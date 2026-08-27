@@ -62,31 +62,30 @@ Estos materiales son referencias internas. No deben convertirse en contenido pú
 
 ## 6. Alcance
 
-### 6.1 Prototipo técnico
+### 6.1 Piloto técnico privado (destino activo)
 
-El prototipo será:
+El piloto activo será:
 
-- Distribuido mediante web responsiva.
-- Solo por invitación.
-- Gratuito.
-- Utilizable sin una cuenta.
-- Restringido a validación interna.
+- Móvil y privado por invitación.
+- Gratuito y restringido a validación interna.
+- Acotado a **una estación original aprobada por clínico**.
+- Ejecutado con **5 a 8** participantes invitados.
 
-Podrá utilizar las estaciones oficiales 1, 6 y 8 de 2025/1 exclusivamente como casos internos de validación.
+Reglas operativas del piloto:
 
-El piloto incluirá:
+- Se permite ayuda humana antes del intento (instalación, acceso, micrófono y orientación inicial).
+- Debe existir al menos un intento **válido y sin guía en estación** por participante inscrito.
+- La guía humana durante la estación invalida el intento para cobertura del piloto.
+- La modalidad oral y escrita se identifica antes de iniciar y no se mezcla dentro del mismo intento.
+- Una interrupción técnica en modo estricto invalida y reemplaza el intento: no se puntúa ni consume.
 
-- Entre cinco y ocho médicos formados en el extranjero que se preparan para Revalida.
-- Participantes con diferentes niveles de preparación.
-- Revisión del médico contratado.
+La decisión de avance del piloto se emite en un **reporte congelado y versionado** (estación, rúbrica, política, rutas proveedor/modelo, build y esquema de telemetría) con tres puertas obligatorias e independientes, sin promedio ni compensación:
 
-El prototipo avanzará al MVP cuando:
+1. **Operabilidad e integridad técnica:** cada participante tiene al menos un intento válido sin guía; p95 de turno actor `<= 4s` con denominador completo; p95 de feedback final `<= 60s` con denominador completo; y cero defectos críticos sin resolver (técnicos, privacidad, scoring, integridad clínica, pérdida de evidencia, desbloqueo incorrecto o fabricación del actor).
+2. **Validez clínica:** revisión ciega criterio por criterio en todo intento válido; acuerdo exacto 100% en criterios críticos y al menos 90% en no críticos; bloqueo por patrones de error sistemático; incertidumbre residual 0% en críticos y máximo 10% en no críticos; `not_evidenced` validado por clínico permanece en denominador.
+3. **Utilidad educativa:** todos los participantes aprueban teach-back; y al menos 80% de los inscritos entregan las tres calificaciones (claridad, utilidad y accionabilidad) con mínimo 4/5 en cada una; faltantes permanecen en denominador.
 
-- Los candidatos completen las tres estaciones sin asistencia del equipo.
-- El médico considere que la evidencia y puntuación estimada están suficientemente alineadas con el PEP aplicable.
-- Los candidatos comprendan sus omisiones y consideren accionable la retroalimentación.
-
-Los umbrales numéricos y la metodología de validación quedan pendientes hasta diseñar el piloto.
+El reporte también incluye diagnósticos (interrupciones, rechazos de validación, fallas de procesamiento, desacuerdos de revisión ciega, disputas/correcciones por criterio, escapes de hechos del actor, desbloqueos, integridad de transcripción/turnos, eliminación/control de acceso y costo p50/p95 por rol/proveedor). Estos diagnósticos y señales longitudinales son no bloqueantes.
 
 ### 6.2 MVP público
 
@@ -487,7 +486,7 @@ El MVP debe demostrar que:
 - Los estudiantes tienen dispositivos iOS, Android o acceso web compatible.
 - Los estudiantes cuentan con conectividad suficiente.
 - Comprenden que los resultados son estimaciones educativas.
-- El piloto proporcionará evidencia para definir umbrales y límites comerciales.
+- El piloto proporcionará evidencia diagnóstica y de decisión bajo umbrales ya definidos para avance al MVP.
 - El médico contratado definirá el contrato clínico de plantillas y rúbricas.
 
 ## 15. No objetivos permanentes
@@ -514,9 +513,9 @@ Determinar si el médico debe ejecutar la simulación antes de publicar cada cas
 
 La capacidad de probarla sí forma parte del MVP.
 
-### 16.3 Umbrales del prototipo
+### 16.3 Contrato de avance del piloto
 
-Definir la metodología del piloto y los valores necesarios para avanzar al MVP.
+Resuelto: el piloto usa contrato fijo de tres puertas independientes, denominadores completos y reporte versionado congelado para decidir avance/no avance, sin puntuación compuesta.
 
 ### 16.4 Precio y límites de uso
 
