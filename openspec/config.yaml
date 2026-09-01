@@ -1,0 +1,119 @@
+context: |
+  proyectoMed is a planning/specification repository for a Revalida clinical-practice
+  MVP (Expo React Native + Elixir/Phoenix, scaffolded). Source of truth is GitHub
+  Issues on ChordanDev/proyectoMed. The runtime scaffold is now in place:
+  `mobile/` is a blank TypeScript Expo app under Expo Go (no native build), and
+  `backend/` is a JSON-only Phoenix API without Ecto or HTML tooling. The scope
+  of this scaffold change is harness-only; clinical, product, and `#12` behavior
+  are explicitly out of scope and remain unimplemented.
+  Agent conventions: see AGENTS.md, docs/agents/issue-tracker.md,
+  docs/agents/triage-labels.md, docs/agents/domain.md.
+project: proyectomed
+strict_tdd: false
+testing:
+  strict_tdd: false
+  rationale: |
+    The harness is available (scripts/test.sh, tests/scripts/scaffold_red.sh,
+    tests/scripts/test_red.sh), but strict TDD discipline is left to the change
+    that implements the first real capability. Toggling strict_tdd is a
+    deliberate decision by the capability-implementing change, not by the
+    scaffold change. e2e and coverage remain unavailable for the same reason.
+  capabilities:
+    runner:
+      available: true
+      command: bash scripts/test.sh
+      notes: |
+        Root orchestrator: runs mobile Jest (npm --prefix mobile test) then
+        backend ExUnit (( cd backend && mix test )) and propagates the first
+        non-zero exit. PATH-resolved npm/mix so the RED harness can substitute
+        fakes.
+    unit:
+      available: true
+      notes: |
+        Mobile: jest-expo + @testing-library/react-native (mobile/__tests__/).
+        Backend: ExUnit (backend/test/).
+    integration:
+      available: true
+      notes: |
+        Backend ConnCase drives a real Plug pipeline against HealthController.
+        Mobile integration beyond the smoke render is gated on a future change.
+    e2e:
+      available: false
+      rationale: |
+        No device or browser harness is wired. Expo Go startup and live
+        `GET /` are documented manual checks; they are NOT automated e2e
+        tests. iOS native builds are blocked by the missing CocoaPods tool.
+    coverage:
+      available: false
+      rationale: |
+        No coverage tool is installed in the baseline scaffold. Mobile and
+        backend each ship exactly one smoke test; coverage tooling is a
+        downstream decision tied to a future capability-implementing change.
+    linter:
+      available: true
+      notes: |
+        Backend: mix format (declared in backend/.formatter.exs; alias
+        precommit runs format --check-formatted). Mobile: the Expo TypeScript
+        template ships its default ESLint + TypeScript settings.
+    type_checker:
+      available: true
+      notes: |
+        Mobile: typescript ~6.0.3 + tsconfig.json (strict defaults from
+        expo-template-blank-typescript). Backend: dialyzer is not enabled in
+        the baseline; Phoenix's compile --warnings-as-errors runs via the
+        precommit alias and covers Elixir-level type concerns.
+    formatter:
+      available: true
+      notes: |
+        Backend: mix format (formatter declared by phx_new generator).
+        Mobile: TypeScript template default prettier-compatible settings
+        are inherited from expo-template-blank-typescript.
+  harnesses:
+    scaffold_script: scripts/scaffold.sh
+    test_script: scripts/test.sh
+    scaffold_red: tests/scripts/scaffold_red.sh
+    test_red: tests/scripts/test_red.sh
+    notes: |
+      Both RED harnesses are hermetic (bash fake-command stubs over PATH).
+      They do not require network access, real npm/npx/mix, or real Expo
+      or Phoenix generators.
+phases:
+  proposal:
+    required: true
+    input: GitHub issue reference (number + URL) for the change.
+    output: openspec/changes/<change-id>/proposal.md
+  spec:
+    required: true
+    format: delta
+    output: openspec/changes/<change-id>/specs/<capability>/spec.md
+  design:
+    required: true
+    output: openspec/changes/<change-id>/design.md
+  tasks:
+    required: true
+    format: numbered
+    output: openspec/changes/<change-id>/tasks.md
+  apply:
+    strategy: auto-chain
+    review_budget_lines: 800
+    test_command: bash scripts/test.sh
+    notes: |
+      Apply batches MUST run `bash scripts/test.sh` after their work unit
+      to prove the existing harness still passes. New work units may add
+      suites but MUST NOT regress mobile Jest or backend ExUnit.
+  verify:
+    required_for: [archive]
+    test_command: bash scripts/test.sh
+    gates:
+      - proposal_completed
+      - specs_completed
+      - design_completed
+      - tasks_completed
+      - apply_receipts_attached
+      - scripts/test.sh exits 0
+  archive:
+    on_success: openspec/specs/<capability>/spec.md synced from change delta.
+    on_failure: leave change in openspec/changes/<change-id>/ with failure note.
+links:
+  tracker: https://github.com/ChordanDev/proyectoMed/issues
+  parent_issue_for_example: "10"  # parent of issue #12 (evidence lineage)

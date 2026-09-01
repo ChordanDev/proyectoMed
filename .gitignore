@@ -1,1 +1,77 @@
+# proyectoMed root ignore rules.
+#
+# Per-subdirectory `.gitignore` files in `mobile/` and `backend/` cover
+# most generator output. The entries below mirror the runtime-scaffold
+# spec requirement and provide a defensive belt-and-braces set so root-
+# level inspection never accidentally picks up generated state.
+
+# Existing planning state (kept from initial scaffold).
 .atl/
+
+# Local editor and code-navigation state.
+.DS_Store
+.codegraph/
+
+# ---------------------------------------------------------------------------
+# Mobile (Expo) — defensive mirrors of mobile/.gitignore
+# ---------------------------------------------------------------------------
+
+# Dependencies.
+node_modules/
+
+# Expo caches (also covered in mobile/.gitignore).
+.expo/
+.expo-shared/
+
+# Metro / bundler artifacts.
+.metro-health-check*
+.web-build/
+web-build/
+dist/
+
+# Generated native projects — must NEVER be committed (Expo Go scope).
+mobile/ios/
+mobile/android/
+
+# Generated TypeScript ambient files.
+expo-env.d.ts
+
+# Typescript build info.
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# Backend (Phoenix / Elixir) — defensive mirrors of backend/.gitignore
+# ---------------------------------------------------------------------------
+
+# Compiled BEAM and artifacts.
+_build/
+*.beam
+
+# Dependencies and docs.
+deps/
+doc/
+
+# Coverage, fetched deps, archives.
+cover/
+.fetch
+*.ez
+backend-*.tar
+
+# Crash dumps.
+erl_crash.dump
+
+# Temporary test output.
+/tmp/
+
+# Elixir tooling caches.
+.elixir_ls/
+.exenv/
+.iex/
+.mix/
+
+# Generated static assets (mirrors priv/static/assets).
+priv/static/assets/
+
+# Erlang build tooling.
+.rebar3/
+_ebin/
