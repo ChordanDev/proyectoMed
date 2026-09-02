@@ -1,0 +1,62 @@
+name: Implementation task
+description: Create an approved, agent-ready implementation task.
+labels:
+  - ready-for-agent
+body:
+  - type: input
+    id: task-title
+    attributes:
+      label: Task title
+      description: Provide a concise, outcome-focused title for this implementation task.
+      placeholder: Implement ...
+    validations:
+      required: true
+
+  - type: input
+    id: parent
+    attributes:
+      label: Parent
+      description: Reference the parent issue (for example, #123).
+      placeholder: "#123"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-to-build
+    attributes:
+      label: What to build
+      description: Describe the complete, verifiable behavior of this vertical slice.
+      placeholder: Describe the end-to-end behavior to implement.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: List the observable conditions that prove this task is complete.
+      placeholder: |
+        - Criterion 1
+        - Criterion 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: List blocking issue references, or write "None - can start immediately".
+      placeholder: None - can start immediately
+    validations:
+      required: true
+
+  - type: dropdown
+    id: execution-mode
+    attributes:
+      label: Execution mode
+      description: Select whether this task can proceed without human interaction.
+      options:
+        - AFK
+        - HITL
+    validations:
+      required: true
