@@ -18,8 +18,7 @@ config :backend, BackendWeb.Endpoint,
     formats: [json: BackendWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Backend.PubSub,
-  live_view: [signing_salt: "OJtwMZAv"]
+  pubsub_server: Backend.PubSub
 
 # Configure Elixir's Logger
 config :logger, :default_formatter,
