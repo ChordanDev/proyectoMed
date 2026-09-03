@@ -106,6 +106,21 @@ clinical or `#12` behavior.
 
 ---
 
+## Pull-request CI
+
+Every pull request runs the `Pull Request Validation` GitHub Actions workflow.
+It installs the mobile dependencies with `npm ci`, fetches the Phoenix
+dependencies with `mix deps.get`, and then runs the single root command:
+
+```sh
+bash scripts/test.sh
+```
+
+The workflow reads its Node version from `mobile/package.json` and its Erlang
+and Elixir versions from `backend/.tool-versions`.
+
+---
+
 ## Available harnesses
 
 | Script                                       | Purpose                                                                                  |
