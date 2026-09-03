@@ -1,0 +1,26 @@
+{
+  "station_id": "chest-pain-initial-assessment",
+  "version": "1.0.0",
+  "language": "pt-BR",
+  "display_title": "Avaliação inicial de dor torácica",
+  "patient_profile": {
+    "summary": "Paciente de 56 anos com dor torácica iniciada há duas horas."
+  },
+  "revealable_facts": [
+    {"id": "onset", "content": "A dor começou durante uma caminhada."}
+  ],
+  "response_rules": [
+    {"id": "unknown-fact", "instruction": "Do not invent facts absent from this package."}
+  ],
+  "expected_actions": [
+    {"id": "ask-onset", "description": "Ask when the chest pain began."}
+  ],
+  "rubric": [
+    {
+      "id": "onset-assessment",
+      "description": "Assesses the onset of chest pain.",
+      "evidence_questions": ["When did the pain begin?"],
+      "practice_recommendation": "Practice opening chest pain assessments with onset questions."
+    }
+  ]
+}
