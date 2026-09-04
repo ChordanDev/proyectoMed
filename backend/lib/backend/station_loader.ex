@@ -7,7 +7,9 @@ defmodule Backend.StationLoader do
 
   alias Backend.StationPackage
 
-  @type validation_error :: {:invalid_station_package, Path.t(), [String.t()]}
+  require Logger
+
+  @active_station_id "chest-pain-initial-assessment"
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
@@ -26,17 +28,17 @@ defmodule Backend.StationLoader do
   end
 
   @impl true
-  @spec init(keyword()) :: {:ok, map()} | {:stop, validation_error() | term()}
+  @spec init(keyword()) :: {:ok, map()} | {:stop, {:station_package_load_failed, String.t()}}
   def init(options) do
     path = Keyword.get(options, :package_path, default_package_path())
 
-    with {:ok, contents} <- File.read(path),
-         {:ok, package} <- Jason.decode(contents),
-         {:ok, package} <- StationPackage.validate(package) do
-      {:ok, package}
-    else
-      {:error, errors} when is_list(errors) -> {:stop, {:invalid_station_package, path, errors}}
-      {:error, reason} -> {:stop, {:station_package_load_failed, path, reason}}
+    case load_package(path) do
+      {:ok, package} ->
+        {:ok, package}
+
+      {:error, message} ->
+        Logger.error(message)
+        {:stop, {:station_package_load_failed, message}}
     end
   end
 
@@ -47,10 +49,28 @@ defmodule Backend.StationLoader do
     do: {:reply, version, package}
 
   defp default_package_path do
-    Application.get_env(
-      :backend,
-      :station_package_path,
-      Application.app_dir(:backend, "priv/stations/fixtures/valid-package.json")
-    )
+    Application.app_dir(:backend, "priv/stations/#{@active_station_id}/package.json")
+  end
+
+  defp load_package(path) do
+    with {:ok, contents} <- File.read(path),
+         {:ok, package} <- Jason.decode(contents),
+         {:ok, package} <- StationPackage.validate(package) do
+      {:ok, package}
+    else
+      {:error, :enoent} ->
+        {:error, "Falha ao carregar o pacote da estação em #{path}: arquivo não encontrado."}
+
+      {:error, %Jason.DecodeError{}} ->
+        {:error, "Falha ao carregar o pacote da estação em #{path}: JSON inválido."}
+
+      {:error, errors} when is_list(errors) ->
+        {:error,
+         "Falha ao validar o pacote da estação em #{path}: o conteúdo não atende ao contrato obrigatório."}
+
+      {:error, _reason} ->
+        {:error,
+         "Falha ao carregar o pacote da estação em #{path}: não foi possível ler o arquivo."}
+    end
   end
 end
