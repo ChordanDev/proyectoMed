@@ -27,19 +27,22 @@ defmodule Backend.StationLoader do
     GenServer.call(server, :active_version)
   end
 
-  @impl true
-  @spec init(keyword()) :: {:ok, map()} | {:stop, {:station_package_load_failed, String.t()}}
-  def init(options) do
-    path = Keyword.get(options, :package_path, default_package_path())
-
-    case load_package(path) do
+  @spec load_active() :: map()
+  def load_active do
+    case load_package(default_package_path()) do
       {:ok, package} ->
-        {:ok, package}
+        package
 
       {:error, message} ->
         Logger.error(message)
-        {:stop, {:station_package_load_failed, message}}
+        raise RuntimeError, message
     end
+  end
+
+  @impl true
+  @spec init(keyword()) :: {:ok, map()}
+  def init(_options) do
+    {:ok, load_active()}
   end
 
   @impl true
@@ -59,18 +62,17 @@ defmodule Backend.StationLoader do
       {:ok, package}
     else
       {:error, :enoent} ->
-        {:error, "Falha ao carregar o pacote da estação em #{path}: arquivo não encontrado."}
+        {:error, "Falha ao carregar o pacote ativo da estação: arquivo não encontrado."}
 
       {:error, %Jason.DecodeError{}} ->
-        {:error, "Falha ao carregar o pacote da estação em #{path}: JSON inválido."}
+        {:error, "Falha ao carregar o pacote ativo da estação: JSON inválido."}
 
       {:error, errors} when is_list(errors) ->
         {:error,
-         "Falha ao validar o pacote da estação em #{path}: o conteúdo não atende ao contrato obrigatório."}
+         "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."}
 
       {:error, _reason} ->
-        {:error,
-         "Falha ao carregar o pacote da estação em #{path}: não foi possível ler o arquivo."}
+        {:error, "Falha ao carregar o pacote ativo da estação: não foi possível ler o arquivo."}
     end
   end
 end

@@ -10,6 +10,11 @@ defmodule Backend.StationPackageTest do
     package = fixture("valid-package.json")
 
     assert package["version"] == StationPackage.version()
+    assert Map.has_key?(package["patient_profile"], "persona")
+    assert Map.has_key?(package["patient_profile"], "age")
+    assert Map.has_key?(package["patient_profile"], "presenting_context")
+    assert Map.has_key?(package["patient_profile"], "tone")
+    assert %{"topic" => _, "content" => _} = hd(package["revealable_facts"])
     assert {:ok, ^package} = StationPackage.validate(package)
   end
 
@@ -18,6 +23,15 @@ defmodule Backend.StationPackageTest do
     rubric_criterion = schema["$defs"]["rubricCriterion"]
 
     assert schema["properties"]["version"]["const"] == StationPackage.version()
+
+    assert schema["properties"]["patient_profile"]["required"] == [
+             "persona",
+             "age",
+             "presenting_context",
+             "tone"
+           ]
+
+    assert schema["$defs"]["revealableFact"]["required"] == ["topic", "content"]
     assert "weight" in rubric_criterion["required"]
     assert rubric_criterion["properties"]["weight"]["type"] == "number"
   end

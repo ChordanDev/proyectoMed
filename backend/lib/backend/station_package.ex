@@ -20,7 +20,7 @@ defmodule Backend.StationPackage do
       |> validate_version(package)
       |> validate_language(package)
       |> validate_patient_profile(package)
-      |> validate_list_of_entries(package, "revealable_facts", ["id", "content"])
+      |> validate_list_of_entries(package, "revealable_facts", ["topic", "content"])
       |> validate_list_of_entries(package, "response_rules", ["id", "instruction"])
       |> validate_list_of_entries(package, "expected_actions", ["id", "description"])
       |> validate_rubric(package)
@@ -49,12 +49,31 @@ defmodule Backend.StationPackage do
   defp validate_language(errors, %{"language" => "pt-BR"}), do: errors
   defp validate_language(errors, _package), do: ["language must be pt-BR" | errors]
 
-  defp validate_patient_profile(errors, %{"patient_profile" => %{"summary" => summary}})
-       when is_binary(summary) and summary != "",
-       do: errors
+  defp validate_patient_profile(errors, %{"patient_profile" => profile}) when is_map(profile) do
+    errors
+    |> validate_patient_profile_strings(profile)
+    |> validate_patient_profile_age(profile)
+  end
 
   defp validate_patient_profile(errors, _package),
-    do: ["patient_profile.summary must be a non-empty string" | errors]
+    do: ["patient_profile must be an object" | errors]
+
+  defp validate_patient_profile_strings(errors, profile) do
+    Enum.reduce(["persona", "presenting_context", "tone"], errors, fn field, errors ->
+      if is_binary(profile[field]) and profile[field] != "" do
+        errors
+      else
+        ["patient_profile.#{field} must be a non-empty string" | errors]
+      end
+    end)
+  end
+
+  defp validate_patient_profile_age(errors, %{"age" => age})
+       when is_integer(age) and age >= 0,
+       do: errors
+
+  defp validate_patient_profile_age(errors, _profile),
+    do: ["patient_profile.age must be a non-negative integer" | errors]
 
   defp validate_list_of_entries(errors, package, field, required_fields) do
     case package[field] do

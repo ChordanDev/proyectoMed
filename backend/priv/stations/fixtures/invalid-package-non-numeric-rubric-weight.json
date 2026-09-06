@@ -4,10 +4,13 @@
   "language": "pt-BR",
   "display_title": "Avaliação inicial de dor torácica",
   "patient_profile": {
-    "summary": "Paciente de 56 anos com dor torácica iniciada há duas horas."
+    "persona": "Paciente colaborativo e preocupado",
+    "age": 56,
+    "presenting_context": "Dor torácica iniciada há duas horas.",
+    "tone": "Responde de forma breve e ansiosa."
   },
   "revealable_facts": [
-    {"id": "onset", "content": "A dor começou durante uma caminhada."}
+    {"topic": "onset", "content": "A dor começou durante uma caminhada."}
   ],
   "response_rules": [
     {"id": "unknown-fact", "instruction": "Do not invent facts absent from this package."}

@@ -22,8 +22,13 @@
     "display_title": {"type": "string", "minLength": 1},
     "patient_profile": {
       "type": "object",
-      "required": ["summary"],
-      "properties": {"summary": {"type": "string", "minLength": 1}}
+      "required": ["persona", "age", "presenting_context", "tone"],
+      "properties": {
+        "persona": {"type": "string", "minLength": 1},
+        "age": {"type": "integer", "minimum": 0},
+        "presenting_context": {"type": "string", "minLength": 1},
+        "tone": {"type": "string", "minLength": 1}
+      }
     },
     "revealable_facts": {"$ref": "#/$defs/revealableFacts"},
     "response_rules": {"$ref": "#/$defs/responseRules"},
@@ -37,9 +42,9 @@
     },
     "revealableFact": {
       "type": "object",
-      "required": ["id", "content"],
+      "required": ["topic", "content"],
       "properties": {
-        "id": {"type": "string", "minLength": 1},
+        "topic": {"type": "string", "minLength": 1},
         "content": {"type": "string", "minLength": 1}
       }
     },
