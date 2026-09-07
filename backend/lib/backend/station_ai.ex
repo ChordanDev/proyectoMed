@@ -16,10 +16,12 @@ defmodule Backend.StationAI do
 
   Concrete adapters implement the `Backend.StationAI.Adapter` behaviour. The
   default adapter is `Backend.StationAI.NoOpAdapter` and can be overridden via
-  the `:backend, :station_ai_adapter` application env. Bounded reply
-  enforcement (length caps, polite-tone, refusal patterns) and the OpenAI
-  chat adapter live in sub-issues #44 and #45 respectively; this module
-  defines only the contract they plug into.
+  the `:backend, :station_ai_adapter` application env. Every adapter reply is
+  funneled through `Backend.StationAI.BoundedReply` so malformed output,
+  out-of-scope roleplay leakage, language-containment violations, and
+  applicable `response_rules` are enforced before the caller sees the text.
+  The OpenAI chat adapter lives in sub-issue #45; this module defines only
+  the contract adapters plug into.
   """
 
   @type fact :: %{required(String.t()) => String.t()}
@@ -63,18 +65,30 @@ defmodule Backend.StationAI do
   Generates the next patient reply for the given package and context.
 
   Delegates to the configured adapter, normalizes the returned reply to
-  `%{text, used_facts}`, and populates `used_facts` when the adapter did
-  not provide its own list.
+  `%{text, used_facts}`, runs the text through
+  `Backend.StationAI.BoundedReply` to enforce the bounded policy, and
+  resets `used_facts` to `[]` whenever the adapter's text is replaced by
+  the canonical refusal. When the adapter does not supply `used_facts`,
+  they are populated by inspecting which `revealable_facts` appear in the
+  bounded text.
   """
   @spec next_reply(package(), context()) :: {:ok, reply()} | {:error, term()}
   def next_reply(package, context) do
     case adapter().next_reply(package, context) do
       {:ok, %{text: text, used_facts: used_facts}} when is_list(used_facts) ->
-        {:ok, %{text: text, used_facts: used_facts}}
+        bounded = Backend.StationAI.BoundedReply.bound(text, package)
+        used_facts = if bounded == text, do: used_facts, else: []
+        {:ok, %{text: bounded, used_facts: used_facts}}
 
       {:ok, %{text: text}} ->
-        {:ok,
-         %{text: text, used_facts: detect_used_facts(text, package["revealable_facts"] || [])}}
+        bounded = Backend.StationAI.BoundedReply.bound(text, package)
+
+        used_facts =
+          if bounded == text,
+            do: detect_used_facts(bounded, package["revealable_facts"] || []),
+            else: []
+
+        {:ok, %{text: bounded, used_facts: used_facts}}
 
       {:error, reason} ->
         {:error, reason}

@@ -87,8 +87,10 @@ defmodule Backend.StationAITest do
 
       package = load_fixture("valid-package.json")
       context = %{conversation: [], language: "pt-BR"}
+      refusal = StationAI.refusal_text()
 
-      assert {:ok, %{text: "", used_facts: []}} = StationAI.next_reply(package, context)
+      assert {:ok, %{text: ^refusal, used_facts: []}} =
+               StationAI.next_reply(package, context)
     end
 
     test "propagates adapter errors without mutating them" do
@@ -98,6 +100,46 @@ defmodule Backend.StationAITest do
       context = %{conversation: [], language: "pt-BR"}
 
       assert StationAI.next_reply(package, context) == {:error, :provider_down}
+    end
+  end
+
+  describe "next_reply/2 bounded policy" do
+    test "replaces adapter roleplay leakage with the canonical refusal" do
+      Application.put_env(
+        :backend,
+        :station_ai_adapter,
+        Backend.StationAITest.RoleplayLeakAdapter
+      )
+
+      package = load_fixture("valid-package.json")
+      context = %{conversation: [], language: "pt-BR"}
+
+      assert {:ok, %{text: refusal_text, used_facts: []}} =
+               StationAI.next_reply(package, context)
+
+      assert refusal_text == StationAI.refusal_text()
+    end
+
+    test "replaces malformed adapter output with the canonical refusal" do
+      Application.put_env(:backend, :station_ai_adapter, Backend.StationAITest.MalformedAdapter)
+
+      package = load_fixture("valid-package.json")
+      context = %{conversation: [], language: "pt-BR"}
+
+      assert {:ok, %{text: refusal_text, used_facts: []}} =
+               StationAI.next_reply(package, context)
+
+      assert refusal_text == StationAI.refusal_text()
+    end
+
+    test "keeps coherent pt-BR adapter output and computes used_facts" do
+      package = load_fixture("valid-package.json")
+      context = %{conversation: [], language: "pt-BR"}
+
+      assert {:ok, reply} = StationAI.next_reply(package, context)
+
+      assert reply.text == "A dor começou durante uma caminhada."
+      assert [%{"topic" => "onset"}] = reply.used_facts
     end
   end
 
@@ -244,5 +286,22 @@ defmodule Backend.StationAITest do
          used_facts: [%{"topic" => "supplied", "content" => "by adapter"}]
        }}
     end
+  end
+
+  defmodule RoleplayLeakAdapter do
+    @moduledoc false
+    @behaviour Backend.StationAI
+
+    @impl true
+    def next_reply(_package, _context),
+      do: {:ok, %{text: "Sou uma inteligência artificial."}}
+  end
+
+  defmodule MalformedAdapter do
+    @moduledoc false
+    @behaviour Backend.StationAI
+
+    @impl true
+    def next_reply(_package, _context), do: {:ok, %{text: ""}}
   end
 end
