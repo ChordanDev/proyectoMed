@@ -15,7 +15,7 @@ defmodule Backend.StationAI do
       prompt built by `system_prompt/1`.
 
   Concrete adapters implement the `Backend.StationAI.Adapter` behaviour. The
-  default adapter is `Backend.StationAI.NoOpAdapter` and can be overridden via
+  default adapter is `Backend.StationAI.OpenAIAdapter` and can be overridden via
   the `:backend, :station_ai_adapter` application env. Every adapter reply is
   funneled through `Backend.StationAI.BoundedReply` so malformed output,
   out-of-scope roleplay leakage, language-containment violations, and
@@ -160,7 +160,7 @@ defmodule Backend.StationAI do
   end
 
   defp adapter do
-    Application.get_env(:backend, :station_ai_adapter, Backend.StationAI.NoOpAdapter)
+    Application.get_env(:backend, :station_ai_adapter, Backend.StationAI.OpenAIAdapter)
   end
 
   defp format_facts([]), do: "  (nenhum)"
