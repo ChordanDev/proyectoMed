@@ -63,7 +63,7 @@ npm --prefix mobile start
 ( cd backend && mix phx.server )
 ```
 
-The backend exposes exactly one HTTP route:
+The backend exposes two HTTP routes:
 
 ```sh
 $ curl -i http://localhost:4000/
@@ -71,6 +71,12 @@ HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
 
 {"status":"ok"}
+
+$ curl -i http://localhost:4000/api/stations/active
+HTTP/1.1 200 OK
+content-type: application/json; charset=utf-8
+
+{"station_id":"chest-pain-initial-assessment","version":"1.0.0","language":"pt-BR","display_title":"Avaliação inicial de dor torácica"}
 ```
 
 ---
@@ -157,8 +163,8 @@ re-run `npx expo prebuild --platform ios`, and add the generated `ios/` and
 ### Other known limitations
 
 - **No persistence layer.** `--no-ecto` was chosen so the database adapter
-  is a deliberate downstream decision (see `#13` evaluation). `GET /` is the
-  only route.
+  is a deliberate downstream decision (see `#13` evaluation). `GET /` and
+  `GET /api/stations/active` are the only routes.
 - **No view layer.** `--no-html --no-assets --no-gettext --no-mailer --no-dashboard`
   remove HTML, EEx, LiveView, Tailwind, asset pipeline, gettext, mailer, and
   dashboard generators. Only JSON responses are served.

@@ -23,6 +23,18 @@ end
 config :backend, BackendWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+if api_key = System.get_env("OPENAI_API_KEY") do
+  config :backend, Backend.StationAI.OpenAIAdapter, api_key: api_key
+end
+
+if base_url = System.get_env("OPENAI_BASE_URL") do
+  config :backend, Backend.StationAI.OpenAIAdapter, base_url: base_url
+end
+
+if model = System.get_env("OPENAI_MODEL") do
+  config :backend, Backend.StationAI.OpenAIAdapter, model: model
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
