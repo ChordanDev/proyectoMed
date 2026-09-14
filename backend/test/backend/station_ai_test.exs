@@ -10,12 +10,14 @@ defmodule Backend.StationAITest do
 
     previous_adapter = Application.get_env(:backend, :station_ai_adapter)
     previous_refusal = Application.get_env(:backend, :station_ai_refusal_text)
+    previous_openai = Application.get_env(:backend, Backend.StationAI.OpenAIAdapter)
 
     Application.put_env(:backend, :station_ai_adapter, Backend.StationAITest.CaptureAdapter)
 
     on_exit(fn ->
       restore_env(:station_ai_adapter, previous_adapter)
       restore_env(:station_ai_refusal_text, previous_refusal)
+      restore_env(Backend.StationAI.OpenAIAdapter, previous_openai)
     end)
 
     :ok
@@ -130,6 +132,78 @@ defmodule Backend.StationAITest do
                StationAI.next_reply(package, context)
 
       assert refusal_text == StationAI.refusal_text()
+    end
+
+    test "replaces adapter output violating polite rule with the canonical refusal" do
+      Application.put_env(
+        :backend,
+        :station_ai_adapter,
+        Backend.StationAITest.PoliteViolationAdapter
+      )
+
+      package =
+        load_fixture("valid-package.json")
+        |> Map.put("response_rules", [%{"id" => "polite", "instruction" => "stay polite"}])
+
+      context = %{conversation: [], language: "pt-BR"}
+
+      assert {:ok, %{text: refusal_text, used_facts: []}} =
+               StationAI.next_reply(package, context)
+
+      assert refusal_text == StationAI.refusal_text()
+    end
+
+    test "replaces adapter output exceeding length-cap rule with the canonical refusal" do
+      Application.put_env(
+        :backend,
+        :station_ai_adapter,
+        Backend.StationAITest.LengthCapViolationAdapter
+      )
+
+      package =
+        load_fixture("valid-package.json")
+        |> Map.put("response_rules", [%{"id" => "length-cap", "max_length" => 200}])
+
+      context = %{conversation: [], language: "pt-BR"}
+
+      assert {:ok, %{text: refusal_text, used_facts: []}} =
+               StationAI.next_reply(package, context)
+
+      assert refusal_text == StationAI.refusal_text()
+    end
+
+    test "exercises the LLM refusal path when model returns the prompt-dictated refusal" do
+      Application.delete_env(:backend, :station_ai_adapter)
+
+      Req.Test.stub(LLMSystemRefusalStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = Jason.decode!(body)
+        system_msg = hd(payload["messages"])
+
+        assert system_msg["content"] =~ StationAI.refusal_text()
+
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{"message" => %{"role" => "assistant", "content" => StationAI.refusal_text()}}
+          ]
+        })
+      end)
+
+      Application.put_env(:backend, Backend.StationAI.OpenAIAdapter,
+        api_key: "test-key",
+        req_options: [plug: {Req.Test, LLMSystemRefusalStub}]
+      )
+
+      package = load_fixture("valid-package.json")
+
+      context = %{
+        conversation: [%{role: :student, text: "Qual seu remédio favorito?"}],
+        language: "pt-BR"
+      }
+
+      assert {:ok, reply} = StationAI.next_reply(package, context)
+      assert reply.text == StationAI.refusal_text()
+      assert reply.used_facts == []
     end
 
     test "keeps coherent pt-BR adapter output and computes used_facts" do
@@ -303,5 +377,21 @@ defmodule Backend.StationAITest do
 
     @impl true
     def next_reply(_package, _context), do: {:ok, %{text: ""}}
+  end
+
+  defmodule PoliteViolationAdapter do
+    @moduledoc false
+    @behaviour Backend.StationAI
+
+    @impl true
+    def next_reply(_package, _context), do: {:ok, %{text: "Você é um idiota."}}
+  end
+
+  defmodule LengthCapViolationAdapter do
+    @moduledoc false
+    @behaviour Backend.StationAI
+
+    @impl true
+    def next_reply(_package, _context), do: {:ok, %{text: String.duplicate("a", 300)}}
   end
 end
