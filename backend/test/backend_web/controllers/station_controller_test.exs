@@ -366,4 +366,310 @@ defmodule BackendWeb.StationControllerTest do
              }
     end
   end
+
+  describe "POST /api/stations/active/sessions/:id/finish" do
+    setup do
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: true
+        })
+
+      %{session: session}
+    end
+
+    test "finishes session with reason=user", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+          "reason" => "user"
+        })
+
+      assert %{
+               "session_id" => session_id,
+               "status" => "completed",
+               "completed_at" => completed_at_str
+             } = json_response(conn, 200)
+
+      assert session_id == session.session_id
+      assert {:ok, completed_at, _} = DateTime.from_iso8601(completed_at_str)
+      assert DateTime.diff(DateTime.utc_now(), completed_at, :second) <= 2
+
+      {:ok, updated_session} = Conversation.fetch(session.session_id)
+      assert updated_session.status == :completed
+      assert updated_session.completion_reason == :user
+    end
+
+    test "finishes session with reason=timer", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+          "reason" => "timer"
+        })
+
+      assert %{
+               "session_id" => session_id,
+               "status" => "completed",
+               "completed_at" => completed_at_str
+             } = json_response(conn, 200)
+
+      assert session_id == session.session_id
+      assert {:ok, _completed_at, _} = DateTime.from_iso8601(completed_at_str)
+
+      {:ok, updated_session} = Conversation.fetch(session.session_id)
+      assert updated_session.status == :completed
+      assert updated_session.completion_reason == :timer
+    end
+
+    test "finishes session with omitted body (defaults to user)", %{
+      conn: conn,
+      session: session
+    } do
+      conn = post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish")
+
+      assert %{
+               "session_id" => session_id,
+               "status" => "completed",
+               "completed_at" => completed_at_str
+             } = json_response(conn, 200)
+
+      assert session_id == session.session_id
+      assert {:ok, _completed_at, _} = DateTime.from_iso8601(completed_at_str)
+
+      {:ok, updated_session} = Conversation.fetch(session.session_id)
+      assert updated_session.status == :completed
+      assert updated_session.completion_reason == :user
+    end
+
+    test "rejects invalid or non-string reason", %{conn: conn, session: session} do
+      for invalid_reason <- ["timeout", "cancelled", "", 123, true, ["user"], %{}] do
+        conn_attempt =
+          post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+            "reason" => invalid_reason
+          })
+
+        assert json_response(conn_attempt, 400) == %{
+                 "error" => "invalid_reason",
+                 "message" => "Motivo de finalização inválido: deve ser 'user' ou 'timer'."
+               }
+      end
+    end
+
+    test "returns 404 on unknown session id", %{conn: conn} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/nonexistent-session/finish", %{
+          "reason" => "user"
+        })
+
+      assert json_response(conn, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "returns 410 on expired session", %{conn: conn} do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      expired_session =
+        try do
+          pkg = StationLoader.active_package()
+
+          Conversation.start(%{
+            station_id: pkg["station_id"],
+            station_version: pkg["version"],
+            audio_consent: false
+          })
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{expired_session.session_id}/finish", %{
+          "reason" => "user"
+        })
+
+      assert json_response(conn, 410) == %{
+               "error" => "session_expired",
+               "message" => "A sessão expirou."
+             }
+    end
+
+    test "repeated finish is idempotent, preserves original completed_at and completion_reason",
+         %{conn: conn, session: session} do
+      conn1 =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+          "reason" => "user"
+        })
+
+      assert %{
+               "session_id" => session_id,
+               "status" => "completed",
+               "completed_at" => first_completed_at
+             } = json_response(conn1, 200)
+
+      :timer.sleep(10)
+
+      # Attempt repeated finish with timer
+      conn2 =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+          "reason" => "timer"
+        })
+
+      assert json_response(conn2, 200) == %{
+               "session_id" => session_id,
+               "status" => "completed",
+               "completed_at" => first_completed_at
+             }
+
+      {:ok, stored_session} = Conversation.fetch(session.session_id)
+      assert stored_session.completion_reason == :user
+      assert DateTime.to_iso8601(stored_session.completed_at) == first_completed_at
+    end
+  end
+
+  describe "GET /api/stations/active/sessions/:id/result" do
+    setup do
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: true
+        })
+
+      %{session: session}
+    end
+
+    test "returns 404 on unknown session id", %{conn: conn} do
+      conn = get(conn, ~p"/api/stations/active/sessions/unknown-session/result")
+
+      assert json_response(conn, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "returns 410 on expired session", %{conn: conn} do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      expired_session =
+        try do
+          pkg = StationLoader.active_package()
+
+          Conversation.start(%{
+            station_id: pkg["station_id"],
+            station_version: pkg["version"],
+            audio_consent: false
+          })
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{expired_session.session_id}/result")
+
+      assert json_response(conn, 410) == %{
+               "error" => "session_expired",
+               "message" => "A sessão expirou."
+             }
+    end
+
+    test "returns 422 on active/unfinished session", %{conn: conn, session: session} do
+      conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}/result")
+
+      assert json_response(conn, 422) == %{
+               "error" => "session_not_finished",
+               "message" => "A sessão ainda não foi finalizada."
+             }
+    end
+
+    test "returns per-criterion feedback with string evidence for completed session", %{
+      conn: conn,
+      session: session
+    } do
+      # Add messages that will meet criteria
+      {:ok, _} =
+        Conversation.append_message(session.session_id, %{
+          role: :learner,
+          modality: :text,
+          text: "Quando começou essa dor no peito? Já fez eletrocardiograma ECG?"
+        })
+
+      {:ok, _} =
+        Conversation.append_message(session.session_id, %{
+          role: :patient,
+          modality: :text,
+          text: "Começou há duas horas."
+        })
+
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}/result")
+
+      response = json_response(conn, 200)
+
+      assert %{
+               "session_id" => session_id,
+               "status" => "completed",
+               "criteria" => criteria
+             } = response
+
+      assert session_id == session.session_id
+      assert is_list(criteria)
+      assert length(criteria) > 0
+
+      # Each criterion contract check
+      for criterion <- criteria do
+        assert %{
+                 "id" => id,
+                 "status" => status,
+                 "evidence" => evidence,
+                 "recommendation" => recommendation
+               } = criterion
+
+        assert is_binary(id) and byte_size(id) > 0
+        assert status in ["met", "omitted", "uncertain"]
+        assert is_list(evidence)
+        assert is_binary(recommendation)
+
+        # Every evidence item MUST be a string (extracted from excerpt maps)
+        for ev <- evidence do
+          assert is_binary(ev)
+        end
+      end
+
+      # Verify at least one criterion has string evidence (since we asked about onset / ECG)
+      all_evidence = Enum.flat_map(criteria, & &1["evidence"])
+      assert length(all_evidence) > 0
+
+      # Explicitly verify NO global score, grade, verdict, pass/fail, or readiness fields anywhere
+      refute Map.has_key?(response, "score")
+      refute Map.has_key?(response, "global_score")
+      refute Map.has_key?(response, "total")
+      refute Map.has_key?(response, "grade")
+      refute Map.has_key?(response, "verdict")
+      refute Map.has_key?(response, "pass")
+      refute Map.has_key?(response, "passed")
+      refute Map.has_key?(response, "fail")
+      refute Map.has_key?(response, "readiness")
+      refute Map.has_key?(response, "revalida_readiness")
+
+      for criterion <- criteria do
+        refute Map.has_key?(criterion, "score")
+        refute Map.has_key?(criterion, "points")
+        refute Map.has_key?(criterion, "weight")
+      end
+    end
+  end
 end
