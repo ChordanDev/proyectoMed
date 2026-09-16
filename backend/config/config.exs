@@ -8,7 +8,8 @@
 import Config
 
 config :backend,
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  openai_transcription_model: "whisper-1"
 
 # Configure the endpoint
 config :backend, BackendWeb.Endpoint,

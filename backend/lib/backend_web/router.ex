@@ -10,5 +10,9 @@ defmodule BackendWeb.Router do
 
     get "/", HealthController, :index
     get "/api/stations/active", StationController, :active
+
+    post "/api/stations/active/sessions/:id/transcribe",
+         TranscriptionController,
+         :create
   end
 end
