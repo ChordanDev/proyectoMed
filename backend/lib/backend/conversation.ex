@@ -18,7 +18,8 @@ defmodule Backend.Conversation do
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
           messages: [message()],
-          status: :active | :completed
+          status: :active | :completed,
+          audio_consent: boolean()
         }
 
   @type message :: %{role: term(), modality: term(), text: String.t(), at: DateTime.t()}
@@ -28,9 +29,13 @@ defmodule Backend.Conversation do
     GenServer.start_link(__MODULE__, options, name: __MODULE__)
   end
 
-  @spec start() :: session()
-  def start do
-    GenServer.call(__MODULE__, :start)
+  @doc """
+  Starts a session. `:audio_consent` defaults to `false`: audio transcription is
+  refused until the learner explicitly grants it.
+  """
+  @spec start(keyword()) :: session()
+  def start(options \\ []) do
+    GenServer.call(__MODULE__, {:start, Keyword.get(options, :audio_consent, false) == true})
   end
 
   @spec append_message(String.t(), %{role: term(), modality: term(), text: String.t()}) ::
@@ -57,7 +62,7 @@ defmodule Backend.Conversation do
   end
 
   @impl true
-  def handle_call(:start, _from, state) do
+  def handle_call({:start, audio_consent}, _from, state) do
     now = DateTime.utc_now()
 
     session = %{
@@ -65,7 +70,8 @@ defmodule Backend.Conversation do
       started_at: now,
       expires_at: DateTime.add(now, timeout_ms(), :millisecond),
       messages: [],
-      status: :active
+      status: :active,
+      audio_consent: audio_consent
     }
 
     true = :ets.insert(__MODULE__, {session.session_id, session})

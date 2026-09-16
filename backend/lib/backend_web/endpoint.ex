@@ -25,6 +25,11 @@ defmodule BackendWeb.Endpoint do
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
+    # Audio uploads are capped at 10 MB by BackendWeb.TranscriptionController.
+    # The parser limit sits well above it so the controller — not Plug — answers
+    # 413 with the documented error shape. Past this ceiling Plug still replies
+    # 413, but with its own body.
+    length: 20_000_000,
     json_decoder: Phoenix.json_library()
 
   plug Plug.Head
