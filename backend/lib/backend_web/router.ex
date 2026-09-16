@@ -14,5 +14,9 @@ defmodule BackendWeb.Router do
     post "/api/stations/active/sessions/:id/transcribe",
          TranscriptionController,
          :create
+
+    post "/api/stations/active/sessions/:id/synthesize",
+         TTSController,
+         :create
   end
 end

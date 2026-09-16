@@ -9,7 +9,9 @@ import Config
 
 config :backend,
   generators: [timestamp_type: :utc_datetime],
-  openai_transcription_model: "whisper-1"
+  openai_transcription_model: "whisper-1",
+  openai_tts_model: "tts-1",
+  openai_tts_voice: "alloy"
 
 # Configure the endpoint
 config :backend, BackendWeb.Endpoint,
