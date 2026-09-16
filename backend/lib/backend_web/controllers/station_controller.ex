@@ -2,6 +2,7 @@ defmodule BackendWeb.StationController do
   use BackendWeb, :controller
 
   alias Backend.Conversation
+  alias Backend.Evaluator
   alias Backend.StationAI
   alias Backend.StationLoader
 
@@ -64,14 +65,8 @@ defmodule BackendWeb.StationController do
          package = StationLoader.active_package(),
          {:ok, current_session} <- Conversation.fetch(session_id),
          context = format_context(current_session, package),
-         {:ok, %{text: reply_text}} <- StationAI.next_reply(package, context) do
-      {:ok, _} =
-        Conversation.append_message(session_id, %{
-          role: :patient,
-          modality: :text,
-          text: reply_text
-        })
-
+         {:ok, %{text: reply_text}} <- StationAI.next_reply(package, context),
+         {:ok, _session} <- append_patient_reply(session_id, reply_text) do
       json(conn, %{
         reply_text: reply_text,
         reply_audio_url: nil,
@@ -121,6 +116,113 @@ defmodule BackendWeb.StationController do
     end
   end
 
+  def finish_session(conn, %{"id" => session_id} = params) do
+    reason_param =
+      case params do
+        %{"reason" => val} -> val
+        %{reason: val} -> val
+        _ -> "user"
+      end
+
+    with {:ok, reason_atom} <- parse_finish_reason(reason_param),
+         {:ok, session} <- Conversation.complete(session_id, reason_atom) do
+      json(conn, %{
+        session_id: session.session_id,
+        status: "completed",
+        completed_at: DateTime.to_iso8601(session.completed_at)
+      })
+    else
+      {:error, :invalid_reason} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{
+          error: "invalid_reason",
+          message: "Motivo de finalização inválido: deve ser 'user' ou 'timer'."
+        })
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{
+          error: "session_not_found",
+          message: "Sessão não encontrada."
+        })
+
+      {:error, :expired} ->
+        conn
+        |> put_status(:gone)
+        |> json(%{
+          error: "session_expired",
+          message: "A sessão expirou."
+        })
+    end
+  end
+
+  def show_result(conn, %{"id" => session_id}) do
+    with {:ok, session} <- Conversation.fetch(session_id) do
+      case session.status do
+        :completed ->
+          package = StationLoader.active_package()
+          evaluation = Evaluator.evaluate(package, session)
+
+          criteria =
+            Enum.map(evaluation.criteria, fn criterion ->
+              %{
+                id: criterion.id,
+                status: to_string(criterion.status),
+                evidence: serialize_evidence(criterion.evidence),
+                recommendation: criterion.recommendation
+              }
+            end)
+
+          json(conn, %{
+            session_id: session.session_id,
+            status: "completed",
+            criteria: criteria
+          })
+
+        :active ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(%{
+            error: "session_not_finished",
+            message: "A sessão ainda não foi finalizada."
+          })
+      end
+    else
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{
+          error: "session_not_found",
+          message: "Sessão não encontrada."
+        })
+
+      {:error, :expired} ->
+        conn
+        |> put_status(:gone)
+        |> json(%{
+          error: "session_expired",
+          message: "A sessão expirou."
+        })
+    end
+  end
+
+  defp parse_finish_reason("user"), do: {:ok, :user}
+  defp parse_finish_reason("timer"), do: {:ok, :timer}
+  defp parse_finish_reason(_), do: {:error, :invalid_reason}
+
+  defp serialize_evidence(evidence) when is_list(evidence) do
+    Enum.map(evidence, fn
+      %{text: text} -> text
+      %{"text" => text} -> text
+      text when is_binary(text) -> text
+      other -> to_string(other)
+    end)
+  end
+
+  defp serialize_evidence(_), do: []
+
   defp validate_message_params(role, modality, text) do
     if role == "learner" and modality in ["voice", "text"] and is_binary(text) and
          byte_size(String.trim(text)) > 0 do
@@ -132,6 +234,18 @@ defmodule BackendWeb.StationController do
 
   defp parse_modality("voice"), do: :voice
   defp parse_modality("text"), do: :text
+
+  defp append_patient_reply(session_id, reply_text) do
+    case Conversation.append_message(session_id, %{
+           role: :patient,
+           modality: :text,
+           text: reply_text
+         }) do
+      {:ok, session} -> {:ok, session}
+      {:error, :completed} -> {:ok, :completed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp format_context(session, package) do
     conversation =
