@@ -20,6 +20,20 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  defmodule BlockingStationAIAdapter do
+    @behaviour Backend.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      parent = Application.get_env(:backend, :blocking_adapter_test_pid)
+      send(parent, :station_ai_started)
+
+      receive do
+        :station_ai_release ->
+          {:ok, %{text: "Resposta do paciente gerada durante conclusão"}}
+      end
+    end
+  end
+
   describe "GET /api/stations/active" do
     test "returns active station metadata", %{conn: conn} do
       conn = get(conn, ~p"/api/stations/active")
@@ -364,6 +378,66 @@ defmodule BackendWeb.StationControllerTest do
                "error" => "station_ai_unavailable",
                "message" => "O serviço da estação de IA está temporariamente indisponível."
              }
+    end
+
+    test "handles race when session is completed while StationAI is generating reply", %{
+      conn: conn,
+      session: session
+    } do
+      Application.put_env(:backend, :station_ai_adapter, BlockingStationAIAdapter)
+      Application.put_env(:backend, :blocking_adapter_test_pid, self())
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :blocking_adapter_test_pid)
+      end)
+
+      # Launch create_message in an async task through the HTTP controller seam
+      task =
+        Task.async(fn ->
+          post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+            "role" => "learner",
+            "modality" => "text",
+            "text" => "Olá, conte-me seus sintomas."
+          })
+        end)
+
+      # 1. Wait for notification that StationAI has started (learner message append already happened)
+      assert_receive :station_ai_started, 1_000
+
+      # Verify learner message was already appended before StationAI returned
+      {:ok, session_during_gen} = Conversation.fetch(session.session_id)
+      assert length(session_during_gen.messages) == 1
+      assert hd(session_during_gen.messages).role == :learner
+
+      # 2. While blocked, call Conversation.complete/2 for the same session
+      assert {:ok, completed_session} = Conversation.complete(session.session_id, :user)
+      assert completed_session.status == :completed
+      original_completed_at = completed_session.completed_at
+      original_completion_reason = completed_session.completion_reason
+
+      # 3. Release the adapter barrier
+      send(task.pid, :station_ai_release)
+
+      # 4. Await HTTP message request response
+      conn_result = Task.await(task, 2_000)
+
+      # Assert response is controlled (200 and expected reply contract)
+      assert %{
+               "reply_text" => "Resposta do paciente gerada durante conclusão",
+               "reply_audio_url" => nil,
+               "server_now" => server_now_str
+             } = json_response(conn_result, 200)
+
+      assert {:ok, _, _} = DateTime.from_iso8601(server_now_str)
+
+      # Assert session status remains :completed, completion metadata is unchanged,
+      # and patient reply is NOT appended after completion
+      {:ok, final_session} = Conversation.fetch(session.session_id)
+      assert final_session.status == :completed
+      assert final_session.completed_at == original_completed_at
+      assert final_session.completion_reason == original_completion_reason
+      assert length(final_session.messages) == 1
+      assert hd(final_session.messages).role == :learner
     end
   end
 

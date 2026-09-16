@@ -65,14 +65,8 @@ defmodule BackendWeb.StationController do
          package = StationLoader.active_package(),
          {:ok, current_session} <- Conversation.fetch(session_id),
          context = format_context(current_session, package),
-         {:ok, %{text: reply_text}} <- StationAI.next_reply(package, context) do
-      {:ok, _} =
-        Conversation.append_message(session_id, %{
-          role: :patient,
-          modality: :text,
-          text: reply_text
-        })
-
+         {:ok, %{text: reply_text}} <- StationAI.next_reply(package, context),
+         {:ok, _session} <- append_patient_reply(session_id, reply_text) do
       json(conn, %{
         reply_text: reply_text,
         reply_audio_url: nil,
@@ -240,6 +234,18 @@ defmodule BackendWeb.StationController do
 
   defp parse_modality("voice"), do: :voice
   defp parse_modality("text"), do: :text
+
+  defp append_patient_reply(session_id, reply_text) do
+    case Conversation.append_message(session_id, %{
+           role: :patient,
+           modality: :text,
+           text: reply_text
+         }) do
+      {:ok, session} -> {:ok, session}
+      {:error, :completed} -> {:ok, :completed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp format_context(session, package) do
     conversation =
