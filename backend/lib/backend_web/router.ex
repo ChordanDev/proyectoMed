@@ -16,5 +16,6 @@ defmodule BackendWeb.Router do
 
     get "/active", StationController, :active
     post "/active/sessions", StationController, :create_session
+    post "/active/sessions/:id/messages", StationController, :create_message
   end
 end

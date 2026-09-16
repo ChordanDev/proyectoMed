@@ -1,8 +1,24 @@
 defmodule BackendWeb.StationControllerTest do
-  use BackendWeb.ConnCase, async: true
+  use BackendWeb.ConnCase, async: false
 
   alias Backend.Conversation
   alias Backend.StationLoader
+
+  defmodule TestSuccessAdapter do
+    @behaviour Backend.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok, %{text: "Estou com um aperto forte no peito há duas horas."}}
+    end
+  end
+
+  defmodule TestErrorAdapter do
+    @behaviour Backend.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:error, :provider_down}
+    end
+  end
 
   describe "GET /api/stations/active" do
     test "returns active station metadata", %{conn: conn} do
@@ -113,6 +129,240 @@ defmodule BackendWeb.StationControllerTest do
                "error" => "invalid_parameters",
                "message" =>
                  "Parâmetros inválidos: 'audio_consent' é obrigatório e deve ser um booleano."
+             }
+    end
+  end
+
+  describe "POST /api/stations/active/sessions/:id/messages" do
+    setup do
+      prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+      Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+
+      on_exit(fn ->
+        if prev_adapter do
+          Application.put_env(:backend, :station_ai_adapter, prev_adapter)
+        else
+          Application.delete_env(:backend, :station_ai_adapter)
+        end
+      end)
+
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: true
+        })
+
+      {:ok, session: session}
+    end
+
+    test "advances the session conversation and returns bounded reply contract", %{
+      conn: conn,
+      session: session
+    } do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Bom dia, o que você está sentindo?"
+        })
+
+      response = json_response(conn, 200)
+
+      assert %{
+               "reply_text" => "Estou com um aperto forte no peito há duas horas.",
+               "reply_audio_url" => nil,
+               "server_now" => server_now_str
+             } = response
+
+      assert {:ok, server_now, _} = DateTime.from_iso8601(server_now_str)
+      assert abs(DateTime.diff(server_now, DateTime.utc_now(), :second)) <= 2
+
+      # Verify conversation history contains both learner message and patient reply
+      assert {:ok, updated_session} = Conversation.fetch(session.session_id)
+      assert length(updated_session.messages) == 2
+
+      [msg1, msg2] = updated_session.messages
+      assert msg1.role == :learner
+      assert msg1.modality == :text
+      assert msg1.text == "Bom dia, o que você está sentindo?"
+
+      assert msg2.role == :patient
+      assert msg2.modality == :text
+      assert msg2.text == "Estou com um aperto forte no peito há duas horas."
+    end
+
+    test "accepts voice modality", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "voice",
+          "text" => "Olá, sou o médico."
+        })
+
+      assert %{"reply_text" => "Estou com um aperto forte no peito há duas horas."} =
+               json_response(conn, 200)
+
+      assert {:ok, updated_session} = Conversation.fetch(session.session_id)
+      [msg1, _msg2] = updated_session.messages
+      assert msg1.role == :learner
+      assert msg1.modality == :voice
+    end
+
+    test "rejects missing role", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "modality" => "text",
+          "text" => "Olá"
+        })
+
+      assert json_response(conn, 400) == %{
+               "error" => "invalid_message",
+               "message" =>
+                 "Mensagem inválida: 'role' deve ser 'learner', 'modality' deve ser 'voice' ou 'text', e 'text' não pode ser vazio."
+             }
+    end
+
+    test "rejects invalid role (e.g. patient)", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "patient",
+          "modality" => "text",
+          "text" => "Olá"
+        })
+
+      assert json_response(conn, 400) == %{
+               "error" => "invalid_message",
+               "message" =>
+                 "Mensagem inválida: 'role' deve ser 'learner', 'modality' deve ser 'voice' ou 'text', e 'text' não pode ser vazio."
+             }
+    end
+
+    test "rejects missing modality", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "text" => "Olá"
+        })
+
+      assert json_response(conn, 400) == %{
+               "error" => "invalid_message",
+               "message" =>
+                 "Mensagem inválida: 'role' deve ser 'learner', 'modality' deve ser 'voice' ou 'text', e 'text' não pode ser vazio."
+             }
+    end
+
+    test "rejects invalid modality", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "pigeon",
+          "text" => "Olá"
+        })
+
+      assert json_response(conn, 400) == %{
+               "error" => "invalid_message",
+               "message" =>
+                 "Mensagem inválida: 'role' deve ser 'learner', 'modality' deve ser 'voice' ou 'text', e 'text' não pode ser vazio."
+             }
+    end
+
+    test "rejects missing text or empty text", %{conn: conn, session: session} do
+      for empty_text <- ["", "   ", "\t\n", nil, 123] do
+        conn_attempt =
+          post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+            "role" => "learner",
+            "modality" => "text",
+            "text" => empty_text
+          })
+
+        assert json_response(conn_attempt, 400) == %{
+                 "error" => "invalid_message",
+                 "message" =>
+                   "Mensagem inválida: 'role' deve ser 'learner', 'modality' deve ser 'voice' ou 'text', e 'text' não pode ser vazio."
+               }
+      end
+    end
+
+    test "returns 404 on unknown session id", %{conn: conn} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/nonexistent-session-id/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Olá"
+        })
+
+      assert json_response(conn, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "returns 410 on expired session", %{conn: conn} do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      session =
+        try do
+          pkg = StationLoader.active_package()
+
+          Conversation.start(%{
+            station_id: pkg["station_id"],
+            station_version: pkg["version"],
+            audio_consent: false
+          })
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Olá"
+        })
+
+      assert json_response(conn, 410) == %{
+               "error" => "session_expired",
+               "message" => "A sessão expirou."
+             }
+    end
+
+    test "returns 422 on completed session", %{conn: conn, session: session} do
+      {:ok, _} = Conversation.complete(session.session_id, "time_up")
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Olá"
+        })
+
+      assert json_response(conn, 422) == %{
+               "error" => "session_completed",
+               "message" => "A sessão já foi concluída."
+             }
+    end
+
+    test "returns 502 when StationAI provider fails", %{conn: conn, session: session} do
+      Application.put_env(:backend, :station_ai_adapter, TestErrorAdapter)
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Como você está?"
+        })
+
+      assert json_response(conn, 502) == %{
+               "error" => "station_ai_unavailable",
+               "message" => "O serviço da estação de IA está temporariamente indisponível."
              }
     end
   end
