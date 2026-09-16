@@ -20,8 +20,8 @@ export interface Session {
 }
 
 export interface SendMessageRequest {
-  role: 'learner';
-  modality: 'voice' | 'text';
+  role: "learner";
+  modality: "voice" | "text";
   text: string;
 }
 
@@ -31,15 +31,15 @@ export interface MessageReply {
   server_now: string;
 }
 
-export type FinishReason = 'user' | 'timer';
+export type FinishReason = "user" | "timer";
 
 export interface CompletedSession {
   session_id: string;
-  status: 'completed';
+  status: "completed";
   completed_at: string;
 }
 
-export type CriterionStatus = 'met' | 'omitted' | 'uncertain';
+export type CriterionStatus = "met" | "omitted" | "uncertain";
 
 export interface ResultCriterion {
   id: string;
@@ -50,14 +50,18 @@ export interface ResultCriterion {
 
 export interface SessionResult {
   session_id: string;
-  status: 'completed';
+  status: "completed";
   criteria: ResultCriterion[];
 }
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
   }
 }
 
@@ -68,15 +72,15 @@ const invalid = (label: string): never => {
 };
 
 const objectValue = (value: unknown, label: string): JsonObject =>
-  typeof value === 'object' && value !== null
+  typeof value === "object" && value !== null
     ? (value as JsonObject)
     : invalid(label);
 
 const stringValue = (body: JsonObject, key: string, label: string): string =>
-  typeof body[key] === 'string' ? body[key] : invalid(label);
+  typeof body[key] === "string" ? body[key] : invalid(label);
 
 const booleanValue = (body: JsonObject, key: string, label: string): boolean =>
-  typeof body[key] === 'boolean' ? body[key] : invalid(label);
+  typeof body[key] === "boolean" ? body[key] : invalid(label);
 
 const literalValue = <T extends string>(
   body: JsonObject,
@@ -85,100 +89,100 @@ const literalValue = <T extends string>(
   label: string,
 ): T => {
   const value = body[key];
-  return typeof value === 'string' && allowed.includes(value as T)
+  return typeof value === "string" && allowed.includes(value as T)
     ? (value as T)
     : invalid(label);
 };
 
 const stringList = (body: JsonObject, key: string, label: string): string[] => {
   const value = body[key];
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? value
     : invalid(label);
 };
 
 const decodeActiveStation = (value: unknown): ActiveStation => {
-  const body = objectValue(value, 'active station');
+  const body = objectValue(value, "active station");
   return {
-    station_id: stringValue(body, 'station_id', 'active station'),
-    version: stringValue(body, 'version', 'active station'),
-    display_title: stringValue(body, 'display_title', 'active station'),
-    language: stringValue(body, 'language', 'active station'),
+    station_id: stringValue(body, "station_id", "active station"),
+    version: stringValue(body, "version", "active station"),
+    display_title: stringValue(body, "display_title", "active station"),
+    language: stringValue(body, "language", "active station"),
   };
 };
 
 const decodeSession = (value: unknown): Session => {
-  const body = objectValue(value, 'session');
+  const body = objectValue(value, "session");
   return {
-    session_id: stringValue(body, 'session_id', 'session'),
-    station_id: stringValue(body, 'station_id', 'session'),
-    station_version: stringValue(body, 'station_version', 'session'),
-    audio_consent: booleanValue(body, 'audio_consent', 'session'),
-    started_at: stringValue(body, 'started_at', 'session'),
-    expires_at: stringValue(body, 'expires_at', 'session'),
-    server_now: stringValue(body, 'server_now', 'session'),
+    session_id: stringValue(body, "session_id", "session"),
+    station_id: stringValue(body, "station_id", "session"),
+    station_version: stringValue(body, "station_version", "session"),
+    audio_consent: booleanValue(body, "audio_consent", "session"),
+    started_at: stringValue(body, "started_at", "session"),
+    expires_at: stringValue(body, "expires_at", "session"),
+    server_now: stringValue(body, "server_now", "session"),
   };
 };
 
 const decodeMessageReply = (value: unknown): MessageReply => {
-  const body = objectValue(value, 'message');
+  const body = objectValue(value, "message");
   const rawAudioUrl = body.reply_audio_url;
   const audioUrl =
-    rawAudioUrl === null || typeof rawAudioUrl === 'string'
+    rawAudioUrl === null || typeof rawAudioUrl === "string"
       ? rawAudioUrl
-      : invalid('message');
+      : invalid("message");
 
   return {
-    reply_text: stringValue(body, 'reply_text', 'message'),
+    reply_text: stringValue(body, "reply_text", "message"),
     reply_audio_url: audioUrl,
-    server_now: stringValue(body, 'server_now', 'message'),
+    server_now: stringValue(body, "server_now", "message"),
   };
 };
 
 const decodeCompletedSession = (value: unknown): CompletedSession => {
-  const body = objectValue(value, 'completed session');
+  const body = objectValue(value, "completed session");
   return {
-    session_id: stringValue(body, 'session_id', 'completed session'),
-    status: literalValue(body, 'status', ['completed'], 'completed session'),
-    completed_at: stringValue(body, 'completed_at', 'completed session'),
+    session_id: stringValue(body, "session_id", "completed session"),
+    status: literalValue(body, "status", ["completed"], "completed session"),
+    completed_at: stringValue(body, "completed_at", "completed session"),
   };
 };
 
 const criterionStatuses: readonly CriterionStatus[] = [
-  'met',
-  'omitted',
-  'uncertain',
+  "met",
+  "omitted",
+  "uncertain",
 ];
 
 const decodeCriterion = (value: unknown): ResultCriterion => {
-  const body = objectValue(value, 'result criterion');
+  const body = objectValue(value, "result criterion");
   return {
-    id: stringValue(body, 'id', 'result criterion'),
-    status: literalValue(body, 'status', criterionStatuses, 'result criterion'),
-    evidence: stringList(body, 'evidence', 'result criterion'),
-    recommendation: stringValue(body, 'recommendation', 'result criterion'),
+    id: stringValue(body, "id", "result criterion"),
+    status: literalValue(body, "status", criterionStatuses, "result criterion"),
+    evidence: stringList(body, "evidence", "result criterion"),
+    recommendation: stringValue(body, "recommendation", "result criterion"),
   };
 };
 
 const decodeSessionResult = (value: unknown): SessionResult => {
-  const body = objectValue(value, 'session result');
+  const body = objectValue(value, "session result");
   const criteria = Array.isArray(body.criteria)
     ? body.criteria
-    : invalid('session result');
+    : invalid("session result");
 
   return {
-    session_id: stringValue(body, 'session_id', 'session result'),
-    status: literalValue(body, 'status', ['completed'], 'session result'),
+    session_id: stringValue(body, "session_id", "session result"),
+    status: literalValue(body, "status", ["completed"], "session result"),
     criteria: criteria.map(decodeCriterion),
   };
 };
 
 const decodeApiError = (status: number, value: unknown): ApiError => {
   const body =
-    typeof value === 'object' && value !== null ? (value as JsonObject) : {};
-  const code = typeof body.error === 'string' ? body.error : 'http_error';
+    typeof value === "object" && value !== null ? (value as JsonObject) : {};
+  const code = typeof body.error === "string" ? body.error : "http_error";
   const message =
-    typeof body.message === 'string' ? body.message : 'A solicitação falhou.';
+    typeof body.message === "string" ? body.message : "A solicitação falhou.";
 
   return new ApiError(status, code, message);
 };
@@ -190,7 +194,7 @@ export const createApiClient = ({
   baseUrl: string;
   fetch?: typeof fetch;
 }) => {
-  const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
+  const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
 
   const request = async <T>(
     path: string,
@@ -202,7 +206,11 @@ export const createApiClient = ({
     try {
       response = await fetchImpl(`${normalizedBaseUrl}${path}`, init);
     } catch {
-      throw new ApiError(0, 'network_error', 'Não foi possível conectar ao servidor.');
+      throw new ApiError(
+        0,
+        "network_error",
+        "Não foi possível conectar ao servidor.",
+      );
     }
 
     let body: unknown;
@@ -211,8 +219,8 @@ export const createApiClient = ({
     } catch {
       throw new ApiError(
         response.status,
-        'invalid_response',
-        'O servidor retornou uma resposta inválida.',
+        "invalid_response",
+        "O servidor retornou uma resposta inválida.",
       );
     }
 
@@ -223,8 +231,8 @@ export const createApiClient = ({
     } catch {
       throw new ApiError(
         response.status,
-        'invalid_response',
-        'O servidor retornou uma resposta inválida.',
+        "invalid_response",
+        "O servidor retornou uma resposta inválida.",
       );
     }
   };
@@ -232,23 +240,23 @@ export const createApiClient = ({
   const sessionPath = (sessionId: string) =>
     `/api/stations/active/sessions/${encodeURIComponent(sessionId)}`;
   const jsonPost = (body: unknown): RequestInit => ({
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 
   return {
     getActiveStation: () =>
-      request('/api/stations/active', { method: 'GET' }, decodeActiveStation),
+      request("/api/stations/active", { method: "GET" }, decodeActiveStation),
     startSession: (body: StartSessionRequest) =>
-      request('/api/stations/active/sessions', jsonPost(body), decodeSession),
+      request("/api/stations/active/sessions", jsonPost(body), decodeSession),
     sendMessage: (sessionId: string, body: SendMessageRequest) =>
       request(
         `${sessionPath(sessionId)}/messages`,
         jsonPost(body),
         decodeMessageReply,
       ),
-    finishSession: (sessionId: string, reason: FinishReason = 'user') =>
+    finishSession: (sessionId: string, reason: FinishReason = "user") =>
       request(
         `${sessionPath(sessionId)}/finish`,
         jsonPost({ reason }),
@@ -257,14 +265,14 @@ export const createApiClient = ({
     fetchResult: (sessionId: string) =>
       request(
         `${sessionPath(sessionId)}/result`,
-        { method: 'GET' },
+        { method: "GET" },
         decodeSessionResult,
       ),
   };
 };
 
 const defaultClient = createApiClient({
-  baseUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:4000',
+  baseUrl: process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:4000",
   fetch: (...args) => fetch(...args),
 });
 
