@@ -129,7 +129,11 @@ describe("station API client", () => {
           signal?.addEventListener("abort", () => reject(new Error("aborted")));
         }),
     );
-    const client = createApiClient({ baseUrl, fetch: fetchMock, timeoutMs: 1_000 });
+    const client = createApiClient({
+      baseUrl,
+      fetch: fetchMock,
+      timeoutMs: 1_000,
+    });
 
     try {
       const pending = client.getActiveStation();
