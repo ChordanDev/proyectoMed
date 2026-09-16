@@ -9,6 +9,12 @@ defmodule BackendWeb.Router do
     pipe_through :api
 
     get "/", HealthController, :index
-    get "/api/stations/active", StationController, :active
+  end
+
+  scope "/api/stations", BackendWeb do
+    pipe_through :api
+
+    get "/active", StationController, :active
+    post "/active/sessions", StationController, :create_session
   end
 end
