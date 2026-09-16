@@ -27,7 +27,7 @@ export interface SendMessageRequest {
 
 export interface MessageReply {
   reply_text: string;
-  reply_audio_url: string | null;
+  reply_audio_url?: string | null;
   server_now: string;
 }
 
@@ -126,16 +126,20 @@ const decodeSession = (value: unknown): Session => {
 
 const decodeMessageReply = (value: unknown): MessageReply => {
   const body = objectValue(value, "message");
-  const rawAudioUrl = body.reply_audio_url;
-  const audioUrl =
-    rawAudioUrl === null || typeof rawAudioUrl === "string"
-      ? rawAudioUrl
-      : invalid("message");
+  const hasAudioUrl = Object.prototype.hasOwnProperty.call(
+    body,
+    "reply_audio_url",
+  );
+  const audioUrl = body.reply_audio_url;
+
+  if (hasAudioUrl && audioUrl !== null && typeof audioUrl !== "string") {
+    invalid("message");
+  }
 
   return {
     reply_text: stringValue(body, "reply_text", "message"),
-    reply_audio_url: audioUrl,
     server_now: stringValue(body, "server_now", "message"),
+    ...(hasAudioUrl ? { reply_audio_url: audioUrl as string | null } : {}),
   };
 };
 
@@ -190,9 +194,11 @@ const decodeApiError = (status: number, value: unknown): ApiError => {
 export const createApiClient = ({
   baseUrl,
   fetch: fetchImpl = fetch,
+  timeoutMs = 15_000,
 }: {
   baseUrl: string;
   fetch?: typeof fetch;
+  timeoutMs?: number;
 }) => {
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
 
@@ -201,39 +207,63 @@ export const createApiClient = ({
     init: RequestInit,
     decode: (value: unknown) => T,
   ): Promise<T> => {
-    let response: Response;
-
-    try {
-      response = await fetchImpl(`${normalizedBaseUrl}${path}`, init);
-    } catch {
-      throw new ApiError(
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeoutError = () =>
+      new ApiError(
         0,
-        "network_error",
-        "Não foi possível conectar ao servidor.",
+        "request_timeout",
+        "A solicitação excedeu o tempo limite.",
       );
-    }
-
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      throw new ApiError(
-        response.status,
-        "invalid_response",
-        "O servidor retornou uma resposta inválida.",
-      );
-    }
-
-    if (!response.ok) throw decodeApiError(response.status, body);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
 
     try {
-      return decode(body);
-    } catch {
-      throw new ApiError(
-        response.status,
-        "invalid_response",
-        "O servidor retornou uma resposta inválida.",
-      );
+      let response: Response;
+
+      try {
+        response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+          ...init,
+          signal: controller.signal,
+        });
+      } catch {
+        if (timedOut) throw timeoutError();
+
+        throw new ApiError(
+          0,
+          "network_error",
+          "Não foi possível conectar ao servidor.",
+        );
+      }
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        if (timedOut) throw timeoutError();
+
+        throw new ApiError(
+          response.status,
+          "invalid_response",
+          "O servidor retornou uma resposta inválida.",
+        );
+      }
+
+      if (!response.ok) throw decodeApiError(response.status, body);
+
+      try {
+        return decode(body);
+      } catch {
+        throw new ApiError(
+          response.status,
+          "invalid_response",
+          "O servidor retornou uma resposta inválida.",
+        );
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   };
 

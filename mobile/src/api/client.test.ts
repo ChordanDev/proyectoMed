@@ -28,7 +28,6 @@ describe("station API client", () => {
     };
     const reply = {
       reply_text: "A dor começou há duas horas.",
-      reply_audio_url: null,
       server_now: "2026-01-01T10:01:00Z",
     };
     const completed = {
@@ -77,34 +76,28 @@ describe("station API client", () => {
     );
     await expect(client.fetchResult("session-1")).resolves.toEqual(result);
 
-    expect(fetchMock.mock.calls).toEqual([
-      [`${baseUrl}/api/stations/active`, { method: "GET" }],
-      [
-        `${baseUrl}/api/stations/active/sessions`,
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ audio_consent: true }),
-        }),
-      ],
-      [
-        `${baseUrl}/api/stations/active/sessions/session%2F1/messages`,
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify(message),
-        }),
-      ],
-      [
-        `${baseUrl}/api/stations/active/sessions/session-1/finish`,
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ reason: "timer" }),
-        }),
-      ],
-      [
-        `${baseUrl}/api/stations/active/sessions/session-1/result`,
-        { method: "GET" },
-      ],
+    const calls = fetchMock.mock.calls;
+    expect(calls.map(([url]) => url)).toEqual([
+      `${baseUrl}/api/stations/active`,
+      `${baseUrl}/api/stations/active/sessions`,
+      `${baseUrl}/api/stations/active/sessions/session%2F1/messages`,
+      `${baseUrl}/api/stations/active/sessions/session-1/finish`,
+      `${baseUrl}/api/stations/active/sessions/session-1/result`,
     ]);
+    expect(calls[0][1]).toMatchObject({ method: "GET" });
+    expect(calls[1][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ audio_consent: true }),
+    });
+    expect(calls[2][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify(message),
+    });
+    expect(calls[3][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ reason: "timer" }),
+    });
+    expect(calls[4][1]).toMatchObject({ method: "GET" });
   });
 
   it("decodes API failures into ApiError", async () => {
@@ -124,5 +117,34 @@ describe("station API client", () => {
       code: "session_not_found",
       message: "Sessão não encontrada.",
     });
+  });
+
+  it("cancels a stalled request at the configured deadline", async () => {
+    jest.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetchMock = jest.fn<typeof fetch>().mockImplementation(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal ?? undefined;
+          signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock, timeoutMs: 1_000 });
+
+    try {
+      const pending = client.getActiveStation();
+      const rejection = expect(pending).rejects.toMatchObject({
+        name: "ApiError",
+        status: 0,
+        code: "request_timeout",
+      });
+
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(signal?.aborted).toBe(true);
+      await rejection;
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
