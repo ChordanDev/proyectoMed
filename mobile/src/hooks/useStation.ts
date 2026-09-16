@@ -45,11 +45,15 @@ export const useStation = (api: StationApi = defaultApi) => {
   const sessionRef = useRef<Session | null>(null);
   const hasStartedRef = useRef(false);
   const isFinishingRef = useRef(false);
+  const pendingSendRef = useRef<Promise<MessageReply | null> | null>(null);
+  const pendingSendTokenRef = useRef<object | null>(null);
 
   const fail = useCallback((cause: unknown) => {
     sessionRef.current = null;
     hasStartedRef.current = false;
     isFinishingRef.current = false;
+    pendingSendRef.current = null;
+    pendingSendTokenRef.current = null;
     setError(cause instanceof ApiError ? cause.message : unknownErrorMessage);
     setStatus("failed");
   }, []);
@@ -60,6 +64,8 @@ export const useStation = (api: StationApi = defaultApi) => {
 
       hasStartedRef.current = true;
       isFinishingRef.current = false;
+      pendingSendRef.current = null;
+      pendingSendTokenRef.current = null;
       setAudioConsent(consent);
       setError(null);
       setResult(null);
@@ -75,23 +81,38 @@ export const useStation = (api: StationApi = defaultApi) => {
   );
 
   const send = useCallback(
-    async (message: SendMessageRequest): Promise<MessageReply | null> => {
+    (message: SendMessageRequest): Promise<MessageReply | null> => {
       const session = sessionRef.current;
-      if (!session || isFinishingRef.current) return null;
-
-      try {
-        const messageReply = await api.sendMessage(session.session_id, message);
-        return sessionRef.current === session && !isFinishingRef.current
-          ? messageReply
-          : null;
-      } catch (cause) {
-        if (sessionRef.current !== session || isFinishingRef.current) {
-          return null;
-        }
-
-        fail(cause);
-        return null;
+      if (
+        !session ||
+        isFinishingRef.current ||
+        pendingSendRef.current !== null
+      ) {
+        return Promise.resolve(null);
       }
+
+      const sendToken = {};
+      pendingSendTokenRef.current = sendToken;
+      const pendingSend = (async () => {
+        try {
+          const messageReply = await api.sendMessage(
+            session.session_id,
+            message,
+          );
+          return sessionRef.current === session ? messageReply : null;
+        } catch (cause) {
+          if (sessionRef.current === session) fail(cause);
+          return null;
+        } finally {
+          if (pendingSendTokenRef.current === sendToken) {
+            pendingSendRef.current = null;
+            pendingSendTokenRef.current = null;
+          }
+        }
+      })();
+
+      pendingSendRef.current = pendingSend;
+      return pendingSend;
     },
     [api, fail],
   );
@@ -103,6 +124,10 @@ export const useStation = (api: StationApi = defaultApi) => {
 
       isFinishingRef.current = true;
       setStatus("finishing");
+
+      const pendingSend = pendingSendRef.current;
+      if (pendingSend) await pendingSend;
+      if (sessionRef.current !== session || !isFinishingRef.current) return;
 
       try {
         await api.finishSession(session.session_id, reason);

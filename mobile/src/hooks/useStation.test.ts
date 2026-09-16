@@ -245,7 +245,7 @@ describe("useStation", () => {
     expect(api.sendMessage).toHaveBeenCalledWith("session-2", message);
   });
 
-  it("ignores a late send failure after the session finishes", async () => {
+  it("waits for a pending send before finishing the session", async () => {
     const pendingSend = deferred<MessageReply>();
     const api = apiMock({
       sendMessage: jest.fn(() => pendingSend.promise),
@@ -260,24 +260,31 @@ describe("useStation", () => {
     await act(() => {
       sendPromise = result.current.send(message);
     });
+
+    let finishPromise!: Promise<void>;
+    await act(() => {
+      finishPromise = result.current.finish("user");
+    });
+    expect(result.current.status).toBe("finishing");
+    expect(api.finishSession).not.toHaveBeenCalled();
+
+    let blockedReply: MessageReply | null = reply;
+    await act(async () => {
+      blockedReply = await result.current.send(message);
+    });
+    expect(blockedReply).toBeNull();
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
 
+    let receivedReply: MessageReply | null = null;
     await act(async () => {
-      await result.current.finish("user");
-    });
-    expect(result.current).toMatchObject({
-      status: "finished",
-      result: stationResult,
-      error: null,
-    });
-
-    let receivedReply: MessageReply | null = reply;
-    await act(async () => {
-      pendingSend.reject(new Error("late socket failure"));
+      pendingSend.resolve(reply);
       receivedReply = await sendPromise;
+      await finishPromise;
     });
 
-    expect(receivedReply).toBeNull();
+    expect(receivedReply).toEqual(reply);
+    expect(api.finishSession).toHaveBeenCalledWith("session-1", "user");
+    expect(api.fetchResult).toHaveBeenCalledWith("session-1");
     expect(result.current).toMatchObject({
       status: "finished",
       result: stationResult,
@@ -285,7 +292,7 @@ describe("useStation", () => {
     });
   });
 
-  it("ignores a late send success after the session finishes", async () => {
+  it("does not finish when the pending send fails", async () => {
     const pendingSend = deferred<MessageReply>();
     const api = apiMock({
       sendMessage: jest.fn(() => pendingSend.promise),
@@ -300,22 +307,57 @@ describe("useStation", () => {
     await act(() => {
       sendPromise = result.current.send(message);
     });
-    await act(async () => {
-      await result.current.finish("user");
-    });
 
-    let receivedReply: MessageReply | null = null;
+    let finishPromise!: Promise<void>;
+    await act(() => {
+      finishPromise = result.current.finish("timer");
+    });
+    expect(api.finishSession).not.toHaveBeenCalled();
+
+    let receivedReply: MessageReply | null = reply;
     await act(async () => {
-      pendingSend.resolve(reply);
+      pendingSend.reject(new Error("socket details"));
       receivedReply = await sendPromise;
+      await finishPromise;
     });
 
     expect(receivedReply).toBeNull();
-    expect(result.current).toMatchObject({
-      status: "finished",
-      result: stationResult,
-      error: null,
+    expect(result.current.status).toBe("failed");
+    expect(result.current.error).toBe(
+      "A estação não pôde ser concluída. Você pode reiniciar.",
+    );
+    expect(api.finishSession).not.toHaveBeenCalled();
+    expect(api.fetchResult).not.toHaveBeenCalled();
+  });
+
+  it("allows only one send in flight while active", async () => {
+    const pendingSend = deferred<MessageReply>();
+    const api = apiMock({
+      sendMessage: jest.fn(() => pendingSend.promise),
     });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let firstSend!: Promise<MessageReply | null>;
+    await act(() => {
+      firstSend = result.current.send(message);
+    });
+
+    let concurrentSend!: Promise<MessageReply | null>;
+    await act(() => {
+      concurrentSend = result.current.send(message);
+    });
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    let concurrentReply: MessageReply | null = reply;
+    await act(async () => {
+      pendingSend.resolve(reply);
+      [, concurrentReply] = await Promise.all([firstSend, concurrentSend]);
+    });
+    expect(concurrentReply).toBeNull();
   });
 
   it("uses a safe pt-BR message when an unknown API failure occurs", async () => {
