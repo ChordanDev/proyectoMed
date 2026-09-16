@@ -53,13 +53,203 @@ The package is a single JSON file at `priv/stations/<id>/package.json`. It defin
 
 ### API contract (seam: Phoenix REST under `/api/stations`)
 
-- `GET /api/stations/active` → `{ station_id, version, display_title, language }`.
-- `POST /api/stations/active/sessions` → creates a session, returns `{ session_id, started_at, expires_at, server_now }`.
-- `POST /api/stations/active/sessions/:id/messages` with `{ role: "learner", modality: "voice" | "text", text }` → `{ reply_text, reply_audio_url?, server_now }`. The endpoint accepts text; voice is transcribed on-device before the call.
-- `POST /api/stations/active/sessions/:id/finish` with optional `{ reason: "user" | "timer" }` → `{ session_id, completed_at }`.
-- `GET /api/stations/active/sessions/:id/result` → `{ session_id, status, criteria: [{ id, status: "met" | "omitted" | "uncertain", evidence: [transcript_excerpts], recommendation }] }`.
-- All errors return JSON `{ "error": "code", "message": "human-readable pt-BR" }`. Invalid session ids return 404; expired sessions return 410.
-- A session that is not accessed for the safety timeout becomes invalid; the next request returns 410 and the backend deletes its record.
+All endpoints live under `/api/stations`. JSON request bodies and responses use snake_case keys and `application/json; charset=utf-8` unless specified otherwise (audio binary endpoints).
+
+#### 1. Active station
+
+- **Endpoint**: `GET /api/stations/active`
+- **Request**: none (no body or query parameters).
+- **Response (200 OK)**:
+
+  ```json
+  {
+    "station_id": "chest-pain-initial-assessment",
+    "version": "1.0.0",
+    "display_title": "Avaliação inicial de dor torácica",
+    "language": "pt-BR"
+  }
+  ```
+
+#### 2. Start session
+
+- **Endpoint**: `POST /api/stations/active/sessions`
+- **Request body**:
+
+  ```json
+  {
+    "audio_consent": true
+  }
+  ```
+
+  `audio_consent` (boolean, required): whether learner consented to audio transmission for transcription and synthesis per ADR-003.
+- **Response (200 OK / 201 Created)**:
+
+  ```json
+  {
+    "session_id": "c1a2b3c4-d5e6-47a8-b9c0-d1e2f3a4b5c6",
+    "station_id": "chest-pain-initial-assessment",
+    "station_version": "1.0.0",
+    "audio_consent": true,
+    "started_at": "2026-09-02T16:00:00Z",
+    "expires_at": "2026-09-02T16:30:00Z",
+    "server_now": "2026-09-02T16:00:00Z"
+  }
+  ```
+
+- **Errors**:
+  - `400`: missing or non-boolean `audio_consent` (`invalid_parameters`).
+
+#### 3. Conversation message
+
+- **Endpoint**: `POST /api/stations/active/sessions/:id/messages`
+- **Request body**:
+
+  ```json
+  {
+    "role": "learner",
+    "modality": "text",
+    "text": "Bom dia, o que você está sentindo?"
+  }
+  ```
+
+  `role` must be `"learner"`. `modality` is `"voice" | "text"`. `text` is non-empty string.
+- **Response (200 OK)**:
+
+  ```json
+  {
+    "reply_text": "Estou com um aperto forte no peito há duas horas.",
+    "reply_audio_url": null,
+    "server_now": "2026-09-02T16:02:15Z"
+  }
+  ```
+
+  `reply_audio_url` is optional/nullable.
+- **Errors**:
+  - `400`: missing or invalid message fields (`invalid_message`).
+  - `404`: session not found (`session_not_found`).
+  - `410`: session expired (`session_expired`).
+  - `422`: session already completed (`session_completed`).
+  - `502`: StationAI provider or LLM failure (`station_ai_unavailable`).
+
+#### 4. Audio transcription (voice input)
+
+- **Endpoint**: `POST /api/stations/active/sessions/:id/transcribe`
+- **Request**: `multipart/form-data` with `audio` blob (formats: `m4a`, `wav`, `webm`; max 10 MB).
+- **Response (200 OK)**:
+
+  ```json
+  {
+    "text": "Bom dia, o que você está sentindo?",
+    "duration_seconds": 3.4,
+    "transcribed_at": "2026-09-02T16:02:10Z"
+  }
+  ```
+
+- **Errors**:
+  - `400`: missing or invalid audio file (`invalid_audio`).
+  - `403`: session lacks `audio_consent` (`no_audio_consent`).
+  - `404`: session not found (`session_not_found`).
+  - `410`: session expired (`session_expired`).
+  - `413`: audio exceeds 10 MB limit (`audio_too_large`).
+  - `502`: OpenAI transcription service unavailable (`openai_unavailable`).
+
+#### 5. Audio synthesis (voice output)
+
+- **Endpoint**: `POST /api/stations/active/sessions/:id/synthesize`
+- **Request body**:
+
+  ```json
+  {
+    "text": "Estou com um aperto forte no peito há duas horas.",
+    "voice": "nova"
+  }
+  ```
+
+  `voice` (optional): `"alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer"`.
+- **Response (200 OK)**:
+  `audio/mpeg` binary stream/blob. When structured contract metadata is represented:
+  the contract uses `synthesized_at` only when a synthesis timestamp is needed; no unneeded timestamp is required (e.g. `%{audio_binary, format, synthesized_at}`).
+- **Errors**:
+  - `400`: missing or invalid text (`invalid_text`).
+  - `403`: session lacks `audio_consent` (`no_audio_consent`).
+  - `404`: session not found (`session_not_found`).
+  - `410`: session expired (`session_expired`).
+  - `502`: OpenAI TTS service unavailable (`openai_unavailable`).
+
+#### 6. Finish session
+
+- **Endpoint**: `POST /api/stations/active/sessions/:id/finish`
+- **Request body** (optional):
+
+  ```json
+  {
+    "reason": "user"
+  }
+  ```
+
+  `reason`: `"user" | "timer"`.
+- **Response (200 OK)**:
+
+  ```json
+  {
+    "session_id": "c1a2b3c4-d5e6-47a8-b9c0-d1e2f3a4b5c6",
+    "status": "completed",
+    "completed_at": "2026-09-02T16:10:00Z"
+  }
+  ```
+
+- **Errors**:
+  - `400`: invalid reason (`invalid_reason`).
+  - `404`: session not found (`session_not_found`).
+  - `410`: session expired (`session_expired`).
+
+#### 7. Session result (rubric feedback)
+
+- **Endpoint**: `GET /api/stations/active/sessions/:id/result`
+- **Request**: none (session ID in path).
+- **Response (200 OK)**:
+
+  ```json
+  {
+    "session_id": "c1a2b3c4-d5e6-47a8-b9c0-d1e2f3a4b5c6",
+    "status": "completed",
+    "criteria": [
+      {
+        "id": "cardiac-history",
+        "status": "met",
+        "evidence": [
+          "Investigou características da dor torácica e histórico cardíaco."
+        ],
+        "recommendation": ""
+      },
+      {
+        "id": "ecg-request",
+        "status": "omitted",
+        "evidence": [],
+        "recommendation": "Solicitar eletrocardiograma de 12 derivações em até 10 minutos para dor torácica aguda."
+      }
+    ]
+  }
+  ```
+
+  Status values per criterion are `"met" | "omitted" | "uncertain"`. No global score.
+- **Errors**:
+  - `404`: session not found (`session_not_found`).
+  - `410`: session expired (`session_expired`).
+  - `422`: session not yet completed (`session_not_finished`).
+
+#### Error format
+
+All errors return JSON:
+
+```json
+{
+  "error": "code",
+  "message": "human-readable pt-BR"
+}
+```
+
+Invalid session ids return 404; expired sessions return 410. A session that is not accessed for the safety timeout becomes invalid; the next request returns 410 and the backend deletes its record.
 
 ### Backend modules
 

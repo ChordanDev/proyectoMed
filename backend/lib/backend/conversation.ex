@@ -15,6 +15,9 @@ defmodule Backend.Conversation do
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
           session_id: String.t(),
+          station_id: String.t(),
+          station_version: String.t(),
+          audio_consent: boolean(),
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
           messages: [message()],
@@ -28,9 +31,9 @@ defmodule Backend.Conversation do
     GenServer.start_link(__MODULE__, options, name: __MODULE__)
   end
 
-  @spec start() :: session()
-  def start do
-    GenServer.call(__MODULE__, :start)
+  @spec start(map() | keyword()) :: session()
+  def start(attrs \\ %{}) do
+    GenServer.call(__MODULE__, {:start, attrs})
   end
 
   @spec append_message(String.t(), %{role: term(), modality: term(), text: String.t()}) ::
@@ -57,11 +60,29 @@ defmodule Backend.Conversation do
   end
 
   @impl true
-  def handle_call(:start, _from, state) do
+  def handle_call(:start, from, state) do
+    handle_call({:start, %{}}, from, state)
+  end
+
+  def handle_call({:start, attrs}, _from, state) do
+    attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
     now = DateTime.utc_now()
+
+    station_id =
+      Map.get(attrs, :station_id) || Map.get(attrs, "station_id") || default_station_id()
+
+    station_version =
+      Map.get(attrs, :station_version) || Map.get(attrs, "station_version") ||
+        default_station_version()
+
+    audio_consent =
+      Map.get(attrs, :audio_consent, Map.get(attrs, "audio_consent", false)) == true
 
     session = %{
       session_id: session_id(),
+      station_id: station_id,
+      station_version: station_version,
+      audio_consent: audio_consent,
       started_at: now,
       expires_at: DateTime.add(now, timeout_ms(), :millisecond),
       messages: [],
@@ -155,6 +176,26 @@ defmodule Backend.Conversation do
 
   defp schedule_purge do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
+  end
+
+  defp default_station_id do
+    if Process.whereis(Backend.StationLoader) do
+      Backend.StationLoader.active_package()["station_id"]
+    else
+      "chest-pain-initial-assessment"
+    end
+  rescue
+    _ -> "chest-pain-initial-assessment"
+  end
+
+  defp default_station_version do
+    if Process.whereis(Backend.StationLoader) do
+      Backend.StationLoader.active_package()["version"]
+    else
+      "1.0.0"
+    end
+  rescue
+    _ -> "1.0.0"
   end
 
   defp timeout_ms do
