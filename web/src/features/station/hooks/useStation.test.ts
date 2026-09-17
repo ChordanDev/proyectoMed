@@ -384,4 +384,37 @@ describe("useStation", () => {
     expect(receivedReply).toBeNull();
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("resets state back to idle cleanly", async () => {
+    const api = apiMock({
+      sendMessage: vi.fn().mockRejectedValue(new Error("socket details")),
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    await act(async () => {
+      await result.current.send(message);
+    });
+    expect(result.current.status).toBe("failed");
+    expect(result.current.error).not.toBeNull();
+
+    act(() => {
+      result.current.reset();
+    });
+
+    expect(result.current.status).toBe("idle");
+    expect(result.current.error).toBeNull();
+    expect(result.current.result).toBeNull();
+    expect(result.current.audioConsent).toBe(false);
+
+    // Can start again cleanly after reset
+    await act(async () => {
+      await result.current.start(false);
+    });
+    expect(result.current.status).toBe("active");
+    expect(result.current.audioConsent).toBe(false);
+  });
 });

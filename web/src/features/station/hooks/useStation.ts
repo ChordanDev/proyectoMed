@@ -58,6 +58,18 @@ export const useStation = (api: StationApi = defaultApi) => {
     setStatus("failed");
   }, []);
 
+  const reset = useCallback(() => {
+    sessionRef.current = null;
+    hasStartedRef.current = false;
+    isFinishingRef.current = false;
+    pendingSendRef.current = null;
+    pendingSendTokenRef.current = null;
+    setError(null);
+    setResult(null);
+    setStatus("idle");
+    setAudioConsent(false);
+  }, []);
+
   const start = useCallback(
     async (consent: boolean): Promise<void> => {
       if (hasStartedRef.current) return;
@@ -145,6 +157,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     start,
     send,
     finish,
+    reset,
     result,
     status,
     error,

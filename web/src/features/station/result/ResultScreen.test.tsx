@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionResult } from "../../../api/client";
-import strings from "../../../i18n/pt-BR.json";
+import type { SessionResult } from "../api/client";
+import strings from "../i18n/pt-BR.json";
 import { ResultScreen, ResultScreenState } from "./ResultScreen";
 
 describe("ResultScreen (Slice 2)", () => {
@@ -235,6 +235,17 @@ describe("ResultScreen (Slice 2)", () => {
       strings.resultUnavailable,
     );
     unmountFailed();
+
+    const { unmount: unmountFailedCustom } = render(
+      <ResultScreen
+        status="failed"
+        result={null}
+        errorMessage="Servidor indisponível"
+        onRestart={handleRestart}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Servidor indisponível");
+    unmountFailedCustom();
 
     const { unmount: unmountNullResult } = render(
       <ResultScreen
