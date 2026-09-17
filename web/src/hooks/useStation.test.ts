@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react-native";
+import { act, renderHook } from "@testing-library/react";
 import {
   ApiError,
   type CompletedSession,
@@ -59,10 +59,10 @@ const deferred = <T>() => {
 };
 
 const apiMock = (overrides: Partial<StationApi> = {}): StationApi => ({
-  startSession: jest.fn().mockResolvedValue(session),
-  sendMessage: jest.fn().mockResolvedValue(reply),
-  finishSession: jest.fn().mockResolvedValue(completed),
-  fetchResult: jest.fn().mockResolvedValue(stationResult),
+  startSession: vi.fn().mockResolvedValue(session),
+  sendMessage: vi.fn().mockResolvedValue(reply),
+  finishSession: vi.fn().mockResolvedValue(completed),
+  fetchResult: vi.fn().mockResolvedValue(stationResult),
   ...overrides,
 });
 
@@ -72,9 +72,9 @@ describe("useStation", () => {
     const pendingFinish = deferred<CompletedSession>();
     const pendingResult = deferred<SessionResult>();
     const api = apiMock({
-      startSession: jest.fn(() => pendingStart.promise),
-      finishSession: jest.fn(() => pendingFinish.promise),
-      fetchResult: jest.fn(() => pendingResult.promise),
+      startSession: vi.fn(() => pendingStart.promise),
+      finishSession: vi.fn(() => pendingFinish.promise),
+      fetchResult: vi.fn(() => pendingResult.promise),
     });
     const { result } = await renderHook(() => useStation(api));
 
@@ -166,7 +166,7 @@ describe("useStation", () => {
   it("fails the station and surfaces an API error message", async () => {
     const pendingStart = deferred<Session>();
     const api = apiMock({
-      startSession: jest.fn(() => pendingStart.promise),
+      startSession: vi.fn(() => pendingStart.promise),
     });
     const { result } = await renderHook(() => useStation(api));
 
@@ -196,11 +196,8 @@ describe("useStation", () => {
       station_version: "2.0.0",
       audio_consent: false,
     };
-    const startSession = jest
-      .fn<
-        ReturnType<StationApi["startSession"]>,
-        Parameters<StationApi["startSession"]>
-      >()
+    const startSession = vi
+      .fn<StationApi["startSession"]>()
       .mockRejectedValueOnce(
         new ApiError(503, "station_unavailable", "Estação indisponível."),
       )
@@ -248,7 +245,7 @@ describe("useStation", () => {
   it("waits for a pending send before finishing the session", async () => {
     const pendingSend = deferred<MessageReply>();
     const api = apiMock({
-      sendMessage: jest.fn(() => pendingSend.promise),
+      sendMessage: vi.fn(() => pendingSend.promise),
     });
     const { result } = await renderHook(() => useStation(api));
 
@@ -295,7 +292,7 @@ describe("useStation", () => {
   it("does not finish when the pending send fails", async () => {
     const pendingSend = deferred<MessageReply>();
     const api = apiMock({
-      sendMessage: jest.fn(() => pendingSend.promise),
+      sendMessage: vi.fn(() => pendingSend.promise),
     });
     const { result } = await renderHook(() => useStation(api));
 
@@ -333,7 +330,7 @@ describe("useStation", () => {
   it("allows only one send in flight while active", async () => {
     const pendingSend = deferred<MessageReply>();
     const api = apiMock({
-      sendMessage: jest.fn(() => pendingSend.promise),
+      sendMessage: vi.fn(() => pendingSend.promise),
     });
     const { result } = await renderHook(() => useStation(api));
 
@@ -362,7 +359,7 @@ describe("useStation", () => {
 
   it("uses a safe pt-BR message when an unknown API failure occurs", async () => {
     const api = apiMock({
-      sendMessage: jest.fn().mockRejectedValue(new Error("socket details")),
+      sendMessage: vi.fn().mockRejectedValue(new Error("socket details")),
     });
     const { result } = await renderHook(() => useStation(api));
 

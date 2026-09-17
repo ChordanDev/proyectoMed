@@ -302,7 +302,7 @@ export const createApiClient = ({
 };
 
 const defaultClient = createApiClient({
-  baseUrl: process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:4000",
+  baseUrl: import.meta.env.VITE_API_URL ?? "",
   fetch: (...args) => fetch(...args),
 });
 
