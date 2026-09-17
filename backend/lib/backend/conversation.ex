@@ -15,11 +15,13 @@ defmodule Backend.Conversation do
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
           session_id: String.t(),
+          station_id: String.t(),
+          station_version: String.t(),
+          audio_consent: boolean(),
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
           messages: [message()],
-          status: :active | :completed,
-          audio_consent: boolean()
+          status: :active | :completed
         }
 
   @type message :: %{role: term(), modality: term(), text: String.t(), at: DateTime.t()}
@@ -33,9 +35,9 @@ defmodule Backend.Conversation do
   Starts a session. `:audio_consent` defaults to `false`: audio transcription is
   refused until the learner explicitly grants it.
   """
-  @spec start(keyword()) :: session()
-  def start(options \\ []) do
-    GenServer.call(__MODULE__, {:start, Keyword.get(options, :audio_consent, false) == true})
+  @spec start(map() | keyword()) :: session()
+  def start(attrs \\ %{}) do
+    GenServer.call(__MODULE__, {:start, attrs})
   end
 
   @spec append_message(String.t(), %{role: term(), modality: term(), text: String.t()}) ::
@@ -62,16 +64,33 @@ defmodule Backend.Conversation do
   end
 
   @impl true
-  def handle_call({:start, audio_consent}, _from, state) do
+  def handle_call(:start, from, state) do
+    handle_call({:start, %{}}, from, state)
+  end
+
+  def handle_call({:start, attrs}, _from, state) when is_map(attrs) or is_list(attrs) do
+    attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
     now = DateTime.utc_now()
+
+    station_id =
+      Map.get(attrs, :station_id) || Map.get(attrs, "station_id") || default_station_id()
+
+    station_version =
+      Map.get(attrs, :station_version) || Map.get(attrs, "station_version") ||
+        default_station_version()
+
+    audio_consent =
+      Map.get(attrs, :audio_consent, Map.get(attrs, "audio_consent", false)) == true
 
     session = %{
       session_id: session_id(),
+      station_id: station_id,
+      station_version: station_version,
+      audio_consent: audio_consent,
       started_at: now,
       expires_at: DateTime.add(now, timeout_ms(), :millisecond),
       messages: [],
-      status: :active,
-      audio_consent: audio_consent
+      status: :active
     }
 
     true = :ets.insert(__MODULE__, {session.session_id, session})
@@ -161,6 +180,26 @@ defmodule Backend.Conversation do
 
   defp schedule_purge do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
+  end
+
+  defp default_station_id do
+    if Process.whereis(Backend.StationLoader) do
+      Backend.StationLoader.active_package()["station_id"]
+    else
+      "chest-pain-initial-assessment"
+    end
+  rescue
+    _ -> "chest-pain-initial-assessment"
+  end
+
+  defp default_station_version do
+    if Process.whereis(Backend.StationLoader) do
+      Backend.StationLoader.active_package()["version"]
+    else
+      "1.0.0"
+    end
+  rescue
+    _ -> "1.0.0"
   end
 
   defp timeout_ms do
