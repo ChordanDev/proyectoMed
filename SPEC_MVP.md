@@ -1,10 +1,10 @@
 ## Problem Statement
 
-A doctor trained abroad needs a safe, focused, low-cost way to rehearse one clinical station for Brazil's Revalida. Today the product has only a scaffolded Phoenix API and an Expo runtime placeholder; there is no station, no conversation, no rubric-bound feedback, and no validation of the learner experience. The user must be able to open the app, complete the station in Portuguese using voice and text under a ten-minute countdown, and immediately understand what they did well, what they missed, and what to practice next — without accounts, subscriptions, or stored personal history.
+A doctor trained abroad needs a safe, focused, low-cost way to rehearse one clinical station for Brazil's Revalida. Today the product has only a scaffolded Phoenix API and a Vite web SPA runtime placeholder; there is no station, no conversation, no rubric-bound feedback, and no validation of the learner experience. The user must be able to open the app, complete the station in Portuguese using voice and text under a ten-minute countdown, and immediately understand what they did well, what they missed, and what to practice next — without accounts, subscriptions, or stored personal history.
 
 ## Solution
 
-Deliver a single Expo app for iOS and Android distributed internally through Expo Go, backed by a Phoenix API that loads one original clinical Station Package authored outside the repo by the Content Partner. The learner starts a session, talks to the Station AI by voice or text, ends the station manually or at the timer, and sees rubric-bound feedback with highlighted transcript excerpts. All session data is ephemeral. No clinician workspace, no accounts, no server-side personal history. The Content Partner prepares the station as a versioned structured package; the system executes the experience.
+Deliver a Vite + React + TypeScript web SPA for desktop and mobile browsers, backed by a Phoenix API that loads one original clinical Station Package authored outside the repo by the Content Partner. The learner starts a session, talks to the Station AI by voice or text, ends the station manually or at the timer, and sees rubric-bound feedback with highlighted transcript excerpts. All session data is ephemeral. No clinician workspace, no accounts, no server-side personal history. The Content Partner prepares the station as a versioned structured package; the system executes the experience.
 
 ## User Stories
 
@@ -33,11 +33,11 @@ Deliver a single Expo app for iOS and Android distributed internally through Exp
 
 ### Architecture and runtime
 
-- The MVP runtime stays an Elixir/Phoenix backend and a React Native Expo frontend targeting iOS and Android distributed via Expo Go.
+- The MVP runtime is an Elixir/Phoenix backend and a Vite + React + TypeScript web SPA targeting desktop and mobile browsers.
 - The Phoenix API is the only public surface for the MVP. It loads exactly one Station Package at boot from `priv/stations/<id>/package.json` (no database, no admin endpoints).
 - All session state lives in an in-memory ETS table keyed by session id with a short safety timeout; the table is wiped on shutdown or expiry.
-- The Expo app speaks to the backend over HTTP. It does not persist anything beyond the current view.
-- `scripts/test.sh` is the only test command. New tests are wired into the existing Jest (Expo) and ExUnit (Phoenix) suites.
+- The SPA speaks to the backend over HTTP from the browser. It does not persist anything beyond the current view.
+- `scripts/test.sh` is the only test command. New tests are wired into the existing Vitest (web) and ExUnit (Phoenix) suites.
 
 ### Station Package format (seam: external file, loaded at boot)
 
@@ -55,7 +55,7 @@ The package is a single JSON file at `priv/stations/<id>/package.json`. It defin
 
 - `GET /api/stations/active` → `{ station_id, version, display_title, language }`.
 - `POST /api/stations/active/sessions` → creates a session, returns `{ session_id, started_at, expires_at, server_now }`.
-- `POST /api/stations/active/sessions/:id/messages` with `{ role: "learner", modality: "voice" | "text", text }` → `{ reply_text, reply_audio_url?, server_now }`. The endpoint accepts text; voice is transcribed on-device before the call.
+- `POST /api/stations/active/sessions/:id/messages` with `{ role: "learner", modality: "voice" | "text", text }` → `{ reply_text, reply_audio_url?, server_now }`. The endpoint accepts text; voice is transcribed in-browser before the call.
 - `POST /api/stations/active/sessions/:id/finish` with optional `{ reason: "user" | "timer" }` → `{ session_id, completed_at }`.
 - `GET /api/stations/active/sessions/:id/result` → `{ session_id, status, criteria: [{ id, status: "met" | "omitted" | "uncertain", evidence: [transcript_excerpts], recommendation }] }`.
 - All errors return JSON `{ "error": "code", "message": "human-readable pt-BR" }`. Invalid session ids return 404; expired sessions return 410.
@@ -72,13 +72,13 @@ The package is a single JSON file at `priv/stations/<id>/package.json`. It defin
 
 ### Frontend modules
 
-- `mobile/src/api/client.ts` — typed HTTP client for the API. Exposes `getActiveStation`, `startSession`, `sendMessage`, `finishSession`, `fetchResult`. Throws typed errors.
-- `mobile/src/hooks/useStation.ts` — React hook that owns the session lifecycle and timer state.
-- `mobile/src/screens/NoticeScreen.tsx` — pt-BR educational-use notice with a single "Entendi" button.
-- `mobile/src/screens/StationScreen.tsx` — voice + text input, transcript list, Station AI replies with synthesized speech (when voice is enabled) and visible text, ten-minute countdown, "Finalizar estação" button.
-- `mobile/src/screens/ResultScreen.tsx` — per-criterion status list with highlighted transcript excerpts and practice recommendations.
-- `mobile/src/i18n/pt-BR.json` — all learner-facing strings.
-- Voice capture uses `expo-av`; transcription happens on-device before posting the message to the backend. Text is always available as a fallback input.
+- `web/src/api/client.ts` — typed HTTP client for the API. Exposes `getActiveStation`, `startSession`, `sendMessage`, `finishSession`, `fetchResult`. Throws typed `ApiError`. Uses `import.meta.env.VITE_API_URL`.
+- `web/src/hooks/useStation.ts` — React hook that owns the session lifecycle and concurrency state.
+- `web/src/screens/NoticeScreen.tsx` — pt-BR educational-use notice with audio consent checkbox and a single "Entendi" button. Rendered with semantic HTML elements.
+- `web/src/screens/StationScreen.tsx` — voice + text input, transcript list, Station AI replies, ten-minute countdown, "Finalizar estação" button.
+- `web/src/screens/ResultScreen.tsx` — per-criterion status list with highlighted transcript excerpts and practice recommendations.
+- `web/src/i18n/pt-BR.json` — all learner-facing strings.
+- Voice capture uses the browser `MediaRecorder` API or Web Speech API (`webkitSpeechRecognition`). Text input is always available as an equal and fallback path.
 
 ### Failure policy
 
@@ -95,12 +95,12 @@ The package is a single JSON file at `priv/stations/<id>/package.json`. It defin
   - `Backend.StationAITest` — never invents facts; respects revealable facts list; uses response_rules.
   - `Backend.EvaluatorTest` — produces met/omitted/uncertain per criterion; selects transcript excerpts; returns no global score.
   - `BackendWeb.StationControllerTest` — every endpoint, every error code, the 410 on expired sessions.
-- Frontend coverage with Jest + React Native Testing Library:
-  - `client.test.ts` — typed errors, retry semantics, audio/text input mapping.
-  - `useStation.test.ts` — countdown, manual finish, timer finish, technical failure path.
-  - `ResultScreen.test.tsx` — criterion list with evidence highlights; no pass/fail language.
-  - `NoticeScreen.test.tsx` — required notice text in pt-BR.
-- Integration coverage: `scripts/test.sh` continues to be the only command. A new integration test boots the Phoenix endpoint from Jest and asserts the full learner loop (start → messages → finish → result).
+- Frontend coverage with Vitest + @testing-library/react:
+  - `web/src/api/client.test.ts` — typed errors, request decoding, timeout behavior, all API methods.
+  - `web/src/hooks/useStation.test.ts` — full lifecycle, concurrency, manual and timer finish, failure paths (7 tests).
+  - `web/src/screens/NoticeScreen.test.tsx` — required pt-BR notice text, checkbox consent gate, voice/text mode (13 tests).
+  - `web/src/screens/ResultScreen.test.tsx` — criterion list with evidence highlights; no pass/fail language.
+- Integration coverage: `scripts/test.sh` continues to be the only command.
 - `strict_tdd: false` per the OpenSpec config; tests run after implementation. Coverage targets are per-file conventions, not a numeric threshold.
 
 ### Out of scope
@@ -108,9 +108,10 @@ The package is a single JSON file at `priv/stations/<id>/package.json`. It defin
 - Clinician workspace, account management, subscription, billing, or any in-app authoring.
 - Server-side personal history or retained learner transcript beyond the active session.
 - Official Revalida material, public or internal; the case is original and inspired by Revalida skills.
-- Web platform, multi-station library, station rotation, station editor.
+- Native mobile apps (iOS/Android), Expo Go distribution.
+- Multi-station library, station rotation, station editor.
 - Patient avatars, 3D, video, or image capture.
-- Store publication (App Store, Play Store, TestFlight). Distribution is Expo Go.
+- Store publication (App Store, Play Store). Distribution is via browser URL.
 - Analytics, telemetry, or instrumentation inside the app. The project owner measures outcomes externally.
 - Translation to languages other than pt-BR.
 - Multi-leaderboard, sharing, or social features.
@@ -120,4 +121,4 @@ The package is a single JSON file at `priv/stations/<id>/package.json`. It defin
 - The implementation of `Backend.StationAI` is a single decision left to the implementation issue: a deterministic rule engine is enough for the MVP if it can satisfy the rubric; otherwise the issue may introduce one external LLM provider behind a thin adapter. The choice is documented in the implementation PR, not here.
 - The single station package is provided by the Content Partner. Until the partner delivers the file, the implementation may ship a placeholder package clearly marked `placeholder: true` and `display_title: "Estação de demonstração"`. The placeholder must still pass the StationLoader validation and must not be promoted to the pilot.
 - The session data lifecycle and safety timeout are listed as implementation details in the API contract; the actual timeout value (proposal: 30 minutes) is decided in the API contract issue, not here.
-- After this spec is approved, the work streams are: API contract and Station Package format (seam 1), Phoenix backend (seam 2), Expo frontend (seam 3), integration and verification (seam 4). Each becomes its own implementation issue via `to-tickets`.
+- After this spec is approved, the work streams are: API contract and Station Package format (seam 1), Phoenix backend (seam 2), web SPA frontend (seam 3), integration and verification (seam 4). Each becomes its own implementation issue via `to-tickets`.

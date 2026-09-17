@@ -1,6 +1,6 @@
 # proyectoMed root ignore rules.
 #
-# Per-subdirectory `.gitignore` files in `mobile/` and `backend/` cover
+# Per-subdirectory `.gitignore` files in `web/` and `backend/` cover
 # most generator output. The entries below mirror the runtime-scaffold
 # spec requirement and provide a defensive belt-and-braces set so root-
 # level inspection never accidentally picks up generated state.
@@ -13,30 +13,16 @@
 .codegraph/
 
 # ---------------------------------------------------------------------------
-# Mobile (Expo) — defensive mirrors of mobile/.gitignore
+# Web (Vite) — generated dependencies, caches, and build output
 # ---------------------------------------------------------------------------
 
-# Dependencies.
 node_modules/
-
-# Expo caches (also covered in mobile/.gitignore).
-.expo/
-.expo-shared/
-
-# Metro / bundler artifacts.
-.metro-health-check*
-.web-build/
-web-build/
 dist/
+.vite/
+.vitest/
+*.local
 
-# Generated native projects — must NEVER be committed (Expo Go scope).
-mobile/ios/
-mobile/android/
-
-# Generated TypeScript ambient files.
-expo-env.d.ts
-
-# Typescript build info.
+# TypeScript build info.
 *.tsbuildinfo
 
 # ---------------------------------------------------------------------------

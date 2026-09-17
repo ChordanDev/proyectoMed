@@ -17,7 +17,7 @@
 # the real $PROJECT_ROOT). The fixture contains a copy of scripts/scaffold.sh
 # so its computed project root is the fixture root, and is initialized as a
 # git repo so the script's git-root check passes. This isolates the harness
-# from the real generated mobile/ and backend/ runtimes: destructive cases
+# from the real generated web/ and backend/ runtimes: destructive cases
 # (target-already-exists, retry-after-partial) cannot damage production
 # state, because the production script never sees the real repository root
 # from inside the fixture.
@@ -42,6 +42,8 @@ ORIG_PATH="$PATH"
 FIXTURE_ROOT=""
 FIXTURE_SCAFFOLD_SH=""
 
+# Called indirectly by the EXIT trap.
+# shellcheck disable=SC2329
 cleanup_scratch() {
   if [[ -n "${SCRATCH:-}" ]]; then
     rm -rf "$SCRATCH"
@@ -53,7 +55,10 @@ trap cleanup_scratch EXIT
 
 begin() {
   CURRENT="$1"
-  SCRATCH="$(mktemp -d -t scaffold_red)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+  SCRATCH="$(mktemp -d -t scaffold_red)" || {
+    echo "FATAL: mktemp failed" >&2
+    exit 2
+  }
   PATH="$ORIG_PATH"
   FIXTURE_ROOT="$SCRATCH/proj"
   mkdir -p "$FIXTURE_ROOT/scripts"
@@ -63,7 +68,7 @@ begin() {
   FIXTURE_ROOT="$(cd "$FIXTURE_ROOT" && pwd -P)"
   cp "$PROD_SCAFFOLD_SH" "$FIXTURE_ROOT/scripts/scaffold.sh"
   chmod +x "$FIXTURE_ROOT/scripts/scaffold.sh"
-  ( cd "$FIXTURE_ROOT" && git init -q -b main >/dev/null )
+  (cd "$FIXTURE_ROOT" && git init -q -b main >/dev/null)
   FIXTURE_SCAFFOLD_SH="$FIXTURE_ROOT/scripts/scaffold.sh"
   printf "  [%s] " "$CURRENT"
 }
@@ -133,7 +138,7 @@ make_stub() {
     echo "echo \"$name invoked\" >> \"$log\""
     [[ -n "$extra_cmd" ]] && echo "$extra_cmd"
     echo "exit $code"
-  } > "$dir/$name"
+  } >"$dir/$name"
   chmod +x "$dir/$name"
   echo "$dir"
 }
@@ -159,11 +164,11 @@ test_git_other_repo_fails() {
   detect_missing_script && return
   local other="$SCRATCH/other-repo"
   mkdir -p "$other"
-  ( cd "$other" && git init -q >/dev/null )
+  (cd "$other" && git init -q >/dev/null)
   local rc=0
-  ( cd "$other" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
+  (cd "$other" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
   expect_nonzero "$rc" "scaffold.sh must exit non-zero when invoked from a foreign git repo"
-  expect_path_absent "$FIXTURE_ROOT/mobile" "fixture mobile/ must not be created"
+  expect_path_absent "$FIXTURE_ROOT/web" "fixture web/ must not be created"
   expect_path_absent "$FIXTURE_ROOT/backend" "fixture backend/ must not be created"
 }
 
@@ -194,17 +199,17 @@ test_no_preflight_mutation() {
   make_stub mix "$mix_log" 0 >/dev/null
   prepend_path "$bin"
   local rc=0
-  ( cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
-  expect_path_absent "$FIXTURE_ROOT/mobile" "preflight must not create mobile/"
+  (cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
+  expect_path_absent "$FIXTURE_ROOT/web" "preflight must not create web/"
   expect_path_absent "$FIXTURE_ROOT/backend" "preflight must not create backend/"
 }
 
 test_target_refusal_when_present() {
   begin "1.2.2 refuses to run when target dirs already exist"
   detect_missing_script && return
-  mkdir -p "$FIXTURE_ROOT/mobile" "$FIXTURE_ROOT/backend"
+  mkdir -p "$FIXTURE_ROOT/web" "$FIXTURE_ROOT/backend"
   local rc=0
-  ( cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
+  (cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
   expect_nonzero "$rc" "scaffold.sh must exit non-zero when target dirs already exist"
 }
 
@@ -213,12 +218,12 @@ test_version_refusal_on_mismatch() {
   detect_missing_script && return
   local dir="$SCRATCH/bin"
   mkdir -p "$dir"
-  cat > "$dir/npx" <<'SH'
+  cat >"$dir/npx" <<'SH'
 #!/usr/bin/env bash
 echo "99.0.0"
 exit 0
 SH
-  cat > "$dir/mix" <<'SH'
+  cat >"$dir/mix" <<'SH'
 #!/usr/bin/env bash
 echo "99.99.99"
 exit 0
@@ -226,9 +231,9 @@ SH
   chmod +x "$dir/npx" "$dir/mix"
   prepend_path "$dir"
   local rc=0
-  ( cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
+  (cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
   expect_nonzero "$rc" "scaffold.sh must exit non-zero on tool version mismatch"
-  expect_path_absent "$FIXTURE_ROOT/mobile" "no fixture mobile/ must be generated on version mismatch"
+  expect_path_absent "$FIXTURE_ROOT/web" "no fixture web/ must be generated on version mismatch"
   expect_path_absent "$FIXTURE_ROOT/backend" "no fixture backend/ must be generated on version mismatch"
 }
 
@@ -241,21 +246,21 @@ test_failure_propagation() {
   make_stub mix "$mix_log" 0 >/dev/null
   prepend_path "$bin"
   local rc=0
-  ( cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
+  (cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
   expect_ne "$rc" "0" "scaffold.sh must propagate a non-zero generator exit code"
 }
 
 test_next_generator_suppression() {
-  begin "1.2.5 next generator suppressed after Expo (npx) fails"
+  begin "1.2.5 next generator suppressed after Vite (npx) fails"
   detect_missing_script && return
   local npx_log="$SCRATCH/npx.log" mix_log="$SCRATCH/mix.log"
   local bin
   bin="$(make_stub npx "$npx_log" 1)"
   make_stub mix "$mix_log" 0 >/dev/null
   prepend_path "$bin"
-  ( cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || true
-  expect_log_present "$npx_log" "Expo (npx) was attempted first"
-  expect_log_absent "$mix_log" "Phoenix (mix) suppressed after Expo failure"
+  (cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || true
+  expect_log_present "$npx_log" "Vite (npx) was attempted first"
+  expect_log_absent "$mix_log" "Phoenix (mix) suppressed after Vite failure"
 }
 
 test_partial_output_preserved() {
@@ -263,19 +268,19 @@ test_partial_output_preserved() {
   detect_missing_script && return
   local npx_log="$SCRATCH/npx.log" mix_log="$SCRATCH/mix.log"
   local bin
-  bin="$(make_stub npx "$npx_log" 0 "mkdir -p '$FIXTURE_ROOT/mobile'")"
+  bin="$(make_stub npx "$npx_log" 0 "mkdir -p '$FIXTURE_ROOT/web'")"
   make_stub mix "$mix_log" 1 >/dev/null
   prepend_path "$bin"
-  ( cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || true
-  expect_path_exists "$FIXTURE_ROOT/mobile" "fixture mobile/ preserved after Phoenix failure"
+  (cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || true
+  expect_path_exists "$FIXTURE_ROOT/web" "fixture web/ preserved after Phoenix failure"
 }
 
 test_retry_refusal_after_partial() {
   begin "1.2.7 retry refused when target already exists"
   detect_missing_script && return
-  mkdir -p "$FIXTURE_ROOT/mobile"
+  mkdir -p "$FIXTURE_ROOT/web"
   local rc=0
-  ( cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH" ) >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
+  (cd "$FIXTURE_ROOT" && "$FIXTURE_SCAFFOLD_SH") >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
   expect_nonzero "$rc" "scaffold.sh must refuse a retry that would overwrite an existing target"
 }
 
@@ -306,7 +311,7 @@ main() {
 
   # The harness exits zero only in GREEN state. In RED state, at least one
   # assertion per scenario fails, so exit 1 is expected here.
-  if (( FAILED > 0 )); then
+  if ((FAILED > 0)); then
     echo "RED state confirmed: scripts/scaffold.sh is not yet implemented."
     exit 1
   fi

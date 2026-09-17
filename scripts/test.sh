@@ -3,7 +3,7 @@
 #
 # Root test orchestrator for proyectoMed.
 #
-# Runs the mobile Jest suite first, then the backend Phoenix ExUnit suite,
+# Runs the web Vitest suite first, then the backend Phoenix ExUnit suite,
 # and propagates the first non-zero exit status from either suite. The script
 # is cwd-independent: it derives its project root from its own location, not
 # from $PWD at invocation time.
@@ -27,18 +27,18 @@ TEST_SH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$TEST_SH")" && pwd -P)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
-MOBILE_DIR="$ROOT/mobile"
+WEB_DIR="$ROOT/web"
 BACKEND_DIR="$ROOT/backend"
 
 # ---------------------------------------------------------------------------
-# Suite 1: mobile Jest
+# Suite 1: web Vitest
 #
 # Uses the PATH-resolved `npm` so the test_red harness can substitute a fake
 # `npm` and assert ordering/failure propagation without running the real
-# Jest suite.
+# Vitest suite.
 # ---------------------------------------------------------------------------
 
-npm --prefix "$MOBILE_DIR" test
+npm --prefix "$WEB_DIR" test
 
 # ---------------------------------------------------------------------------
 # Suite 2: backend Phoenix ExUnit

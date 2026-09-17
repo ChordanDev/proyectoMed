@@ -2,7 +2,7 @@
 # tests/scripts/test_red.sh
 #
 # RED acceptance harness for scripts/test.sh.
-# Task 1.3 -- proves scripts/test.sh runs the mobile Jest suite before the
+# Task 1.3 -- proves scripts/test.sh runs the web Vitest suite before the
 # backend Phoenix ExUnit suite, and that it propagates the first non-zero
 # fake-suite status as its own exit code.
 #
@@ -27,6 +27,8 @@ CURRENT=""
 SCRATCH=""
 ORIG_PATH="$PATH"
 
+# Called indirectly by the EXIT trap.
+# shellcheck disable=SC2329
 cleanup_scratch() {
   if [[ -n "${SCRATCH:-}" ]]; then
     rm -rf "$SCRATCH"
@@ -38,7 +40,10 @@ trap cleanup_scratch EXIT
 
 begin() {
   CURRENT="$1"
-  SCRATCH="$(mktemp -d -t test_red)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+  SCRATCH="$(mktemp -d -t test_red)" || {
+    echo "FATAL: mktemp failed" >&2
+    exit 2
+  }
   PATH="$ORIG_PATH"
   printf "  [%s] " "$CURRENT"
 }
@@ -58,6 +63,8 @@ expect_eq() {
   if [[ "$actual" == "$expected" ]]; then ok; else bad "$why (expected '$expected', got '$actual')"; fi
 }
 
+# Retained as part of the tiny assertion library used by this harness family.
+# shellcheck disable=SC2329
 expect_path_exists() {
   local path="$1" why="$2"
   if [[ -e "$path" ]]; then ok; else bad "$why (path missing: $path)"; fi
@@ -74,12 +81,12 @@ make_suite_stubs() {
   local log="$1" npm_code="$2" mix_code="$3"
   local dir="$SCRATCH/bin"
   mkdir -p "$dir"
-  cat > "$dir/npm" <<SH
+  cat >"$dir/npm" <<SH
 #!/usr/bin/env bash
 echo "npm@start" >> "$log"
 exit $npm_code
 SH
-  cat > "$dir/mix" <<SH
+  cat >"$dir/mix" <<SH
 #!/usr/bin/env bash
 echo "mix@start" >> "$log"
 exit $mix_code
@@ -102,8 +109,8 @@ detect_missing_script() {
 # 1.3 Root test orchestration
 # ---------------------------------------------------------------------------
 
-test_mobile_before_backend_order() {
-  begin "1.3.1 mobile suite runs before backend suite"
+test_web_before_backend_order() {
+  begin "1.3.1 web suite runs before backend suite"
   detect_missing_script && return
   local log="$SCRATCH/order.log"
   local bin
@@ -122,7 +129,7 @@ test_mobile_before_backend_order() {
   mix_pos="$(grep -n '^mix@start' "$log" | head -1 | cut -d: -f1)"
   if [[ -z "$npm_pos" || -z "$mix_pos" ]]; then
     bad "either npm or mix was never invoked (npm_pos=$npm_pos, mix_pos=$mix_pos)"
-  elif (( npm_pos < mix_pos )); then
+  elif ((npm_pos < mix_pos)); then
     ok
   else
     bad "npm must precede mix in the order log (npm line $npm_pos vs mix line $mix_pos)"
@@ -138,7 +145,7 @@ test_first_nonzero_propagates() {
   prepend_path "$bin"
   local rc=0
   "$TEST_SH" >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
-  expect_eq "$rc" "17" "exit code 17 from the mobile suite must propagate as scripts/test.sh's exit code"
+  expect_eq "$rc" "17" "exit code 17 from the web suite must propagate as scripts/test.sh's exit code"
 }
 
 # ---------------------------------------------------------------------------
@@ -152,14 +159,14 @@ main() {
   echo "Target script: $TEST_SH"
   echo
 
-  test_mobile_before_backend_order
+  test_web_before_backend_order
   test_first_nonzero_propagates
 
   echo
   echo "Summary: $PASSED passed, $FAILED failed"
   echo
 
-  if (( FAILED > 0 )); then
+  if ((FAILED > 0)); then
     echo "RED state confirmed: scripts/test.sh is not yet implemented."
     exit 1
   fi
