@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/scaffold.sh
 #
-# Expo + Phoenix scaffold orchestrator for proyectoMed.
+# Vite + Phoenix scaffold orchestrator for proyectoMed.
 # Sole generator boundary: preflight, git-root authority, version pin,
 # and partial-output preservation.
 #
@@ -9,7 +9,7 @@
 #   --print-root   Emit the canonical project root on stdout and exit.
 #
 # Acceptance contract: tests/scripts/scaffold_red.sh must pass against
-# this script without test edits. The script never creates `mobile/` or
+# this script without test edits. The script never creates `web/` or
 # `backend/` outside its verified preflight.
 
 set -euo pipefail
@@ -21,7 +21,7 @@ set -euo pipefail
 SCAFFOLD_SH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCAFFOLD_SH")" && pwd -P)"
 EXPECTED_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-MOBILE_DIR="$EXPECTED_ROOT/mobile"
+WEB_DIR="$EXPECTED_ROOT/web"
 BACKEND_DIR="$EXPECTED_ROOT/backend"
 
 # --print-root: emit canonical project root, skip preflight.
@@ -52,18 +52,21 @@ fi
 # Preflight 1: target directories must not exist (no overwrite, no resume).
 # ---------------------------------------------------------------------------
 
-if [[ -e "$MOBILE_DIR" || -e "$BACKEND_DIR" ]]; then
+if [[ -e "$WEB_DIR" || -e "$BACKEND_DIR" ]]; then
   echo "ERROR: target directories already exist; refusing to overwrite." >&2
-  echo "  mobile/:  $MOBILE_DIR" >&2
+  echo "  web/:     $WEB_DIR" >&2
   echo "  backend/: $BACKEND_DIR" >&2
   exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# Preflight 2: Expo toolchain availability and version pin.
+# Preflight 2: Vite/npm toolchain availability and version pin.
 # ---------------------------------------------------------------------------
 
-command -v npx >/dev/null 2>&1 || { echo "ERROR: npx not found in PATH" >&2; exit 1; }
+command -v npx >/dev/null 2>&1 || {
+  echo "ERROR: npx not found in PATH" >&2
+  exit 1
+}
 
 # Version pin: reject the "99.x.x" sentinel that the RED harness uses to
 # simulate a mismatched toolchain. Empty output (e.g. from a faked stub
@@ -76,32 +79,32 @@ if [[ "$NPX_VERSION" == 99.* ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Generator 1: Expo (mobile/) -- only attempted after Expo preflight.
+# Generator 1: Vite (web/) -- only attempted after Vite preflight.
 # On failure, the next generator is suppressed and the script exits.
 # ---------------------------------------------------------------------------
 
-EXPO_RC=0
-npx --yes create-expo-app@4.0.0 "$MOBILE_DIR" \
-  --template expo-template-blank-typescript@57.0.20 \
-  --no-install \
-  --no-agents-md \
-  --yes || EXPO_RC=$?
+VITE_RC=0
+npx --yes create-vite@latest "$WEB_DIR" \
+  --template react-ts || VITE_RC=$?
 
-if [[ "$EXPO_RC" -ne 0 ]]; then
-  echo "ERROR: Expo generator failed with exit $EXPO_RC." >&2
-  if [[ -e "$MOBILE_DIR" ]]; then
-    echo "Preserved partial mobile/ output for diagnosis." >&2
+if [[ "$VITE_RC" -ne 0 ]]; then
+  echo "ERROR: Vite generator failed with exit $VITE_RC." >&2
+  if [[ -e "$WEB_DIR" ]]; then
+    echo "Preserved partial web/ output for diagnosis." >&2
   fi
-  exit "$EXPO_RC"
+  exit "$VITE_RC"
 fi
 
 # ---------------------------------------------------------------------------
 # Preflight 3: Phoenix toolchain availability and version pin.
-# Only attempted after Expo succeeded, so a failing Expo leaves mix
+# Only attempted after Vite succeeded, so a failing Vite leaves mix
 # untouched (next-generator suppression).
 # ---------------------------------------------------------------------------
 
-command -v mix >/dev/null 2>&1 || { echo "ERROR: mix not found in PATH" >&2; exit 1; }
+command -v mix >/dev/null 2>&1 || {
+  echo "ERROR: mix not found in PATH" >&2
+  exit 1
+}
 
 MIX_VERSION_RAW="$(mix --version 2>/dev/null || printf '')"
 MIX_FIRST_LINE="${MIX_VERSION_RAW%%$'\n'*}"
@@ -111,7 +114,7 @@ if [[ "$MIX_FIRST_LINE" == 99.* ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Generator 2: Phoenix (backend/) -- only attempted if Expo succeeded.
+# Generator 2: Phoenix (backend/) -- only attempted if Vite succeeded.
 # ---------------------------------------------------------------------------
 
 PHOENIX_RC=0

@@ -1,4 +1,4 @@
-import { describe, expect, it, jest } from "@jest/globals";
+import { describe, expect, it, vi } from "vitest";
 import { createApiClient } from "./client";
 
 const baseUrl = "https://api.example.test";
@@ -47,7 +47,7 @@ describe("station API client", () => {
         },
       ],
     };
-    const fetchMock = jest
+    const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(activeStation))
       .mockResolvedValueOnce(jsonResponse(session))
@@ -101,7 +101,7 @@ describe("station API client", () => {
   });
 
   it("decodes API failures into ApiError", async () => {
-    const fetchMock = jest
+    const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValue(
         jsonResponse(
@@ -120,16 +120,20 @@ describe("station API client", () => {
   });
 
   it("cancels a stalled request at the configured deadline", async () => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
     let signal: AbortSignal | undefined;
-    const fetchMock = jest.fn<typeof fetch>().mockImplementation(
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
       (_input, init) =>
         new Promise<Response>((_resolve, reject) => {
           signal = init?.signal ?? undefined;
           signal?.addEventListener("abort", () => reject(new Error("aborted")));
         }),
     );
-    const client = createApiClient({ baseUrl, fetch: fetchMock, timeoutMs: 1_000 });
+    const client = createApiClient({
+      baseUrl,
+      fetch: fetchMock,
+      timeoutMs: 1_000,
+    });
 
     try {
       const pending = client.getActiveStation();
@@ -139,12 +143,12 @@ describe("station API client", () => {
         code: "request_timeout",
       });
 
-      await jest.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
 
       expect(signal?.aborted).toBe(true);
       await rejection;
     } finally {
-      jest.useRealTimers();
+      vi.useRealTimers();
     }
   });
 });
