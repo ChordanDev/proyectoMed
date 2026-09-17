@@ -275,4 +275,49 @@ describe("ResultScreenState (Slice 1)", () => {
 
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("remounts DOM node when transitioning from finishing to failed recovery (TR-03)", () => {
+    const { rerender } = render(
+      <ResultScreenState
+        status="finishing"
+        hasUsableFeedback={false}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    const finishingNode = screen.getByRole("status");
+
+    rerender(
+      <ResultScreenState
+        status="failed"
+        hasUsableFeedback={false}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    const recoveryNode = screen.getByRole("alert");
+    expect(recoveryNode).not.toBe(finishingNode);
+  });
+
+  it("binds disabled prop to restart button and prevents click when disabled (TR-01)", async () => {
+    const user = userEvent.setup();
+    const handleRestart = vi.fn();
+
+    render(
+      <ResultScreenState
+        status="failed"
+        hasUsableFeedback={false}
+        onRestart={handleRestart}
+        disabled={true}
+      />,
+    );
+
+    const restartButton = screen.getByRole("button", {
+      name: strings.resultRestartButton,
+    });
+    expect(restartButton).toBeDisabled();
+
+    await user.click(restartButton);
+    expect(handleRestart).not.toHaveBeenCalled();
+  });
 });
