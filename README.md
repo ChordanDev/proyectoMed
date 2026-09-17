@@ -65,7 +65,7 @@ npm --prefix web run dev
 ( cd backend && mix phx.server )
 ```
 
-The backend exposes exactly one HTTP route:
+The backend exposes two HTTP routes:
 
 ```sh
 $ curl -i http://localhost:4000/
@@ -73,6 +73,12 @@ HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
 
 {"status":"ok"}
+
+$ curl -i http://localhost:4000/api/stations/active
+HTTP/1.1 200 OK
+content-type: application/json; charset=utf-8
+
+{"station_id":"chest-pain-initial-assessment","version":"1.0.0","language":"pt-BR","display_title":"Avaliação inicial de dor torácica"}
 ```
 
 During local development, Vite proxies `/api` requests to the Phoenix backend
@@ -100,6 +106,21 @@ npm --prefix web test
 # Backend (ExUnit).
 ( cd backend && mix test )
 ```
+
+---
+
+## Pull-request CI
+
+Every pull request runs the `Pull Request Validation` GitHub Actions workflow.
+It installs the mobile dependencies with `npm ci`, fetches the Phoenix
+dependencies with `mix deps.get`, and then runs the single root command:
+
+```sh
+bash scripts/test.sh
+```
+
+The workflow reads its Node version from `mobile/package.json` and its Erlang
+and Elixir versions from `backend/.tool-versions`.
 
 ---
 
@@ -136,8 +157,11 @@ support is enabled; callers can pass `voiceSupport={false}` for text-only mode.
 ### Other known limitations
 
 - **No persistence layer.** `--no-ecto` was chosen so the database adapter
-  is a deliberate downstream decision. `GET /` is the only route.
+- **No persistence layer.** `--no-ecto` was chosen so the database adapter
+  is a deliberate downstream decision (see `#13` evaluation). `GET /` and
+  `GET /api/stations/active` are the only routes.
 - **No view layer.** The backend serves only JSON responses.
+
 - **No strict TDD.** `openspec/config.yaml` keeps `strict_tdd: false`. The
   harness is available, but test-first discipline is left to the change that
   implements the first real capability.

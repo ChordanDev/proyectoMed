@@ -1,0 +1,75 @@
+name: Architecture Decision Record (ADR)
+description: Record a significant architecture or design decision.
+title: "ADR-NNN: "
+labels:
+  - type:docs
+body:
+  - type: input
+    id: decision_title
+    attributes:
+      label: Decision title
+      description: Provide a concise title describing the architecture decision.
+      placeholder: e.g. Adopt Phoenix Contexts for Backend Domain Interface
+    validations:
+      required: true
+
+  - type: dropdown
+    id: status
+    attributes:
+      label: Status
+      description: Current status of this architecture decision.
+      options:
+        - Proposed
+        - Accepted
+        - Superseded
+        - Deprecated
+        - Rejected
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What is the context, problem statement, or driving architectural force?
+      placeholder: Describe the forces, current situation, constraints, and requirements.
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision
+      description: What is the architecture change or decision being adopted?
+      placeholder: State the decision clearly and how it resolves the context forces.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What alternatives or alternate architectures were considered and why were they rejected?
+      placeholder: |
+        - Alternative 1: Why it was not selected
+        - Alternative 2: Why it was not selected
+    validations:
+      required: true
+
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences
+      description: What are the positive, negative, and neutral trade-offs of this decision?
+      placeholder: Describe the impact on velocity, complexity, maintenance, and testing.
+    validations:
+      required: true
+
+  - type: input
+    id: related_issues
+    attributes:
+      label: Related issues
+      description: Reference related issues, PRs, or prior ADRs (optional).
+      placeholder: e.g. #89, ADR-001
+    validations:
+      required: false
