@@ -236,6 +236,17 @@ describe("ResultScreen (Slice 2)", () => {
     );
     unmountFailed();
 
+    const { unmount: unmountFailedCustom } = render(
+      <ResultScreen
+        status="failed"
+        result={null}
+        errorMessage="Servidor indisponível"
+        onRestart={handleRestart}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Servidor indisponível");
+    unmountFailedCustom();
+
     const { unmount: unmountNullResult } = render(
       <ResultScreen
         status="finished"

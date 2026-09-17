@@ -50,19 +50,24 @@ export function StationScreen({
     // Scroll after learner message renders
     queueMicrotask(scrollToBottom);
 
-    const replyText = await onSend(trimmed);
+    try {
+      const replyText = await onSend(trimmed);
 
-    if (replyText) {
-      const patientMessage: DisplayMessage = {
-        role: "patient",
-        text: replyText,
-      };
-      setMessages((prev) => [...prev, patientMessage]);
+      if (replyText) {
+        const patientMessage: DisplayMessage = {
+          role: "patient",
+          text: replyText,
+        };
+        setMessages((prev) => [...prev, patientMessage]);
+      }
+    } catch {
+      // Swallowed here so UI doesn't crash on unhandled rejection;
+      // error state can be propagated via error prop if needed.
+    } finally {
+      setSending(false);
+      // Scroll after patient message renders
+      queueMicrotask(scrollToBottom);
     }
-
-    setSending(false);
-    // Scroll after patient message renders
-    queueMicrotask(scrollToBottom);
   }, [inputValue, sending, disabled, onSend, scrollToBottom]);
 
   const handleKeyDown = useCallback(

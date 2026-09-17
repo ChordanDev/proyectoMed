@@ -148,6 +148,21 @@ describe("StationScreen", () => {
     });
   });
 
+  it("re-enables input and controls if onSend throws an error", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockRejectedValue(new Error("Network crash"));
+    render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+    await user.type(screen.getByTestId("message-input"), "Mensagem com erro");
+    await user.click(screen.getByTestId("send-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("message-input")).toBeEnabled();
+      expect(screen.getByTestId("finish-button")).toBeEnabled();
+      expect(screen.queryByTestId("typing-indicator")).not.toBeInTheDocument();
+    });
+  });
+
   it("displays an external error message", () => {
     render(
       <StationScreen {...defaultProps} error="Erro de conexão" />,

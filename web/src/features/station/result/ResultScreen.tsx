@@ -10,6 +10,7 @@ export interface ResultScreenStateProps {
   hasUsableFeedback: boolean;
   onRestart: () => void | Promise<void>;
   disabled?: boolean;
+  errorMessage?: string;
 }
 
 export interface ResultScreenProps {
@@ -17,6 +18,7 @@ export interface ResultScreenProps {
   result: SessionResult | null;
   onRestart: () => void | Promise<void>;
   disabled?: boolean;
+  errorMessage?: string;
 }
 
 const STATUS_TEXT_MAP: Record<CriterionStatus, string> = {
@@ -30,6 +32,7 @@ export function ResultScreenState({
   hasUsableFeedback,
   onRestart,
   disabled = false,
+  errorMessage,
 }: ResultScreenStateProps): React.JSX.Element | null {
   if (status === "finishing") {
     return (
@@ -53,7 +56,9 @@ export function ResultScreenState({
         role="alert"
         aria-live="assertive"
       >
-        <p className="result-screen-state__text">{strings.resultUnavailable}</p>
+        <p className="result-screen-state__text">
+          {errorMessage || strings.resultUnavailable}
+        </p>
         <button
           type="button"
           className="result-screen-state__button"
@@ -76,6 +81,7 @@ export function ResultScreen({
   result,
   onRestart,
   disabled = false,
+  errorMessage,
 }: ResultScreenProps): React.JSX.Element | null {
   const criteria = result?.criteria;
   const hasUsableFeedback = Boolean(criteria && criteria.length > 0);
@@ -87,6 +93,7 @@ export function ResultScreen({
         hasUsableFeedback={hasUsableFeedback}
         onRestart={onRestart}
         disabled={disabled}
+        errorMessage={errorMessage}
       />
     );
   }

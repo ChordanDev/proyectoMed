@@ -4,8 +4,9 @@ import {
   StationScreen,
   ResultScreen,
   useStation,
+  type ResultScreenStatus,
 } from "./features/station";
-import type { ResultScreenStatus } from "./features/station/result/ResultScreen";
+import strings from "./features/station/i18n/pt-BR.json";
 import "./index.css";
 
 export default function App(): React.JSX.Element {
@@ -44,7 +45,7 @@ export default function App(): React.JSX.Element {
     return (
       <main className="app-root">
         {station.status === "loading" ? (
-          <p role="status">Carregando estação...</p>
+          <p role="status">{strings.loadingStation}</p>
         ) : (
           <NoticeScreen onStart={handleStart} voiceSupport={false} />
         )}
@@ -72,6 +73,7 @@ export default function App(): React.JSX.Element {
         <ResultScreen
           status="failed"
           result={null}
+          errorMessage={station.error ?? undefined}
           onRestart={handleRestart}
         />
       </main>
