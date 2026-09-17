@@ -1,12 +1,11 @@
-import React from "react";
-import { act, render, fireEvent } from "@testing-library/react-native";
+import { act, render, fireEvent } from "@testing-library/react";
 import { NoticeScreen } from "./NoticeScreen";
 import strings from "../i18n/pt-BR.json";
 
 describe("NoticeScreen", () => {
   describe("shared: renders educational notice and primary button", () => {
     it("shows the notice title and body text", async () => {
-      const onStart = jest.fn();
+      const onStart = vi.fn();
       const { getByText } = await render(
         <NoticeScreen onStart={onStart} voiceSupport={false} />,
       );
@@ -15,7 +14,7 @@ describe("NoticeScreen", () => {
     });
 
     it("shows the 'Entendi' button", async () => {
-      const onStart = jest.fn();
+      const onStart = vi.fn();
       const { getByText } = await render(
         <NoticeScreen onStart={onStart} voiceSupport={false} />,
       );
@@ -25,79 +24,79 @@ describe("NoticeScreen", () => {
 
   describe("voiceSupport: true (default)", () => {
     it("renders audio disclosure text", async () => {
-      const onStart = jest.fn();
+      const onStart = vi.fn();
       const { getByText } = await render(<NoticeScreen onStart={onStart} />);
       expect(getByText(strings.audioDisclosure)).toBeTruthy();
     });
 
     it("renders consent checkbox label", async () => {
-      const onStart = jest.fn();
+      const onStart = vi.fn();
       const { getByText } = await render(<NoticeScreen onStart={onStart} />);
       expect(getByText(strings.consentCheckboxLabel)).toBeTruthy();
     });
 
     it("'Entendi' button is disabled when checkbox is unchecked", async () => {
-      const onStart = jest.fn();
-      const { getByText } = await render(<NoticeScreen onStart={onStart} />);
-      const button = getByText(strings.noticeButton).parent;
-      expect(button?.props.accessibilityState?.disabled).toBe(true);
+      const onStart = vi.fn();
+      const { getByTestId } = await render(<NoticeScreen onStart={onStart} />);
+      const button = getByTestId("notice-button");
+      expect(button).toBeDisabled();
     });
 
     it("'Entendi' button is enabled after checking the consent checkbox", async () => {
-      const onStart = jest.fn();
-      const { getByText } = await render(<NoticeScreen onStart={onStart} />);
-      const checkbox = getByText(strings.consentCheckboxLabel).parent;
+      const onStart = vi.fn();
+      const { getByTestId } = await render(<NoticeScreen onStart={onStart} />);
+      const checkbox = getByTestId("consent-checkbox").querySelector("input")!;
       await act(async () => {
-        fireEvent.press(checkbox!);
+        fireEvent.click(checkbox);
       });
-      const button = getByText(strings.noticeButton).parent;
-      expect(button?.props.accessibilityState?.disabled).toBe(false);
+      const button = getByTestId("notice-button");
+      expect(button).not.toBeDisabled();
     });
 
     it("disables 'Entendi' again after unchecking the checkbox", async () => {
-      const onStart = jest.fn();
-      const { getByText } = await render(<NoticeScreen onStart={onStart} />);
-      const checkbox = getByText(strings.consentCheckboxLabel).parent;
+      const onStart = vi.fn();
+      const { getByTestId } = await render(<NoticeScreen onStart={onStart} />);
+      const checkbox = getByTestId("consent-checkbox").querySelector("input")!;
       await act(async () => {
-        fireEvent.press(checkbox!); // check
+        fireEvent.click(checkbox); // check
       });
       await act(async () => {
-        fireEvent.press(checkbox!); // uncheck
+        fireEvent.click(checkbox); // uncheck
       });
-      const button = getByText(strings.noticeButton).parent;
-      expect(button?.props.accessibilityState?.disabled).toBe(true);
+      const button = getByTestId("notice-button");
+      expect(button).toBeDisabled();
     });
 
     it("calls onStart(true) when consent is given and button is pressed", async () => {
-      const onStart = jest.fn();
-      const { getByText } = await render(<NoticeScreen onStart={onStart} />);
-      const checkbox = getByText(strings.consentCheckboxLabel).parent;
+      const onStart = vi.fn();
+      const { getByTestId } = await render(<NoticeScreen onStart={onStart} />);
+      const checkbox = getByTestId("consent-checkbox").querySelector("input")!;
       await act(async () => {
-        fireEvent.press(checkbox!);
+        fireEvent.click(checkbox);
       });
-      const button = getByText(strings.noticeButton).parent;
+      const button = getByTestId("notice-button");
       await act(async () => {
-        fireEvent.press(button!);
+        fireEvent.click(button);
       });
       expect(onStart).toHaveBeenCalledTimes(1);
       expect(onStart).toHaveBeenCalledWith(true);
     });
 
-    it("checkbox accessibilityState.checked toggles on press", async () => {
-      const onStart = jest.fn();
-      const { getByText } = await render(<NoticeScreen onStart={onStart} />);
-      const checkbox = getByText(strings.consentCheckboxLabel).parent;
-      expect(checkbox?.props.accessibilityState?.checked).toBe(false);
+    it("checkbox aria-checked toggles on click", async () => {
+      const onStart = vi.fn();
+      const { getByTestId } = await render(<NoticeScreen onStart={onStart} />);
+      const checkbox = getByTestId("consent-checkbox").querySelector("input")!;
+      expect(checkbox).not.toBeChecked();
       await act(async () => {
-        fireEvent.press(checkbox!);
+        fireEvent.click(checkbox);
       });
-      expect(checkbox?.props.accessibilityState?.checked).toBe(true);
+      expect(checkbox).toBeChecked();
     });
   });
 
   describe("voiceSupport: false", () => {
     it("does NOT render audio disclosure", async () => {
-      const onStart = jest.fn();
+      const onStart = vi.fn();
       const { queryByText } = await render(
         <NoticeScreen onStart={onStart} voiceSupport={false} />,
       );
@@ -105,7 +104,7 @@ describe("NoticeScreen", () => {
     });
 
     it("does NOT render consent checkbox", async () => {
-      const onStart = jest.fn();
+      const onStart = vi.fn();
       const { queryByText } = await render(
         <NoticeScreen onStart={onStart} voiceSupport={false} />,
       );
@@ -113,23 +112,22 @@ describe("NoticeScreen", () => {
     });
 
     it("'Entendi' button is enabled by default", async () => {
-      const onStart = jest.fn();
-      const { getByText } = await render(
+      const onStart = vi.fn();
+      const { getByTestId } = await render(
         <NoticeScreen onStart={onStart} voiceSupport={false} />,
       );
-      const button = getByText(strings.noticeButton).parent;
-      const disabled = button?.props.accessibilityState?.disabled;
-      expect(disabled === false || disabled === undefined).toBe(true);
+      const button = getByTestId("notice-button");
+      expect(button).not.toBeDisabled();
     });
 
     it("calls onStart(false) when button is pressed", async () => {
-      const onStart = jest.fn();
-      const { getByText } = await render(
+      const onStart = vi.fn();
+      const { getByTestId } = await render(
         <NoticeScreen onStart={onStart} voiceSupport={false} />,
       );
-      const button = getByText(strings.noticeButton).parent;
+      const button = getByTestId("notice-button");
       await act(async () => {
-        fireEvent.press(button!);
+        fireEvent.click(button);
       });
       expect(onStart).toHaveBeenCalledTimes(1);
       expect(onStart).toHaveBeenCalledWith(false);

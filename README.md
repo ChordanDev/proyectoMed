@@ -1,16 +1,16 @@
 # proyectoMed
 
 Planning and specification repository for a Revalida clinical-practice MVP.
-The application is an Expo React Native mobile client (`mobile/`) talking to a
+The application is a Vite + React + TypeScript web SPA (`web/`) talking to a
 JSON-only Phoenix API (`backend/`). Issue source-of-truth lives on the
 [GitHub issue tracker](https://github.com/ChordanDev/proyectoMed/issues); see
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md) for how agents
 and humans interact with it.
 
 This repository currently hosts the **runtime scaffold** for the planned stack.
-The scaffold is intentionally minimal: one pinned Expo blank-TypeScript app
-under Expo Go, one JSON-only Phoenix API without Ecto or HTML tooling, a
-deterministic root test orchestrator, and baseline smoke coverage per runtime.
+The scaffold is intentionally minimal: one Vite + React + TypeScript SPA under
+`web/`, one JSON-only Phoenix API without Ecto or HTML tooling, a deterministic
+root test orchestrator, and baseline smoke coverage per runtime.
 It adds no clinical, product, or `#12` behavior.
 
 ---
@@ -19,36 +19,38 @@ It adds no clinical, product, or `#12` behavior.
 
 | Tool       | Version          | Source                                      |
 | ---------- | ---------------- | ------------------------------------------- |
-| Node       | `26.5.0`         | `mobile/package.json` `engines.node`        |
-| npm        | `11.17.0`        | `mobile/package.json` `engines.npm`         |
-| Expo SDK   | `~57.0.18`       | `mobile/package.json` `dependencies.expo`   |
+| Node       | `>=20.0.0`       | `web/package.json` `engines.node`           |
+| npm        | `>=10.0.0`       | `web/package.json` `engines.npm`            |
+| Vite       | `^5.4.19`        | `web/package.json` `devDependencies.vite`   |
+| React      | `^18.3.1`        | `web/package.json` `dependencies.react`     |
+| TypeScript | `~5.6.3`         | `web/package.json` `devDependencies.typescript` |
+| Vitest     | `^2.1.9`         | `web/package.json` `devDependencies.vitest` |
 | Elixir     | `1.20.2-otp-29`  | `backend/.tool-versions`                    |
 | OTP        | `29.0.5`         | `backend/.tool-versions`                    |
 | Phoenix    | `~> 1.8.13`      | `backend/mix.exs`                           |
 
-The scaffold was generated with pinned community templates:
+The web SPA is managed under `web/` with `npm --prefix web`. The backend was
+generated with:
 
-- `npx create-expo-app@4.0.0 mobile --template expo-template-blank-typescript@57.0.20`
 - `mix phx.new backend --app backend --module Backend --no-html --no-ecto --no-assets --no-gettext --no-mailer --no-dashboard --no-install --no-agents-md --no-version-check`
 
-Both generators are wrapped by [`scripts/scaffold.sh`](scripts/scaffold.sh) so
-the preflight, ordering, version pin, and partial-output policy are testable
-and reproducible. Re-running the script requires `mobile/` and `backend/` to
-be absent (no overwrite, no resume).
+Both front-end and back-end are wrapped by
+[`scripts/scaffold.sh`](scripts/scaffold.sh) so the preflight, ordering,
+version pin, and partial-output policy are testable and reproducible.
 
 ---
 
 ## Install
 
 ```sh
-# Mobile (Expo / React Native).
-npm --prefix mobile install
+# Web SPA (Vite + React + TypeScript).
+npm --prefix web install
 
 # Backend (Phoenix / Elixir).
 ( cd backend && mix deps.get )
 ```
 
-The repository commits both lockfiles (`mobile/package-lock.json` and
+The repository commits both lockfiles (`web/package-lock.json` and
 `backend/mix.lock`) so a fresh clone builds deterministically.
 
 ---
@@ -56,8 +58,8 @@ The repository commits both lockfiles (`mobile/package-lock.json` and
 ## Run
 
 ```sh
-# Mobile — boots Metro under Expo Go (no native compilation).
-npm --prefix mobile start
+# Web SPA — boots Vite dev server on http://localhost:5173.
+npm --prefix web run dev
 
 # Backend — boots the JSON API on http://localhost:4000.
 ( cd backend && mix phx.server )
@@ -73,11 +75,16 @@ content-type: application/json; charset=utf-8
 {"status":"ok"}
 ```
 
+During local development, Vite proxies `/api` requests to the Phoenix backend
+at `http://localhost:4000`, avoiding a separate CORS dependency. Set
+`VITE_API_URL` only when the API is hosted at a different origin; production
+may instead serve the SPA and API from the same origin.
+
 ---
 
 ## Test
 
-The root entry point runs mobile Jest and Phoenix ExUnit in sequence and
+The root entry point runs web Vitest and Phoenix ExUnit in sequence and
 propagates the first non-zero exit from either suite:
 
 ```sh
@@ -87,22 +94,12 @@ bash scripts/test.sh
 Equivalent per-runtime commands:
 
 ```sh
-# Mobile (Jest + React Native Testing Library).
-npm --prefix mobile test
+# Web SPA (Vitest + @testing-library/react).
+npm --prefix web test
 
 # Backend (ExUnit).
 ( cd backend && mix test )
 ```
-
-A baseline smoke test lives in each runtime:
-
-- `mobile/__tests__/App.smoke.test.tsx` — asserts the blank Expo root
-  component renders the template welcome text.
-- `backend/test/backend_web/controllers/health_controller_test.exs` —
-  asserts `GET /` returns HTTP 200 and `{"status":"ok"}`.
-
-These smoke tests prove the harness runs; they do **not** implement any
-clinical or `#12` behavior.
 
 ---
 
@@ -110,13 +107,13 @@ clinical or `#12` behavior.
 
 | Script                                       | Purpose                                                                                  |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `scripts/scaffold.sh`                        | Sole generator boundary — preflight, git-root authority, Expo then Phoenix, partial preservation. |
-| `scripts/test.sh`                            | Root test orchestrator — `npm --prefix mobile test` then `( cd backend && mix test )`.    |
+| `scripts/scaffold.sh`                        | Sole generator boundary — preflight, git-root authority, Vite then Phoenix, partial preservation. |
+| `scripts/test.sh`                            | Root test orchestrator — `npm --prefix web test` then `( cd backend && mix test )`.     |
 | `tests/scripts/scaffold_red.sh`              | RED/GREEN acceptance tests for `scripts/scaffold.sh` (16 invariants).                   |
-| `tests/scripts/test_red.sh`                  | RED/GREEN acceptance tests for `scripts/test.sh` (ordering + exit-code propagation).     |
+| `tests/scripts/test_red.sh`                  | RED/GREEN acceptance tests for `scripts/test.sh` (ordering + exit-code propagation).    |
 
 Both RED harnesses use bash fake-command stubs over `PATH`, so they are
-hermetic: no network access, no real npm/npx/mix, no Expo or Phoenix generators.
+hermetic: no network access and no real npm/npx/mix or Vite/Phoenix generators.
 
 ```sh
 # All RED harnesses from a clean state.
@@ -128,32 +125,25 @@ bash tests/scripts/test_red.sh
 
 ## Limitations
 
-### iOS native build
+### Audio / voice input
 
-CocoaPods (`pod`) is **not** installed on the baseline host. As a result
-no local `mobile/ios/` or `mobile/android/` native project is generated or
-committed; the scaffold runs only under Expo Go (managed workflow).
-
-If a future change needs a native module that requires CocoaPods, install
-CocoaPods (`sudo gem install cocoapods` or Homebrew `brew install cocoapods`),
-re-run `npx expo prebuild --platform ios`, and add the generated `ios/` and
-`android/` directories to version control via a follow-up SDD change.
+The web SPA accepts voice input through the browser Web Audio API /
+`MediaRecorder` or Web Speech API (`webkitSpeechRecognition`). When voice is
+unavailable (permissions denied, unsupported browser), the SPA falls back to
+text-only input. `NoticeScreen` requires explicit audio consent whenever voice
+support is enabled; callers can pass `voiceSupport={false}` for text-only mode.
 
 ### Other known limitations
 
 - **No persistence layer.** `--no-ecto` was chosen so the database adapter
-  is a deliberate downstream decision (see `#13` evaluation). `GET /` is the
-  only route.
-- **No view layer.** `--no-html --no-assets --no-gettext --no-mailer --no-dashboard`
-  remove HTML, EEx, LiveView, Tailwind, asset pipeline, gettext, mailer, and
-  dashboard generators. Only JSON responses are served.
+  is a deliberate downstream decision. `GET /` is the only route.
+- **No view layer.** The backend serves only JSON responses.
 - **No strict TDD.** `openspec/config.yaml` keeps `strict_tdd: false`. The
-  harness is available (`scripts/test.sh`, RED harnesses), but test-first
-  discipline is left to the change that implements the first real capability.
-- **Toolchain drift.** Pinned versions in `mobile/package.json` and
+  harness is available, but test-first discipline is left to the change that
+  implements the first real capability.
+- **Toolchain drift.** Pinned versions in `web/package.json` and
   `backend/.tool-versions` are the only supported way to reproduce the
-  scaffold. Drift between the host toolchain and these pins is the most
-  likely source of regressions.
+  scaffold.
 
 ---
 
@@ -163,14 +153,13 @@ re-run `npx expo prebuild --platform ios`, and add the generated `ios/` and
 .
 ├── AGENTS.md                    Agent conventions (issue tracker, triage labels).
 ├── docs/
-│   ├── PRD.md                   Product requirements (clinical-practice MVP).
 │   └── agents/                  Agent reference docs.
-├── mobile/                      Generated Expo TypeScript app (PR 2).
-├── backend/                     Generated Phoenix API (PR 3).
+├── web/                         Vite + React + TypeScript SPA.
+├── backend/                     Generated Phoenix API.
 ├── scripts/
-│   ├── scaffold.sh              Sole generator orchestrator (PR 2).
-│   └── test.sh                  Root test orchestrator (PR 3).
-├── tests/scripts/               RED harnesses for both scripts (PR 1).
+│   ├── scaffold.sh              Sole generator orchestrator.
+│   └── test.sh                  Root test orchestrator.
+├── tests/scripts/               RED harnesses for both scripts.
 └── openspec/
     ├── config.yaml              SDD harness config; `strict_tdd: false`.
     ├── specs/                   Archived capability specs.
@@ -182,7 +171,7 @@ re-run `npx expo prebuild --platform ios`, and add the generated `ios/` and
 ## See also
 
 - [`openspec/changes/scaffold-expo-phoenix-runtime/`](openspec/changes/scaffold-expo-phoenix-runtime/) —
-  the proposal, design, and tasks for the runtime scaffold.
+  the proposal, design, and tasks for the runtime scaffold (historical record).
 - [`docs/agents/domain.md`](docs/agents/domain.md) — domain vocabulary.
 - [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md) — canonical
   five-label triage vocabulary used on GitHub Issues.

@@ -36,11 +36,11 @@ The MVP station instructions, Station AI interaction, voice and text input, and 
 
 ## MVP Runtime
 
-The MVP uses an Elixir/Phoenix backend and a React Native Expo frontend. The system is built as a client/server product from the start, not as a web-only prototype.
+The MVP uses an Elixir/Phoenix backend and a Vite + React + TypeScript web SPA. The system is built as a client/server product, with the SPA running in the browser and communicating with the Phoenix API over HTTP.
 
 ## MVP Work Streams
 
-The MVP is planned as four coordinated work streams: API contract and case/rubric model, Phoenix backend, Expo frontend, and end-to-end integration/testing. Frontend and backend may progress in parallel only against the agreed API contract; integration remains a required final stream.
+The MVP is planned as four coordinated work streams: API contract and case/rubric model, Phoenix backend, web SPA frontend, and end-to-end integration/testing. Frontend and backend may progress in parallel only against the agreed API contract; integration remains a required final stream.
 
 ## Station Timer
 
@@ -96,7 +96,7 @@ The MVP is worth extending when pilot learners can complete the station without 
 
 ## MVP Platforms
 
-The first MVP release targets iOS and Android through Expo. Web is outside the initial scope; the priority is real-device voice, microphone permissions, and conversational interaction.
+The first MVP release targets desktop and mobile browsers via the Vite + React web SPA. Native mobile apps (iOS/Android) and Expo Go are outside the initial scope; the priority is browser-based voice via `MediaRecorder`/Web Speech API, microphone permissions, and conversational interaction.
 
 ## Station Retry Policy
 
