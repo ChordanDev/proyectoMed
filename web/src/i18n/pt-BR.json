@@ -17,5 +17,6 @@
   "resultReportTitle": "Resultado da Estação",
   "resultOrdinalPrefix": "Critério",
   "resultStatusPrefix": "Status:",
-  "resultRecommendationHeading": "Recomendação"
+  "resultRecommendationHeading": "Recomendação",
+  "resultEvidenceHeading": "Evidências"
 }

@@ -95,6 +95,8 @@ export function ResultScreen({
         {criteria.map((criterion, index) => {
           const ordinalNumber = index + 1;
           const statusLabel = STATUS_TEXT_MAP[criterion.status];
+          const hasEvidence =
+            Boolean(criterion.evidence) && criterion.evidence.length > 0;
 
           return (
             <li
@@ -113,6 +115,28 @@ export function ResultScreen({
                   {statusLabel}
                 </span>
               </header>
+
+              {hasEvidence ? (
+                <section className="result-screen__evidence">
+                  <h3 className="result-screen__evidence-heading">
+                    {strings.resultEvidenceHeading}
+                  </h3>
+                  <ul className="result-screen__evidence-list">
+                    {criterion.evidence.map((excerpt, excerptIndex) => (
+                      <li
+                        key={excerptIndex}
+                        className="result-screen__evidence-item"
+                      >
+                        <blockquote className="result-screen__evidence-quote">
+                          <mark className="result-screen__evidence-highlight">
+                            {excerpt}
+                          </mark>
+                        </blockquote>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
 
               <section className="result-screen__recommendation">
                 <h3 className="result-screen__recommendation-heading">

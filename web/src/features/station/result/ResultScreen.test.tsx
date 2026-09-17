@@ -82,6 +82,115 @@ describe("ResultScreen (Slice 2)", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders evidence heading and blockquote excerpts with mark highlight when evidence is non-empty", () => {
+    const resultWithEvidence: SessionResult = {
+      session_id: "session-with-evidence",
+      status: "completed",
+      criteria: [
+        {
+          id: "crit-history-onset",
+          status: "met",
+          evidence: [
+            "Quando começou a dor no peito?",
+            "A dor irradia para algum lugar?",
+          ],
+          recommendation: "Mantenha a abordagem sistemática.",
+        },
+      ],
+    };
+
+    render(
+      <ResultScreen
+        status="finished"
+        result={resultWithEvidence}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        level: 3,
+        name: strings.resultEvidenceHeading,
+      }),
+    ).toBeInTheDocument();
+
+    const excerpts = screen.getAllByRole("blockquote");
+    expect(excerpts).toHaveLength(2);
+
+    const firstMark = excerpts[0].querySelector("mark");
+    expect(firstMark).not.toBeNull();
+    expect(firstMark).toHaveTextContent("Quando começou a dor no peito?");
+
+    const secondMark = excerpts[1].querySelector("mark");
+    expect(secondMark).not.toBeNull();
+    expect(secondMark).toHaveTextContent("A dor irradia para algum lugar?");
+  });
+
+  it("renders multiple criteria preserving evidence scoping per criterion", () => {
+    const mixedResult: SessionResult = {
+      session_id: "mixed-evidence-session",
+      status: "completed",
+      criteria: [
+        {
+          id: "crit-onset",
+          status: "met",
+          evidence: ["Início súbito da dor."],
+          recommendation: "Rec 1",
+        },
+        {
+          id: "crit-risk-factors",
+          status: "omitted",
+          evidence: [],
+          recommendation: "Rec 2",
+        },
+        {
+          id: "crit-history",
+          status: "uncertain",
+          evidence: ["Histórico incerto.", "Dúvida relatada."],
+          recommendation: "Rec 3",
+        },
+      ],
+    };
+
+    render(
+      <ResultScreen
+        status="finished"
+        result={mixedResult}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    const evidenceHeadings = screen.getAllByRole("heading", {
+      level: 3,
+      name: strings.resultEvidenceHeading,
+    });
+    expect(evidenceHeadings).toHaveLength(2);
+
+    const excerpts = screen.getAllByRole("blockquote");
+    expect(excerpts).toHaveLength(3);
+    expect(excerpts[0]).toHaveTextContent("Início súbito da dor.");
+    expect(excerpts[1]).toHaveTextContent("Histórico incerto.");
+    expect(excerpts[2]).toHaveTextContent("Dúvida relatada.");
+  });
+
+  it("omits the evidence section entirely when evidence array is empty", () => {
+    render(
+      <ResultScreen
+        status="finished"
+        result={sampleResult}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("heading", {
+        level: 3,
+        name: strings.resultEvidenceHeading,
+      }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("blockquote")).not.toBeInTheDocument();
+  });
+
   it("hides technical criteria IDs from visible text without coupling to metadata attributes", () => {
     render(
       <ResultScreen
