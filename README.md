@@ -65,7 +65,7 @@ npm --prefix web run dev
 ( cd backend && mix phx.server )
 ```
 
-The backend exposes two HTTP routes:
+The backend exposes health and Station HTTP routes. Representative responses:
 
 ```sh
 $ curl -i http://localhost:4000/
@@ -112,14 +112,14 @@ npm --prefix web test
 ## Pull-request CI
 
 Every pull request runs the `Pull Request Validation` GitHub Actions workflow.
-It installs the mobile dependencies with `npm ci`, fetches the Phoenix
+It installs the web dependencies with `npm ci`, fetches the Phoenix
 dependencies with `mix deps.get`, and then runs the single root command:
 
 ```sh
 bash scripts/test.sh
 ```
 
-The workflow reads its Node version from `mobile/package.json` and its Erlang
+The workflow reads its Node version from `web/package.json` and its Erlang
 and Elixir versions from `backend/.tool-versions`.
 
 ---
@@ -157,9 +157,8 @@ support is enabled; callers can pass `voiceSupport={false}` for text-only mode.
 ### Other known limitations
 
 - **No persistence layer.** `--no-ecto` was chosen so the database adapter
-- **No persistence layer.** `--no-ecto` was chosen so the database adapter
-  is a deliberate downstream decision (see `#13` evaluation). `GET /` and
-  `GET /api/stations/active` are the only routes.
+  is a deliberate downstream decision (see `#13` evaluation). The router
+  currently exposes health, active station, transcription, and synthesis endpoints.
 - **No view layer.** The backend serves only JSON responses.
 
 - **No strict TDD.** `openspec/config.yaml` keeps `strict_tdd: false`. The
