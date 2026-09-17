@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import strings from "../i18n/pt-BR.json";
 import "./StationScreen.css";
 
@@ -30,6 +30,7 @@ export function StationScreen({
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -37,6 +38,10 @@ export function StationScreen({
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, sending, scrollToBottom]);
 
   const handleSend = useCallback(async () => {
     const trimmed = inputValue.trim();
@@ -46,9 +51,7 @@ export function StationScreen({
     setMessages((prev) => [...prev, learnerMessage]);
     setInputValue("");
     setSending(true);
-
-    // Scroll after learner message renders
-    queueMicrotask(scrollToBottom);
+    setSendError(null);
 
     try {
       const replyText = await onSend(trimmed);
@@ -59,16 +62,15 @@ export function StationScreen({
           text: replyText,
         };
         setMessages((prev) => [...prev, patientMessage]);
+      } else {
+        setSendError(strings.stationError);
       }
     } catch {
-      // Swallowed here so UI doesn't crash on unhandled rejection;
-      // error state can be propagated via error prop if needed.
+      setSendError(strings.stationError);
     } finally {
       setSending(false);
-      // Scroll after patient message renders
-      queueMicrotask(scrollToBottom);
     }
-  }, [inputValue, sending, disabled, onSend, scrollToBottom]);
+  }, [inputValue, sending, disabled, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -81,6 +83,7 @@ export function StationScreen({
   );
 
   const isSendDisabled = disabled || sending || inputValue.trim().length === 0;
+  const displayedError = error || sendError;
 
   return (
     <div className="station-screen" data-testid="station-screen">
@@ -116,30 +119,30 @@ export function StationScreen({
             data-testid={`message-${msg.role}`}
           >
             <div className="station-message__role">
-              {msg.role === "learner" ? "Você" : "Paciente"}
+              {msg.role === "learner" ? strings.roleLearner : strings.rolePatient}
             </div>
             {msg.text}
           </div>
         ))}
 
-        {sending && (
-          <div
-            className="station-typing"
-            role="status"
-            data-testid="typing-indicator"
-          >
-            {strings.sendingMessage}
-          </div>
-        )}
-
-        {error && (
-          <div className="station-error" role="alert" data-testid="station-error">
-            {error}
-          </div>
-        )}
-
         <div ref={messagesEndRef} />
       </div>
+
+      {sending && (
+        <div
+          className="station-typing"
+          role="status"
+          data-testid="typing-indicator"
+        >
+          {strings.sendingMessage}
+        </div>
+      )}
+
+      {displayedError && (
+        <div className="station-error" role="alert" data-testid="station-error">
+          {displayedError}
+        </div>
+      )}
 
       {/* Input area */}
       <div className="station-input-area">

@@ -50,6 +50,7 @@ describe("StationScreen", () => {
 
     // Learner message appears immediately
     expect(screen.getByText("Boa tarde")).toBeInTheDocument();
+    expect(screen.getByText(strings.roleLearner)).toBeInTheDocument();
 
     // onSend called with trimmed text
     expect(onSend).toHaveBeenCalledWith("Boa tarde");
@@ -57,6 +58,7 @@ describe("StationScreen", () => {
     // Patient reply appears after resolution
     await waitFor(() => {
       expect(screen.getByText("Boa tarde, doutor.")).toBeInTheDocument();
+      expect(screen.getByText(strings.rolePatient)).toBeInTheDocument();
     });
   });
 
@@ -126,7 +128,7 @@ describe("StationScreen", () => {
     expect(onSend).toHaveBeenCalledWith("Enter test");
   });
 
-  it("handles null reply (API failure) without crashing", async () => {
+  it("handles null reply (API failure) without crashing and displays recoverable error banner", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(null);
     render(<StationScreen {...defaultProps} onSend={onSend} />);
@@ -142,13 +144,17 @@ describe("StationScreen", () => {
     // No patient message rendered
     expect(screen.queryByTestId("message-patient")).not.toBeInTheDocument();
 
-    // Input re-enabled
+    // Error banner displayed with stationError message
+    expect(screen.getByTestId("station-error")).toBeInTheDocument();
+    expect(screen.getByText(strings.stationError)).toBeInTheDocument();
+
+    // Input re-enabled for recovery
     await waitFor(() => {
       expect(screen.getByTestId("message-input")).toBeEnabled();
     });
   });
 
-  it("re-enables input and controls if onSend throws an error", async () => {
+  it("re-enables input and controls if onSend throws an error and displays error banner", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockRejectedValue(new Error("Network crash"));
     render(<StationScreen {...defaultProps} onSend={onSend} />);
@@ -160,6 +166,9 @@ describe("StationScreen", () => {
       expect(screen.getByTestId("message-input")).toBeEnabled();
       expect(screen.getByTestId("finish-button")).toBeEnabled();
       expect(screen.queryByTestId("typing-indicator")).not.toBeInTheDocument();
+      expect(screen.getByTestId("station-error")).toHaveTextContent(
+        strings.stationError,
+      );
     });
   });
 

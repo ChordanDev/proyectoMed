@@ -36,9 +36,8 @@ export default function App(): React.JSX.Element {
   }, [station]);
 
   const handleRestart = useCallback(() => {
-    // Reload the page for a clean restart (no retained state)
-    window.location.reload();
-  }, []);
+    station.reset();
+  }, [station]);
 
   // Flow: notice → station → result
   if (station.status === "idle" || station.status === "loading") {

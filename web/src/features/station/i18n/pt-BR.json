@@ -19,6 +19,8 @@
   "resultStatusPrefix": "Status:",
   "resultRecommendationHeading": "Recomendação",
   "resultEvidenceHeading": "Evidências",
+  "roleLearner": "Você",
+  "rolePatient": "Paciente",
   "stationScreenTitle": "Estação",
   "inputPlaceholder": "Digite sua mensagem...",
   "sendButton": "Enviar",
