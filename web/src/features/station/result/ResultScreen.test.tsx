@@ -1,8 +1,202 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { SessionResult } from "../../../api/client";
 import strings from "../../../i18n/pt-BR.json";
-import { ResultScreenState } from "./ResultScreen";
+import { ResultScreen, ResultScreenState } from "./ResultScreen";
+
+describe("ResultScreen (Slice 2)", () => {
+  const sampleResult: SessionResult = {
+    session_id: "session-123",
+    status: "completed",
+    criteria: [
+      {
+        id: "crit-history-onset",
+        status: "met",
+        evidence: [],
+        recommendation: "Mantenha a abordagem sistemática.",
+      },
+      {
+        id: "crit-family-history",
+        status: "omitted",
+        evidence: [],
+        recommendation: "Investigue antecedentes familiares na anamnese.",
+      },
+      {
+        id: "crit-duration",
+        status: "uncertain",
+        evidence: [],
+        recommendation: "Esclareça o tempo de evolução dos sintomas.",
+      },
+    ],
+  };
+
+  it("renders ordered report with 3 criteria statuses, visible ordinals, and recommendations", () => {
+    render(
+      <ResultScreen
+        status="finished"
+        result={sampleResult}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    const reportHeading = screen.getByRole("heading", {
+      level: 1,
+      name: strings.resultReportTitle,
+    });
+    expect(reportHeading).toBeInTheDocument();
+
+    const reportList = screen.getByRole("list");
+    expect(reportList).toBeInTheDocument();
+
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+
+    expect(
+      screen.getByText(`${strings.resultOrdinalPrefix} 1`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`${strings.resultOrdinalPrefix} 2`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`${strings.resultOrdinalPrefix} 3`),
+    ).toBeInTheDocument();
+
+    expect(screen.getByText(strings.criterionMet)).toBeInTheDocument();
+    expect(screen.getByText(strings.criterionOmitted)).toBeInTheDocument();
+    expect(screen.getByText(strings.criterionUncertain)).toBeInTheDocument();
+
+    const recHeadings = screen.getAllByText(
+      strings.resultRecommendationHeading,
+    );
+    expect(recHeadings).toHaveLength(3);
+
+    expect(
+      screen.getByText("Mantenha a abordagem sistemática."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Investigue antecedentes familiares na anamnese."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Esclareça o tempo de evolução dos sintomas."),
+    ).toBeInTheDocument();
+  });
+
+  it("hides technical criteria IDs from visible text without coupling to metadata attributes", () => {
+    render(
+      <ResultScreen
+        status="finished"
+        result={sampleResult}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("crit-history-onset")).not.toBeInTheDocument();
+    expect(screen.queryByText("crit-family-history")).not.toBeInTheDocument();
+    expect(screen.queryByText("crit-duration")).not.toBeInTheDocument();
+    expect(screen.queryByText(/crit-/i)).not.toBeInTheDocument();
+  });
+
+  it("delegates recovery when status is finishing, failed, or result is null/empty", () => {
+    const handleRestart = vi.fn();
+
+    const { unmount: unmountFinishing } = render(
+      <ResultScreen
+        status="finishing"
+        result={null}
+        onRestart={handleRestart}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(strings.loadingResult);
+    unmountFinishing();
+
+    const { unmount: unmountFailed } = render(
+      <ResultScreen status="failed" result={null} onRestart={handleRestart} />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      strings.resultUnavailable,
+    );
+    unmountFailed();
+
+    const { unmount: unmountNullResult } = render(
+      <ResultScreen
+        status="finished"
+        result={null}
+        onRestart={handleRestart}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      strings.resultUnavailable,
+    );
+    unmountNullResult();
+
+    const { unmount: unmountEmptyResult } = render(
+      <ResultScreen
+        status="finished"
+        result={{ session_id: "s1", status: "completed", criteria: [] }}
+        onRestart={handleRestart}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      strings.resultUnavailable,
+    );
+    unmountEmptyResult();
+  });
+
+  it("triggers onRestart from report action button", async () => {
+    const user = userEvent.setup();
+    const handleRestart = vi.fn();
+
+    render(
+      <ResultScreen
+        status="finished"
+        result={sampleResult}
+        onRestart={handleRestart}
+      />,
+    );
+
+    const restartButton = screen.getByRole("button", {
+      name: strings.resultRestartButton,
+    });
+    expect(restartButton).toBeInTheDocument();
+
+    await user.click(restartButton);
+    expect(handleRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not contain forbidden judgmental, grading, or score language", () => {
+    const { container } = render(
+      <ResultScreen
+        status="finished"
+        result={sampleResult}
+        onRestart={vi.fn()}
+      />,
+    );
+
+    const fullText = (container.textContent || "").toLowerCase();
+    const forbiddenPatterns = [
+      "nota",
+      "score",
+      "pontuação",
+      "pontuacao",
+      "porcentagem",
+      "porcento",
+      "%",
+      "aprovad",
+      "reprovad",
+      "pass",
+      "fail",
+      "grade",
+      "prontidão",
+      "prontidao",
+      "readiness",
+    ];
+
+    for (const pattern of forbiddenPatterns) {
+      expect(fullText).not.toContain(pattern);
+    }
+  });
+});
 
 describe("ResultScreenState (Slice 1)", () => {
   it("renders polite loading status section when status is finishing", () => {

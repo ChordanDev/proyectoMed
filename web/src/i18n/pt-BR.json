@@ -13,5 +13,9 @@
   "criterionUncertain": "Incerto",
   "resultRestartButton": "Reiniciar estação",
   "loadingResult": "Gerando o resultado da estação...",
-  "resultUnavailable": "Não foi possível carregar o resultado da estação."
+  "resultUnavailable": "Não foi possível carregar o resultado da estação.",
+  "resultReportTitle": "Resultado da Estação",
+  "resultOrdinalPrefix": "Critério",
+  "resultStatusPrefix": "Status:",
+  "resultRecommendationHeading": "Recomendação"
 }
