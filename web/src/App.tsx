@@ -1,5 +1,5 @@
 import React from "react";
-import { NoticeScreen } from "./screens/NoticeScreen";
+import { NoticeScreen } from "./features/station";
 import "./index.css";
 
 export default function App(): React.JSX.Element {
