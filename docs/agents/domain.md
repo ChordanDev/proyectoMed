@@ -4,12 +4,12 @@ This repository has a single domain context.
 
 ## Architecture Decision Records (ADRs)
 
-ADRs in this repository are recorded as GitHub Issues using the Architecture Decision Record issue template (`.github/ISSUE_TEMPLATE/architecture-decision.yml`) and labeled `documentation` with titles prefixed by `ADR-NNN:`. Do not introduce a markdown directory under `docs/adr/`.
+ADRs in this repository are recorded as GitHub Issues using the Architecture Decision Record issue template (`.github/ISSUE_TEMPLATE/architecture-decision.yml`) and labeled `type:docs` with titles prefixed by `ADR-NNN:`. Do not introduce a markdown directory under `docs/adr/`.
 
 ## Before exploring
 
 - Read root-level `CONTEXT.md` when it exists.
-- Query accepted and proposed ADR issues via `gh issue list --label documentation --search "ADR-"`.
+- Query accepted and proposed ADR issues via `gh issue list --label type:docs --search "ADR-"`.
 - If no ADR issues exist, proceed silently. Do not record an ADR until an architectural decision or significant structural shift is made.
 
 ## Layout
