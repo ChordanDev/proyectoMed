@@ -43,4 +43,13 @@ Issues without children (for example #23, #25, #27, #32, and #33) branch directl
 
 GitHub auto-closing keywords apply only to PRs targeting the repository default branch: child PRs use `Refs #N`; parent PRs targeting default `develop` use `Closes #parent` and `Closes #child` for completed children. Never push directly to `develop` or `main`: require a PR, CI, one approval, and resolved conversations. `main` accepts only PRs from `develop`; any emergency hotfix must return to `develop` afterwards. Every merge into `main` is a versioned release.
 
+### Review feedback loop
+
+When addressing review findings (human, advisory such as Jorge, or automated CI) on an open pull request, agents must never push follow-up commits in silence. After committing and pushing the resolution, the agent must leave an explicit comment on the PR containing:
+1. **Finding reference:** The ID or title of each finding addressed.
+2. **Commit SHA:** The specific commit hash implementing the fix.
+3. **Solution summary:** What was changed to resolve the finding.
+4. **Verification evidence:** Passing test counts, typechecks, builds, or review authority receipts.
+5. **Chain propagation:** For chained PRs, explicit confirmation of whether and how the fix was merged forward into dependent branches.
+
 Changing the GitHub default branch and configuring branch protection rules are administrator actions outside this documentation update.
