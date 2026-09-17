@@ -1,6 +1,6 @@
 import React from "react";
-import type { CriterionStatus, SessionResult } from "../../../api/client";
-import strings from "../../../i18n/pt-BR.json";
+import type { CriterionStatus, SessionResult } from "../api/client";
+import strings from "../i18n/pt-BR.json";
 import "./ResultScreen.css";
 
 export type ResultScreenStatus = "finishing" | "finished" | "failed";

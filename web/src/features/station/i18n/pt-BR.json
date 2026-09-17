@@ -18,5 +18,11 @@
   "resultOrdinalPrefix": "Critério",
   "resultStatusPrefix": "Status:",
   "resultRecommendationHeading": "Recomendação",
-  "resultEvidenceHeading": "Evidências"
+  "resultEvidenceHeading": "Evidências",
+  "stationScreenTitle": "Estação",
+  "inputPlaceholder": "Digite sua mensagem...",
+  "sendButton": "Enviar",
+  "sendingMessage": "Enviando...",
+  "loadingStation": "Carregando estação...",
+  "stationError": "Erro na estação. Tente novamente."
 }
