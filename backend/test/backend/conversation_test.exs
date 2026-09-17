@@ -3,15 +3,31 @@ defmodule Backend.ConversationTest do
 
   alias Backend.Conversation
 
-  test "start creates an active session with a thirty-minute safety timeout" do
+  test "start creates an active session with a thirty-minute safety timeout and default station identity" do
     session = Conversation.start()
 
     assert is_binary(session.session_id)
+    assert session.station_id == "chest-pain-initial-assessment"
+    assert session.station_version == "1.0.0"
+    assert session.audio_consent == false
     assert %DateTime{} = session.started_at
     assert %DateTime{} = session.expires_at
     assert DateTime.diff(session.expires_at, session.started_at, :second) == 30 * 60
     assert session.messages == []
     assert session.status == :active
+  end
+
+  test "start accepts custom station_id, station_version, and audio_consent" do
+    session =
+      Conversation.start(%{
+        station_id: "custom-station",
+        station_version: "2.1.0",
+        audio_consent: true
+      })
+
+    assert session.station_id == "custom-station"
+    assert session.station_version == "2.1.0"
+    assert session.audio_consent == true
   end
 
   test "append_message adds a timestamped message to an active session" do
