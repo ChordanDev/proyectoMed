@@ -53,13 +53,22 @@ describe("ResultScreen (Slice 2)", () => {
     expect(items).toHaveLength(3);
 
     expect(
-      screen.getByText(`${strings.resultOrdinalPrefix} 1`),
+      screen.getByRole("heading", {
+        level: 2,
+        name: `${strings.resultOrdinalPrefix} 1`,
+      }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(`${strings.resultOrdinalPrefix} 2`),
+      screen.getByRole("heading", {
+        level: 2,
+        name: `${strings.resultOrdinalPrefix} 2`,
+      }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(`${strings.resultOrdinalPrefix} 3`),
+      screen.getByRole("heading", {
+        level: 2,
+        name: `${strings.resultOrdinalPrefix} 3`,
+      }),
     ).toBeInTheDocument();
 
     expect(screen.getByText(strings.criterionMet)).toBeInTheDocument();
@@ -162,6 +171,43 @@ describe("ResultScreen (Slice 2)", () => {
 
     await user.click(restartButton);
     expect(handleRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables footer and delegated restart button, suppressing onRestart clicks when disabled (TR-04)", async () => {
+    const user = userEvent.setup();
+    const handleRestart = vi.fn();
+
+    const { rerender } = render(
+      <ResultScreen
+        status="finished"
+        result={sampleResult}
+        onRestart={handleRestart}
+        disabled={true}
+      />,
+    );
+
+    const footerButton = screen.getByRole("button", {
+      name: strings.resultRestartButton,
+    });
+    expect(footerButton).toBeDisabled();
+    await user.click(footerButton);
+    expect(handleRestart).not.toHaveBeenCalled();
+
+    rerender(
+      <ResultScreen
+        status="failed"
+        result={null}
+        onRestart={handleRestart}
+        disabled={true}
+      />,
+    );
+
+    const delegatedButton = screen.getByRole("button", {
+      name: strings.resultRestartButton,
+    });
+    expect(delegatedButton).toBeDisabled();
+    await user.click(delegatedButton);
+    expect(handleRestart).not.toHaveBeenCalled();
   });
 
   it("does not contain forbidden judgmental, grading, or score language", () => {

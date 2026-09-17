@@ -16,6 +16,7 @@ export interface ResultScreenProps {
   status: ResultScreenStatus;
   result: SessionResult | null;
   onRestart: () => void | Promise<void>;
+  disabled?: boolean;
 }
 
 const STATUS_TEXT_MAP: Record<CriterionStatus, string> = {
@@ -74,6 +75,7 @@ export function ResultScreen({
   status,
   result,
   onRestart,
+  disabled = false,
 }: ResultScreenProps): React.JSX.Element | null {
   const criteria = result?.criteria;
   const hasUsableFeedback = Boolean(criteria && criteria.length > 0);
@@ -84,6 +86,7 @@ export function ResultScreen({
         status={status}
         hasUsableFeedback={hasUsableFeedback}
         onRestart={onRestart}
+        disabled={disabled}
       />
     );
   }
@@ -108,12 +111,11 @@ export function ResultScreen({
               className="result-screen__item"
             >
               <header className="result-screen__item-header">
-                <span className="result-screen__ordinal">
+                <h2 className="result-screen__ordinal">
                   {strings.resultOrdinalPrefix} {ordinalNumber}
-                </span>
+                </h2>
                 <span
                   className={`result-screen__status result-screen__status--${criterion.status}`}
-                  aria-label={`${strings.resultStatusPrefix} ${statusLabel}`}
                 >
                   {statusLabel}
                 </span>
@@ -136,6 +138,7 @@ export function ResultScreen({
         <button
           type="button"
           className="result-screen-state__button"
+          disabled={disabled}
           onClick={() => {
             void onRestart();
           }}
