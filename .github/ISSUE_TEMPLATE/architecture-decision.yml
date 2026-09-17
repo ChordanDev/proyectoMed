@@ -2,7 +2,7 @@ name: Architecture Decision Record (ADR)
 description: Record a significant architecture or design decision.
 title: "ADR-NNN: "
 labels:
-  - documentation
+  - type:docs
 body:
   - type: input
     id: decision_title
