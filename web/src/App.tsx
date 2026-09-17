@@ -1,0 +1,13 @@
+import React from "react";
+import { NoticeScreen } from "./features/station";
+import "./index.css";
+
+export default function App(): React.JSX.Element {
+  return (
+    <main className="app-root">
+      <NoticeScreen
+        onStart={(consent: boolean) => console.log("start", consent)}
+      />
+    </main>
+  );
+}

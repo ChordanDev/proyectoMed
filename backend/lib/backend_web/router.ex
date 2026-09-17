@@ -19,5 +19,13 @@ defmodule BackendWeb.Router do
     post "/active/sessions/:id/messages", StationController, :create_message
     post "/active/sessions/:id/finish", StationController, :finish_session
     get "/active/sessions/:id/result", StationController, :show_result
+
+    post "/active/sessions/:id/transcribe",
+         TranscriptionController,
+         :create
+
+    post "/active/sessions/:id/synthesize",
+         TTSController,
+         :create
   end
 end

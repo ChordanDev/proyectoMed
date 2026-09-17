@@ -31,6 +31,10 @@ defmodule Backend.Conversation do
     GenServer.start_link(__MODULE__, options, name: __MODULE__)
   end
 
+  @doc """
+  Starts a session. `:audio_consent` defaults to `false`: audio transcription is
+  refused until the learner explicitly grants it.
+  """
   @spec start(map() | keyword()) :: session()
   def start(attrs \\ %{}) do
     GenServer.call(__MODULE__, {:start, attrs})
@@ -64,7 +68,7 @@ defmodule Backend.Conversation do
     handle_call({:start, %{}}, from, state)
   end
 
-  def handle_call({:start, attrs}, _from, state) do
+  def handle_call({:start, attrs}, _from, state) when is_map(attrs) or is_list(attrs) do
     attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
     now = DateTime.utc_now()
 

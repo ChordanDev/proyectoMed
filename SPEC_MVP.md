@@ -261,14 +261,14 @@ Invalid session ids return 404; expired sessions return 410. A session that is n
 - The router gains a `scope "/api/stations", BackendWeb do ... end` block; existing `HealthController` and root route stay untouched.
 
 ### Frontend modules
-
-- `mobile/src/api/client.ts` — typed HTTP client for the API. Exposes `getActiveStation`, `startSession`, `sendMessage`, `finishSession`, `fetchResult`. Throws typed errors.
-- `mobile/src/hooks/useStation.ts` — React hook that owns the session lifecycle and timer state.
-- `mobile/src/screens/NoticeScreen.tsx` — pt-BR educational-use notice with a single "Entendi" button.
-- `mobile/src/screens/StationScreen.tsx` — voice + text input, transcript list, Station AI replies with synthesized speech (when voice is enabled) and visible text, ten-minute countdown, "Finalizar estação" button.
-- `mobile/src/screens/ResultScreen.tsx` — per-criterion status list with highlighted transcript excerpts and practice recommendations.
-- `mobile/src/i18n/pt-BR.json` — all learner-facing strings.
-- Voice capture uses `expo-av`; transcription happens on-device before posting the message to the backend. Text is always available as a fallback input.
+    
+- `web/src/features/station/api/client.ts` — typed HTTP client for the API. Exposes `getActiveStation`, `startSession`, `sendMessage`, `finishSession`, `fetchResult`. Throws typed errors.
+- `web/src/features/station/hooks/useStation.ts` — React hook that owns the session lifecycle and timer state.
+- `web/src/features/station/screens/NoticeScreen.tsx` — pt-BR educational-use notice with a single "Entendi" button.
+- `web/src/features/station/screens/StationScreen.tsx` — voice + text input, transcript list, Station AI replies with synthesized speech (when voice is enabled) and visible text, ten-minute countdown, "Finalizar estação" button.
+- `web/src/features/station/screens/ResultScreen.tsx` — per-criterion status list with highlighted transcript excerpts and practice recommendations.
+- `web/src/features/station/i18n/pt-BR.json` — all learner-facing strings.
+- Voice capture uses browser media APIs; transcription is posted to the backend transcribe endpoint when the learner granted audio consent. Text is always available as a fallback input.
 
 ### Failure policy
 

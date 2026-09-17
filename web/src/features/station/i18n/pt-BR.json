@@ -1,0 +1,14 @@
+{
+  "noticeTitle": "Ferramenta Educacional",
+  "noticeBody": "Esta é uma ferramenta educacional independente para treino de habilidades clínicas e não substitui avaliações oficiais de prontidão para o Revalida.",
+  "noticeButton": "Entendi",
+  "audioDisclosure": "Ao usar voz, o áudio que você envia é transcrito pela OpenAI e a resposta do paciente IA é sintetizada pela OpenAI. A OpenAI pode reter esses dados por até 30 dias conforme sua política. Consulte a política de privacidade.",
+  "consentCheckboxLabel": "Aceito o envio do meu áudio à OpenAI",
+  "errorNotice": "A estação não pôde ser concluída. Você pode reiniciar.",
+  "restartButton": "Reiniciar estação",
+  "voiceFallbackNotice": "Voz indisponível — usando texto.",
+  "finishStation": "Finalizar estação",
+  "criterionMet": "Cumprido",
+  "criterionOmitted": "Omitido",
+  "criterionUncertain": "Incerto"
+}
