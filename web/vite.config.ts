@@ -11,8 +11,11 @@ export default defineConfig({
     },
   },
   test: {
-    environment: "jsdom",
     globals: true,
+    environmentMatchGlobs: [
+      ["src/integration/**", "node"],
+      ["**", "jsdom"],
+    ],
     setupFiles: ["./src/test-setup.ts"],
   },
 });
