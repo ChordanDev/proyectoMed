@@ -19,7 +19,7 @@ Correct the Jev/PEP educational design and record the confirmed publication of t
 - [x] T4 — Restore delegated execution. Explore, worker and verifier completed after the user-requested OpenAI profile change.
 - [x] T5 — Accept ADR-011 #123 and ADR-012 #124 with the current date, record human approval comments, and update Ticket 14 #125 without authorizing pilot/production activation. Confirmed on 2026-09-21 with exact body/comment readback: [#123 approval](https://github.com/ChordanDev/proyectoMed/issues/123#issuecomment-5767715417), [#124 approval](https://github.com/ChordanDev/proyectoMed/issues/124#issuecomment-5767716172), and [#125 gate-resolution record](https://github.com/ChordanDev/proyectoMed/issues/125#issuecomment-5767716610). #125 records the remaining provider/privacy/ZDR/legal/clinical gates.
 - [x] T6 — Synchronize acceptance across the four design/tracking documents and independently verify ADR bodies/comments, unchanged native graph, `git diff --check`, and untouched runtime files. Independent verifier passed all requested live and local checks; historical absence of every unrelated ADR mutation cannot be proven without an immutable global snapshot, but no unrelated mutation was observed.
-- [x] T7 — Deliver the four documentation files through a two-commit feature-branch chain on isolated branch `docs/jev-adr-acceptance` and push that branch without opening a PR. Slice 1 is commit `d57ebbfea094f05c069af6318dcdcc871929d0a5`; slice 2 is the branch-tip evidence commit containing `SPEC_MVP.md` and this task record.
+- [x] T7 — Deliver the four documentation files through a two-work-unit feature-branch chain on isolated branch `docs/jev-adr-acceptance` and push that branch without opening a PR. Slice 1 is commit `d57ebbfea094f05c069af6318dcdcc871929d0a5`; slice 2 is commit `2627519bcb9fccaaf91d90dc8807ad1f76cb2b68`. A final tracking-only commit records the confirmed remote delivery.
 
 ## Confirmed acceptance scope
 - The completed GitHub operation changed only the internal status/body fields and added brief approval comments on #123/#124 plus a gate-resolution comment on #125.
@@ -39,7 +39,8 @@ Delegated mapping, multi-file writing and independent verification. Parent perfo
 - Native assessment returned unassessable (`native-assess-unavailable`, empty native output); required independent verification completed, not a native approval.
 - The user authorized an isolated documentation branch and selected `feature-branch-chain` after the 655-line authored diff exceeded the ~400-line review threshold. Direct `develop` push remains prohibited; no PR is authorized in this step.
 - Slice 1, commit `d57ebbfea094f05c069af6318dcdcc871929d0a5`, contains `CONTEXT.md` and `docs/design/jev-prototype.md` (296 authored lines). Native assessment was unavailable, so an independent verifier checked the exact commit and passed.
-- Slice 2 contains `SPEC_MVP.md` and `odd/tasks/jev-prototype-design.md`, remains below 400 authored lines, and is the pushed branch tip.
+- Slice 2, commit `2627519bcb9fccaaf91d90dc8807ad1f76cb2b68`, contains `SPEC_MVP.md` and `odd/tasks/jev-prototype-design.md` (361 authored changed lines) and passed independent verification.
+- `origin/docs/jev-adr-acceptance` was confirmed at the local branch tip after both work-unit commits. A tracking-only follow-up records this delivery evidence without changing architecture or runtime content.
 
 ## Tracker preflight and publication incident
 Target github.com/ChordanDev/proyectoMed; default develop; actor ChordanDev with ADMIN. Completed all-state limit-1000 inventory, not saturated; ADR-011/012 and Ticket 14 titles were unused. Ticket 14 is not historical closed GitHub issue #14. Default-branch YAML forms and labels were verified. ADR form permits `type:docs`; the implementation form declares ready-for-agent, but #125 still has no labels because the remaining human qualification gates are pending. The architecture acceptance gate is resolved. No first-person checkboxes.
@@ -70,4 +71,4 @@ Current runtime status is limited to these three preserved frontend files; this 
 - `web/src/features/station/screens/StationScreen.tsx`: `85bbdde6d8ce4a43737125a227d9b74de7cfaf0a6f77ac3dcae9f81080c312d3`
 
 ## Next step
-The documentation branch is ready for its final push. A later PR still requires a separately authorized, policy-compliant issue/approval path. Provider/privacy/ZDR/legal and clinical pt-BR qualification remain separate gates; architecture acceptance does not authorize runtime implementation or pilot/production activation.
+The documentation branch has been pushed. A later PR still requires a separately authorized, policy-compliant issue/approval path. Provider/privacy/ZDR/legal and clinical pt-BR qualification remain separate gates; architecture acceptance does not authorize runtime implementation or pilot/production activation.
