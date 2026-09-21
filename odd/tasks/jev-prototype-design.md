@@ -71,4 +71,4 @@ Current runtime status is limited to these three preserved frontend files; this 
 - `web/src/features/station/screens/StationScreen.tsx`: `85bbdde6d8ce4a43737125a227d9b74de7cfaf0a6f77ac3dcae9f81080c312d3`
 
 ## Next step
-The documentation branch has been pushed. A later PR still requires a separately authorized, policy-compliant issue/approval path. Provider/privacy/ZDR/legal and clinical pt-BR qualification remain separate gates; architecture acceptance does not authorize runtime implementation or pilot/production activation.
+Pull request [#132](https://github.com/ChordanDev/proyectoMed/pull/132) (`docs/jev-adr-acceptance` -> `develop`, `type:docs`, `Closes #131`) is open; linked issue #131 carries `ready-for-agent` per the maintainer's direct instruction. This commit records the pull request after its creation. Merge requires passing CI validation and one approval; no merge has been performed. Provider/privacy/ZDR/legal and clinical pt-BR qualification remain separate gates; architecture acceptance does not authorize runtime implementation or pilot/production activation.
