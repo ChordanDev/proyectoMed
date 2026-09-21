@@ -1,8 +1,79 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import strings from "../i18n/pt-BR.json";
 import { StationScreen } from "./StationScreen";
+
+interface FakeRecorderController {
+  recorder: FakeMediaRecorder | null;
+}
+
+class FakeMediaRecorder {
+  readonly mimeType = "audio/webm";
+  state: RecordingState = "inactive";
+  private listeners = new Map<string, Array<(event: Event) => void>>();
+
+  constructor(_stream: MediaStream, controller: FakeRecorderController) {
+    controller.recorder = this;
+  }
+
+  addEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  start(): void {
+    this.state = "recording";
+  }
+
+  stop(): void {
+    this.state = "inactive";
+    this.emit("dataavailable", {
+      data: new Blob(["recorded audio"], { type: this.mimeType }),
+    } as BlobEvent);
+    this.emit("stop", new Event("stop"));
+  }
+
+  private emit(type: string, event: Event): void {
+    this.listeners.get(type)?.forEach((listener) => listener(event));
+  }
+}
+
+const installVoiceBrowser = ({
+  getUserMedia = vi.fn().mockResolvedValue({
+    getTracks: () => [{ stop: vi.fn() }],
+  }),
+  failRecorder = false,
+}: {
+  getUserMedia?: ReturnType<typeof vi.fn>;
+  failRecorder?: boolean;
+} = {}) => {
+  const controller: FakeRecorderController = { recorder: null };
+  vi.stubGlobal("navigator", {
+    ...navigator,
+    mediaDevices: { getUserMedia },
+  });
+  vi.stubGlobal(
+    "MediaRecorder",
+    failRecorder
+      ? class {
+          constructor() {
+            throw new Error("recorder unavailable");
+          }
+        }
+      : class extends FakeMediaRecorder {
+          constructor(stream: MediaStream) {
+            super(stream, controller);
+          }
+        },
+  );
+  return { controller, getUserMedia };
+};
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("StationScreen", () => {
   const defaultProps = {
@@ -208,6 +279,134 @@ describe("StationScreen", () => {
 
     // Send button remains disabled for whitespace-only
     expect(screen.getByTestId("send-button")).toBeDisabled();
+  });
+
+  it("does not offer or request voice input without audio consent", () => {
+    const { getUserMedia } = installVoiceBrowser();
+
+    render(
+      <StationScreen
+        {...defaultProps}
+        audioConsent={false}
+        onTranscribe={vi.fn()}
+        onSendVoice={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId("voice-button")).not.toBeInTheDocument();
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("records, transcribes, and sends a learner voice turn", async () => {
+    const user = userEvent.setup();
+    installVoiceBrowser();
+    const onTranscribe = vi.fn().mockResolvedValue("Como começou a dor?");
+    const onSendVoice = vi.fn().mockResolvedValue("Começou há duas horas.");
+
+    render(
+      <StationScreen
+        {...defaultProps}
+        audioConsent
+        onTranscribe={onTranscribe}
+        onSendVoice={onSendVoice}
+      />,
+    );
+
+    await user.click(screen.getByTestId("voice-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-button")).toHaveAccessibleName(
+        strings.stopVoiceInput,
+      );
+    });
+    await user.click(screen.getByTestId("voice-button"));
+
+    await waitFor(() => {
+      expect(onTranscribe).toHaveBeenCalledWith(expect.any(Blob));
+      expect(onSendVoice).toHaveBeenCalledWith("Como começou a dor?");
+      expect(screen.getByText("Como começou a dor?")).toBeInTheDocument();
+      expect(screen.getByText("Começou há duas horas.")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("voice-fallback")).not.toBeInTheDocument();
+  });
+
+  it("falls back to text for the session when microphone permission is denied", async () => {
+    const user = userEvent.setup();
+    installVoiceBrowser({
+      getUserMedia: vi.fn().mockRejectedValue(new DOMException("denied")),
+    });
+
+    render(
+      <StationScreen
+        {...defaultProps}
+        audioConsent
+        onTranscribe={vi.fn()}
+        onSendVoice={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByTestId("voice-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-fallback")).toHaveTextContent(
+        strings.voiceFallbackNotice,
+      );
+    });
+    expect(screen.queryByTestId("voice-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-input")).toBeEnabled();
+  });
+
+  it("falls back to text when MediaRecorder cannot start", async () => {
+    const user = userEvent.setup();
+    installVoiceBrowser({ failRecorder: true });
+
+    render(
+      <StationScreen
+        {...defaultProps}
+        audioConsent
+        onTranscribe={vi.fn()}
+        onSendVoice={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByTestId("voice-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-fallback")).toHaveTextContent(
+        strings.voiceFallbackNotice,
+      );
+    });
+    expect(screen.getByTestId("message-input")).toBeEnabled();
+  });
+
+  it("falls back to text when transcription is unavailable", async () => {
+    const user = userEvent.setup();
+    installVoiceBrowser();
+    const onSendVoice = vi.fn();
+
+    render(
+      <StationScreen
+        {...defaultProps}
+        audioConsent
+        onTranscribe={vi.fn().mockResolvedValue(null)}
+        onSendVoice={onSendVoice}
+      />,
+    );
+
+    await user.click(screen.getByTestId("voice-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-button")).toHaveAccessibleName(
+        strings.stopVoiceInput,
+      );
+    });
+    await user.click(screen.getByTestId("voice-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-fallback")).toHaveTextContent(
+        strings.voiceFallbackNotice,
+      );
+    });
+    expect(onSendVoice).not.toHaveBeenCalled();
+    expect(screen.getByTestId("message-input")).toBeEnabled();
   });
 
   it("renders multiple conversation turns in order", async () => {

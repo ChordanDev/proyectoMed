@@ -5,6 +5,7 @@ import {
   finishSession,
   sendMessage,
   startSession,
+  transcribeAudio,
   type FinishReason,
   type MessageReply,
   type SendMessageRequest,
@@ -25,6 +26,7 @@ export interface StationApi {
   sendMessage: typeof sendMessage;
   finishSession: typeof finishSession;
   fetchResult: typeof fetchResult;
+  transcribeAudio: typeof transcribeAudio;
 }
 
 const defaultApi: StationApi = {
@@ -32,6 +34,7 @@ const defaultApi: StationApi = {
   sendMessage,
   finishSession,
   fetchResult,
+  transcribeAudio,
 };
 
 const unknownErrorMessage =
@@ -129,6 +132,32 @@ export const useStation = (api: StationApi = defaultApi) => {
     [api, fail],
   );
 
+  const transcribe = useCallback(
+    async (audioBlob: Blob, filename?: string): Promise<string | null> => {
+      const session = sessionRef.current;
+      if (!session || !session.audio_consent || isFinishingRef.current) {
+        return null;
+      }
+
+      try {
+        const transcription = await api.transcribeAudio(
+          session.session_id,
+          audioBlob,
+          filename,
+        );
+        if (sessionRef.current !== session || isFinishingRef.current) {
+          return null;
+        }
+
+        const text = transcription.text.trim();
+        return text.length > 0 ? text : null;
+      } catch {
+        return null;
+      }
+    },
+    [api],
+  );
+
   const finish = useCallback(
     async (reason: FinishReason = "user"): Promise<void> => {
       const session = sessionRef.current;
@@ -156,6 +185,7 @@ export const useStation = (api: StationApi = defaultApi) => {
   return {
     start,
     send,
+    transcribe,
     finish,
     reset,
     result,

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import strings from "./features/station/i18n/pt-BR.json";
 import type { SessionResult } from "./features/station/api/client";
@@ -9,16 +9,23 @@ const mockStart = vi.fn();
 const mockSend = vi.fn();
 const mockFinish = vi.fn();
 const mockReset = vi.fn();
+const mockTranscribe = vi.fn();
 
 let mockStationState = {
   status: "idle",
   result: null as SessionResult | null,
   error: null as string | null,
+  audioConsent: false,
   start: mockStart,
   send: mockSend,
+  transcribe: mockTranscribe,
   finish: mockFinish,
   reset: mockReset,
 };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 vi.mock("./features/station", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./features/station")>();
@@ -35,8 +42,10 @@ describe("App", () => {
       status: "idle",
       result: null,
       error: null,
+      audioConsent: false,
       start: mockStart,
       send: mockSend,
+      transcribe: mockTranscribe,
       finish: mockFinish,
       reset: mockReset,
     };
@@ -51,9 +60,12 @@ describe("App", () => {
     const startButton = screen.getByRole("button", {
       name: strings.noticeButton,
     });
+    expect(startButton).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox"));
     await user.click(startButton);
 
-    expect(mockStart).toHaveBeenCalledWith(false);
+    expect(mockStart).toHaveBeenCalledWith(true);
   });
 
   it("renders loading message when station status is loading", () => {
@@ -66,6 +78,7 @@ describe("App", () => {
   it("renders StationScreen when station status is active and wires handlers", async () => {
     const user = userEvent.setup();
     mockStationState.status = "active";
+    mockStationState.audioConsent = true;
     mockSend.mockResolvedValue({
       reply_text: "Paciente respondeu",
       server_now: "2026-01-01T10:00:00Z",
@@ -89,6 +102,61 @@ describe("App", () => {
     // Finish session
     await user.click(screen.getByTestId("finish-button"));
     expect(mockFinish).toHaveBeenCalledWith("user");
+  });
+
+  it("wires successful voice transcription to a voice learner message", async () => {
+    const user = userEvent.setup();
+    class MockMediaRecorder {
+      readonly mimeType = "audio/webm";
+      state: RecordingState = "inactive";
+      private listeners = new Map<string, EventListener>();
+
+      addEventListener(type: string, listener: EventListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      start(): void {
+        this.state = "recording";
+      }
+
+      stop(): void {
+        this.state = "inactive";
+        this.listeners.get("dataavailable")?.({
+          data: new Blob(["audio"]),
+        } as BlobEvent);
+        this.listeners.get("stop")?.(new Event("stop"));
+      }
+    }
+    vi.stubGlobal("MediaRecorder", MockMediaRecorder);
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({
+          getTracks: () => [{ stop: vi.fn() }],
+        }),
+      },
+    });
+    mockStationState.status = "active";
+    mockStationState.audioConsent = true;
+    mockTranscribe.mockResolvedValue("A dor irradia?");
+    mockSend.mockResolvedValue({
+      reply_text: "Irradia para o braço.",
+      server_now: "2026-01-01T10:00:00Z",
+    });
+
+    render(<App />);
+
+    await user.click(screen.getByTestId("voice-button"));
+    await screen.findByRole("button", { name: strings.stopVoiceInput });
+    await user.click(screen.getByTestId("voice-button"));
+
+    await screen.findByText("Irradia para o braço.");
+    expect(mockTranscribe).toHaveBeenCalledWith(expect.any(Blob));
+    expect(mockSend).toHaveBeenCalledWith({
+      role: "learner",
+      modality: "voice",
+      text: "A dor irradia?",
+    });
   });
 
   it("renders ResultScreen with finishing state when station status is finishing", () => {

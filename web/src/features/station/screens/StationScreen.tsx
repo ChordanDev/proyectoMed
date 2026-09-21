@@ -12,6 +12,12 @@ export interface StationScreenProps {
   onSend: (text: string) => Promise<string | null>;
   /** Finish the station session. */
   onFinish: () => void | Promise<void>;
+  /** Whether the learner granted consent to capture and transcribe audio. */
+  audioConsent?: boolean;
+  /** Transcribe a captured audio blob. Returns null when voice is unavailable. */
+  onTranscribe?: (audioBlob: Blob) => Promise<string | null>;
+  /** Send a transcribed voice turn and receive the AI reply text. */
+  onSendVoice?: (text: string) => Promise<string | null>;
   /** Optional station title for the header. */
   title?: string;
   /** External error message to display. */
@@ -23,6 +29,9 @@ export interface StationScreenProps {
 export function StationScreen({
   onSend,
   onFinish,
+  audioConsent = false,
+  onTranscribe,
+  onSendVoice,
   title,
   error = null,
   disabled = false,
@@ -30,8 +39,54 @@ export function StationScreen({
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [voiceFallback, setVoiceFallback] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const mountedRef = useRef(true);
+
+  const stopStream = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }, []);
+
+  const enableTextFallback = useCallback(() => {
+    recorderRef.current = null;
+    chunksRef.current = [];
+    stopStream();
+    if (mountedRef.current) {
+      setRecording(false);
+      setTranscribing(false);
+      setVoiceFallback(true);
+    }
+  }, [stopStream]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+      }
+      stopStream();
+    };
+  }, [stopStream]);
+
+  const browserVoiceSupported =
+    typeof MediaRecorder !== "undefined" &&
+    typeof navigator.mediaDevices?.getUserMedia === "function";
+  const voiceRequested = audioConsent && Boolean(onTranscribe && onSendVoice);
+
+  useEffect(() => {
+    if (voiceRequested && !browserVoiceSupported) {
+      enableTextFallback();
+    }
+  }, [browserVoiceSupported, enableTextFallback, voiceRequested]);
 
   const scrollToBottom = useCallback(() => {
     if (typeof messagesEndRef.current?.scrollIntoView === "function") {
@@ -43,51 +98,143 @@ export function StationScreen({
     scrollToBottom();
   }, [messages, sending, scrollToBottom]);
 
+  const sendTurn = useCallback(
+    async (
+      text: string,
+      sender: (message: string) => Promise<string | null>,
+    ) => {
+      const learnerMessage: DisplayMessage = { role: "learner", text };
+      setMessages((previous) => [...previous, learnerMessage]);
+      setSending(true);
+      setSendError(null);
+
+      try {
+        const replyText = await sender(text);
+        if (replyText) {
+          setMessages((previous) => [
+            ...previous,
+            { role: "patient", text: replyText },
+          ]);
+        } else {
+          setSendError(strings.stationError);
+        }
+      } catch {
+        setSendError(strings.stationError);
+      } finally {
+        if (mountedRef.current) setSending(false);
+      }
+    },
+    [],
+  );
+
   const handleSend = useCallback(async () => {
     const trimmed = inputValue.trim();
-    if (!trimmed || sending || disabled) return;
+    if (!trimmed || sending || transcribing || disabled) return;
 
-    const learnerMessage: DisplayMessage = { role: "learner", text: trimmed };
-    setMessages((prev) => [...prev, learnerMessage]);
     setInputValue("");
-    setSending(true);
-    setSendError(null);
+    await sendTurn(trimmed, onSend);
+  }, [disabled, inputValue, onSend, sendTurn, sending, transcribing]);
+
+  const startRecording = useCallback(async () => {
+    if (
+      !voiceRequested ||
+      voiceFallback ||
+      sending ||
+      transcribing ||
+      disabled ||
+      !browserVoiceSupported
+    ) {
+      return;
+    }
 
     try {
-      const replyText = await onSend(trimmed);
-
-      if (replyText) {
-        const patientMessage: DisplayMessage = {
-          role: "patient",
-          text: replyText,
-        };
-        setMessages((prev) => [...prev, patientMessage]);
-      } else {
-        setSendError(strings.stationError);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
+
+      const recorder = new MediaRecorder(stream);
+      streamRef.current = stream;
+      recorderRef.current = recorder;
+      chunksRef.current = [];
+
+      recorder.addEventListener("dataavailable", (event: BlobEvent) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      });
+      recorder.addEventListener("error", enableTextFallback);
+      recorder.addEventListener("stop", () => {
+        const audioBlob = new Blob(chunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        recorderRef.current = null;
+        chunksRef.current = [];
+        stopStream();
+        if (!mountedRef.current) return;
+
+        setRecording(false);
+        setTranscribing(true);
+        void (async () => {
+          try {
+            const text = await onTranscribe?.(audioBlob);
+            if (!text) {
+              enableTextFallback();
+              return;
+            }
+
+            setTranscribing(false);
+            await sendTurn(text, onSendVoice!);
+          } catch {
+            enableTextFallback();
+          }
+        })();
+      });
+
+      recorder.start();
+      setRecording(true);
     } catch {
-      setSendError(strings.stationError);
-    } finally {
-      setSending(false);
+      enableTextFallback();
     }
-  }, [inputValue, sending, disabled, onSend]);
+  }, [
+    browserVoiceSupported,
+    disabled,
+    onSendVoice,
+    onTranscribe,
+    sendTurn,
+    sending,
+    stopStream,
+    transcribing,
+    enableTextFallback,
+    voiceFallback,
+    voiceRequested,
+  ]);
+
+  const stopRecording = useCallback(() => {
+    try {
+      recorderRef.current?.stop();
+    } catch {
+      enableTextFallback();
+    }
+  }, [enableTextFallback]);
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
         void handleSend();
       }
     },
     [handleSend],
   );
 
-  const isSendDisabled = disabled || sending || inputValue.trim().length === 0;
+  const busy = sending || transcribing;
+  const isSendDisabled = disabled || busy || inputValue.trim().length === 0;
   const displayedError = error || sendError;
+  const showVoiceButton =
+    voiceRequested && browserVoiceSupported && !voiceFallback;
 
   return (
     <div className="station-screen" data-testid="station-screen">
-      {/* Header with title and finish button */}
       <header className="station-header">
         <h1 className="station-header__title">
           {title ?? strings.stationScreenTitle}
@@ -95,46 +242,50 @@ export function StationScreen({
         <button
           type="button"
           className="station-header__finish-button"
-          disabled={disabled || sending}
-          onClick={() => {
-            void onFinish();
-          }}
+          disabled={disabled || sending || recording || transcribing}
+          onClick={() => void onFinish()}
           data-testid="finish-button"
         >
           {strings.finishStation}
         </button>
       </header>
 
-      {/* Message list */}
       <div
         className="station-messages"
         role="log"
         aria-live="polite"
         data-testid="message-list"
       >
-        {messages.map((msg, index) => (
+        {messages.map((message, index) => (
           <div
             key={index}
-            className={`station-message station-message--${msg.role}`}
-            data-testid={`message-${msg.role}`}
+            className={`station-message station-message--${message.role}`}
+            data-testid={`message-${message.role}`}
           >
             <div className="station-message__role">
-              {msg.role === "learner" ? strings.roleLearner : strings.rolePatient}
+              {message.role === "learner"
+                ? strings.roleLearner
+                : strings.rolePatient}
             </div>
-            {msg.text}
+            {message.text}
           </div>
         ))}
-
         <div ref={messagesEndRef} />
       </div>
 
-      {sending && (
+      {busy && (
+        <div className="station-typing" role="status" data-testid="typing-indicator">
+          {transcribing ? strings.transcribingVoice : strings.sendingMessage}
+        </div>
+      )}
+
+      {voiceFallback && (
         <div
-          className="station-typing"
+          className="station-voice-fallback"
           role="status"
-          data-testid="typing-indicator"
+          data-testid="voice-fallback"
         >
-          {strings.sendingMessage}
+          {strings.voiceFallbackNotice}
         </div>
       )}
 
@@ -144,26 +295,35 @@ export function StationScreen({
         </div>
       )}
 
-      {/* Input area */}
       <div className="station-input-area">
         <input
           type="text"
           className="station-input-area__input"
           placeholder={strings.inputPlaceholder}
           value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
+          onChange={(event) => setInputValue(event.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={disabled || sending}
+          disabled={disabled || busy}
           data-testid="message-input"
           aria-label={strings.inputPlaceholder}
         />
+        {showVoiceButton && (
+          <button
+            type="button"
+            className={`station-input-area__voice-button${recording ? " station-input-area__voice-button--recording" : ""}`}
+            disabled={disabled || busy}
+            onClick={() => void (recording ? stopRecording() : startRecording())}
+            data-testid="voice-button"
+            aria-label={recording ? strings.stopVoiceInput : strings.startVoiceInput}
+          >
+            {recording ? strings.stopVoiceInput : strings.startVoiceInput}
+          </button>
+        )}
         <button
           type="button"
           className="station-input-area__send-button"
           disabled={isSendDisabled}
-          onClick={() => {
-            void handleSend();
-          }}
+          onClick={() => void handleSend()}
           data-testid="send-button"
         >
           {sending ? strings.sendingMessage : strings.sendButton}

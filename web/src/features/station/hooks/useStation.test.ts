@@ -63,6 +63,10 @@ const apiMock = (overrides: Partial<StationApi> = {}): StationApi => ({
   sendMessage: vi.fn().mockResolvedValue(reply),
   finishSession: vi.fn().mockResolvedValue(completed),
   fetchResult: vi.fn().mockResolvedValue(stationResult),
+  transcribeAudio: vi.fn().mockResolvedValue({
+    text: "Quando começou a dor?",
+    transcribed_at: "2026-01-01T10:00:30Z",
+  }),
   ...overrides,
 });
 
@@ -383,6 +387,85 @@ describe("useStation", () => {
     });
     expect(receivedReply).toBeNull();
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("transcribes consented session audio without failing the station", async () => {
+    const transcribeAudio = vi.fn().mockResolvedValue({
+      text: "  Quando começou a dor?  ",
+      transcribed_at: "2026-01-01T10:00:30Z",
+    });
+    const api = apiMock({ transcribeAudio });
+    const { result } = renderHook(() => useStation(api));
+    const audio = new Blob(["audio"], { type: "audio/webm" });
+
+    let beforeStart: string | null = "unexpected";
+    await act(async () => {
+      beforeStart = await result.current.transcribe(audio);
+      await result.current.start(true);
+    });
+    expect(beforeStart).toBeNull();
+
+    let transcription: string | null = null;
+    await act(async () => {
+      transcription = await result.current.transcribe(audio, "question.webm");
+    });
+
+    expect(transcription).toBe("Quando começou a dor?");
+    expect(transcribeAudio).toHaveBeenCalledWith(
+      "session-1",
+      audio,
+      "question.webm",
+    );
+    expect(result.current.status).toBe("active");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("returns null for transcription failure or missing audio consent", async () => {
+    const noConsentSession = { ...session, audio_consent: false };
+    const transcribeAudio = vi.fn().mockRejectedValue(new Error("network"));
+    const withoutConsentApi = apiMock({
+      startSession: vi.fn().mockResolvedValue(noConsentSession),
+      transcribeAudio,
+    });
+    const withoutConsent = renderHook(() => useStation(withoutConsentApi));
+    const audio = new Blob(["audio"]);
+
+    await act(async () => {
+      await withoutConsent.result.current.start(false);
+    });
+    await expect(withoutConsent.result.current.transcribe(audio)).resolves.toBeNull();
+    expect(transcribeAudio).not.toHaveBeenCalled();
+
+    const failingApi = apiMock({ transcribeAudio });
+    const failing = renderHook(() => useStation(failingApi));
+    await act(async () => {
+      await failing.result.current.start(true);
+    });
+
+    let transcription: string | null = "unexpected";
+    await act(async () => {
+      transcription = await failing.result.current.transcribe(audio);
+    });
+    expect(transcription).toBeNull();
+    expect(failing.result.current.status).toBe("active");
+    expect(failing.result.current.error).toBeNull();
+  });
+
+  it("treats an empty transcription as unavailable", async () => {
+    const api = apiMock({
+      transcribeAudio: vi.fn().mockResolvedValue({
+        text: "   ",
+        transcribed_at: "2026-01-01T10:00:30Z",
+      }),
+    });
+    const { result } = renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    await expect(result.current.transcribe(new Blob(["audio"]))).resolves.toBeNull();
+    expect(result.current.status).toBe("active");
   });
 
   it("resets state back to idle cleanly", async () => {
