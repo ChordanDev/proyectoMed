@@ -19,16 +19,29 @@ export default function App(): React.JSX.Element {
     [station],
   );
 
-  const handleSend = useCallback(
-    async (text: string): Promise<string | null> => {
+  const sendMessage = useCallback(
+    async (
+      text: string,
+      modality: "text" | "voice",
+    ): Promise<string | null> => {
       const reply = await station.send({
         role: "learner",
-        modality: "text",
+        modality,
         text,
       });
       return reply?.reply_text ?? null;
     },
     [station],
+  );
+
+  const handleSend = useCallback(
+    (text: string) => sendMessage(text, "text"),
+    [sendMessage],
+  );
+
+  const handleSendVoice = useCallback(
+    (text: string) => sendMessage(text, "voice"),
+    [sendMessage],
   );
 
   const handleFinish = useCallback(() => {
@@ -46,7 +59,7 @@ export default function App(): React.JSX.Element {
         {station.status === "loading" ? (
           <p role="status">{strings.loadingStation}</p>
         ) : (
-          <NoticeScreen onStart={handleStart} voiceSupport={false} />
+          <NoticeScreen onStart={handleStart} voiceSupport />
         )}
       </main>
     );
@@ -85,6 +98,9 @@ export default function App(): React.JSX.Element {
       <StationScreen
         onSend={handleSend}
         onFinish={handleFinish}
+        audioConsent={station.audioConsent}
+        onTranscribe={station.transcribe}
+        onSendVoice={handleSendVoice}
         error={station.error}
       />
     </main>

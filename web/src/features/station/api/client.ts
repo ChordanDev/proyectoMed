@@ -48,6 +48,12 @@ export interface ResultCriterion {
   recommendation: string;
 }
 
+export interface TranscriptionResult {
+  text: string;
+  duration_seconds?: number | null;
+  transcribed_at: string;
+}
+
 export interface SessionResult {
   session_id: string;
   status: "completed";
@@ -157,6 +163,27 @@ const criterionStatuses: readonly CriterionStatus[] = [
   "omitted",
   "uncertain",
 ];
+
+const decodeTranscriptionResult = (value: unknown): TranscriptionResult => {
+  const body = objectValue(value, "transcription");
+  const duration = body.duration_seconds;
+  if (
+    duration !== undefined &&
+    duration !== null &&
+    typeof duration !== "number"
+  ) {
+    invalid("transcription");
+  }
+
+  const result: TranscriptionResult = {
+    text: stringValue(body, "text", "transcription"),
+    transcribed_at: stringValue(body, "transcribed_at", "transcription"),
+  };
+  if (duration !== undefined) {
+    result.duration_seconds = duration as number | null;
+  }
+  return result;
+};
 
 const decodeCriterion = (value: unknown): ResultCriterion => {
   const body = objectValue(value, "result criterion");
@@ -292,6 +319,22 @@ export const createApiClient = ({
         jsonPost({ reason }),
         decodeCompletedSession,
       ),
+    transcribeAudio: (
+      sessionId: string,
+      audioBlob: Blob,
+      filename = "audio.webm",
+    ) => {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, filename);
+      return request(
+        `${sessionPath(sessionId)}/transcribe`,
+        {
+          method: "POST",
+          body: formData,
+        },
+        decodeTranscriptionResult,
+      );
+    },
     fetchResult: (sessionId: string) =>
       request(
         `${sessionPath(sessionId)}/result`,
@@ -311,5 +354,6 @@ export const {
   startSession,
   sendMessage,
   finishSession,
+  transcribeAudio,
   fetchResult,
 } = defaultClient;
