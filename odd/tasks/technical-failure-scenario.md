@@ -6,7 +6,7 @@
 - **Branch:** `feat/57-technical-failure`
 - **Base:** `origin/feat/31-e2e-integration` at `5f6fd51`
 - **Pull request target:** `feat/31-e2e-integration`
-- **Status:** Implementation complete; delivery pending
+- **Status:** Complete; pull request opened
 - **Engram mirror:** Pending — local Engram server is incompatible with the installed client.
 
 ## Objective
@@ -75,11 +75,11 @@ The existing integration harness proves the happy path but its OpenAI mock only 
 
 ## Delivery
 
-- Pull request: pending.
+- Pull request: #138 — https://github.com/ChordanDev/proyectoMed/pull/138
 - Required target: `feat/31-e2e-integration`.
 - Required issue reference: `Refs #57` because this child PR does not target the repository default branch.
 - Required PR label: exactly one `type:*` label, expected `type:feature`.
 
 ## Next step
 
-Push the feature branch and open the child pull request to `feat/31-e2e-integration`.
+Monitor PR #138 checks and review feedback before merging into `feat/31-e2e-integration`.
