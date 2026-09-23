@@ -104,3 +104,59 @@ describe("Station E2E Happy Path", () => {
     }
   });
 });
+
+describe("Station E2E Technical Failure", () => {
+  let harness: E2EHarnessInstance;
+  let client: ReturnType<typeof createApiClient>;
+
+  beforeAll(async () => {
+    harness = await startE2EHarness({
+      mockOpenAIFailureStatus: 500,
+      startupTimeoutMs: 25_000,
+    });
+    client = createApiClient({
+      baseUrl: harness.baseUrl,
+    });
+  }, 30_000);
+
+  afterAll(async () => {
+    if (harness) {
+      await harness.stop();
+    }
+  });
+
+  it("keeps feedback unavailable and recovers with a fresh session after an upstream failure", async () => {
+    const failedSession = await client.startSession({ audio_consent: true });
+
+    try {
+      await client.sendMessage(failedSession.session_id, {
+        role: "learner",
+        modality: "text",
+        text: "Quando começou a dor no peito?",
+      });
+      throw new Error("Expected the Station AI request to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiError);
+      const apiError = error as ApiError;
+      expect(apiError.status).toBe(502);
+      expect(apiError.code).toBe("station_ai_unavailable");
+      expect(apiError.message).toBe(
+        "O serviço da estação de IA está temporariamente indisponível.",
+      );
+    }
+
+    try {
+      await client.fetchResult(failedSession.session_id);
+      throw new Error("Expected results to remain unavailable");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiError);
+      const apiError = error as ApiError;
+      expect(apiError.status).toBe(422);
+      expect(apiError.code).toBe("session_not_finished");
+    }
+
+    const recoverySession = await client.startSession({ audio_consent: true });
+    expect(recoverySession.session_id).toBeTruthy();
+    expect(recoverySession.session_id).not.toBe(failedSession.session_id);
+  });
+});
