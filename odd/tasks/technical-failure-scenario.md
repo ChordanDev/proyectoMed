@@ -6,7 +6,7 @@
 - **Branch:** `feat/57-technical-failure`
 - **Base:** `origin/feat/31-e2e-integration` at `5f6fd51`
 - **Pull request target:** `feat/31-e2e-integration`
-- **Status:** In progress
+- **Status:** Implementation complete; delivery pending
 - **Engram mirror:** Pending — local Engram server is incompatible with the installed client.
 
 ## Objective
@@ -37,8 +37,8 @@ The existing integration harness proves the happy path but its OpenAI mock only 
 
 ## Tasks
 
-- [ ] **ODD-57-1 — Prove the recoverable provider-failure contract end to end**
-  - State: In progress.
+- [x] **ODD-57-1 — Prove the recoverable provider-failure contract end to end**
+  - State: Done.
   - Route: delegated writer.
   - Trigger: two non-trivial files (`web/src/integration/harness.ts`, `web/src/integration/stationFlow.test.ts`).
   - Acceptance:
@@ -57,7 +57,7 @@ The existing integration harness proves the happy path but its OpenAI mock only 
     - Independent verifier: focused integration and full suite passed with the same counts.
     - Parent spot check: focused integration passed (1 file, 3 tests).
     - LSP: reported pre-existing Node type-resolution diagnostics in the integration harness; Vitest and the full repository suite compile and pass the file.
-  - Commit: pending.
+  - Commit: `3044f94` (`test(e2e): cover technical failure recovery`).
   - Native review assessment: unavailable because the untracked ODD task artifact prevented native assessment; RDD is off, so the candidate was treated as high risk and independently verified.
 
 ## Progress
@@ -82,4 +82,4 @@ The existing integration harness proves the happy path but its OpenAI mock only 
 
 ## Next step
 
-Create the ODD-57-1 work-unit commit, record its identity, then open the child pull request.
+Push the feature branch and open the child pull request to `feat/31-e2e-integration`.
