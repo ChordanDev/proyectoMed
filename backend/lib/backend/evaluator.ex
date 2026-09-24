@@ -34,7 +34,7 @@ defmodule Backend.Evaluator do
 
   @type package :: %{required(String.t() | atom()) => term()}
   @type message :: %{required(String.t() | atom()) => term()}
-  @type transcript :: [message()] | %{optional(atom() | String.t()) => [message()]}
+  @type transcript :: [message()] | %{optional(atom() | String.t()) => term()}
 
   @doc """
   Evaluator behaviour for custom or LLM-backed evaluation adapters.
@@ -270,7 +270,7 @@ defmodule Backend.Evaluator do
     has_inquiry = contains_any?(downcased, inquiry_terms)
     has_context = contains_any?(downcased, context_terms)
     has_ambiguity = contains_any?(downcased, @ambiguity_markers)
-    learner_role? = is_learner_role?(msg.role)
+    learner_role? = learner_role?(msg.role)
 
     cond do
       has_inquiry and has_ambiguity ->
@@ -377,7 +377,7 @@ defmodule Backend.Evaluator do
 
   defp contains_any?(_text, _terms), do: false
 
-  defp is_learner_role?(role) do
+  defp learner_role?(role) do
     role in [:learner, :student, "learner", "student"]
   end
 
@@ -406,29 +406,17 @@ defmodule Backend.Evaluator do
 
   defp normalize_message(_), do: %{role: :unknown, text: ""}
 
-  defp get_field(map, field) when is_map(map) do
-    cond do
-      is_binary(field) ->
-        case Map.fetch(map, field) do
-          {:ok, val} ->
-            val
+  defp get_field(map, field) when is_map(map) and is_binary(field) do
+    case Map.fetch(map, field) do
+      {:ok, val} ->
+        val
 
-          :error ->
-            try do
-              Map.get(map, String.to_existing_atom(field))
-            rescue
-              ArgumentError -> nil
-            end
+      :error ->
+        try do
+          Map.get(map, String.to_existing_atom(field))
+        rescue
+          ArgumentError -> nil
         end
-
-      is_atom(field) ->
-        case Map.fetch(map, field) do
-          {:ok, val} -> val
-          :error -> Map.get(map, Atom.to_string(field))
-        end
-
-      true ->
-        nil
     end
   end
 

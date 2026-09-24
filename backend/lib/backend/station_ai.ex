@@ -29,6 +29,8 @@ defmodule Backend.StationAI do
   @type response_rule :: %{required(String.t()) => String.t()}
   @type response_rules :: [response_rule()]
 
+  alias Backend.StationAI.BoundedReply
+
   @type package :: %{required(String.t()) => term()}
 
   @type conversation_message :: %{
@@ -76,12 +78,12 @@ defmodule Backend.StationAI do
   def next_reply(package, context) do
     case adapter().next_reply(package, context) do
       {:ok, %{text: text, used_facts: used_facts}} when is_list(used_facts) ->
-        bounded = Backend.StationAI.BoundedReply.bound(text, package)
+        bounded = BoundedReply.bound(text, package)
         used_facts = if bounded == text, do: used_facts, else: []
         {:ok, %{text: bounded, used_facts: used_facts}}
 
       {:ok, %{text: text}} ->
-        bounded = Backend.StationAI.BoundedReply.bound(text, package)
+        bounded = BoundedReply.bound(text, package)
 
         used_facts =
           if bounded == text,
@@ -166,21 +168,17 @@ defmodule Backend.StationAI do
   defp format_facts([]), do: "  (nenhum)"
 
   defp format_facts(facts) when is_list(facts) do
-    facts
-    |> Enum.map(fn %{"topic" => topic, "content" => content} ->
+    Enum.map_join(facts, "\n", fn %{"topic" => topic, "content" => content} ->
       "  - [#{topic}] #{content}"
     end)
-    |> Enum.join("\n")
   end
 
   defp format_rules([]), do: "  (nenhuma)"
 
   defp format_rules(rules) when is_list(rules) do
-    rules
-    |> Enum.map(fn %{"id" => id, "instruction" => instruction} ->
+    Enum.map_join(rules, "\n", fn %{"id" => id, "instruction" => instruction} ->
       "  - [#{id}] #{instruction}"
     end)
-    |> Enum.join("\n")
   end
 
   defp string_includes?(haystack, needle) when is_binary(needle) and byte_size(needle) > 0 do
