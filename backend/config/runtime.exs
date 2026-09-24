@@ -55,6 +55,14 @@ if voice = System.get_env("OPENAI_TTS_VOICE") do
   config :backend, :openai_tts_voice, voice
 end
 
+if timeout = System.get_env("CONVERSATION_TIMEOUT_MS") do
+  config :backend, :conversation_timeout_ms, String.to_integer(timeout)
+end
+
+if purge_interval = System.get_env("CONVERSATION_PURGE_INTERVAL_MS") do
+  config :backend, :conversation_purge_interval_ms, String.to_integer(purge_interval)
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

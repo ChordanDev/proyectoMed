@@ -12,6 +12,7 @@ const MAX_MOCK_BODY_BYTES = 64 * 1024; // 64 KB cap for mock request payload
 export interface E2EHarnessOptions {
   mockOpenAIReplies?: string[];
   mockOpenAIFailureStatus?: number;
+  conversationTimeoutMs?: number;
   startupTimeoutMs?: number;
 }
 
@@ -45,6 +46,7 @@ export async function startE2EHarness(
   const {
     mockOpenAIReplies = ["A dor começou durante uma caminhada."],
     mockOpenAIFailureStatus,
+    conversationTimeoutMs,
     startupTimeoutMs = 25_000,
   } = options;
 
@@ -138,18 +140,23 @@ export async function startE2EHarness(
 
   // 3. Spawn Phoenix process with env overrides
   // CDD-001: Set base URL without trailing /v1 because OpenAIAdapter appends /v1/chat/completions
+  const phxEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    PORT: String(phxPort),
+    PHX_SERVER: "true",
+    OPENAI_API_KEY: "e2e-stub-key",
+    OPENAI_BASE_URL: `http://127.0.0.1:${mockPort}`,
+    MIX_ENV: "dev",
+  };
+  if (conversationTimeoutMs !== undefined) {
+    phxEnv.CONVERSATION_TIMEOUT_MS = String(conversationTimeoutMs);
+  }
+
   let phxProcess: ChildProcess;
   try {
     phxProcess = spawn("mix", ["phx.server"], {
       cwd: BACKEND_DIR,
-      env: {
-        ...process.env,
-        PORT: String(phxPort),
-        PHX_SERVER: "true",
-        OPENAI_API_KEY: "e2e-stub-key",
-        OPENAI_BASE_URL: `http://127.0.0.1:${mockPort}`,
-        MIX_ENV: "dev",
-      },
+      env: phxEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (spawnError) {
