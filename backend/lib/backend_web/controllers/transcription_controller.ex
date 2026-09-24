@@ -2,20 +2,20 @@ defmodule BackendWeb.TranscriptionController do
   @moduledoc """
   `POST /api/stations/active/sessions/:id/transcribe`.
 
-  Accepts a `multipart/form-data` audio blob, hands it to `Backend.Transcription`
+  Accepts a `multipart/form-data` audio blob, hands it to `Backend.Stations`
   and returns the transcription. Audio is never written to disk by this
   controller beyond the temporary upload Plug already manages, and never logged.
   """
 
   use BackendWeb, :controller
 
-  alias Backend.Transcription
+  alias Backend.Stations
 
   @max_bytes 10 * 1024 * 1024
 
   def create(conn, %{"id" => session_id, "audio" => %Plug.Upload{} = upload}) do
     with {:ok, audio} <- read_audio(upload),
-         {:ok, result} <- Transcription.transcribe(session_id, audio, format(upload)) do
+         {:ok, result} <- Stations.transcribe_audio(session_id, audio, format(upload)) do
       json(conn, %{
         text: result.text,
         duration_seconds: result.duration_seconds,
