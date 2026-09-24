@@ -40,7 +40,10 @@ version pin, and partial-output policy are testable and reproducible.
 
 ---
 
-## Install
+## Prerequisites and install
+
+Install the pinned Node/npm and Elixir/OTP versions listed above, then install
+both runtime dependency sets:
 
 ```sh
 # Web SPA (Vite + React + TypeScript).
@@ -49,6 +52,12 @@ npm --prefix web install
 # Backend (Phoenix / Elixir).
 ( cd backend && mix deps.get )
 ```
+
+The process-level E2E suite also requires `mix` on `PATH` and permission to
+bind ephemeral localhost ports. It starts a real Phoenix server and a local,
+deterministic OpenAI-compatible mock; it needs neither an OpenAI credential nor
+external network access. No separately running Vite or Phoenix server is
+required.
 
 The repository commits both lockfiles (`web/package-lock.json` and
 `backend/mix.lock`) so a fresh clone builds deterministically.
@@ -90,22 +99,46 @@ may instead serve the SPA and API from the same origin.
 
 ## Test
 
-The root entry point runs web Vitest and Phoenix ExUnit in sequence and
-propagates the first non-zero exit from either suite:
+The standard root command runs three explicit phases in order: web unit tests,
+backend ExUnit, then process-level E2E scenarios.
 
 ```sh
 bash scripts/test.sh
 ```
 
-Equivalent per-runtime commands:
+Focused and complete web commands:
 
 ```sh
-# Web SPA (Vitest + @testing-library/react).
-npm --prefix web test
+# Web unit tests only (Vitest + @testing-library/react).
+npm --prefix web run test:unit
 
-# Backend (ExUnit).
+# Backend tests only (ExUnit).
 ( cd backend && mix test )
+
+# Process/API E2E scenarios only (Vitest starts a real Phoenix process).
+npm --prefix web run test:e2e
+
+# Complete web suite: web unit tests plus process-level E2E.
+npm --prefix web test
 ```
+
+The E2E suite is process/API integration, not browser automation. It drives the
+web API client against a real Phoenix HTTP process and a deterministic local
+provider mock. It covers these scenarios and expected outcomes:
+
+- **Station E2E Happy Path:** starts a consented session, exchanges a learner
+  message, finishes the session, and returns criterion-level feedback; invalid
+  session access also returns the structured `404 session_not_found` error.
+- **Station E2E Technical Failure:** converts an upstream provider failure into
+  `502 station_ai_unavailable`, keeps unfinished feedback unavailable with
+  `422 session_not_finished`, and permits recovery through a fresh session.
+- **Station E2E Session Expiry:** rejects expired sessions with `410
+  session_expired` (or `404 session_not_found` after purge), serves no stale
+  result, and permits a fresh recovery session.
+
+The runner is fail-fast. A failed phase exits with that phase's exact non-zero
+status and prevents all later phases from running, so an E2E failure can occur
+only after the web unit and backend phases have passed.
 
 ---
 
@@ -129,12 +162,14 @@ and Elixir versions from `backend/.tool-versions`.
 | Script                                       | Purpose                                                                                  |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `scripts/scaffold.sh`                        | Sole generator boundary — preflight, git-root authority, Vite then Phoenix, partial preservation. |
-| `scripts/test.sh`                            | Root test orchestrator — `npm --prefix web test` then `( cd backend && mix test )`.     |
+| `scripts/test.sh`                            | Root test orchestrator — web unit, backend ExUnit, then process-level E2E.               |
 | `tests/scripts/scaffold_red.sh`              | RED/GREEN acceptance tests for `scripts/scaffold.sh` (16 invariants).                   |
-| `tests/scripts/test_red.sh`                  | RED/GREEN acceptance tests for `scripts/test.sh` (ordering + exit-code propagation).    |
+| `tests/scripts/test_red.sh`                  | Hermetic acceptance tests for three-phase ordering and exact fail-fast propagation.     |
 
-Both RED harnesses use bash fake-command stubs over `PATH`, so they are
-hermetic: no network access and no real npm/npx/mix or Vite/Phoenix generators.
+Both shell acceptance harnesses use bash fake-command stubs over `PATH`, so
+they are hermetic: no network access and no real npm/npx/mix or Vite/Phoenix
+generators. The application E2E suite is separate: it starts a real local
+Phoenix process while replacing only the external provider with a local mock.
 
 ```sh
 # All RED harnesses from a clean state.
