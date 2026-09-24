@@ -25,4 +25,7 @@ ADRs: ADR-011 #123 (Jev verification), ADR-012 #124 (PEP-shaped estimates)
 
 ## Evidence
 
-- Commits: (pending)
+- Commit: `bdfd82e` — feat(stations): implement Station Package v2 contract with Jev-ready rubric and fictional fixtures (Refs #126)
+- PR #141: feat/126-station-package-contracts → feat/125-jev-evaluation
+- PR #142 (Draft): feat/125-jev-evaluation → develop (parent)
+- Tests: 166 passed (`cd backend && mix test`)
