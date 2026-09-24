@@ -6,7 +6,7 @@
 - **Branch:** `feat/59-test-runner-readme-integration`
 - **Base:** `origin/feat/31-e2e-integration` at `a871e6a`
 - **Merge target:** `feat/31-e2e-integration`
-- **Status:** Implementation complete; awaiting merge into the parent feature branch.
+- **Status:** Complete — merged locally into `feat/31-e2e-integration`.
 - **Engram mirror:** Pending — local Engram server is incompatible with the installed client.
 - **TDD mode:** Disabled by `openspec/config.yaml` (`strict_tdd: false`).
 - **Test runner:** `bash scripts/test.sh`
@@ -56,13 +56,15 @@ Make the standard repository test runner execute the web unit suite, backend ExU
     - Independent verification: PASS with no blocking findings.
     - Parent spot check: `bash tests/scripts/test_red.sh` passed (4 passed, 0 failed).
 
-- [ ] **ODD-59-2 — Merge the completed work unit into the parent feature branch**
-  - State: Pending.
+- [x] **ODD-59-2 — Merge the completed work unit into the parent feature branch**
+  - State: Done.
   - Route: inline Git state operation after verification.
   - Acceptance:
     - The implementation commit exists on `feat/59-test-runner-readme-integration`.
     - Local `feat/31-e2e-integration` contains the verified work through an explicit merge.
-  - Evidence: Pending.
+  - Evidence:
+    - Merge commit: `b3df763` on local `feat/31-e2e-integration`.
+    - The parent branch contains implementation commit `96fc776` and verification evidence commit `9634811`.
 
 ## Verification evidence
 
@@ -75,4 +77,4 @@ Make the standard repository test runner execute the web unit suite, backend ExU
 
 ## Next step
 
-Commit this evidence update, then merge the branch into local `feat/31-e2e-integration`.
+Push `feat/31-e2e-integration` only when explicitly requested; no remote branches were changed in this work unit.
