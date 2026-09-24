@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://proyectomed.dev/schemas/station-package/1.0.0",
+  "$id": "https://proyectomed.dev/schemas/station-package/2.0.0",
   "title": "Station Package",
   "description": "The versioned content contract supplied by a Content Partner.",
   "type": "object",
@@ -9,6 +9,7 @@
     "version",
     "language",
     "display_title",
+    "placeholder",
     "patient_profile",
     "revealable_facts",
     "response_rules",
@@ -17,9 +18,10 @@
   ],
   "properties": {
     "station_id": {"type": "string", "minLength": 1},
-    "version": {"const": "1.0.0"},
+    "version": {"const": "2.0.0"},
     "language": {"const": "pt-BR"},
     "display_title": {"type": "string", "minLength": 1},
+    "placeholder": {"type": "boolean"},
     "patient_profile": {
       "type": "object",
       "required": ["persona", "age", "presenting_context", "tone"],
@@ -33,7 +35,13 @@
     "revealable_facts": {"$ref": "#/$defs/revealableFacts"},
     "response_rules": {"$ref": "#/$defs/responseRules"},
     "expected_actions": {"$ref": "#/$defs/expectedActions"},
-    "rubric": {"$ref": "#/$defs/rubric"}
+    "rubric": {"$ref": "#/$defs/rubric"},
+    "approved_templates": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "array", "items": {"$ref": "#/$defs/approvedTemplate"}}
+      ]
+    }
   },
   "$defs": {
     "revealableFacts": {
@@ -42,10 +50,14 @@
     },
     "revealableFact": {
       "type": "object",
-      "required": ["topic", "content"],
+      "required": ["id", "topic", "content", "disclosure_condition"],
       "properties": {
+        "id": {"type": "string", "minLength": 1},
         "topic": {"type": "string", "minLength": 1},
-        "content": {"type": "string", "minLength": 1}
+        "content": {"type": "string", "minLength": 1},
+        "disclosure_condition": {
+          "enum": ["on_request", "after_action", "timed", "unconditional"]
+        }
       }
     },
     "responseRules": {
@@ -78,7 +90,20 @@
     },
     "rubricCriterion": {
       "type": "object",
-      "required": ["id", "description", "evidence_questions", "practice_recommendation", "weight"],
+      "required": [
+        "id",
+        "description",
+        "evidence_questions",
+        "practice_recommendation",
+        "levels",
+        "actions",
+        "order",
+        "count_cap",
+        "first_n",
+        "veto",
+        "exclusion",
+        "modality_requirement"
+      ],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "description": {"type": "string", "minLength": 1},
@@ -87,7 +112,54 @@
           "items": {"type": "string", "minLength": 1}
         },
         "practice_recommendation": {"type": "string", "minLength": 1},
-        "weight": {"type": "number"}
+        "levels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/rubricLevel"}
+        },
+        "actions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/rubricAction"}
+        },
+        "order": {"type": ["integer", "null"]},
+        "count_cap": {"type": ["integer", "null"]},
+        "first_n": {"type": ["integer", "null"]},
+        "veto": {"type": "boolean", "default": false},
+        "exclusion": {"type": "boolean", "default": false},
+        "modality_requirement": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "minLength": 1}
+          ]
+        }
+      }
+    },
+    "rubricLevel": {
+      "type": "object",
+      "required": ["label", "points", "description"],
+      "properties": {
+        "label": {
+          "enum": ["inadequado", "parcialmente_adequado", "adequado"]
+        },
+        "points": {"type": "number", "multipleOf": 0.125},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "rubricAction": {
+      "type": "object",
+      "required": ["id", "description"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "approvedTemplate": {
+      "type": "object",
+      "required": ["template_id", "text", "applicability"],
+      "properties": {
+        "template_id": {"type": "string", "minLength": 1},
+        "text": {"type": "string", "minLength": 1},
+        "applicability": {"type": "string", "minLength": 1}
       }
     }
   }

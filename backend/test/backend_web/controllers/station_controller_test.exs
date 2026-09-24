@@ -40,7 +40,7 @@ defmodule BackendWeb.StationControllerTest do
 
       assert json_response(conn, 200) == %{
                "station_id" => "chest-pain-initial-assessment",
-               "version" => "1.0.0",
+               "version" => "2.0.0",
                "language" => "pt-BR",
                "display_title" => "Avaliação inicial de dor torácica"
              }
