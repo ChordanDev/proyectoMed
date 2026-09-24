@@ -6,7 +6,7 @@
 - **Branch:** `feat/59-test-runner-readme-integration`
 - **Base:** `origin/feat/31-e2e-integration` at `a871e6a`
 - **Merge target:** `feat/31-e2e-integration`
-- **Status:** Verification complete; awaiting work-unit commit and merge.
+- **Status:** Implementation complete; awaiting merge into the parent feature branch.
 - **Engram mirror:** Pending — local Engram server is incompatible with the installed client.
 - **TDD mode:** Disabled by `openspec/config.yaml` (`strict_tdd: false`).
 - **Test runner:** `bash scripts/test.sh`
@@ -34,8 +34,8 @@ Make the standard repository test runner execute the web unit suite, backend ExU
 
 ## Tasks
 
-- [ ] **ODD-59-1 — Integrate process-level E2E into the standard runner and docs**
-  - State: Verification complete; awaiting work-unit commit.
+- [x] **ODD-59-1 — Integrate process-level E2E into the standard runner and docs**
+  - State: Done.
   - Route: delegated writer; multi-file write trigger (five non-trivial files).
   - Allowed edit surfaces: `web/package.json`, `scripts/test.sh`, `tests/scripts/test_red.sh`, `README.md`, `openspec/config.yaml`, `odd/tasks/test-runner-readme-integration.md`.
   - Acceptance:
@@ -50,7 +50,11 @@ Make the standard repository test runner execute the web unit suite, backend ExU
     - `npm --prefix web run typecheck`
     - `npm --prefix web run lint`
     - `bash scripts/test.sh`
-  - Evidence: Pending.
+  - Evidence:
+    - Commit: `96fc776` (`test(e2e): integrate scenarios into root runner`).
+    - Writer verification: all required commands passed.
+    - Independent verification: PASS with no blocking findings.
+    - Parent spot check: `bash tests/scripts/test_red.sh` passed (4 passed, 0 failed).
 
 - [ ] **ODD-59-2 — Merge the completed work unit into the parent feature branch**
   - State: Pending.
@@ -71,4 +75,4 @@ Make the standard repository test runner execute the web unit suite, backend ExU
 
 ## Next step
 
-Create the work-unit commit, record its identity, then merge the branch into local `feat/31-e2e-integration`.
+Commit this evidence update, then merge the branch into local `feat/31-e2e-integration`.
