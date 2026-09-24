@@ -12,6 +12,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude 'src/integration/**'",
+    "test:e2e": "vitest run src/integration/stationFlow.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
