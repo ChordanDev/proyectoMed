@@ -1,7 +1,7 @@
 defmodule BackendWeb.TranscriptionControllerTest do
   use BackendWeb.ConnCase, async: false
 
-  alias Backend.Conversation
+  alias Backend.Stations
 
   @audio "fake-audio-bytes"
 
@@ -37,7 +37,7 @@ defmodule BackendWeb.TranscriptionControllerTest do
       Req.Test.json(c, %{"text" => "Dói o peito.", "duration" => 2.0})
     end)
 
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
     conn = post_audio(conn, session.session_id, %{"audio" => upload(@audio)})
 
     assert %{"text" => "Dói o peito.", "duration_seconds" => 2.0, "transcribed_at" => at} =
@@ -49,7 +49,7 @@ defmodule BackendWeb.TranscriptionControllerTest do
   test "returns 502 when OpenAI fails", %{conn: conn} do
     stub_openai(BoomStub, fn c -> Plug.Conn.send_resp(c, 503, "down") end)
 
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
     conn = post_audio(conn, session.session_id, %{"audio" => upload(@audio)})
 
     assert %{"error" => "openai_unavailable", "message" => message} = json_response(conn, 502)
@@ -60,7 +60,7 @@ defmodule BackendWeb.TranscriptionControllerTest do
     Application.put_env(:backend, :conversation_timeout_ms, 0)
     on_exit(fn -> Application.delete_env(:backend, :conversation_timeout_ms) end)
 
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
     conn = post_audio(conn, session.session_id, %{"audio" => upload(@audio)})
 
     assert %{"error" => "expired"} = json_response(conn, 410)
@@ -73,21 +73,21 @@ defmodule BackendWeb.TranscriptionControllerTest do
   end
 
   test "returns 403 when the session has no audio consent", %{conn: conn} do
-    session = Conversation.start()
+    session = Stations.create_session(audio_consent: false)
     conn = post_audio(conn, session.session_id, %{"audio" => upload(@audio)})
 
     assert %{"error" => "no_consent"} = json_response(conn, 403)
   end
 
   test "returns 400 when the audio part is missing", %{conn: conn} do
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
     conn = post_audio(conn, session.session_id, %{})
 
     assert %{"error" => "invalid_audio"} = json_response(conn, 400)
   end
 
   test "returns 400 for an unsupported audio format", %{conn: conn} do
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
 
     conn =
       post_audio(conn, session.session_id, %{
@@ -98,7 +98,7 @@ defmodule BackendWeb.TranscriptionControllerTest do
   end
 
   test "returns 413 for audio over the 10 MB limit", %{conn: conn} do
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
     oversized = :binary.copy("a", 10 * 1024 * 1024 + 1)
 
     conn = post_audio(conn, session.session_id, %{"audio" => upload(oversized)})

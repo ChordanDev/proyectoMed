@@ -1,7 +1,7 @@
 defmodule BackendWeb.TTSControllerTest do
   use BackendWeb.ConnCase, async: false
 
-  alias Backend.Conversation
+  alias Backend.Stations
 
   @text "Bom dia, o que o senhor está sentindo?"
   @audio "fake-mp3-bytes"
@@ -32,7 +32,7 @@ defmodule BackendWeb.TTSControllerTest do
 
   test "returns the audio blob on success", %{conn: conn} do
     stub_audio(OkVoiceStub)
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
 
     conn = post_text(conn, session.session_id, %{"text" => @text})
 
@@ -49,7 +49,7 @@ defmodule BackendWeb.TTSControllerTest do
       Plug.Conn.send_resp(c, 200, @audio)
     end)
 
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
     conn = post_text(conn, session.session_id, %{"text" => @text, "voice" => "echo"})
 
     assert response(conn, 200) == @audio
@@ -58,7 +58,7 @@ defmodule BackendWeb.TTSControllerTest do
 
   test "returns 502 when OpenAI fails", %{conn: conn} do
     stub_openai(BoomVoiceStub, fn c -> Plug.Conn.send_resp(c, 503, "down") end)
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
 
     conn = post_text(conn, session.session_id, %{"text" => @text})
 
@@ -71,7 +71,7 @@ defmodule BackendWeb.TTSControllerTest do
     Application.put_env(:backend, :conversation_timeout_ms, 0)
     on_exit(fn -> Application.delete_env(:backend, :conversation_timeout_ms) end)
 
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
     conn = post_text(conn, session.session_id, %{"text" => @text})
 
     assert %{"error" => "expired"} = json_response(conn, 410)
@@ -87,7 +87,7 @@ defmodule BackendWeb.TTSControllerTest do
 
   test "returns 400 when the text is missing or invalid", %{conn: conn} do
     stub_audio(NoTextStub)
-    session = Conversation.start(audio_consent: true)
+    session = Stations.create_session(audio_consent: true)
 
     assert %{"error" => "invalid_text"} =
              conn |> post_text(session.session_id, %{}) |> json_response(400)
@@ -103,7 +103,7 @@ defmodule BackendWeb.TTSControllerTest do
 
   test "returns 403 when the session has no audio consent", %{conn: conn} do
     stub_audio(NoConsentVoiceStub)
-    session = Conversation.start(audio_consent: false)
+    session = Stations.create_session(audio_consent: false)
 
     conn = post_text(conn, session.session_id, %{"text" => @text})
 
