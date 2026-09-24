@@ -65,13 +65,28 @@ The existing integration suite covers the happy path (#56) and technical upstrea
     - `npm --prefix web test` (66 passed)
     - `bash scripts/test.sh` (66 vitest, 157 exunit passed)
 
-- [ ] **ODD-58-4 — Deliver PR and record evidence**
-  - State: In progress.
+- [x] **ODD-58-4 — Deliver PR and record evidence**
+  - State: Done.
   - Acceptance:
     - PR opened to `feat/31-e2e-integration` with `Refs #58`.
+  - Evidence:
+    - Commit: `1b86689` (`test(e2e): cover session expiry scenario (Refs #58)`).
+    - PR: #139 (https://github.com/ChordanDev/proyectoMed/pull/139).
+    - Label: `type:feature`.
+
+## Delivery
+
+- Pull request: #139 — https://github.com/ChordanDev/proyectoMed/pull/139
+- Required target: `feat/31-e2e-integration`.
+- Required issue reference: `Refs #58`.
+- Required PR label: `type:feature`.
 
 ## Verification evidence
 
 - `npm --prefix web test`: passed (7 test files, 66 tests).
 - `bash scripts/test.sh`: passed (66 Vitest tests and 157 ExUnit tests).
 - `npm --prefix web run typecheck`: passed with zero type errors.
+
+## Next step
+
+Monitor PR #139 checks and review feedback before merging into `feat/31-e2e-integration`.
