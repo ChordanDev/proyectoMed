@@ -98,41 +98,45 @@ defmodule Backend.Conversation do
   end
 
   def handle_call({:append_message, session_id, message}, _from, state) do
-    with {:ok, session} <- active_session(session_id) do
-      case session.status do
-        :active ->
-          message = Map.put(message, :at, DateTime.utc_now())
-          session = %{session | messages: session.messages ++ [message]}
-          true = :ets.insert(__MODULE__, {session_id, session})
-          {:reply, {:ok, session}, state}
+    case active_session(session_id) do
+      {:ok, session} ->
+        case session.status do
+          :active ->
+            message = Map.put(message, :at, DateTime.utc_now())
+            session = %{session | messages: session.messages ++ [message]}
+            true = :ets.insert(__MODULE__, {session_id, session})
+            {:reply, {:ok, session}, state}
 
-        :completed ->
-          {:reply, {:error, :completed}, state}
-      end
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+          :completed ->
+            {:reply, {:error, :completed}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
   def handle_call({:complete, session_id, reason}, _from, state) do
-    with {:ok, session} <- active_session(session_id) do
-      case session.status do
-        :active ->
-          session =
-            Map.merge(session, %{
-              status: :completed,
-              completed_at: DateTime.utc_now(),
-              completion_reason: reason
-            })
+    case active_session(session_id) do
+      {:ok, session} ->
+        case session.status do
+          :active ->
+            session =
+              Map.merge(session, %{
+                status: :completed,
+                completed_at: DateTime.utc_now(),
+                completion_reason: reason
+              })
 
-          true = :ets.insert(__MODULE__, {session_id, session})
-          {:reply, {:ok, session}, state}
+            true = :ets.insert(__MODULE__, {session_id, session})
+            {:reply, {:ok, session}, state}
 
-        :completed ->
-          {:reply, {:ok, session}, state}
-      end
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+          :completed ->
+            {:reply, {:ok, session}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 

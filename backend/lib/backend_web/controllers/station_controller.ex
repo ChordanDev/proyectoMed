@@ -159,37 +159,18 @@ defmodule BackendWeb.StationController do
   end
 
   def show_result(conn, %{"id" => session_id}) do
-    with {:ok, session} <- Conversation.fetch(session_id) do
-      case session.status do
-        :completed ->
-          package = StationLoader.active_package()
-          evaluation = Evaluator.evaluate(package, session)
+    case Conversation.fetch(session_id) do
+      {:ok, %{status: :completed} = session} ->
+        render_completed_result(conn, session)
 
-          criteria =
-            Enum.map(evaluation.criteria, fn criterion ->
-              %{
-                id: criterion.id,
-                status: to_string(criterion.status),
-                evidence: serialize_evidence(criterion.evidence),
-                recommendation: criterion.recommendation
-              }
-            end)
+      {:ok, %{status: :active}} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{
+          error: "session_not_finished",
+          message: "A sessão ainda não foi finalizada."
+        })
 
-          json(conn, %{
-            session_id: session.session_id,
-            status: "completed",
-            criteria: criteria
-          })
-
-        :active ->
-          conn
-          |> put_status(:unprocessable_entity)
-          |> json(%{
-            error: "session_not_finished",
-            message: "A sessão ainda não foi finalizada."
-          })
-      end
-    else
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
@@ -206,6 +187,27 @@ defmodule BackendWeb.StationController do
           message: "A sessão expirou."
         })
     end
+  end
+
+  defp render_completed_result(conn, session) do
+    package = StationLoader.active_package()
+    evaluation = Evaluator.evaluate(package, session)
+
+    criteria =
+      Enum.map(evaluation.criteria, fn criterion ->
+        %{
+          id: criterion.id,
+          status: to_string(criterion.status),
+          evidence: serialize_evidence(criterion.evidence),
+          recommendation: criterion.recommendation
+        }
+      end)
+
+    json(conn, %{
+      session_id: session.session_id,
+      status: "completed",
+      criteria: criteria
+    })
   end
 
   defp parse_finish_reason("user"), do: {:ok, :user}
