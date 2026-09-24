@@ -13,6 +13,10 @@ Feature branch: `feat/135-backend-stations-context`
 - [x] Task 4: Migrate existing tests and add comprehensive `Backend.StationsTest` suite
 - [x] Task 5: Add architecture tests preventing direct web-to-internal calls
 - [x] Task 6: Run full verification suite (`scripts/test.sh`, credo, format, compile) and prepare PR
+- [x] Task 7: Clarify and test `append_patient_reply/2` finish race behavior (TR-02 pre-existing/intended)
+- [x] Task 8: Fix `OpenAIAdapter.get_config/1` environment keyword merge (sec-perf-001)
+- [x] Task 9: Implement learner message rollback on AI failure (TR-01)
+- [x] Task 10: Run full test suite, format/lint, and document Jorge review resolution
 
 ## Acceptance Criteria
 
@@ -33,10 +37,11 @@ Feature branch: `feat/135-backend-stations-context`
   - `7b4f13d` — refactor(backend_web): delegate station domain operations strictly to Backend.Stations (Refs #135)
   - `b419702` — test(backend_web): migrate controller tests to use Backend.Stations (Refs #135)
   - `52f9757` — test(backend): add architecture boundary tests forbidding web-to-internal calls (Refs #135)
+  - `8844b73` — fix(stations): resolve review findings for retry rollback and config merge (Refs #135)
 - Tests:
   - Web: 23 passed (`npm --prefix web test`)
-  - Backend: 184 passed (`mix test`)
-  - End-to-end: 207 passed total (`bash scripts/test.sh`)
+  - Backend: 187 passed (`mix test`)
+  - End-to-end: 210 passed total (`bash scripts/test.sh`)
   - Web Typecheck: clean (`npm --prefix web run typecheck`)
   - Web Lint: clean (`npm --prefix web run lint`)
   - Backend Format: clean (`mix format --check-formatted`)

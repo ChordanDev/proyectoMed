@@ -36,9 +36,9 @@ defmodule Backend.Stations.StationAI.OpenAIAdapter do
   end
 
   defp get_config(opts) do
-    app =
-      Application.get_env(:backend, __MODULE__) ||
-        Application.get_env(:backend, Backend.StationAI.OpenAIAdapter, [])
+    legacy_app = Application.get_env(:backend, Backend.StationAI.OpenAIAdapter, [])
+    current_app = Application.get_env(:backend, __MODULE__, [])
+    app = Keyword.merge(legacy_app, current_app)
 
     %{
       api_key: opts[:api_key] || Keyword.get(app, :api_key) || System.get_env("OPENAI_API_KEY"),

@@ -160,6 +160,7 @@ defmodule Backend.Stations do
         {:error, :completed}
 
       {:error, _reason} ->
+        _ = rollback_learner_message(session_id, learner_message)
         {:error, :station_ai_unavailable}
     end
   end
@@ -337,6 +338,10 @@ defmodule Backend.Stations do
       {:error, :completed} -> {:ok, :completed}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp rollback_learner_message(session_id, learner_message) do
+    Conversation.pop_last_message(session_id, learner_message)
   end
 
   defp format_context(session, package) do

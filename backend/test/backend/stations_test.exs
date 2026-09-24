@@ -19,6 +19,16 @@ defmodule Backend.StationsTest do
     end
   end
 
+  defmodule TestConcurrentCompleteAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      session_id = Process.get(:test_concurrent_session_id)
+      if session_id, do: Backend.Stations.complete_session(session_id, :user)
+      {:ok, %{text: "Resposta tardia", used_facts: []}}
+    end
+  end
+
   setup do
     prev_adapter = Application.get_env(:backend, :station_ai_adapter)
     Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
@@ -168,7 +178,7 @@ defmodule Backend.StationsTest do
                {:error, :not_found}
     end
 
-    test "create_message/2 returns station_ai_unavailable when adapter fails" do
+    test "create_message/2 returns station_ai_unavailable and rolls back learner message when adapter fails" do
       Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
       session = Stations.create_session(%{audio_consent: true})
 
@@ -177,6 +187,42 @@ defmodule Backend.StationsTest do
                modality: "text",
                text: "Olá"
              }) == {:error, :station_ai_unavailable}
+
+      {:ok, session_after_failure} = Stations.get_session(session.session_id)
+      assert session_after_failure.messages == []
+
+      # Retry with recovered adapter succeeds without duplicating learner messages
+      Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+
+      assert {:ok, result} =
+               Stations.create_message(session.session_id, %{
+                 role: "learner",
+                 modality: "text",
+                 text: "Olá"
+               })
+
+      assert is_binary(result.reply_text)
+      {:ok, session_after_retry} = Stations.get_session(session.session_id)
+      assert length(session_after_retry.messages) == 2
+      assert hd(session_after_retry.messages).text == "Olá"
+      assert List.last(session_after_retry.messages).text == result.reply_text
+    end
+
+    test "create_message/2 handles race when session completes while generating reply" do
+      Application.put_env(:backend, :station_ai_adapter, TestConcurrentCompleteAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+      Process.put(:test_concurrent_session_id, session.session_id)
+
+      assert {:ok, %{reply_text: "Resposta tardia"}} =
+               Stations.create_message(session.session_id, %{
+                 role: "learner",
+                 modality: "text",
+                 text: "Olá"
+               })
+
+      assert {:ok, completed_session} = Stations.get_session(session.session_id)
+      assert completed_session.status == :completed
+      assert length(completed_session.messages) == 1
     end
   end
 

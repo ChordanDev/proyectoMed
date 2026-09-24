@@ -57,6 +57,17 @@ defmodule Backend.Stations.Conversation do
   end
 
   @doc """
+  Pops the last message from an active session if it matches the expected message.
+  Returns `{:ok, session}` on success, or `{:error, reason}` if the session is not found,
+  expired, completed, or the last message does not match.
+  """
+  @spec pop_last_message(String.t(), map() | nil) ::
+          {:ok, session()} | {:error, :not_found | :expired | :completed | :no_match}
+  def pop_last_message(session_id, expected_message \\ nil) do
+    GenServer.call(__MODULE__, {:pop_last_message, session_id, expected_message})
+  end
+
+  @doc """
   Idempotently discards a session from in-memory storage.
   Returns `:ok` whether the session existed or not.
   """
@@ -153,6 +164,19 @@ defmodule Backend.Stations.Conversation do
     {:reply, fetch_session(session_id), state}
   end
 
+  def handle_call({:pop_last_message, session_id, expected_message}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :active} = session} ->
+        {:reply, do_pop_last_message(session, expected_message), state}
+
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call({:discard, session_id}, _from, state) do
     :ets.delete(__MODULE__, session_id)
     {:reply, :ok, state}
@@ -237,6 +261,43 @@ defmodule Backend.Stations.Conversation do
   defp session_id do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
+
+  defp do_pop_last_message(session, expected_message) do
+    case List.last(session.messages) do
+      nil ->
+        {:error, :no_match}
+
+      last_msg ->
+        pop_if_matching(session, last_msg, expected_message)
+    end
+  end
+
+  defp pop_if_matching(session, last_msg, expected_message) do
+    if matches_expected?(last_msg, expected_message) do
+      updated_messages = :lists.droplast(session.messages)
+      session = %{session | messages: updated_messages}
+      true = :ets.insert(__MODULE__, {session.session_id, session})
+      {:ok, session}
+    else
+      {:error, :no_match}
+    end
+  end
+
+  defp matches_expected?(_msg, nil), do: true
+
+  defp matches_expected?(msg, %{role: role, text: text}) do
+    normalize_match_role(msg.role) == normalize_match_role(role) and msg.text == text
+  end
+
+  defp matches_expected?(msg, %{"role" => role, "text" => text}) do
+    normalize_match_role(msg.role) == normalize_match_role(role) and msg.text == text
+  end
+
+  defp matches_expected?(_msg, _), do: true
+
+  defp normalize_match_role(r) when r in [:learner, "learner", :student, "student"], do: :learner
+  defp normalize_match_role(r) when r in [:patient, "patient"], do: :patient
+  defp normalize_match_role(other), do: other
 end
 
 defmodule Backend.Conversation do
@@ -244,6 +305,10 @@ defmodule Backend.Conversation do
   defdelegate start_link(options \\ []), to: Backend.Stations.Conversation
   defdelegate start(attrs \\ %{}), to: Backend.Stations.Conversation
   defdelegate append_message(session_id, message), to: Backend.Stations.Conversation
+
+  defdelegate pop_last_message(session_id, expected_message \\ nil),
+    to: Backend.Stations.Conversation
+
   defdelegate complete(session_id, reason), to: Backend.Stations.Conversation
   defdelegate fetch(session_id), to: Backend.Stations.Conversation
   defdelegate discard(session_id), to: Backend.Stations.Conversation

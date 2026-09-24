@@ -94,4 +94,37 @@ defmodule Backend.ConversationTest do
     assert {:error, :expired} = Conversation.fetch(session.session_id)
     assert {:error, :not_found} = Conversation.fetch(session.session_id)
   end
+
+  test "pop_last_message removes the latest message matching expected role and text" do
+    session = Conversation.start()
+
+    {:ok, _} =
+      Conversation.append_message(session.session_id, %{
+        role: :learner,
+        modality: :text,
+        text: "Primeira mensagem"
+      })
+
+    {:ok, _} =
+      Conversation.append_message(session.session_id, %{
+        role: :learner,
+        modality: :text,
+        text: "Segunda mensagem"
+      })
+
+    assert {:ok, popped} =
+             Conversation.pop_last_message(session.session_id, %{
+               role: :learner,
+               text: "Segunda mensagem"
+             })
+
+    assert length(popped.messages) == 1
+    assert hd(popped.messages).text == "Primeira mensagem"
+
+    assert {:error, :no_match} =
+             Conversation.pop_last_message(session.session_id, %{
+               role: :learner,
+               text: "Outro texto"
+             })
+  end
 end
