@@ -1,11 +1,11 @@
-defmodule Backend.StationLoader do
+defmodule Backend.Stations.StationLoader do
   @moduledoc """
   Loads and holds the active validated Station Package for runtime consumers.
   """
 
   use GenServer
 
-  alias Backend.StationPackage
+  alias Backend.Stations.StationPackage
 
   require Logger
 
@@ -75,4 +75,17 @@ defmodule Backend.StationLoader do
         {:error, "Falha ao carregar o pacote ativo da estação: não foi possível ler o arquivo."}
     end
   end
+end
+
+defmodule Backend.StationLoader do
+  @moduledoc false
+  defdelegate start_link(options \\ []), to: Backend.Stations.StationLoader
+
+  defdelegate active_package(server \\ Backend.Stations.StationLoader),
+    to: Backend.Stations.StationLoader
+
+  defdelegate active_version(server \\ Backend.Stations.StationLoader),
+    to: Backend.Stations.StationLoader
+
+  defdelegate load_active(), to: Backend.Stations.StationLoader
 end

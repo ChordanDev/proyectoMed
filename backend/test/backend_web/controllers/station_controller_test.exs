@@ -1,11 +1,12 @@
 defmodule BackendWeb.StationControllerTest do
   use BackendWeb.ConnCase, async: false
 
-  alias Backend.Conversation
-  alias Backend.StationLoader
+  alias Backend.Stations
+  alias Backend.Stations.Conversation
+  alias Backend.Stations.StationLoader
 
   defmodule TestSuccessAdapter do
-    @behaviour Backend.StationAI
+    @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
       {:ok, %{text: "Estou com um aperto forte no peito há duas horas."}}
@@ -13,7 +14,7 @@ defmodule BackendWeb.StationControllerTest do
   end
 
   defmodule TestErrorAdapter do
-    @behaviour Backend.StationAI
+    @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
       {:error, :provider_down}
@@ -21,7 +22,7 @@ defmodule BackendWeb.StationControllerTest do
   end
 
   defmodule BlockingStationAIAdapter do
-    @behaviour Backend.StationAI
+    @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
       parent = Application.get_env(:backend, :blocking_adapter_test_pid)
@@ -50,7 +51,7 @@ defmodule BackendWeb.StationControllerTest do
       conn = get(conn, ~p"/api/stations/active")
 
       assert %{"version" => version} = json_response(conn, 200)
-      assert version == StationLoader.active_version()
+      assert version == Stations.active_version()
     end
   end
 
@@ -72,7 +73,7 @@ defmodule BackendWeb.StationControllerTest do
                "server_now" => server_now_str
              } = response
 
-      active_pkg = StationLoader.active_package()
+      active_pkg = Stations.get_active_package()
       assert station_id == active_pkg["station_id"]
       assert station_version == active_pkg["version"]
 
@@ -83,8 +84,8 @@ defmodule BackendWeb.StationControllerTest do
       assert DateTime.diff(expires_at, started_at, :second) == 30 * 60
       assert abs(DateTime.diff(server_now, started_at, :second)) <= 2
 
-      # Verifies persistence in Backend.Conversation
-      assert {:ok, session} = Conversation.fetch(session_id)
+      # Verifies persistence in Backend.Stations
+      assert {:ok, session} = Stations.get_session(session_id)
       assert session.session_id == session_id
       assert session.station_id == station_id
       assert session.station_version == station_version

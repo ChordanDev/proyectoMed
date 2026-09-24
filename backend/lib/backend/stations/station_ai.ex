@@ -1,4 +1,4 @@
-defmodule Backend.StationAI do
+defmodule Backend.Stations.StationAI do
   @moduledoc """
   Provider boundary that binds every model reply to a Station Package.
 
@@ -14,20 +14,20 @@ defmodule Backend.StationAI do
       `response_rule` is applied before output — is encoded in the system
       prompt built by `system_prompt/1`.
 
-  Concrete adapters implement the `Backend.StationAI.Adapter` behaviour. The
-  default adapter is `Backend.StationAI.OpenAIAdapter` and can be overridden via
+  Concrete adapters implement the `Backend.Stations.StationAI.Adapter` behaviour. The
+  default adapter is `Backend.Stations.StationAI.OpenAIAdapter` and can be overridden via
   the `:backend, :station_ai_adapter` application env. Every adapter reply is
-  funneled through `Backend.StationAI.BoundedReply` so malformed output,
+  funneled through `Backend.Stations.StationAI.BoundedReply` so malformed output,
   out-of-scope roleplay leakage, language-containment violations, and
   applicable `response_rules` are enforced before the caller sees the text.
-  The OpenAI chat adapter lives in sub-issue #45; this module defines only
-  the contract adapters plug into.
   """
 
   @type fact :: %{required(String.t()) => String.t()}
   @type revealable_facts :: [fact()]
   @type response_rule :: %{required(String.t()) => String.t()}
   @type response_rules :: [response_rule()]
+
+  alias Backend.Stations.StationAI.BoundedReply
 
   @type package :: %{required(String.t()) => term()}
 
@@ -51,7 +51,7 @@ defmodule Backend.StationAI do
 
   Adapters receive the validated package and the conversation context and
   return a `reply` map with a `text` field. The `used_facts` field is
-  populated by `Backend.StationAI.next_reply/2` by inspecting which
+  populated by `Backend.Stations.StationAI.next_reply/2` by inspecting which
   `revealable_facts` appear in the reply text.
   """
   @callback next_reply(package(), context()) ::
@@ -66,7 +66,7 @@ defmodule Backend.StationAI do
 
   Delegates to the configured adapter, normalizes the returned reply to
   `%{text, used_facts}`, runs the text through
-  `Backend.StationAI.BoundedReply` to enforce the bounded policy, and
+  `Backend.Stations.StationAI.BoundedReply` to enforce the bounded policy, and
   resets `used_facts` to `[]` whenever the adapter's text is replaced by
   the canonical refusal. When the adapter does not supply `used_facts`,
   they are populated by inspecting which `revealable_facts` appear in the
@@ -74,14 +74,14 @@ defmodule Backend.StationAI do
   """
   @spec next_reply(package(), context()) :: {:ok, reply()} | {:error, term()}
   def next_reply(package, context) do
-    case adapter().next_reply(package, context) do
+    case resolve_adapter().next_reply(package, context) do
       {:ok, %{text: text, used_facts: used_facts}} when is_list(used_facts) ->
-        bounded = Backend.StationAI.BoundedReply.bound(text, package)
+        bounded = BoundedReply.bound(text, package)
         used_facts = if bounded == text, do: used_facts, else: []
         {:ok, %{text: bounded, used_facts: used_facts}}
 
       {:ok, %{text: text}} ->
-        bounded = Backend.StationAI.BoundedReply.bound(text, package)
+        bounded = BoundedReply.bound(text, package)
 
         used_facts =
           if bounded == text,
@@ -159,28 +159,32 @@ defmodule Backend.StationAI do
     Application.get_env(:backend, :station_ai_refusal_text, @default_refusal_text)
   end
 
-  defp adapter do
-    Application.get_env(:backend, :station_ai_adapter, Backend.StationAI.OpenAIAdapter)
+  defp resolve_adapter do
+    case Application.get_env(
+           :backend,
+           :station_ai_adapter,
+           Backend.Stations.StationAI.OpenAIAdapter
+         ) do
+      Backend.StationAI.OpenAIAdapter -> Backend.Stations.StationAI.OpenAIAdapter
+      Backend.StationAI.NoOpAdapter -> Backend.Stations.StationAI.NoOpAdapter
+      other -> other
+    end
   end
 
   defp format_facts([]), do: "  (nenhum)"
 
   defp format_facts(facts) when is_list(facts) do
-    facts
-    |> Enum.map(fn %{"topic" => topic, "content" => content} ->
+    Enum.map_join(facts, "\n", fn %{"topic" => topic, "content" => content} ->
       "  - [#{topic}] #{content}"
     end)
-    |> Enum.join("\n")
   end
 
   defp format_rules([]), do: "  (nenhuma)"
 
   defp format_rules(rules) when is_list(rules) do
-    rules
-    |> Enum.map(fn %{"id" => id, "instruction" => instruction} ->
+    Enum.map_join(rules, "\n", fn %{"id" => id, "instruction" => instruction} ->
       "  - [#{id}] #{instruction}"
     end)
-    |> Enum.join("\n")
   end
 
   defp string_includes?(haystack, needle) when is_binary(needle) and byte_size(needle) > 0 do
@@ -188,4 +192,18 @@ defmodule Backend.StationAI do
   end
 
   defp string_includes?(_haystack, _needle), do: false
+end
+
+defmodule Backend.StationAI do
+  @moduledoc false
+  @callback next_reply(Backend.Stations.StationAI.package(), Backend.Stations.StationAI.context()) ::
+              {:ok,
+               %{text: String.t(), used_facts: Backend.Stations.StationAI.revealable_facts()}}
+              | {:ok, %{text: String.t()}}
+              | {:error, term()}
+
+  defdelegate next_reply(package, context), to: Backend.Stations.StationAI
+  defdelegate system_prompt(package), to: Backend.Stations.StationAI
+  defdelegate detect_used_facts(text, facts), to: Backend.Stations.StationAI
+  defdelegate refusal_text(), to: Backend.Stations.StationAI
 end

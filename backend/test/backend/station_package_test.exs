@@ -24,6 +24,17 @@ defmodule Backend.StationPackageTest do
     assert {:ok, ^package} = StationPackage.validate(package)
   end
 
+  test "canonical Backend.Stations.StationPackage and legacy Backend.StationPackage expose identical API" do
+    assert Backend.Stations.StationPackage.version() == "2.0.0"
+    assert StationPackage.version() == Backend.Stations.StationPackage.version()
+
+    v1 = fixture("valid-package-v1.json")
+    assert Backend.Stations.StationPackage.migrate(v1) == StationPackage.migrate(v1)
+
+    v2 = fixture("valid-package-v2.json")
+    assert Backend.Stations.StationPackage.validate(v2) == StationPackage.validate(v2)
+  end
+
   test "migrates a v1 package to v2 and validates it" do
     v1 = fixture("valid-package-v1.json")
     migrated = StationPackage.migrate(v1)

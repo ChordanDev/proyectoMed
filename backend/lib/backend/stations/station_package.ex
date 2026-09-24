@@ -1,9 +1,9 @@
-defmodule Backend.StationPackage do
+defmodule Backend.Stations.StationPackage do
   @moduledoc """
   Validates and migrates the versioned Station Package contract supplied by the
   Content Partner.
 
-  `Backend.StationLoader` decodes a package JSON document and passes the resulting
+  `Backend.Stations.StationLoader` decodes a package JSON document and passes the resulting
   map to `validate/1` before making it available to the application. Version 1
   packages can be upgraded explicitly with `migrate/1` before validation.
   """
@@ -357,4 +357,11 @@ defmodule Backend.StationPackage do
   end
 
   defp non_empty_string?(value), do: is_binary(value) and value != ""
+end
+
+defmodule Backend.StationPackage do
+  @moduledoc false
+  defdelegate version(), to: Backend.Stations.StationPackage
+  defdelegate migrate(package), to: Backend.Stations.StationPackage
+  defdelegate validate(package), to: Backend.Stations.StationPackage
 end
