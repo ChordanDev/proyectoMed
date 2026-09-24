@@ -55,12 +55,15 @@ if voice = System.get_env("OPENAI_TTS_VOICE") do
   config :backend, :openai_tts_voice, voice
 end
 
-if timeout = System.get_env("CONVERSATION_TIMEOUT_MS") do
-  config :backend, :conversation_timeout_ms, String.to_integer(timeout)
+with timeout when is_binary(timeout) <- System.get_env("CONVERSATION_TIMEOUT_MS"),
+     {timeout_ms, ""} when timeout_ms >= 0 <- Integer.parse(timeout) do
+  config :backend, :conversation_timeout_ms, timeout_ms
 end
 
-if purge_interval = System.get_env("CONVERSATION_PURGE_INTERVAL_MS") do
-  config :backend, :conversation_purge_interval_ms, String.to_integer(purge_interval)
+with purge_interval when is_binary(purge_interval) <-
+       System.get_env("CONVERSATION_PURGE_INTERVAL_MS"),
+     {purge_interval_ms, ""} when purge_interval_ms >= 0 <- Integer.parse(purge_interval) do
+  config :backend, :conversation_purge_interval_ms, purge_interval_ms
 end
 
 if config_env() == :prod do
