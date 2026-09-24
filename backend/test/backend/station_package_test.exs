@@ -35,22 +35,29 @@ defmodule Backend.StationPackageTest do
     assert "weight" in rubric_criterion["required"]
     assert rubric_criterion["properties"]["weight"]["type"] == "number"
 
-    assert schema["properties"]["impressos"]["$ref"] == "#/$defs/impressos"
+    assert schema["properties"]["impressos"]["oneOf"] == [
+             %{"$ref" => "#/$defs/impressos"},
+             %{"type" => "null"}
+           ]
+
     assert schema["$defs"]["impressos"]["type"] == "array"
     impresso_def = schema["$defs"]["impresso"]
     assert impresso_def["required"] == ["id", "title", "category", "keywords", "content"]
     assert impresso_def["properties"]["id"]["type"] == "string"
     assert impresso_def["properties"]["title"]["type"] == "string"
+
     assert impresso_def["properties"]["category"]["enum"] == [
              "physical_exam",
              "laboratory",
              "imaging",
              "report"
            ]
+
     assert impresso_def["properties"]["keywords"]["type"] == "array"
+
     assert impresso_def["properties"]["content"]["oneOf"] == [
              %{"type" => "string", "minLength" => 1},
-             %{"type" => "object"}
+             %{"type" => "object", "minProperties" => 1}
            ]
   end
 
@@ -184,6 +191,7 @@ defmodule Backend.StationPackageTest do
       ])
 
     assert {:error, errors} = StationPackage.validate(package)
+
     assert "impressos entries category must be one of: physical_exam, laboratory, imaging, report" in errors
   end
 

@@ -34,7 +34,12 @@
     "response_rules": {"$ref": "#/$defs/responseRules"},
     "expected_actions": {"$ref": "#/$defs/expectedActions"},
     "rubric": {"$ref": "#/$defs/rubric"},
-    "impressos": {"$ref": "#/$defs/impressos"}
+    "impressos": {
+      "oneOf": [
+        {"$ref": "#/$defs/impressos"},
+        {"type": "null"}
+      ]
+    }
   },
   "$defs": {
     "revealableFacts": {
@@ -112,7 +117,7 @@
         "content": {
           "oneOf": [
             {"type": "string", "minLength": 1},
-            {"type": "object"}
+            {"type": "object", "minProperties": 1}
           ]
         }
       }
