@@ -1,6 +1,6 @@
-defmodule Backend.StationAI.OpenAIAdapter do
+defmodule Backend.Stations.StationAI.OpenAIAdapter do
   @moduledoc """
-  `Backend.StationAI` adapter backed by OpenAI's Chat Completions API.
+  `Backend.Stations.StationAI` adapter backed by OpenAI's Chat Completions API.
 
   Translates the active Station Package and conversation history into OpenAI
   messages, sends a `POST /v1/chat/completions` request using Req, and normalizes
@@ -17,7 +17,9 @@ defmodule Backend.StationAI.OpenAIAdapter do
     * `{:error, :malformed_response}` - invalid or unparseable completion payload
   """
 
-  @behaviour Backend.StationAI
+  @behaviour Backend.Stations.StationAI
+
+  alias Backend.Stations.StationAI
 
   @default_model "gpt-4o-mini"
   @default_base_url "https://api.openai.com"
@@ -34,7 +36,9 @@ defmodule Backend.StationAI.OpenAIAdapter do
   end
 
   defp get_config(opts) do
-    app = Application.get_env(:backend, __MODULE__, [])
+    app =
+      Application.get_env(:backend, __MODULE__) ||
+        Application.get_env(:backend, Backend.StationAI.OpenAIAdapter, [])
 
     %{
       api_key: opts[:api_key] || Keyword.get(app, :api_key) || System.get_env("OPENAI_API_KEY"),
@@ -61,7 +65,7 @@ defmodule Backend.StationAI.OpenAIAdapter do
   defp build_payload(package, context, model) do
     system_msg = %{
       "role" => "system",
-      "content" => Backend.StationAI.system_prompt(package)
+      "content" => StationAI.system_prompt(package)
     }
 
     history =
@@ -113,4 +117,16 @@ defmodule Backend.StationAI.OpenAIAdapter do
   end
 
   defp parse_response(_), do: {:error, :malformed_response}
+end
+
+defmodule Backend.StationAI.OpenAIAdapter do
+  @moduledoc false
+  @behaviour Backend.StationAI
+
+  alias Backend.Stations.StationAI.OpenAIAdapter, as: Target
+
+  @impl true
+  defdelegate next_reply(package, context), to: Target
+
+  defdelegate next_reply(package, context, opts), to: Target
 end

@@ -1,4 +1,4 @@
-defmodule Backend.Evaluator do
+defmodule Backend.Stations.Evaluator do
   @moduledoc """
   Produces rubric-bound feedback comparing a completed station transcript
   against the active Station Package.
@@ -421,4 +421,16 @@ defmodule Backend.Evaluator do
   end
 
   defp get_field(_map, _field), do: nil
+end
+
+defmodule Backend.Evaluator do
+  @moduledoc false
+  @callback evaluate(
+              Backend.Stations.Evaluator.package(),
+              Backend.Stations.Evaluator.transcript(),
+              keyword()
+            ) :: Backend.Stations.Evaluator.evaluation_result()
+
+  defdelegate evaluate(package, transcript), to: Backend.Stations.Evaluator
+  defdelegate evaluate(package, transcript, opts), to: Backend.Stations.Evaluator
 end
