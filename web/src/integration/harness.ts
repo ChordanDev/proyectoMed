@@ -11,6 +11,7 @@ const MAX_MOCK_BODY_BYTES = 64 * 1024; // 64 KB cap for mock request payload
 
 export interface E2EHarnessOptions {
   mockOpenAIReplies?: string[];
+  mockOpenAIFailureStatus?: number;
   startupTimeoutMs?: number;
 }
 
@@ -43,6 +44,7 @@ export async function startE2EHarness(
 ): Promise<E2EHarnessInstance> {
   const {
     mockOpenAIReplies = ["A dor começou durante uma caminhada."],
+    mockOpenAIFailureStatus,
     startupTimeoutMs = 25_000,
   } = options;
 
@@ -79,6 +81,21 @@ export async function startE2EHarness(
       if (payloadExceeded) {
         res.writeHead(413, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { message: "Payload too large" } }));
+        return;
+      }
+
+      if (mockOpenAIFailureStatus !== undefined) {
+        res.writeHead(mockOpenAIFailureStatus, {
+          "Content-Type": "application/json",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: "Deterministic upstream failure",
+              type: "server_error",
+            },
+          }),
+        );
         return;
       }
 
