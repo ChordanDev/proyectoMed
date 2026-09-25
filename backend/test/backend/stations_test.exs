@@ -29,15 +29,38 @@ defmodule Backend.StationsTest do
     end
   end
 
+  defmodule TestVerifyingJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request) do
+      {:ok, %{status: :verified}}
+    end
+
+    @impl true
+    def decide_rubric(_request) do
+      {:error, :not_implemented}
+    end
+  end
+
   setup do
     prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+    prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
+
     Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+    Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
 
     on_exit(fn ->
       if prev_adapter do
         Application.put_env(:backend, :station_ai_adapter, prev_adapter)
       else
         Application.delete_env(:backend, :station_ai_adapter)
+      end
+
+      if prev_jev_adapter do
+        Application.put_env(:backend, :jev_decision_adapter, prev_jev_adapter)
+      else
+        Application.delete_env(:backend, :jev_decision_adapter)
       end
     end)
 

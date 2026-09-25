@@ -89,6 +89,46 @@ defmodule BackendWeb.StationController do
           message: "A sessão já foi concluída."
         })
 
+      {:error, :timeout} ->
+        conn
+        |> put_status(:gateway_timeout)
+        |> json(%{
+          error: "timeout",
+          message: "A verificação da resposta do paciente excedeu o tempo limite."
+        })
+
+      {:error, {tag, _detail}} when tag in [:denied, :refused] ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "reply_verification_failed",
+          message: "A verificação de segurança da resposta do paciente falhou."
+        })
+
+      {:error, tag} when tag in [:denied, :refused] ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "reply_verification_failed",
+          message: "A verificação de segurança da resposta do paciente falhou."
+        })
+
+      {:error, {:adapter_disabled, _detail}} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "station_ai_unavailable",
+          message: "O serviço da estação de IA está temporariamente indisponível."
+        })
+
+      {:error, :station_ai_unavailable} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "station_ai_unavailable",
+          message: "O serviço da estação de IA está temporariamente indisponível."
+        })
+
       {:error, _reason} ->
         conn
         |> put_status(:bad_gateway)

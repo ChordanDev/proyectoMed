@@ -35,6 +35,35 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  defmodule TestVerifyingJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request) do
+      {:ok, %{status: :verified}}
+    end
+
+    @impl true
+    def decide_rubric(_request) do
+      {:error, :not_implemented}
+    end
+  end
+
+  setup do
+    prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
+    Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
+
+    on_exit(fn ->
+      if prev_jev_adapter do
+        Application.put_env(:backend, :jev_decision_adapter, prev_jev_adapter)
+      else
+        Application.delete_env(:backend, :jev_decision_adapter)
+      end
+    end)
+
+    :ok
+  end
+
   describe "GET /api/stations/active" do
     test "returns active station metadata", %{conn: conn} do
       conn = get(conn, ~p"/api/stations/active")
