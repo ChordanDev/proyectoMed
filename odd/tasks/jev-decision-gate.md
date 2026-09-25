@@ -12,6 +12,8 @@ Expose a validated, typed Jev decision seam for patient verification and closed-
 - TDD: off, from `openspec/config.yaml` (`strict_tdd: false`); focused backend runner `cd backend && mix test`, full runner `bash scripts/test.sh`. Tests remain required.
 - RDD switch: off (session). No native review start while disabled; risk assessment determines separate verifier after delegated writes.
 - Running authored lines from work-unit commits: 4,385 additions + deletions (T2: 1,931; T3: 1,448; T4: 1,006). Recorded `size:exception` on single PR.
+- Child PR opened: #148 (feat/127-jev-decision-gate -> feat/125-jev-evaluation).
+- Parent draft PR #142 (feat/125-jev-evaluation -> develop) is now conflict-free and mergeable.
 - Follow-up issue created: #147 (`Implement structured deterministic package/state predicates for Approved Generic Reply bypass`).
 - Engram mirror topic: `odd/jev-decision-gate/tasks` (pending: local Engram server incompatible with client); local file is current recovery copy.
 
@@ -21,7 +23,7 @@ Expose a validated, typed Jev decision seam for patient verification and closed-
 - [x] T2 — Implement the external decision adapter contract, disabled/test-double configuration, typed and validated patient/rubric requests and outcomes, bounded context and deadlines; unit/contract tests. Route: delegated writer, one independent high-consequence assumption challenge and correction, independent verifier (risk assessment unassessable, RDD off). Commit `25d15a01557dccf61bc3d415193763c032288362` (1,931 authored lines); 47 focused / 244 backend tests passed, format and cached diff checks passed, parent spot-check 47 focused tests passed. Runtime harness N/A because the adapter is disabled and no live provider may be invoked; rollback boundary is the five changed files in this work-unit commit.
 - [x] T3 — Implement deny-first, exact package/version/template applicability check (failing closed on unexecutable prose applicability by routing through Jev per Option B; positive structured predicate bypass tracked in #147) and all-other-candidate verification with one bounded semantic retry, full recheck and no fabricated fallback; focused tests. Route: delegated writer, independent verifier. Commit `887dbb675fdeb15bc55c08f72f78ba5240eb28a6` (1,448 authored lines); 53 focused / 297 backend tests passed, format and diff checks passed, parent spot-check 53 focused tests passed. Option B implemented: prose applicability never bypasses Jev; positive structured predicate bypass deferred to follow-up issue #147. Rollback boundary: the three changed files in commit `887dbb6`.
 - [x] T4 — Wire the verified/rejected/technical-failure boundary through Backend.Stations and thin HTTP boundary; contract-test no unapproved text/history/TTS and stale/cancelled decisions without taking #119–#121 scheduling/media ownership. Route: delegated writer, independent verifier. Commit `dbfcfa1fd729d539bc15b8359cd2016ebd41a0e8` (1,006 authored lines); 15 pre-delivery contract / 312 backend / 23 web tests passed, format and diff checks passed, parent spot-check 15 contract tests passed. Rollback boundary: the five changed files in commit `dbfcfa1`.
-- [ ] T5 — Prepare delivery: inspect reviewable diff, verification evidence, parent/child PR ancestry and scope; publish PR targeting feat/125-jev-evaluation when checks pass, with no live activation claim. Route: parent coordination and delegated verification as assessed.
+- [x] T5 — Prepare delivery: inspect reviewable diff, verification evidence, parent/child PR ancestry and scope; publish PR targeting feat/125-jev-evaluation when checks pass, with no live activation claim. Route: parent coordination and delegated verification as assessed. Evidence: parent `feat/125-jev-evaluation` updated and pushed to origin (resolving conflicts on draft PR #142 to develop); child `feat/127-jev-decision-gate` pushed and PR #148 opened targeting `feat/125-jev-evaluation` (Refs #127). All 312 backend and 23 web tests pass. Single PR `size:exception` documented.
 
 ## Progress and evidence
 
@@ -32,4 +34,4 @@ Expose a validated, typed Jev decision seam for patient verification and closed-
 
 ## Next step
 
-T1, T2, T3, and T4 are complete locally. Prepare delivery (T5): inspect reviewable diff, verification evidence, push feat/125-jev-evaluation parent update, and open PR from feat/127-jev-decision-gate to feat/125-jev-evaluation.
+All tasks (T1 through T5) are complete. PR #148 is open on GitHub targeting `feat/125-jev-evaluation`.
