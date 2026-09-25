@@ -14,7 +14,7 @@ One server-authoritative 10-minute deadline (`deadline_at = started_at + 10 min`
 ## Tasks
 - [x] T1 (delegated writer; trigger: 3+ non-trivial backend files) Backend: `deadline_at` + `server_now` on create; time-based `check_session_deadline`; late turn → `station_time_elapsed`; accepted pending turn resolves within bounded grace before completion; timer finish exactly once, distinguishable from manual; restart/race tests.
 - [x] T2 (delegated writer; trigger: 2+ non-trivial web files) Web: decode `deadline_at`/`server_now`; skew-corrected countdown in StationScreen; at zero disable input and finish once with `reason: "timer"`; handle `station_time_elapsed`; survive refresh/rerender; fake-timer tests.
-- [ ] T3 Manual smoke steps for the user (no browser automation).
+- [x] T3 Manual smoke steps for the user (no browser automation). User ran the browser smoke (countdown, refresh, zero, pending turn, manual finish) and confirmed all passed.
 
 ## Acceptance
 Per issue #133; `bash scripts/test.sh` exits 0.
@@ -42,6 +42,8 @@ Per issue #133; `bash scripts/test.sh` exits 0.
 - Evidence: `npm --prefix web test` → 86 passed (client 5, hooks 20 incl. new deadline suite, StationScreen 25, App 8, others unchanged). `npm --prefix web run typecheck` → clean. `npm --prefix web run lint` → clean. `npm --prefix web run build` → succeeds. `cd backend && mix format --check-formatted` → exit 0, `mix test` → 205 passed, `mix credo --strict` → no issues. `bash scripts/test.sh` from worktree root → web 86 + backend 205, exit 0.
   TDD note: client/hook/screen tests were authored together with their implementation in tight loops (not a strict upfront RED commit per behavior) given the interdependent client-anchor design; each new test was run and observed failing against the prior code before the corresponding implementation line landed, and the `pendingSend` unhandled-rejection bug above was caught exactly this way (test red → root-caused → fixed → green), which is the TDD guarantee the mode is meant to buy.
 - Deviations: (1) added `messages` to the backend's `show_session` response — pre-authorized by the task brief as "a tiny backend change with a controller test" because resuming a session without its transcript would be meaningless; (2) exported `sessionIdStorageKey` from `useStation.ts` (not in the original decisions) so tests can assert against the persisted key without duplicating the literal; both are minimal, test-covered, and don't change the described behavior.
+- Parent spot checks: `bash scripts/test.sh` exit 0 (web 86, backend 205). `gentle-ai review assess` on 44b2e3a: medium; RDD off → writer self-verification + parent spot check.
+- Curl smoke vs real Phoenix + fake OpenAI (no browser): create returns `deadline_at` = started_at + 10 min, distinct from `expires_at` (+30); early timer finish → 409 `deadline_not_reached`; GET keeps same `deadline_at`; with duration 8s the server auto-completed with reason `timer`; late turn → 409 `station_time_elapsed`; with duration 5s a turn accepted pre-deadline replying at 8s was appended (n=2), then completed `timer`. Note: provider replies >15s hit Req's default `receive_timeout` → 502 + rollback (pre-existing, not #133).
 
 ## Next
-T3 (manual smoke steps for the user — not automated per the task brief).
+Push + child PR to feat/30-expo-screens (user). T3 done: user ran the manual browser smoke (fake OpenAI at ../fake_openai.py, duration shortened via Application.put_env in iex). Then chain/PR decision (ask-on-risk; branch ~1.3k lines incl. tests).
