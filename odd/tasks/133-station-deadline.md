@@ -54,4 +54,6 @@ Push + child PR to feat/30-expo-screens (user). T3 done: user ran the manual bro
 ### T4 (merge done, smoke + push + PR pending)
 - Merge commit 2cd7399 (origin/feat/55-tts-playback @ 7284cfd into feat/133). Conflicts: 4 test/i18n files were append-both; `useStation.ts` kept HEAD's relocated `finish` plus #55's `synthesize` (#55 did not change `finish`, verified with a diff from the merge base).
 - Evidence: `npm --prefix web run typecheck` clean, `npm --prefix web run lint` clean, `bash scripts/test.sh` exit 0 (web 101, backend 205).
-- Pending: user's short smoke (countdown + play audio), then the user pushes, then the agent opens the stacked PR (base feat/55-tts-playback).
+- User pushed 7c1994e → feat/30-expo-screens (fast-forward) and feat/133-station-deadline. PR #149 opened against feat/30-expo-screens (not feat/55: that base showed 49 files because #55 lacks the develop merge; feat/30 shows 20 and drops #55's files once #146 merges). User approved the base.
+- User ran the post-merge browser smoke (countdown + audio playback): passed; ticked in PR #149.
+- Pending: review and merge of #146, then #149.
