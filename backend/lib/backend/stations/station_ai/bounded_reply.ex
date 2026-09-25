@@ -74,6 +74,38 @@ defmodule Backend.Stations.StationAI.BoundedReply do
   ]
 
   @doc """
+  Runs deterministic deny checks on `text` against `package`.
+
+  Returns `:ok` if no rule fires.
+  Returns `{:error, {:denied, reason}}` if any rule fires:
+    * `:malformed` - text is non-binary, blank/empty, or exceeds 2000 chars.
+    * `:roleplay_leakage` - text matches roleplay leakage regexes.
+    * `:language_containment` - text violates pt-BR language containment.
+    * `:response_rules` - text violates package response rules (length-cap, max-length, polite).
+
+  Does not substitute clinical refusal text or fabricate fallbacks.
+  """
+  @spec check_violations(term(), map()) :: :ok | {:error, {:denied, atom()}}
+  def check_violations(text, package) do
+    cond do
+      not is_binary(text) or malformed?(text) ->
+        {:error, {:denied, :malformed}}
+
+      roleplay_leakage?(text) ->
+        {:error, {:denied, :roleplay_leakage}}
+
+      language_violation?(text, package) ->
+        {:error, {:denied, :language_containment}}
+
+      violates_response_rules?(text, package) ->
+        {:error, {:denied, :response_rules}}
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc """
   Returns a bounded version of `text` according to the Station Package
   contract.
 
@@ -91,21 +123,11 @@ defmodule Backend.Stations.StationAI.BoundedReply do
       text == refusal ->
         text
 
-      not is_binary(text) ->
+      match?({:error, {:denied, _}}, check_violations(text, package)) ->
         refusal
 
       true ->
-        apply_rules(text, package, refusal)
-    end
-  end
-
-  defp apply_rules(text, package, refusal) do
-    cond do
-      malformed?(text) -> refusal
-      roleplay_leakage?(text) -> refusal
-      language_violation?(text, package) -> refusal
-      violates_response_rules?(text, package) -> refusal
-      true -> text
+        text
     end
   end
 
@@ -120,7 +142,8 @@ defmodule Backend.Stations.StationAI.BoundedReply do
   end
 
   defp language_violation?(text, package) when is_map(package) do
-    package["language"] == "pt-BR" and english_only?(text)
+    lang = Map.get(package, "language") || Map.get(package, :language)
+    lang == "pt-BR" and english_only?(text)
   end
 
   defp language_violation?(_text, _package), do: false
@@ -132,7 +155,7 @@ defmodule Backend.Stations.StationAI.BoundedReply do
   end
 
   defp violates_response_rules?(text, package) when is_map(package) do
-    rules = package["response_rules"] || []
+    rules = Map.get(package, "response_rules") || Map.get(package, :response_rules) || []
     Enum.any?(rules, &rule_violates?(&1, text))
   end
 
@@ -143,20 +166,39 @@ defmodule Backend.Stations.StationAI.BoundedReply do
     String.length(text) > max
   end
 
+  defp rule_violates?(%{id: "length-cap", max_length: max}, text)
+       when is_integer(max) do
+    String.length(text) > max
+  end
+
   defp rule_violates?(%{"id" => "max-length", "max_length" => max}, text)
        when is_integer(max) do
     String.length(text) > max
   end
 
+  defp rule_violates?(%{id: "max-length", max_length: max}, text)
+       when is_integer(max) do
+    String.length(text) > max
+  end
+
   defp rule_violates?(%{"id" => "polite"}, text) do
-    downcased = String.downcase(text)
-    Enum.any?(@polite_insults, &String.contains?(downcased, &1))
+    polite_violation?(text)
+  end
+
+  defp rule_violates?(%{id: "polite"}, text) do
+    polite_violation?(text)
   end
 
   defp rule_violates?(_rule, _text), do: false
+
+  defp polite_violation?(text) do
+    downcased = String.downcase(text)
+    Enum.any?(@polite_insults, &String.contains?(downcased, &1))
+  end
 end
 
 defmodule Backend.StationAI.BoundedReply do
   @moduledoc false
   defdelegate bound(text, package), to: Backend.Stations.StationAI.BoundedReply
+  defdelegate check_violations(text, package), to: Backend.Stations.StationAI.BoundedReply
 end
