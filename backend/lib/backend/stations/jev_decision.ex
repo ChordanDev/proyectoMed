@@ -557,6 +557,7 @@ defmodule Backend.Stations.JevDecision do
           _e -> {:error, {:technical_failure, :adapter_crashed}}
         catch
           :exit, _reason -> {:error, {:technical_failure, :task_exit}}
+          :throw, _value -> {:error, {:technical_failure, :adapter_threw}}
         end
       end)
 

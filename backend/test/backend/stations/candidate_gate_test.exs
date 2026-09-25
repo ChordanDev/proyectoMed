@@ -768,6 +768,21 @@ defmodule Backend.Stations.CandidateGateTest do
                  generator: generator
                )
     end
+
+    test "nil generator defaults to StationAI.next_reply passing map context without crashing" do
+      package = base_package()
+
+      # Under test environment without OpenAI keys, StationAI returns {:error, :missing_credentials}
+      # rather than crashing with BadMapError/ArgumentError when building payload.
+      assert {:error, :missing_credentials} =
+               CandidateGate.verify_and_deliver(
+                 "ungrounded_hallucination",
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: nil
+               )
+    end
   end
 
   # ============================================================================

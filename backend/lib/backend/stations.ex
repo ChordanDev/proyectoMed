@@ -344,16 +344,22 @@ defmodule Backend.Stations do
       |> Keyword.put_new(:version, package["version"] || package[:version])
 
     case CandidateGate.verify_and_deliver(candidate_text, package, conversation, gate_opts) do
+      {:ok, %{text: verified_text, used_facts: used_facts}} ->
+        if is_map(reply) do
+          reply = update_reply_text(reply, verified_text)
+          {:ok, put_used_facts(reply, used_facts)}
+        else
+          {:ok, %{text: verified_text, used_facts: used_facts}}
+        end
+
       {:ok, verified_text} ->
         cond do
-          is_map(reply) and Map.has_key?(reply, :text) ->
-            {:ok, Map.put(reply, :text, verified_text)}
-
-          is_map(reply) and Map.has_key?(reply, "text") ->
-            {:ok, Map.put(reply, "text", verified_text)}
+          verified_text != candidate_text and is_map(reply) ->
+            reply = update_reply_text(reply, verified_text)
+            {:ok, put_used_facts(reply, [])}
 
           is_map(reply) ->
-            {:ok, Map.put(reply, :text, verified_text)}
+            {:ok, update_reply_text(reply, verified_text)}
 
           true ->
             {:ok, verified_text}
@@ -428,6 +434,22 @@ defmodule Backend.Stations do
   defp extract_used_facts(%{used_facts: facts}) when is_list(facts), do: facts
   defp extract_used_facts(%{"used_facts" => facts}) when is_list(facts), do: facts
   defp extract_used_facts(_), do: []
+
+  defp update_reply_text(reply, text) do
+    cond do
+      is_map(reply) and Map.has_key?(reply, "text") -> Map.put(reply, "text", text)
+      is_map(reply) -> Map.put(reply, :text, text)
+      true -> text
+    end
+  end
+
+  defp put_used_facts(reply, facts) do
+    cond do
+      is_map(reply) and Map.has_key?(reply, "used_facts") -> Map.put(reply, "used_facts", facts)
+      is_map(reply) -> Map.put(reply, :used_facts, facts)
+      true -> reply
+    end
+  end
 
   defp resolve_station_ai_adapter do
     case Application.get_env(

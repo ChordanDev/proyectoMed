@@ -356,7 +356,7 @@ defmodule Backend.Stations.CandidateGate do
               generator.(package, conversation, remaining_ms)
 
             is_nil(generator) ->
-              Backend.Stations.StationAI.next_reply(package, conversation)
+              Backend.Stations.StationAI.next_reply(package, %{conversation: conversation})
 
             true ->
               {:error, {:invalid_generator, :unsupported_generator_type}}

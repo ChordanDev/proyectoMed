@@ -61,6 +61,9 @@ defmodule Backend.Stations.JevDecisionTest do
         "crash" ->
           raise "Boom! Simulated crash containing CANDIDATE_LEAKED_TEXT_456"
 
+        "throw" ->
+          throw(:simulated_throw_error)
+
         _other ->
           {:ok, %{status: :verified}}
       end
@@ -360,6 +363,17 @@ defmodule Backend.Stations.JevDecisionTest do
 
       # Result must be sanitized atom, not carrying the exception string with leaked text
       assert {:error, {:technical_failure, :adapter_crashed}} =
+               JevDecision.decide_patient(request, adapter: DeterministicDouble)
+    end
+
+    test "adapter throwing an unhandled throw returns technical failure without killing caller" do
+      request = %{
+        candidate_text: "throw",
+        package: sample_package(),
+        conversation: sample_conversation()
+      }
+
+      assert {:error, {:technical_failure, :adapter_threw}} =
                JevDecision.decide_patient(request, adapter: DeterministicDouble)
     end
 
