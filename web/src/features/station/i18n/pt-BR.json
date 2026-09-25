@@ -29,5 +29,8 @@
   "sendButton": "Enviar",
   "sendingMessage": "Enviando...",
   "loadingStation": "Carregando estação...",
-  "stationError": "Erro na estação. Tente novamente."
+  "stationError": "Erro na estação. Tente novamente.",
+  "playAudio": "Ouvir resposta",
+  "stopAudio": "Parar áudio",
+  "loadingAudio": "Carregando áudio..."
 }

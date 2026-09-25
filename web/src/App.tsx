@@ -101,6 +101,7 @@ export default function App(): React.JSX.Element {
         audioConsent={station.audioConsent}
         onTranscribe={station.transcribe}
         onSendVoice={handleSendVoice}
+        onSynthesize={station.synthesize}
         error={station.error}
       />
     </main>

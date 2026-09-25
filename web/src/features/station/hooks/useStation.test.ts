@@ -67,6 +67,9 @@ const apiMock = (overrides: Partial<StationApi> = {}): StationApi => ({
     text: "Quando começou a dor?",
     transcribed_at: "2026-01-01T10:00:30Z",
   }),
+  synthesizeSpeech: vi
+    .fn()
+    .mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" })),
   ...overrides,
 });
 
@@ -499,5 +502,74 @@ describe("useStation", () => {
     });
     expect(result.current.status).toBe("active");
     expect(result.current.audioConsent).toBe(false);
+  });
+
+  it("returns null without calling the API when there is no audio consent", async () => {
+    const noConsentSession = { ...session, audio_consent: false };
+    const synthesizeSpeech = vi.fn();
+    const api = apiMock({
+      startSession: vi.fn().mockResolvedValue(noConsentSession),
+      synthesizeSpeech,
+    });
+    const { result } = renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(false);
+    });
+
+    await expect(result.current.synthesize("Olá")).resolves.toBeNull();
+    expect(synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
+  it("returns null without calling the API when there is no session", async () => {
+    const synthesizeSpeech = vi.fn();
+    const api = apiMock({ synthesizeSpeech });
+    const { result } = renderHook(() => useStation(api));
+
+    await expect(result.current.synthesize("Olá")).resolves.toBeNull();
+    expect(synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
+  it("synthesizes speech for a consented session and returns the blob", async () => {
+    const audioBlob = new Blob(["audio-bytes"], { type: "audio/mpeg" });
+    const synthesizeSpeech = vi.fn().mockResolvedValue(audioBlob);
+    const api = apiMock({ synthesizeSpeech });
+    const { result } = renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let blob: Blob | null = null;
+    await act(async () => {
+      blob = await result.current.synthesize("A dor começou há duas horas.");
+    });
+
+    expect(blob).toBe(audioBlob);
+    expect(synthesizeSpeech).toHaveBeenCalledWith(
+      "session-1",
+      "A dor começou há duas horas.",
+    );
+    expect(result.current.status).toBe("active");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("returns null and keeps the station active when synthesis rejects", async () => {
+    const synthesizeSpeech = vi.fn().mockRejectedValue(new Error("network"));
+    const api = apiMock({ synthesizeSpeech });
+    const { result } = renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let blob: Blob | null = new Blob();
+    await act(async () => {
+      blob = await result.current.synthesize("Olá");
+    });
+
+    expect(blob).toBeNull();
+    expect(result.current.status).toBe("active");
+    expect(result.current.error).toBeNull();
   });
 });
