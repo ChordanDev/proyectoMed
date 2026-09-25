@@ -6,6 +6,7 @@ import {
   getSession,
   sendMessage,
   startSession,
+  synthesizeSpeech,
   transcribeAudio,
   type FinishReason,
   type MessageReply,
@@ -30,6 +31,7 @@ export interface StationApi {
   finishSession: typeof finishSession;
   fetchResult: typeof fetchResult;
   transcribeAudio: typeof transcribeAudio;
+  synthesizeSpeech: typeof synthesizeSpeech;
 }
 
 const defaultApi: StationApi = {
@@ -39,6 +41,7 @@ const defaultApi: StationApi = {
   finishSession,
   fetchResult,
   transcribeAudio,
+  synthesizeSpeech,
 };
 
 const unknownErrorMessage =
@@ -291,6 +294,30 @@ export const useStation = (api: StationApi = defaultApi) => {
     [api],
   );
 
+  const synthesize = useCallback(
+    async (text: string): Promise<Blob | null> => {
+      const session = sessionRef.current;
+      if (!session || !session.audio_consent || isFinishingRef.current) {
+        return null;
+      }
+
+      try {
+        const audioBlob = await api.synthesizeSpeech(
+          session.session_id,
+          text,
+        );
+        if (sessionRef.current !== session || isFinishingRef.current) {
+          return null;
+        }
+
+        return audioBlob;
+      } catch {
+        return null;
+      }
+    },
+    [api],
+  );
+
   // Resume an in-progress (or just-completed) session after a refresh or
   // reconnect, from the session id persisted in sessionStorage.
   useEffect(() => {
@@ -382,6 +409,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     start,
     send,
     transcribe,
+    synthesize,
     finish,
     reset,
     result,

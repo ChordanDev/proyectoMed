@@ -18,6 +18,8 @@ export interface StationScreenProps {
   onTranscribe?: (audioBlob: Blob) => Promise<string | null>;
   /** Send a transcribed voice turn and receive the AI reply text. */
   onSendVoice?: (text: string) => Promise<string | null>;
+  /** Synthesize a patient reply into playable audio. Returns null when unavailable. */
+  onSynthesize?: (text: string) => Promise<Blob | null>;
   /** Optional station title for the header. */
   title?: string;
   /** External error message to display. */
@@ -48,6 +50,7 @@ export function StationScreen({
   audioConsent = false,
   onTranscribe,
   onSendVoice,
+  onSynthesize,
   title,
   error = null,
   disabled = false,
@@ -63,16 +66,106 @@ export function StationScreen({
   const [transcribing, setTranscribing] = useState(false);
   const [voiceFallback, setVoiceFallback] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [playingIndex, setPlayingIndex] = useState<number | null>(null);
+  const [loadingAudioIndex, setLoadingAudioIndex] = useState<number | null>(
+    null,
+  );
+  const [unavailableAudioIndices, setUnavailableAudioIndices] = useState<
+    Set<number>
+  >(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const mountedRef = useRef(true);
+  const audioUrlsRef = useRef<Map<number, string>>(new Map());
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const playTokenRef = useRef<object | null>(null);
 
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
   }, []);
+
+  const pauseCurrentAudio = useCallback(() => {
+    playTokenRef.current = null;
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    if (mountedRef.current) {
+      setPlayingIndex(null);
+      setLoadingAudioIndex(null);
+    }
+  }, []);
+
+  const markAudioUnavailable = useCallback((index: number) => {
+    setUnavailableAudioIndices((previous) => {
+      if (previous.has(index)) return previous;
+      const next = new Set(previous);
+      next.add(index);
+      return next;
+    });
+  }, []);
+
+  const handlePlay = useCallback(
+    async (index: number, text: string) => {
+      if (!onSynthesize) return;
+
+      if (playingIndex === index) {
+        pauseCurrentAudio();
+        return;
+      }
+
+      pauseCurrentAudio();
+      const token = {};
+      playTokenRef.current = token;
+
+      let url = audioUrlsRef.current.get(index);
+      if (!url) {
+        setLoadingAudioIndex(index);
+        let audioBlob: Blob | null;
+        try {
+          audioBlob = await onSynthesize(text);
+        } catch {
+          audioBlob = null;
+        }
+
+        if (playTokenRef.current !== token) return;
+
+        if (!audioBlob) {
+          markAudioUnavailable(index);
+          setLoadingAudioIndex(null);
+          return;
+        }
+
+        url = URL.createObjectURL(audioBlob);
+        audioUrlsRef.current.set(index, url);
+        setLoadingAudioIndex(null);
+      }
+
+      const audio = new Audio(url);
+      audio.addEventListener("ended", () => {
+        if (playTokenRef.current === token) pauseCurrentAudio();
+      });
+      audio.addEventListener("error", () => {
+        if (playTokenRef.current === token) {
+          markAudioUnavailable(index);
+          pauseCurrentAudio();
+        }
+      });
+
+      currentAudioRef.current = audio;
+      setPlayingIndex(index);
+      try {
+        await audio.play();
+      } catch {
+        if (playTokenRef.current === token) {
+          markAudioUnavailable(index);
+          pauseCurrentAudio();
+        }
+      }
+    },
+    [markAudioUnavailable, onSynthesize, pauseCurrentAudio, playingIndex],
+  );
 
   const enableTextFallback = useCallback(() => {
     recorderRef.current = null;
@@ -87,6 +180,7 @@ export function StationScreen({
 
   useEffect(() => {
     mountedRef.current = true;
+    const audioUrls = audioUrlsRef.current;
     return () => {
       mountedRef.current = false;
       const recorder = recorderRef.current;
@@ -94,6 +188,10 @@ export function StationScreen({
         recorder.stop();
       }
       stopStream();
+      currentAudioRef.current?.pause();
+      currentAudioRef.current = null;
+      audioUrls.forEach((url) => URL.revokeObjectURL(url));
+      audioUrls.clear();
     };
   }, [stopStream]);
 
@@ -123,6 +221,7 @@ export function StationScreen({
       text: string,
       sender: (message: string) => Promise<string | null>,
     ) => {
+      pauseCurrentAudio();
       const learnerMessage: DisplayMessage = { role: "learner", text };
       setMessages((previous) => [...previous, learnerMessage]);
       setSending(true);
@@ -152,7 +251,7 @@ export function StationScreen({
         if (mountedRef.current) setSending(false);
       }
     },
-    [],
+    [pauseCurrentAudio],
   );
 
   const handleSend = useCallback(async () => {
@@ -174,6 +273,8 @@ export function StationScreen({
     ) {
       return;
     }
+
+    pauseCurrentAudio();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -228,6 +329,7 @@ export function StationScreen({
     disabled,
     onSendVoice,
     onTranscribe,
+    pauseCurrentAudio,
     sendTurn,
     sending,
     stopStream,
@@ -294,20 +396,52 @@ export function StationScreen({
         aria-live="polite"
         data-testid="message-list"
       >
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            className={`station-message station-message--${message.role}`}
-            data-testid={`message-${message.role}`}
-          >
-            <div className="station-message__role">
-              {message.role === "learner"
-                ? strings.roleLearner
-                : strings.rolePatient}
+        {messages.map((message, index) => {
+          const canPlay =
+            message.role === "patient" &&
+            audioConsent &&
+            Boolean(onSynthesize) &&
+            !unavailableAudioIndices.has(index);
+          const isLoadingAudio = loadingAudioIndex === index;
+          const isPlaying = playingIndex === index;
+
+          return (
+            <div
+              key={index}
+              className={`station-message station-message--${message.role}`}
+              data-testid={`message-${message.role}`}
+            >
+              <div className="station-message__role">
+                {message.role === "learner"
+                  ? strings.roleLearner
+                  : strings.rolePatient}
+              </div>
+              {message.text}
+              {canPlay && (
+                <button
+                  type="button"
+                  className="station-message__play-button"
+                  disabled={isLoadingAudio}
+                  onClick={() => void handlePlay(index, message.text)}
+                  data-testid="play-button"
+                  aria-label={
+                    isLoadingAudio
+                      ? strings.loadingAudio
+                      : isPlaying
+                        ? strings.stopAudio
+                        : strings.playAudio
+                  }
+                >
+                  {isLoadingAudio
+                    ? strings.loadingAudio
+                    : isPlaying
+                      ? strings.stopAudio
+                      : strings.playAudio}
+                </button>
+              )}
             </div>
-            {message.text}
-          </div>
-        ))}
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 

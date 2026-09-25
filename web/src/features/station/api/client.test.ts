@@ -8,6 +8,15 @@ const jsonResponse = (body: unknown, status = 200) =>
     status,
     json: async () => body,
   }) as Response;
+const blobResponse = (blob: Blob, status = 200) =>
+  ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => {
+      throw new Error("not json");
+    },
+    blob: async () => blob,
+  }) as unknown as Response;
 
 describe("station API client", () => {
   it("models every station flow request and decodes its response", async () => {
@@ -169,6 +178,66 @@ describe("station API client", () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       `${baseUrl}/api/stations/active/sessions/session-1`,
     );
+  });
+
+  it("posts JSON to synthesize and returns the audio blob", async () => {
+    const audioBlob = new Blob(["fake-mp3-bytes"], { type: "audio/mpeg" });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(blobResponse(audioBlob));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    const result = await client.synthesizeSpeech(
+      "session-1",
+      "A dor começou há duas horas.",
+      "alloy",
+    );
+
+    expect(result).toBe(audioBlob);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `${baseUrl}/api/stations/active/sessions/session-1/synthesize`,
+    );
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(
+      JSON.stringify({ text: "A dor começou há duas horas.", voice: "alloy" }),
+    );
+  });
+
+  it("posts JSON to synthesize without a voice when omitted", async () => {
+    const audioBlob = new Blob(["fake-mp3-bytes"], { type: "audio/mpeg" });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(blobResponse(audioBlob));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await client.synthesizeSpeech("session-1", "Boa tarde.");
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.body).toBe(JSON.stringify({ text: "Boa tarde." }));
+  });
+
+  it("decodes synthesize failures into ApiError", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: "session_not_found", message: "Sessão não encontrada." },
+          404,
+        ),
+      );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.synthesizeSpeech("missing", "Olá"),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 404,
+      code: "session_not_found",
+      message: "Sessão não encontrada.",
+    });
   });
 
   it("decodes API failures into ApiError", async () => {

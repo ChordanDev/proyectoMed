@@ -10,6 +10,7 @@ const mockSend = vi.fn();
 const mockFinish = vi.fn();
 const mockReset = vi.fn();
 const mockTranscribe = vi.fn();
+const mockSynthesize = vi.fn();
 
 let mockStationState = {
   status: "idle",
@@ -21,6 +22,7 @@ let mockStationState = {
   start: mockStart,
   send: mockSend,
   transcribe: mockTranscribe,
+  synthesize: mockSynthesize,
   finish: mockFinish,
   reset: mockReset,
 };
@@ -50,6 +52,7 @@ describe("App", () => {
       start: mockStart,
       send: mockSend,
       transcribe: mockTranscribe,
+      synthesize: mockSynthesize,
       finish: mockFinish,
       reset: mockReset,
     };
@@ -173,6 +176,42 @@ describe("App", () => {
 
     expect(screen.getByTestId("message-input")).toBeDisabled();
     expect(screen.getByTestId("finish-button")).toBeDisabled();
+  });
+
+  it("wires onSynthesize to the station's synthesize function", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn().mockReturnValue("blob:audio-url");
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "Audio",
+      class {
+        constructor(public src: string) {}
+        play = vi.fn().mockResolvedValue(undefined);
+        pause = vi.fn();
+        addEventListener = vi.fn();
+        removeEventListener = vi.fn();
+      },
+    );
+
+    mockStationState.status = "active";
+    mockStationState.audioConsent = true;
+    mockSend.mockResolvedValue({
+      reply_text: "Paciente respondeu",
+      server_now: "2026-01-01T10:00:00Z",
+    });
+    mockSynthesize.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+
+    render(<App />);
+
+    const input = screen.getByTestId("message-input");
+    await user.type(input, "Olá");
+    await user.click(screen.getByTestId("send-button"));
+    await screen.findByText("Paciente respondeu");
+
+    await user.click(screen.getByTestId("play-button"));
+
+    expect(mockSynthesize).toHaveBeenCalledWith("Paciente respondeu");
   });
 
   it("renders ResultScreen with finishing state when station status is finishing", () => {

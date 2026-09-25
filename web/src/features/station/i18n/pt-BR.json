@@ -30,5 +30,8 @@
   "sendingMessage": "Enviando...",
   "loadingStation": "Carregando estação...",
   "stationError": "Erro na estação. Tente novamente.",
-  "timeRemainingLabel": "Tempo restante para finalizar a estação"
+  "timeRemainingLabel": "Tempo restante para finalizar a estação",
+  "playAudio": "Ouvir resposta",
+  "stopAudio": "Parar áudio",
+  "loadingAudio": "Carregando áudio..."
 }

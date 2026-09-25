@@ -6,6 +6,7 @@ export {
   sendMessage,
   finishSession,
   transcribeAudio,
+  synthesizeSpeech,
   fetchResult,
   ApiError,
   type ActiveStation,

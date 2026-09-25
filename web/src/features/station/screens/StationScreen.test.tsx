@@ -498,3 +498,182 @@ describe("StationScreen", () => {
     expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
   });
 });
+
+describe("StationScreen playback", () => {
+  const installAudio = () => {
+    const createObjectURL = vi.fn().mockReturnValue("blob:audio-url");
+    const revokeObjectURL = vi.fn();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+
+    const play = vi.fn().mockResolvedValue(undefined);
+    const pause = vi.fn();
+    vi.stubGlobal(
+      "Audio",
+      class {
+        src: string;
+        onended: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        constructor(src: string) {
+          this.src = src;
+        }
+        play = play;
+        pause = pause;
+        addEventListener(type: string, listener: EventListener) {
+          if (type === "ended") this.onended = listener as () => void;
+          if (type === "error") this.onerror = listener as () => void;
+        }
+        removeEventListener() {}
+      },
+    );
+
+    return { createObjectURL, revokeObjectURL, play, pause };
+  };
+
+  const defaultProps = {
+    onSend: vi.fn().mockResolvedValue("reply text"),
+    onFinish: vi.fn(),
+  };
+
+  const renderWithPatientMessage = async (
+    onSynthesize: ReturnType<typeof vi.fn>,
+    props: Record<string, unknown> = {},
+  ) => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue("Boa tarde, doutor.");
+    render(
+      <StationScreen
+        {...defaultProps}
+        onSend={onSend}
+        audioConsent
+        onSynthesize={onSynthesize}
+        {...props}
+      />,
+    );
+    await user.type(screen.getByTestId("message-input"), "Boa tarde");
+    await user.click(screen.getByTestId("send-button"));
+    await waitFor(() => {
+      expect(screen.getByText("Boa tarde, doutor.")).toBeInTheDocument();
+    });
+    return user;
+  };
+
+  it("does not show a play button without audio consent", async () => {
+    installAudio();
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue("Boa tarde, doutor.");
+    render(
+      <StationScreen
+        {...defaultProps}
+        onSend={onSend}
+        audioConsent={false}
+        onSynthesize={vi.fn()}
+      />,
+    );
+    await user.type(screen.getByTestId("message-input"), "Boa tarde");
+    await user.click(screen.getByTestId("send-button"));
+    await waitFor(() => {
+      expect(screen.getByText("Boa tarde, doutor.")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("play-button")).not.toBeInTheDocument();
+  });
+
+  it("does not show a play button without onSynthesize", async () => {
+    installAudio();
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue("Boa tarde, doutor.");
+    render(<StationScreen {...defaultProps} onSend={onSend} audioConsent />);
+    await user.type(screen.getByTestId("message-input"), "Boa tarde");
+    await user.click(screen.getByTestId("send-button"));
+    await waitFor(() => {
+      expect(screen.getByText("Boa tarde, doutor.")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("play-button")).not.toBeInTheDocument();
+  });
+
+  it("synthesizes and plays audio when the play button is clicked", async () => {
+    const { createObjectURL, play } = installAudio();
+    const onSynthesize = vi
+      .fn()
+      .mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    const user = await renderWithPatientMessage(onSynthesize);
+
+    await user.click(screen.getByTestId("play-button"));
+
+    await waitFor(() => {
+      expect(onSynthesize).toHaveBeenCalledWith("Boa tarde, doutor.");
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("play-button")).toHaveAccessibleName(
+        strings.stopAudio,
+      );
+    });
+  });
+
+  it("hides the play button and keeps the text when synthesis returns null, never retrying", async () => {
+    installAudio();
+    const onSynthesize = vi.fn().mockResolvedValue(null);
+    const user = await renderWithPatientMessage(onSynthesize);
+
+    await user.click(screen.getByTestId("play-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("play-button")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Boa tarde, doutor.")).toBeInTheDocument();
+    expect(onSynthesize).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the play button when audio.play() rejects, keeping the text", async () => {
+    const { play } = installAudio();
+    play.mockRejectedValue(new Error("playback blocked"));
+    const onSynthesize = vi
+      .fn()
+      .mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    const user = await renderWithPatientMessage(onSynthesize);
+
+    await user.click(screen.getByTestId("play-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("play-button")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Boa tarde, doutor.")).toBeInTheDocument();
+  });
+
+  it("pauses playing audio when sending a new turn", async () => {
+    const { play, pause } = installAudio();
+    const onSynthesize = vi
+      .fn()
+      .mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    const user = await renderWithPatientMessage(onSynthesize);
+
+    await user.click(screen.getByTestId("play-button"));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    await user.type(screen.getByTestId("message-input"), "Outra pergunta");
+    await user.click(screen.getByTestId("send-button"));
+
+    await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
+  });
+
+  it("pauses playing audio when starting a new voice recording", async () => {
+    const { play, pause } = installAudio();
+    installVoiceBrowser();
+    const onSynthesize = vi
+      .fn()
+      .mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    const user = await renderWithPatientMessage(onSynthesize, {
+      onTranscribe: vi.fn(),
+      onSendVoice: vi.fn(),
+    });
+
+    await user.click(screen.getByTestId("play-button"));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByTestId("voice-button"));
+
+    await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
+  });
+});
