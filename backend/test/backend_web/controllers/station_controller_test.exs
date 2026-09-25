@@ -148,6 +148,114 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  describe "GET /api/stations/active/sessions/:id" do
+    setup do
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: true
+        })
+
+      %{session: session}
+    end
+
+    test "returns the session contract for an active session, including its deadline_at", %{
+      conn: conn,
+      session: session
+    } do
+      conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
+
+      response = json_response(conn, 200)
+
+      assert %{
+               "session_id" => session_id,
+               "station_id" => station_id,
+               "station_version" => station_version,
+               "audio_consent" => true,
+               "started_at" => _started_at,
+               "expires_at" => _expires_at,
+               "deadline_at" => deadline_at_str,
+               "status" => "active",
+               "completion_reason" => nil,
+               "server_now" => server_now_str
+             } = response
+
+      assert session_id == session.session_id
+      assert station_id == session.station_id
+      assert station_version == session.station_version
+      assert {:ok, deadline_at, _} = DateTime.from_iso8601(deadline_at_str)
+      assert DateTime.to_iso8601(session.deadline_at) == DateTime.to_iso8601(deadline_at)
+      assert {:ok, _, _} = DateTime.from_iso8601(server_now_str)
+    end
+
+    test "a refresh/reconnect (repeated GET) returns the same deadline_at (does not reset)", %{
+      conn: conn,
+      session: session
+    } do
+      conn1 = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
+      %{"deadline_at" => deadline_at_1} = json_response(conn1, 200)
+
+      Process.sleep(20)
+
+      conn2 = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
+      %{"deadline_at" => deadline_at_2} = json_response(conn2, 200)
+
+      assert deadline_at_1 == deadline_at_2
+    end
+
+    test "reflects completion_reason once the session is completed", %{
+      conn: conn,
+      session: session
+    } do
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
+
+      assert %{"status" => "completed", "completion_reason" => "user"} = json_response(conn, 200)
+    end
+
+    test "returns 404 on unknown session id", %{conn: conn} do
+      conn = get(conn, ~p"/api/stations/active/sessions/unknown-session")
+
+      assert json_response(conn, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "returns 410 on expired session", %{conn: conn} do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      expired_session =
+        try do
+          pkg = StationLoader.active_package()
+
+          Conversation.start(%{
+            station_id: pkg["station_id"],
+            station_version: pkg["version"],
+            audio_consent: false
+          })
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{expired_session.session_id}")
+
+      assert json_response(conn, 410) == %{
+               "error" => "session_expired",
+               "message" => "A sessão expirou."
+             }
+    end
+  end
+
   describe "POST /api/stations/active/sessions/:id/messages" do
     setup do
       prev_adapter = Application.get_env(:backend, :station_ai_adapter)
@@ -381,7 +489,48 @@ defmodule BackendWeb.StationControllerTest do
              }
     end
 
-    test "handles race when session is completed while StationAI is generating reply", %{
+    test "returns 409 station_time_elapsed for a turn received at/after the deadline", %{
+      conn: conn
+    } do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      Application.put_env(:backend, :station_duration_ms, 30)
+
+      on_exit(fn ->
+        if is_nil(original_duration) do
+          Application.delete_env(:backend, :station_duration_ms)
+        else
+          Application.put_env(:backend, :station_duration_ms, original_duration)
+        end
+      end)
+
+      pkg = StationLoader.active_package()
+
+      late_session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: true
+        })
+
+      Process.sleep(60)
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{late_session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Chegou tarde"
+        })
+
+      assert json_response(conn, 409) == %{
+               "error" => "station_time_elapsed",
+               "message" => "O tempo da estação se esgotou."
+             }
+
+      assert {:ok, unchanged} = Conversation.fetch(late_session.session_id)
+      assert unchanged.messages == []
+    end
+
+    test "accepted pending turn resolves before a racing manual completion finalizes", %{
       conn: conn,
       session: session
     } do
@@ -410,11 +559,11 @@ defmodule BackendWeb.StationControllerTest do
       assert length(session_during_gen.messages) == 1
       assert hd(session_during_gen.messages).role == :learner
 
-      # 2. While blocked, call Conversation.complete/2 for the same session
-      assert {:ok, completed_session} = Conversation.complete(session.session_id, :user)
-      assert completed_session.status == :completed
-      original_completed_at = completed_session.completed_at
-      original_completion_reason = completed_session.completion_reason
+      # 2. While blocked, a manual completion arrives for the same session. Since a
+      # turn is pending (the learner message was accepted before the deadline), the
+      # completion call is deferred instead of racing the in-flight reply away —
+      # run it from a separate process so this test can still release the barrier.
+      complete_task = Task.async(fn -> Conversation.complete(session.session_id, :user) end)
 
       # 3. Release the adapter barrier
       send(task.pid, :station_ai_release)
@@ -431,14 +580,21 @@ defmodule BackendWeb.StationControllerTest do
 
       assert {:ok, _, _} = DateTime.from_iso8601(server_now_str)
 
-      # Assert session status remains :completed, completion metadata is unchanged,
-      # and patient reply is NOT appended after completion
+      # 5. The deferred completion finalizes once the turn resolves
+      assert {:ok, completed_session} = Task.await(complete_task, 2_000)
+      assert completed_session.status == :completed
+      assert completed_session.completion_reason == :user
+
+      # Assert the pending patient reply WAS appended before completion, and the
+      # session is completed with the manual reason.
       {:ok, final_session} = Conversation.fetch(session.session_id)
       assert final_session.status == :completed
-      assert final_session.completed_at == original_completed_at
-      assert final_session.completion_reason == original_completion_reason
-      assert length(final_session.messages) == 1
-      assert hd(final_session.messages).role == :learner
+      assert final_session.completion_reason == :user
+      assert length(final_session.messages) == 2
+      [msg1, msg2] = final_session.messages
+      assert msg1.role == :learner
+      assert msg2.role == :patient
+      assert msg2.text == "Resposta do paciente gerada durante conclusão"
     end
   end
 
@@ -477,7 +633,29 @@ defmodule BackendWeb.StationControllerTest do
       assert updated_session.completion_reason == :user
     end
 
-    test "finishes session with reason=timer", %{conn: conn, session: session} do
+    test "finishes session with reason=timer", %{conn: conn} do
+      # Timer finishes are only accepted at/after the deadline (within a small
+      # tolerance): shrink station_duration_ms so the deadline is already reached.
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      Application.put_env(:backend, :station_duration_ms, 0)
+
+      on_exit(fn ->
+        if is_nil(original_duration) do
+          Application.delete_env(:backend, :station_duration_ms)
+        else
+          Application.put_env(:backend, :station_duration_ms, original_duration)
+        end
+      end)
+
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: true
+        })
+
       conn =
         post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
           "reason" => "timer"
@@ -585,7 +763,8 @@ defmodule BackendWeb.StationControllerTest do
       assert %{
                "session_id" => session_id,
                "status" => "completed",
-               "completed_at" => first_completed_at
+               "completed_at" => first_completed_at,
+               "completion_reason" => "user"
              } = json_response(conn1, 200)
 
       :timer.sleep(10)
@@ -596,11 +775,12 @@ defmodule BackendWeb.StationControllerTest do
           "reason" => "timer"
         })
 
-      assert json_response(conn2, 200) == %{
-               "session_id" => session_id,
+      assert %{
+               "session_id" => ^session_id,
                "status" => "completed",
-               "completed_at" => first_completed_at
-             }
+               "completed_at" => ^first_completed_at,
+               "completion_reason" => "user"
+             } = json_response(conn2, 200)
 
       {:ok, stored_session} = Conversation.fetch(session.session_id)
       assert stored_session.completion_reason == :user

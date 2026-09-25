@@ -17,6 +17,8 @@ defmodule Backend.Stations do
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
 
+  @early_timer_finish_tolerance_ms 2_000
+
   # ============================================================================
   # Station Package & Metadata
   # ============================================================================
@@ -93,10 +95,34 @@ defmodule Backend.Stations do
 
   @doc """
   Completes a session with a completion reason (`:user` or `:timer`).
+
+  A `:timer` completion is only accepted at or after `deadline_at` (with a
+  small tolerance): a client-driven timer finish arriving more than
+  `@early_timer_finish_tolerance_ms` before the deadline is rejected with
+  `{:error, :deadline_not_reached}`.
   """
   @spec complete_session(String.t(), :user | :timer | term()) ::
-          {:ok, Conversation.session()} | {:error, :not_found | :expired}
-  def complete_session(session_id, reason \\ :user) do
+          {:ok, Conversation.session()} | {:error, :not_found | :expired | :deadline_not_reached}
+  def complete_session(session_id, reason \\ :user)
+
+  def complete_session(session_id, :timer) do
+    case Conversation.fetch(session_id) do
+      {:ok, %{status: :active} = session} ->
+        if timer_finish_allowed?(session) do
+          Conversation.complete(session_id, :timer)
+        else
+          {:error, :deadline_not_reached}
+        end
+
+      {:ok, %{status: :completed} = session} ->
+        {:ok, session}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def complete_session(session_id, reason) do
     Conversation.complete(session_id, reason)
   end
 
@@ -124,7 +150,13 @@ defmodule Backend.Stations do
   """
   @spec create_message(String.t(), map()) ::
           {:ok, map()}
-          | {:error, :not_found | :expired | :completed | :station_ai_unavailable | term()}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :station_time_elapsed
+             | :station_ai_unavailable
+             | term()}
   def create_message(session_id, params) do
     role = Map.get(params, :role) || Map.get(params, "role") || :learner
     modality = normalize_modality(Map.get(params, :modality) || Map.get(params, "modality"))
@@ -136,13 +168,21 @@ defmodule Backend.Stations do
       text: text
     }
 
-    with {:ok, _session} <- Conversation.append_message(session_id, learner_message),
-         package = get_active_package(),
-         {:ok, current_session} <- Conversation.fetch(session_id),
+    case Conversation.begin_turn(session_id, learner_message) do
+      {:ok, _session, token} -> generate_and_resolve_turn(session_id, token)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp generate_and_resolve_turn(session_id, token) do
+    package = get_active_package()
+
+    with {:ok, current_session} <- Conversation.fetch(session_id),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context),
          {:ok, verified_reply} <- verify_patient_reply(package, ai_reply),
-         {:ok, _session} <- append_patient_reply(session_id, verified_reply.text) do
+         patient_message = %{role: :patient, modality: :text, text: verified_reply.text},
+         {:ok, _session} <- Conversation.resolve_turn(session_id, token, {:ok, patient_message}) do
       {:ok,
        %{
          reply_text: verified_reply.text,
@@ -150,18 +190,14 @@ defmodule Backend.Stations do
          used_facts: Map.get(verified_reply, :used_facts, [])
        }}
     else
-      {:error, :not_found} ->
-        {:error, :not_found}
-
-      {:error, :expired} ->
-        {:error, :expired}
-
-      {:error, :completed} ->
-        {:error, :completed}
+      {:error, :station_time_elapsed} ->
+        {:error, :station_time_elapsed}
 
       {:error, _reason} ->
-        _ = rollback_learner_message(session_id, learner_message)
-        {:error, :station_ai_unavailable}
+        case Conversation.resolve_turn(session_id, token, :rollback) do
+          {:error, :station_time_elapsed} -> {:error, :station_time_elapsed}
+          _ -> {:error, :station_ai_unavailable}
+        end
     end
   end
 
@@ -273,17 +309,27 @@ defmodule Backend.Stations do
   end
 
   @doc """
-  Checks if a session is within its authoritative deadline.
+  Checks whether a session is within its authoritative ten-minute deadline.
 
-  Stable extension point for Ticket 133 (ten-minute station deadline).
+  Returns `{:error, :session_time_elapsed}` once `deadline_at` has passed, even
+  if the session has not yet been auto-completed by the timer.
   """
   @spec check_session_deadline(String.t()) ::
           {:ok, :within_deadline} | {:error, :session_time_elapsed | :not_found | :expired}
   def check_session_deadline(session_id) do
     case Conversation.fetch(session_id) do
-      {:ok, %{status: :active}} -> {:ok, :within_deadline}
-      {:ok, %{status: :completed}} -> {:error, :session_time_elapsed}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{status: :completed}} ->
+        {:error, :session_time_elapsed}
+
+      {:ok, %{status: :active} = session} ->
+        if DateTime.compare(DateTime.utc_now(), session.deadline_at) == :lt do
+          {:ok, :within_deadline}
+        else
+          {:error, :session_time_elapsed}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -328,20 +374,9 @@ defmodule Backend.Stations do
     StationAI.next_reply(package, context)
   end
 
-  defp append_patient_reply(session_id, reply_text) do
-    case Conversation.append_message(session_id, %{
-           role: :patient,
-           modality: :text,
-           text: reply_text
-         }) do
-      {:ok, session} -> {:ok, session}
-      {:error, :completed} -> {:ok, :completed}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp rollback_learner_message(session_id, learner_message) do
-    Conversation.pop_last_message(session_id, learner_message)
+  defp timer_finish_allowed?(session) do
+    DateTime.diff(session.deadline_at, DateTime.utc_now(), :millisecond) <=
+      @early_timer_finish_tolerance_ms
   end
 
   defp format_context(session, package) do
