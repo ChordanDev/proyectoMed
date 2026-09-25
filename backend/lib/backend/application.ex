@@ -11,8 +11,8 @@ defmodule Backend.Application do
       BackendWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:backend, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Backend.PubSub},
-      Backend.StationLoader,
-      Backend.Conversation,
+      Backend.Stations.StationLoader,
+      Backend.Stations.Conversation,
       # Start a worker by calling: Backend.Worker.start_link(arg)
       # {Backend.Worker, arg},
       # Start to serve requests, typically the last entry

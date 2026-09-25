@@ -54,6 +54,9 @@ erl_crash.dump
 .exenv/
 .iex/
 .mix/
+priv/plts/
+*.plt
+*.plt.hash
 
 # Generated static assets (mirrors priv/static/assets).
 priv/static/assets/
