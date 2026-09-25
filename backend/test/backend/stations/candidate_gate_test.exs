@@ -14,62 +14,67 @@ defmodule Backend.Stations.CandidateGateTest do
 
     @impl true
     def decide_patient(request) do
-      case Map.get(request, :candidate_text) do
-        "verified_text" ->
-          {:ok,
-           %{status: :verified, rationale: "Well-grounded in facts", used_fact_ids: ["fact-1"]}}
+      decide_candidate(Map.get(request, :candidate_text), request)
+    end
 
-        "ungrounded_hallucination" ->
-          {:ok, %{status: :semantic_refusal, rationale: "Hallucination outside package facts"}}
+    defp decide_candidate("verified_text", _req) do
+      {:ok, %{status: :verified, rationale: "Well-grounded in facts", used_fact_ids: ["fact-1"]}}
+    end
 
-        "contradicts_history" ->
-          {:ok, %{status: :semantic_refusal, rationale: "Contradicts medical history"}}
+    defp decide_candidate("ungrounded_hallucination", _req) do
+      {:ok, %{status: :semantic_refusal, rationale: "Hallucination outside package facts"}}
+    end
 
-        "premature_disclosure" ->
-          {:ok, %{status: :semantic_refusal, rationale: "Discloses ECG results prematurely"}}
+    defp decide_candidate("contradicts_history", _req) do
+      {:ok, %{status: :semantic_refusal, rationale: "Contradicts medical history"}}
+    end
 
-        "role_violation_doctor" ->
-          {:ok, %{status: :semantic_refusal, rationale: "Patient candidate acts as doctor"}}
+    defp decide_candidate("premature_disclosure", _req) do
+      {:ok, %{status: :semantic_refusal, rationale: "Discloses ECG results prematurely"}}
+    end
 
-        "prompt_injection_attempt" ->
-          {:ok, %{status: :semantic_refusal, rationale: "Prompt injection detected in candidate"}}
+    defp decide_candidate("role_violation_doctor", _req) do
+      {:ok, %{status: :semantic_refusal, rationale: "Patient candidate acts as doctor"}}
+    end
 
-        "low_confidence_text" ->
-          {:ok, %{status: :low_confidence, rationale: "Uncertain clinical grounding"}}
+    defp decide_candidate("prompt_injection_attempt", _req) do
+      {:ok, %{status: :semantic_refusal, rationale: "Prompt injection detected in candidate"}}
+    end
 
-        "upstream_500" ->
-          {:error, {:upstream_5xx, 500}}
+    defp decide_candidate("low_confidence_text", _req) do
+      {:ok, %{status: :low_confidence, rationale: "Uncertain clinical grounding"}}
+    end
 
-        "upstream_503" ->
-          {:error, {:upstream_5xx, 503}}
+    defp decide_candidate("upstream_500", _req), do: {:error, {:upstream_5xx, 500}}
+    defp decide_candidate("upstream_503", _req), do: {:error, {:upstream_5xx, 503}}
+    defp decide_candidate("adapter_timeout", _req), do: {:error, :timeout}
 
-        "adapter_timeout" ->
-          {:error, :timeout}
+    defp decide_candidate("adapter_disabled", _req) do
+      {:error, {:adapter_disabled, "Adapter disabled in test"}}
+    end
 
-        "adapter_disabled" ->
-          {:error, {:adapter_disabled, "Adapter disabled in test"}}
+    defp decide_candidate("malformed_output", _req) do
+      {:error, {:malformed_output, :missing_status}}
+    end
 
-        "malformed_output" ->
-          {:error, {:malformed_output, :missing_status}}
+    defp decide_candidate("sleep_beyond_deadline", request) do
+      Process.sleep(request.deadline_ms + 40)
+      {:ok, %{status: :verified}}
+    end
 
-        "sleep_beyond_deadline" ->
-          Process.sleep(request.deadline_ms + 40)
+    defp decide_candidate(text, _req) when is_binary(text) do
+      cond do
+        String.starts_with?(text, "regen_ok") ->
           {:ok, %{status: :verified}}
 
-        text when is_binary(text) ->
-          cond do
-            String.starts_with?(text, "regen_ok") ->
-              {:ok, %{status: :verified}}
+        String.starts_with?(text, "regen_refused") ->
+          {:ok, %{status: :semantic_refusal, rationale: "Regenerated reply refused"}}
 
-            String.starts_with?(text, "regen_refused") ->
-              {:ok, %{status: :semantic_refusal, rationale: "Regenerated reply refused"}}
+        String.starts_with?(text, "regen_low_confidence") ->
+          {:ok, %{status: :low_confidence, rationale: "Regenerated reply low confidence"}}
 
-            String.starts_with?(text, "regen_low_confidence") ->
-              {:ok, %{status: :low_confidence, rationale: "Regenerated reply low confidence"}}
-
-            true ->
-              {:ok, %{status: :verified}}
-          end
+        true ->
+          {:ok, %{status: :verified}}
       end
     end
 

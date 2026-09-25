@@ -13,61 +13,57 @@ defmodule Backend.Stations.JevDecisionTest do
 
     @impl true
     def decide_patient(request) do
-      case Map.get(request, :candidate_text) do
-        "sleep" ->
-          Process.sleep(request.deadline_ms + 50)
-          {:ok, %{status: :verified}}
-
-        "verified" ->
-          {:ok, %{status: :verified, rationale: "Grounded in facts", used_fact_ids: ["fact-1"]}}
-
-        "semantic_refusal" ->
-          {:ok, %{status: :semantic_refusal, rationale: "Out of scope"}}
-
-        "low_confidence" ->
-          {:ok, %{status: :low_confidence, rationale: "Unclear grounding"}}
-
-        "string_status" ->
-          {:ok, %{"status" => "verified"}}
-
-        "invalid_status" ->
-          {:ok, %{status: :uncertain}}
-
-        "leaking_status" ->
-          {:ok, %{status: "CANDIDATE_SECRET_TEXT_LEAK_IN_STATUS"}}
-
-        "malformed_map" ->
-          {:ok, "not a map"}
-
-        "topic_slug_instead_of_id" ->
-          # "onset" is the topic of fact-1, but canonical id is "fact-1"
-          {:ok, %{status: :verified, used_fact_ids: ["onset"]}}
-
-        "nonexistent_fact" ->
-          {:ok, %{status: :verified, used_fact_ids: ["nonexistent-fact-99"]}}
-
-        "upstream_500" ->
-          {:error, {:upstream_error, 500}}
-
-        "upstream_503" ->
-          {:error, {:upstream_5xx, 503}}
-
-        "upstream_raw_body_leak" ->
-          {:error, {:upstream_error, "LEAKED_INTERNAL_SENSITIVE_UPSTREAM_BODY_789"}}
-
-        "timeout_error" ->
-          {:error, :timeout}
-
-        "crash" ->
-          raise "Boom! Simulated crash containing CANDIDATE_LEAKED_TEXT_456"
-
-        "throw" ->
-          throw(:simulated_throw_error)
-
-        _other ->
-          {:ok, %{status: :verified}}
-      end
+      decide_text(Map.get(request, :candidate_text), request)
     end
+
+    defp decide_text("sleep", request) do
+      Process.sleep(request.deadline_ms + 50)
+      {:ok, %{status: :verified}}
+    end
+
+    defp decide_text("verified", _req) do
+      {:ok, %{status: :verified, rationale: "Grounded in facts", used_fact_ids: ["fact-1"]}}
+    end
+
+    defp decide_text("semantic_refusal", _req) do
+      {:ok, %{status: :semantic_refusal, rationale: "Out of scope"}}
+    end
+
+    defp decide_text("low_confidence", _req) do
+      {:ok, %{status: :low_confidence, rationale: "Unclear grounding"}}
+    end
+
+    defp decide_text("string_status", _req), do: {:ok, %{"status" => "verified"}}
+    defp decide_text("invalid_status", _req), do: {:ok, %{status: :uncertain}}
+
+    defp decide_text("leaking_status", _req),
+      do: {:ok, %{status: "CANDIDATE_SECRET_TEXT_LEAK_IN_STATUS"}}
+
+    defp decide_text("malformed_map", _req), do: {:ok, "not a map"}
+
+    defp decide_text("topic_slug_instead_of_id", _req) do
+      {:ok, %{status: :verified, used_fact_ids: ["onset"]}}
+    end
+
+    defp decide_text("nonexistent_fact", _req) do
+      {:ok, %{status: :verified, used_fact_ids: ["nonexistent-fact-99"]}}
+    end
+
+    defp decide_text("upstream_500", _req), do: {:error, {:upstream_error, 500}}
+    defp decide_text("upstream_503", _req), do: {:error, {:upstream_5xx, 503}}
+
+    defp decide_text("upstream_raw_body_leak", _req) do
+      {:error, {:upstream_error, "LEAKED_INTERNAL_SENSITIVE_UPSTREAM_BODY_789"}}
+    end
+
+    defp decide_text("timeout_error", _req), do: {:error, :timeout}
+
+    defp decide_text("crash", _req) do
+      raise "Boom! Simulated crash containing CANDIDATE_LEAKED_TEXT_456"
+    end
+
+    defp decide_text("throw", _req), do: throw(:simulated_throw_error)
+    defp decide_text(_other, _req), do: {:ok, %{status: :verified}}
 
     @impl true
     def decide_rubric(request) do

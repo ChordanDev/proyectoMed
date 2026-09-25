@@ -278,22 +278,19 @@ defmodule Backend.Stations.CandidateGate do
   end
 
   defp attempt_regeneration(package, conversation, deadline_at, opts) do
+    with :ok <- check_regeneration_budget(deadline_at),
+         generator = opts[:generator],
+         {:ok, regen_text} <- invoke_generator(generator, package, conversation, deadline_at),
+         :ok <- check_regeneration_budget(deadline_at) do
+      recheck_regenerated(regen_text, package, conversation, deadline_at, opts)
+    end
+  end
+
+  defp check_regeneration_budget(deadline_at) do
     if JevDecision.remaining_budget_ms(deadline_at) <= 0 do
       {:error, :timeout}
     else
-      generator = opts[:generator]
-
-      case invoke_generator(generator, package, conversation, deadline_at) do
-        {:ok, regen_text} ->
-          if JevDecision.remaining_budget_ms(deadline_at) <= 0 do
-            {:error, :timeout}
-          else
-            recheck_regenerated(regen_text, package, conversation, deadline_at, opts)
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      :ok
     end
   end
 
@@ -305,34 +302,38 @@ defmodule Backend.Stations.CandidateGate do
       |> Keyword.put(:deadline_at_monotonic_ms, deadline_at)
 
     with :ok <- BoundedReply.check_violations(regen_text, package) do
-      if template_bypass?(regen_text, package, recheck_opts) do
-        {:ok, regen_text}
-      else
-        if JevDecision.remaining_budget_ms(deadline_at) <= 0 do
-          {:error, :timeout}
-        else
-          jev_request = %{
-            candidate_text: regen_text,
-            package: package,
-            conversation: conversation,
-            deadline_at_monotonic_ms: deadline_at
-          }
-
-          case JevDecision.decide_patient(jev_request, recheck_opts) do
-            {:ok, %{status: :verified}} ->
-              {:ok, regen_text}
-
-            {:ok, %{status: second_status}}
-            when second_status in [:semantic_refusal, :low_confidence] ->
-              {:error, {:refused, second_status}}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        end
-      end
+      recheck_candidate_dispatch(regen_text, package, conversation, deadline_at, recheck_opts)
     end
   end
+
+  defp recheck_candidate_dispatch(regen_text, package, conversation, deadline_at, recheck_opts) do
+    if template_bypass?(regen_text, package, recheck_opts) do
+      {:ok, regen_text}
+    else
+      recheck_with_jev(regen_text, package, conversation, deadline_at, recheck_opts)
+    end
+  end
+
+  defp recheck_with_jev(regen_text, package, conversation, deadline_at, recheck_opts) do
+    with :ok <- check_regeneration_budget(deadline_at) do
+      jev_request = %{
+        candidate_text: regen_text,
+        package: package,
+        conversation: conversation,
+        deadline_at_monotonic_ms: deadline_at
+      }
+
+      eval_recheck_jev_result(JevDecision.decide_patient(jev_request, recheck_opts), regen_text)
+    end
+  end
+
+  defp eval_recheck_jev_result({:ok, %{status: :verified}}, regen_text), do: {:ok, regen_text}
+
+  defp eval_recheck_jev_result({:ok, %{status: status}}, _text)
+       when status in [:semantic_refusal, :low_confidence],
+       do: {:error, {:refused, status}}
+
+  defp eval_recheck_jev_result({:error, reason}, _text), do: {:error, reason}
 
   defp invoke_generator(generator, package, conversation, deadline_at) do
     remaining_ms = JevDecision.remaining_budget_ms(deadline_at)
@@ -356,7 +357,12 @@ defmodule Backend.Stations.CandidateGate do
               generator.(package, conversation, remaining_ms)
 
             is_nil(generator) ->
-              Backend.Stations.StationAI.next_reply(package, %{conversation: conversation})
+              language = package["language"] || package[:language] || "pt-BR"
+
+              Backend.Stations.StationAI.next_reply(package, %{
+                conversation: conversation,
+                language: language
+              })
 
             true ->
               {:error, {:invalid_generator, :unsupported_generator_type}}

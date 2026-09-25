@@ -188,48 +188,47 @@ defmodule Backend.Stations.JevDecision do
     now = monotonic_now_ms()
 
     cond do
-      deadline_at =
-          opts[:deadline_at_monotonic_ms] ||
-            Map.get(request, :deadline_at_monotonic_ms) ||
-            Map.get(request, "deadline_at_monotonic_ms") ->
-        if is_integer(deadline_at) do
-          remaining = deadline_at - now
+      deadline_at = extract_deadline_at(request, opts) ->
+        resolve_from_deadline_at(deadline_at, now)
 
-          if remaining <= 0 do
-            {:error, :timeout}
-          else
-            {:ok, remaining, deadline_at}
-          end
-        else
-          {:error, {:invalid_request, :invalid_deadline}}
-        end
+      budget = extract_budget(request, opts) ->
+        resolve_from_budget(budget, now)
 
-      budget =
-          opts[:remaining_budget_ms] ||
-            Map.get(request, :remaining_budget_ms) ||
-            Map.get(request, "remaining_budget_ms") ->
-        if is_integer(budget) do
-          if budget <= 0 do
-            {:error, :timeout}
-          else
-            {:ok, budget, now + budget}
-          end
-        else
-          {:error, {:invalid_request, :invalid_deadline}}
-        end
-
-      raw_deadline =
-          opts[:deadline_ms] ||
-            Map.get(request, :deadline_ms) ||
-            Map.get(request, "deadline_ms") ||
-            default_deadline_ms() ->
-        if is_integer(raw_deadline) and raw_deadline > 0 do
-          {:ok, raw_deadline, now + raw_deadline}
-        else
-          {:error, {:invalid_request, :invalid_deadline}}
-        end
+      true ->
+        raw = extract_raw_deadline(request, opts)
+        resolve_from_raw_deadline(raw, now)
     end
   end
+
+  defp extract_deadline_at(request, opts) do
+    opts[:deadline_at_monotonic_ms] ||
+      Map.get(request, :deadline_at_monotonic_ms) ||
+      Map.get(request, "deadline_at_monotonic_ms")
+  end
+
+  defp extract_budget(request, opts) do
+    opts[:remaining_budget_ms] ||
+      Map.get(request, :remaining_budget_ms) ||
+      Map.get(request, "remaining_budget_ms")
+  end
+
+  defp extract_raw_deadline(request, opts) do
+    opts[:deadline_ms] ||
+      Map.get(request, :deadline_ms) ||
+      Map.get(request, "deadline_ms") ||
+      default_deadline_ms()
+  end
+
+  defp resolve_from_deadline_at(d, now) when is_integer(d) and d - now > 0, do: {:ok, d - now, d}
+  defp resolve_from_deadline_at(d, _now) when is_integer(d), do: {:error, :timeout}
+  defp resolve_from_deadline_at(_d, _now), do: {:error, {:invalid_request, :invalid_deadline}}
+
+  defp resolve_from_budget(b, now) when is_integer(b) and b > 0, do: {:ok, b, now + b}
+  defp resolve_from_budget(b, _now) when is_integer(b), do: {:error, :timeout}
+  defp resolve_from_budget(_b, _now), do: {:error, {:invalid_request, :invalid_deadline}}
+
+  defp resolve_from_raw_deadline(r, now) when is_integer(r) and r > 0, do: {:ok, r, now + r}
+  defp resolve_from_raw_deadline(_r, _now), do: {:error, {:invalid_request, :invalid_deadline}}
 
   # ============================================================================
   # Input Validation & Context Bounding: Patient
@@ -581,30 +580,15 @@ defmodule Backend.Stations.JevDecision do
 
   defp validate_patient_output({:ok, response}, package) when is_map(response) do
     raw_status = Map.get(response, :status) || Map.get(response, "status")
+    used_fact_ids = Map.get(response, :used_fact_ids) || Map.get(response, "used_fact_ids")
 
-    case normalize_patient_status(raw_status) do
-      {:ok, status} ->
-        rationale = Map.get(response, :rationale) || Map.get(response, "rationale")
-        used_fact_ids = Map.get(response, :used_fact_ids) || Map.get(response, "used_fact_ids")
-
-        case validate_used_fact_ids(used_fact_ids, package) do
-          {:ok, validated_fact_ids} ->
-            result = %{status: status}
-            result = if rationale, do: Map.put(result, :rationale, rationale), else: result
-
-            result =
-              if validated_fact_ids,
-                do: Map.put(result, :used_fact_ids, validated_fact_ids),
-                else: result
-
-            {:ok, result}
-
-          {:error, reason} ->
-            {:error, {:invalid_response, reason}}
-        end
-
-      :error ->
-        {:error, {:invalid_response, :unrecognized_patient_status}}
+    with {:ok, status} <- normalize_patient_status(raw_status),
+         {:ok, validated_fact_ids} <- validate_used_fact_ids(used_fact_ids, package) do
+      rationale = Map.get(response, :rationale) || Map.get(response, "rationale")
+      {:ok, build_patient_output_result(status, rationale, validated_fact_ids)}
+    else
+      :error -> {:error, {:invalid_response, :unrecognized_patient_status}}
+      {:error, reason} -> {:error, {:invalid_response, reason}}
     end
   end
 
@@ -619,6 +603,15 @@ defmodule Backend.Stations.JevDecision do
   defp validate_patient_output(_other, _package) do
     {:error, {:malformed_output, :expected_map}}
   end
+
+  defp build_patient_output_result(status, rationale, validated_fact_ids) do
+    %{status: status}
+    |> maybe_put(:rationale, rationale)
+    |> maybe_put(:used_fact_ids, validated_fact_ids)
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, val), do: Map.put(map, key, val)
 
   defp normalize_patient_status(:verified), do: {:ok, :verified}
   defp normalize_patient_status("verified"), do: {:ok, :verified}
@@ -736,57 +729,35 @@ defmodule Backend.Stations.JevDecision do
   # ============================================================================
 
   defp normalize_error(reason) do
-    sanitized =
-      case reason do
-        :timeout ->
-          :timeout
-
-        {:adapter_disabled, msg} when is_binary(msg) ->
-          {:adapter_disabled, msg}
-
-        :adapter_disabled ->
-          :adapter_disabled
-
-        {:upstream_5xx, code} when is_integer(code) ->
-          {:upstream_5xx, code}
-
-        {:upstream_error, code} when is_integer(code) and code >= 500 ->
-          {:upstream_5xx, code}
-
-        {:upstream_error, code} when is_integer(code) ->
-          {:upstream_error, code}
-
-        {:upstream_error, _raw} ->
-          :upstream_error
-
-        :upstream_error ->
-          :upstream_error
-
-        :network_error ->
-          :network_error
-
-        :malformed_output ->
-          :malformed_output
-
-        {:malformed_output, _} ->
-          :malformed_output
-
-        {:invalid_response, atom_code} when is_atom(atom_code) ->
-          {:invalid_response, atom_code}
-
-        {:invalid_response, _} ->
-          {:invalid_response, :invalid_payload}
-
-        {:technical_failure, atom_code} when is_atom(atom_code) ->
-          {:technical_failure, atom_code}
-
-        _other ->
-          {:technical_failure, :adapter_error}
-      end
-
+    sanitized = sanitize_error(reason)
     log_error_safe(sanitized)
     {:error, sanitized}
   end
+
+  defp sanitize_error(:timeout), do: :timeout
+  defp sanitize_error({:adapter_disabled, msg}) when is_binary(msg), do: {:adapter_disabled, msg}
+  defp sanitize_error(:adapter_disabled), do: :adapter_disabled
+  defp sanitize_error({:upstream_5xx, code}) when is_integer(code), do: {:upstream_5xx, code}
+
+  defp sanitize_error({:upstream_error, code}) when is_integer(code) and code >= 500,
+    do: {:upstream_5xx, code}
+
+  defp sanitize_error({:upstream_error, code}) when is_integer(code), do: {:upstream_error, code}
+  defp sanitize_error({:upstream_error, _raw}), do: :upstream_error
+  defp sanitize_error(:upstream_error), do: :upstream_error
+  defp sanitize_error(:network_error), do: :network_error
+  defp sanitize_error(:malformed_output), do: :malformed_output
+  defp sanitize_error({:malformed_output, _}), do: :malformed_output
+
+  defp sanitize_error({:invalid_response, atom_code}) when is_atom(atom_code),
+    do: {:invalid_response, atom_code}
+
+  defp sanitize_error({:invalid_response, _}), do: {:invalid_response, :invalid_payload}
+
+  defp sanitize_error({:technical_failure, atom_code}) when is_atom(atom_code),
+    do: {:technical_failure, atom_code}
+
+  defp sanitize_error(_other), do: {:technical_failure, :adapter_error}
 
   defp log_privacy_safe(level, message) do
     Logger.log(level, "[JevDecision] " <> message)
