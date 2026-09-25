@@ -46,4 +46,7 @@ Per issue #133; `bash scripts/test.sh` exits 0.
 - Curl smoke vs real Phoenix + fake OpenAI (no browser): create returns `deadline_at` = started_at + 10 min, distinct from `expires_at` (+30); early timer finish → 409 `deadline_not_reached`; GET keeps same `deadline_at`; with duration 8s the server auto-completed with reason `timer`; late turn → 409 `station_time_elapsed`; with duration 5s a turn accepted pre-deadline replying at 8s was appended (n=2), then completed `timer`. Note: provider replies >15s hit Req's default `receive_timeout` → 502 + rollback (pre-existing, not #133).
 
 ## Next
+- [ ] T4 (added 2026-09-25) Stack on #55: `git merge-tree` shows real conflicts with `origin/feat/55-tts-playback` (PR #146) in `useStation.ts`, `useStation.test.ts`, `client.test.ts`, `App.test.tsx`, `pt-BR.json`. User approved: merge `feat/55-tts-playback` into this branch, resolve, run `bash scripts/test.sh`, have the user run a short smoke, then open the PR with base `feat/55-tts-playback` (retarget to `feat/30-expo-screens` after #146 merges). Nothing pushed yet; the parent fast-forward (`7c1994e` → `feat/30-expo-screens`) is still pending, for the user to run.
+
+Previous:
 Push + child PR to feat/30-expo-screens (user). T3 done: user ran the manual browser smoke (fake OpenAI at ../fake_openai.py, duration shortened via Application.put_env in iex). Then chain/PR decision (ask-on-risk; branch ~1.3k lines incl. tests).
