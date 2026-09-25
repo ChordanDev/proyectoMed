@@ -24,7 +24,23 @@ export interface StationScreenProps {
   error?: string | null;
   /** Whether the send/finish controls are disabled (e.g. finishing in progress). */
   disabled?: boolean;
+  /** Milliseconds left until the server-authoritative station deadline, when known. */
+  remainingMs?: number | null;
+  /** Transcript restored from a resumed session (refresh/reconnect). */
+  initialMessages?: DisplayMessage[];
 }
+
+const isStationTimeElapsedError = (cause: unknown): boolean =>
+  typeof cause === "object" &&
+  cause !== null &&
+  (cause as { code?: unknown }).code === "station_time_elapsed";
+
+const formatCountdown = (remainingMs: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
 
 export function StationScreen({
   onSend,
@@ -35,8 +51,12 @@ export function StationScreen({
   title,
   error = null,
   disabled = false,
+  remainingMs = null,
+  initialMessages,
 }: StationScreenProps): React.JSX.Element {
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [messages, setMessages] = useState<DisplayMessage[]>(
+    () => initialMessages ?? [],
+  );
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -118,8 +138,16 @@ export function StationScreen({
         } else {
           setSendError(strings.stationError);
         }
-      } catch {
-        setSendError(strings.stationError);
+      } catch (cause) {
+        if (isStationTimeElapsedError(cause)) {
+          // The station's deadline elapsed while this turn was in flight:
+          // it was never accepted, so it must not linger in the transcript.
+          if (mountedRef.current) {
+            setMessages((previous) => previous.slice(0, -1));
+          }
+        } else {
+          setSendError(strings.stationError);
+        }
       } finally {
         if (mountedRef.current) setSending(false);
       }
@@ -239,6 +267,16 @@ export function StationScreen({
         <h1 className="station-header__title">
           {title ?? strings.stationScreenTitle}
         </h1>
+        {remainingMs !== null && (
+          <div
+            className="station-header__countdown"
+            role="timer"
+            aria-label={strings.timeRemainingLabel}
+            data-testid="station-countdown"
+          >
+            {formatCountdown(remainingMs)}
+          </div>
+        )}
         <button
           type="button"
           className="station-header__finish-button"

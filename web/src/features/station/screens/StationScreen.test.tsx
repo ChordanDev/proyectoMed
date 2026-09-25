@@ -438,4 +438,63 @@ describe("StationScreen", () => {
     const allMessages = screen.getAllByTestId(/^message-(learner|patient)$/);
     expect(allMessages).toHaveLength(4);
   });
+
+  it("renders the server-authoritative countdown with an accessible timer role", () => {
+    render(<StationScreen {...defaultProps} remainingMs={9 * 60 * 1000 + 5_000} />);
+
+    const countdown = screen.getByRole("timer");
+    expect(countdown).toHaveTextContent("09:05");
+    expect(countdown).toHaveAccessibleName(strings.timeRemainingLabel);
+  });
+
+  it("does not render a countdown when remainingMs is not provided", () => {
+    render(<StationScreen {...defaultProps} />);
+
+    expect(screen.queryByRole("timer")).not.toBeInTheDocument();
+  });
+
+  it("restores a transcript from a resumed session", () => {
+    render(
+      <StationScreen
+        {...defaultProps}
+        initialMessages={[
+          { role: "learner", text: "Bom dia" },
+          { role: "patient", text: "Boa tarde" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Bom dia")).toBeInTheDocument();
+    expect(screen.getByText("Boa tarde")).toBeInTheDocument();
+  });
+
+  it("removes the learner bubble instead of leaving it as accepted when the send is rejected for station_time_elapsed", async () => {
+    const user = userEvent.setup();
+    let reject!: (cause: unknown) => void;
+    const onSend = vi.fn(
+      () =>
+        new Promise<string | null>((_resolve, r) => {
+          reject = r;
+        }),
+    );
+    render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+    await user.type(screen.getByTestId("message-input"), "Última mensagem");
+    await user.click(screen.getByTestId("send-button"));
+
+    // Learner bubble appears immediately, while the turn is in flight.
+    expect(screen.getByText("Última mensagem")).toBeInTheDocument();
+
+    reject(
+      Object.assign(new Error("O tempo da estação se esgotou."), {
+        code: "station_time_elapsed",
+      }),
+    );
+
+    // ...but is removed once the station_time_elapsed rejection lands.
+    await waitFor(() => {
+      expect(screen.queryByText("Última mensagem")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
+  });
 });

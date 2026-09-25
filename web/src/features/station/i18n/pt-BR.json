@@ -29,5 +29,6 @@
   "sendButton": "Enviar",
   "sendingMessage": "Enviando...",
   "loadingStation": "Carregando estação...",
-  "stationError": "Erro na estação. Tente novamente."
+  "stationError": "Erro na estação. Tente novamente.",
+  "timeRemainingLabel": "Tempo restante para finalizar a estação"
 }

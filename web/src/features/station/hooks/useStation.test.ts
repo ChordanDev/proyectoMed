@@ -1,12 +1,19 @@
-import { act, renderHook } from "@testing-library/react";
+import React from "react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach } from "vitest";
 import {
   ApiError,
   type CompletedSession,
   type MessageReply,
   type Session,
+  type SessionDetail,
   type SessionResult,
 } from "../api/client";
-import { useStation, type StationApi } from "./useStation";
+import { sessionIdStorageKey, useStation, type StationApi } from "./useStation";
+
+afterEach(() => {
+  sessionStorage.clear();
+});
 
 const session: Session = {
   session_id: "session-1",
@@ -15,6 +22,7 @@ const session: Session = {
   audio_consent: true,
   started_at: "2026-01-01T10:00:00Z",
   expires_at: "2026-01-01T10:30:00Z",
+  deadline_at: "2026-01-01T10:10:00Z",
   server_now: "2026-01-01T10:00:00Z",
 };
 
@@ -60,6 +68,11 @@ const deferred = <T>() => {
 
 const apiMock = (overrides: Partial<StationApi> = {}): StationApi => ({
   startSession: vi.fn().mockResolvedValue(session),
+  getSession: vi
+    .fn()
+    .mockRejectedValue(
+      new ApiError(404, "session_not_found", "Sessão não encontrada."),
+    ),
   sendMessage: vi.fn().mockResolvedValue(reply),
   finishSession: vi.fn().mockResolvedValue(completed),
   fetchResult: vi.fn().mockResolvedValue(stationResult),
@@ -436,6 +449,7 @@ describe("useStation", () => {
     await expect(withoutConsent.result.current.transcribe(audio)).resolves.toBeNull();
     expect(transcribeAudio).not.toHaveBeenCalled();
 
+    sessionStorage.clear();
     const failingApi = apiMock({ transcribeAudio });
     const failing = renderHook(() => useStation(failingApi));
     await act(async () => {
@@ -499,5 +513,265 @@ describe("useStation", () => {
     });
     expect(result.current.status).toBe("active");
     expect(result.current.audioConsent).toBe(false);
+  });
+
+  describe("server-authoritative station deadline", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("derives the countdown from the server-anchored clock and a rerender does not reset or extend it", async () => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      });
+      const api = apiMock();
+      const { result, rerender } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      expect(result.current.remainingMs).toBe(10 * 60 * 1000);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(result.current.remainingMs).toBe(9 * 60 * 1000);
+
+      rerender();
+      expect(result.current.remainingMs).toBe(9 * 60 * 1000);
+    });
+
+    it("counts down correctly even when the client wall clock is skewed by minutes from server_now", async () => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      });
+      vi.setSystemTime(new Date("2026-01-01T10:07:00Z")); // client clock 7 minutes ahead
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      // deadline_at (10:10:00Z) - server_now (10:00:00Z) from the response,
+      // not from the skewed local clock.
+      expect(result.current.remainingMs).toBe(10 * 60 * 1000);
+    });
+
+    it("a client wall-clock jump mid-session does not change the remaining time", async () => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      });
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(result.current.remainingMs).toBe(9 * 60 * 1000);
+
+      act(() => {
+        vi.setSystemTime(new Date("2026-01-01T14:00:00Z")); // jump the wall clock forward
+      });
+      expect(result.current.remainingMs).toBe(9 * 60 * 1000);
+    });
+
+    it("resumes an active session on refresh via getSession, with the same deadline and restored transcript", async () => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      });
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const resumedDetail: SessionDetail = {
+        ...session,
+        status: "active",
+        completion_reason: null,
+        messages: [
+          { role: "learner", text: "Bom dia" },
+          { role: "patient", text: "Boa tarde" },
+        ],
+      };
+      const api = apiMock({
+        getSession: vi.fn().mockResolvedValue(resumedDetail),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(api.getSession).toHaveBeenCalledWith("session-1");
+      expect(result.current.status).toBe("active");
+      expect(result.current.remainingMs).toBe(10 * 60 * 1000);
+      expect(result.current.initialMessages).toEqual(resumedDetail.messages);
+    });
+
+    it("clears the stored session id and starts fresh when the resumed session is gone (404/410)", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "stale-session");
+      const api = apiMock({
+        getSession: vi
+          .fn()
+          .mockRejectedValue(
+            new ApiError(410, "session_expired", "A sessão expirou."),
+          ),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(result.current.status).toBe("idle");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBeNull();
+    });
+
+    it("at zero, disables further activity and finishes with reason timer exactly once, even under StrictMode double effects", async () => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      });
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api), {
+        wrapper: React.StrictMode,
+      });
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      });
+
+      // By now the exactly-once timer finish has already resolved the
+      // session (default mocks resolve immediately), so the countdown was
+      // torn down along with it; assert the completed outcome instead.
+      expect(api.finishSession).toHaveBeenCalledTimes(1);
+      expect(api.finishSession).toHaveBeenCalledWith("session-1", "timer");
+      expect(result.current.status).toBe("finished");
+    });
+
+    it("a manual finish racing the timer deadline wins alone; the timer finish is a no-op", async () => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      });
+      const finishDeferred = deferred<CompletedSession>();
+      const api = apiMock({
+        finishSession: vi.fn(() => finishDeferred.promise),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      let manualFinish!: Promise<void>;
+      act(() => {
+        manualFinish = result.current.finish("user");
+      });
+      expect(result.current.status).toBe("finishing");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      });
+
+      expect(api.finishSession).toHaveBeenCalledTimes(1);
+      expect(api.finishSession).toHaveBeenCalledWith("session-1", "user");
+
+      await act(async () => {
+        finishDeferred.resolve(completed);
+        await manualFinish;
+      });
+      expect(result.current.status).toBe("finished");
+    });
+
+    it("resyncs the deadline on deadline_not_reached and retries the timer finish once remaining actually reaches zero", async () => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      });
+      const laterDeadline = "2026-01-01T10:10:02Z"; // 2s later than the original
+      const refreshedDetail: SessionDetail = {
+        ...session,
+        deadline_at: laterDeadline,
+        status: "active",
+        completion_reason: null,
+        messages: [],
+        // No remaining client/server skew at resync time: the recomputed
+        // remaining is exactly the 2s gap to the (later) resynced deadline.
+        server_now: "2026-01-01T10:10:00Z",
+      };
+      const finishSession = vi
+        .fn<StationApi["finishSession"]>()
+        .mockRejectedValueOnce(
+          new ApiError(
+            409,
+            "deadline_not_reached",
+            "O prazo da estação ainda não foi atingido.",
+          ),
+        )
+        .mockResolvedValueOnce(completed);
+      const api = apiMock({
+        finishSession,
+        getSession: vi.fn().mockResolvedValue(refreshedDetail),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      });
+
+      expect(api.getSession).toHaveBeenCalledWith("session-1");
+      expect(finishSession).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("active");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(finishSession).toHaveBeenCalledTimes(2);
+      expect(finishSession).toHaveBeenLastCalledWith("session-1", "timer");
+      expect(result.current.status).toBe("finished");
+    });
+
+    it("a send rejected with station_time_elapsed rejects, disables the session, and finishes with reason timer once", async () => {
+      const api = apiMock({
+        sendMessage: vi
+          .fn()
+          .mockRejectedValue(
+            new ApiError(
+              409,
+              "station_time_elapsed",
+              "O tempo da estação se esgotou.",
+            ),
+          ),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      let caught: unknown;
+      await act(async () => {
+        try {
+          await result.current.send(message);
+        } catch (cause) {
+          caught = cause;
+        }
+      });
+      expect(caught).toMatchObject({ code: "station_time_elapsed" });
+
+      await waitFor(() => {
+        expect(api.finishSession).toHaveBeenCalledWith("session-1", "timer");
+      });
+      expect(api.finishSession).toHaveBeenCalledTimes(1);
+    });
   });
 });

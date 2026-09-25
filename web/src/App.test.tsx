@@ -16,6 +16,8 @@ let mockStationState = {
   result: null as SessionResult | null,
   error: null as string | null,
   audioConsent: false,
+  remainingMs: null as number | null,
+  initialMessages: [] as { role: "learner" | "patient"; text: string }[],
   start: mockStart,
   send: mockSend,
   transcribe: mockTranscribe,
@@ -43,6 +45,8 @@ describe("App", () => {
       result: null,
       error: null,
       audioConsent: false,
+      remainingMs: null,
+      initialMessages: [],
       start: mockStart,
       send: mockSend,
       transcribe: mockTranscribe,
@@ -79,6 +83,7 @@ describe("App", () => {
     const user = userEvent.setup();
     mockStationState.status = "active";
     mockStationState.audioConsent = true;
+    mockStationState.remainingMs = 9 * 60 * 1000;
     mockSend.mockResolvedValue({
       reply_text: "Paciente respondeu",
       server_now: "2026-01-01T10:00:00Z",
@@ -87,6 +92,7 @@ describe("App", () => {
     render(<App />);
 
     expect(screen.getByTestId("station-screen")).toBeInTheDocument();
+    expect(screen.getByRole("timer")).toHaveTextContent("09:00");
 
     // Send a message
     const input = screen.getByTestId("message-input");
@@ -157,6 +163,16 @@ describe("App", () => {
       modality: "voice",
       text: "A dor irradia?",
     });
+  });
+
+  it("disables the StationScreen input once the countdown reaches zero", () => {
+    mockStationState.status = "active";
+    mockStationState.remainingMs = 0;
+
+    render(<App />);
+
+    expect(screen.getByTestId("message-input")).toBeDisabled();
+    expect(screen.getByTestId("finish-button")).toBeDisabled();
   });
 
   it("renders ResultScreen with finishing state when station status is finishing", () => {

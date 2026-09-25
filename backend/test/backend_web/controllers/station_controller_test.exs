@@ -180,6 +180,7 @@ defmodule BackendWeb.StationControllerTest do
                "deadline_at" => deadline_at_str,
                "status" => "active",
                "completion_reason" => nil,
+               "messages" => [],
                "server_now" => server_now_str
              } = response
 
@@ -215,6 +216,50 @@ defmodule BackendWeb.StationControllerTest do
       conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
 
       assert %{"status" => "completed", "completion_reason" => "user"} = json_response(conn, 200)
+    end
+
+    test "includes the transcript so far, so a refresh can restore it", %{
+      conn: conn,
+      session: session
+    } do
+      prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+      Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+
+      on_exit(fn ->
+        if prev_adapter do
+          Application.put_env(:backend, :station_ai_adapter, prev_adapter)
+        else
+          Application.delete_env(:backend, :station_ai_adapter)
+        end
+      end)
+
+      post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+        "role" => "learner",
+        "modality" => "text",
+        "text" => "Bom dia, o que você está sentindo?"
+      })
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
+
+      assert %{
+               "messages" => [
+                 %{
+                   "role" => "learner",
+                   "modality" => "text",
+                   "text" => "Bom dia, o que você está sentindo?",
+                   "at" => learner_at
+                 },
+                 %{
+                   "role" => "patient",
+                   "modality" => "text",
+                   "text" => "Estou com um aperto forte no peito há duas horas.",
+                   "at" => patient_at
+                 }
+               ]
+             } = json_response(conn, 200)
+
+      assert {:ok, _, _} = DateTime.from_iso8601(learner_at)
+      assert {:ok, _, _} = DateTime.from_iso8601(patient_at)
     end
 
     test "returns 404 on unknown session id", %{conn: conn} do

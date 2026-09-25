@@ -93,6 +93,7 @@ export default function App(): React.JSX.Element {
   }
 
   // station.status === "active"
+  const timeElapsed = station.remainingMs !== null && station.remainingMs <= 0;
   return (
     <main className="app-root">
       <StationScreen
@@ -102,6 +103,9 @@ export default function App(): React.JSX.Element {
         onTranscribe={station.transcribe}
         onSendVoice={handleSendVoice}
         error={station.error}
+        disabled={timeElapsed}
+        remainingMs={station.remainingMs}
+        initialMessages={station.initialMessages}
       />
     </main>
   );

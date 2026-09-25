@@ -175,6 +175,7 @@ defmodule BackendWeb.StationController do
           status: to_string(session.status),
           completion_reason:
             session |> Map.get(:completion_reason) |> completion_reason_to_string(),
+          messages: Enum.map(session.messages, &message_to_json/1),
           server_now: DateTime.to_iso8601(DateTime.utc_now())
         })
 
@@ -245,4 +246,13 @@ defmodule BackendWeb.StationController do
 
   defp completion_reason_to_string(nil), do: nil
   defp completion_reason_to_string(reason), do: to_string(reason)
+
+  defp message_to_json(msg) do
+    %{
+      role: to_string(msg.role),
+      modality: to_string(msg.modality),
+      text: msg.text,
+      at: DateTime.to_iso8601(msg.at)
+    }
+  end
 end

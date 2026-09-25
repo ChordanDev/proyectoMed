@@ -16,7 +16,21 @@ export interface Session {
   audio_consent: boolean;
   started_at: string;
   expires_at: string;
+  deadline_at: string;
   server_now: string;
+}
+
+export type SessionStatus = "active" | "completed";
+
+export interface SessionMessage {
+  role: "learner" | "patient";
+  text: string;
+}
+
+export interface SessionDetail extends Session {
+  status: SessionStatus;
+  completion_reason: string | null;
+  messages: SessionMessage[];
 }
 
 export interface SendMessageRequest {
@@ -126,7 +140,41 @@ const decodeSession = (value: unknown): Session => {
     audio_consent: booleanValue(body, "audio_consent", "session"),
     started_at: stringValue(body, "started_at", "session"),
     expires_at: stringValue(body, "expires_at", "session"),
+    deadline_at: stringValue(body, "deadline_at", "session"),
     server_now: stringValue(body, "server_now", "session"),
+  };
+};
+
+const sessionStatuses: readonly SessionStatus[] = ["active", "completed"];
+
+const decodeSessionMessage = (value: unknown): SessionMessage => {
+  const body = objectValue(value, "session message");
+  return {
+    role: literalValue(
+      body,
+      "role",
+      ["learner", "patient"],
+      "session message",
+    ),
+    text: stringValue(body, "text", "session message"),
+  };
+};
+
+const decodeSessionDetail = (value: unknown): SessionDetail => {
+  const body = objectValue(value, "session detail");
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : invalid("session detail");
+  const completionReason = body.completion_reason;
+  if (completionReason !== null && typeof completionReason !== "string") {
+    invalid("session detail");
+  }
+
+  return {
+    ...decodeSession(value),
+    status: literalValue(body, "status", sessionStatuses, "session detail"),
+    completion_reason: completionReason as string | null,
+    messages: messages.map(decodeSessionMessage),
   };
 };
 
@@ -307,6 +355,8 @@ export const createApiClient = ({
       request("/api/stations/active", { method: "GET" }, decodeActiveStation),
     startSession: (body: StartSessionRequest) =>
       request("/api/stations/active/sessions", jsonPost(body), decodeSession),
+    getSession: (sessionId: string) =>
+      request(sessionPath(sessionId), { method: "GET" }, decodeSessionDetail),
     sendMessage: (sessionId: string, body: SendMessageRequest) =>
       request(
         `${sessionPath(sessionId)}/messages`,
@@ -352,6 +402,7 @@ const defaultClient = createApiClient({
 export const {
   getActiveStation,
   startSession,
+  getSession,
   sendMessage,
   finishSession,
   transcribeAudio,
