@@ -85,7 +85,7 @@ defmodule Backend.Stations.Conversation do
   Returns `{:error, :station_time_elapsed}` if the token is no longer pending
   (already rolled back by the grace timer, or unknown/stale).
   """
-  @spec resolve_turn(String.t(), turn_token(), {:ok, message()} | :rollback) ::
+  @spec resolve_turn(String.t(), turn_token(), {:ok, map()} | :rollback) ::
           {:ok, session()} | {:error, :station_time_elapsed | :not_found | :expired}
   def resolve_turn(session_id, token, resolution) do
     GenServer.call(__MODULE__, {:resolve_turn, session_id, token, resolution}, call_timeout_ms())
