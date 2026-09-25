@@ -11,7 +11,11 @@ config :backend,
   generators: [timestamp_type: :utc_datetime],
   openai_transcription_model: "whisper-1",
   openai_tts_model: "tts-1",
-  openai_tts_voice: "alloy"
+  openai_tts_voice: "alloy",
+  jev_decision_adapter: Backend.Stations.JevDecision.DisabledAdapter,
+  jev_decision_default_deadline_ms: 3_000,
+  jev_decision_max_context_turns: 10,
+  jev_decision_max_characters: 2_000
 
 # Configure the endpoint
 config :backend, BackendWeb.Endpoint,

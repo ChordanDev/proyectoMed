@@ -10,8 +10,10 @@ defmodule Backend.Stations do
   directly by `BackendWeb` controllers.
   """
 
+  alias Backend.Stations.CandidateGate
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
+  alias Backend.Stations.JevDecision
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
@@ -138,30 +140,82 @@ defmodule Backend.Stations do
 
     with {:ok, _session} <- Conversation.append_message(session_id, learner_message),
          package = get_active_package(),
-         {:ok, current_session} <- Conversation.fetch(session_id),
-         context = format_context(current_session, package),
-         {:ok, ai_reply} <- generate_patient_reply(package, context),
-         {:ok, verified_reply} <- verify_patient_reply(package, ai_reply),
-         {:ok, _session} <- append_patient_reply(session_id, verified_reply.text) do
-      {:ok,
-       %{
-         reply_text: verified_reply.text,
-         reply_audio_url: nil,
-         used_facts: Map.get(verified_reply, :used_facts, [])
-       }}
-    else
-      {:error, :not_found} ->
-        {:error, :not_found}
+         {:ok, current_session} <- Conversation.fetch(session_id) do
+      context = format_context(current_session, package)
 
-      {:error, :expired} ->
-        {:error, :expired}
+      deliver_generated_reply(
+        session_id,
+        package,
+        current_session,
+        context,
+        learner_message,
+        params
+      )
+    end
+  end
 
-      {:error, :completed} ->
-        {:error, :completed}
+  defp deliver_generated_reply(
+         session_id,
+         package,
+         current_session,
+         context,
+         learner_message,
+         params
+       ) do
+    case generate_patient_reply(package, context) do
+      {:ok, ai_reply} ->
+        verify_and_append_reply(
+          session_id,
+          package,
+          current_session,
+          context,
+          ai_reply,
+          learner_message,
+          params
+        )
 
-      {:error, _reason} ->
+      {:error, _gen_error} ->
         _ = rollback_learner_message(session_id, learner_message)
         {:error, :station_ai_unavailable}
+    end
+  end
+
+  defp verify_and_append_reply(
+         session_id,
+         package,
+         current_session,
+         context,
+         ai_reply,
+         learner_message,
+         params
+       ) do
+    verify_opts = build_verify_opts(package, current_session, context, params)
+
+    case verify_patient_reply(package, ai_reply, verify_opts) do
+      {:ok, verified_reply} ->
+        commit_patient_reply(session_id, verified_reply)
+
+      {:error, reason} ->
+        _ = rollback_learner_message(session_id, learner_message)
+        {:error, reason}
+    end
+  end
+
+  defp commit_patient_reply(session_id, verified_reply) do
+    verified_text = extract_reply_text(verified_reply)
+    used_facts = extract_used_facts(verified_reply)
+
+    case append_patient_reply(session_id, verified_text) do
+      {:ok, _session} ->
+        {:ok,
+         %{
+           reply_text: verified_text,
+           reply_audio_url: nil,
+           used_facts: used_facts
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -312,20 +366,155 @@ defmodule Backend.Stations do
   @doc """
   Verification seam for generated patient replies before display or synthesis.
 
-  Stable extension point for Ticket 14 / ADR-011 (#125, #127) Jev verification.
+  Wires directly to `Backend.Stations.CandidateGate.verify_and_deliver/4`.
   """
-  @spec verify_patient_reply(map(), map(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def verify_patient_reply(_package, reply, _opts \\ []) do
-    {:ok, reply}
+  @spec verify_patient_reply(map(), map() | String.t(), keyword()) ::
+          {:ok, map() | String.t()} | {:error, term()}
+  def verify_patient_reply(package, reply, opts \\ []) do
+    candidate_text = extract_reply_text(reply)
+    conversation = Keyword.get(opts, :conversation, [])
+
+    gate_opts =
+      opts
+      |> Keyword.delete(:conversation)
+      |> Keyword.put_new(:station_id, package["station_id"] || package[:station_id])
+      |> Keyword.put_new(:version, package["version"] || package[:version])
+
+    case CandidateGate.verify_and_deliver(candidate_text, package, conversation, gate_opts) do
+      {:ok, verified_text} ->
+        cond do
+          verified_text != candidate_text and is_map(reply) ->
+            reply = update_reply_text(reply, verified_text)
+            {:ok, put_used_facts(reply, [])}
+
+          is_map(reply) ->
+            {:ok, update_reply_text(reply, verified_text)}
+
+          true ->
+            {:ok, verified_text}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   # ============================================================================
   # Internal Helpers
   # ============================================================================
 
+  defp build_verify_opts(package, session, context, params) do
+    deadline_at = resolve_verify_deadline(params)
+    generator = resolve_verify_generator(params, package, context)
+    custom_opts = resolve_custom_verify_opts(params)
+
+    base_opts = [
+      conversation: session.messages,
+      context: context,
+      station_id: package["station_id"] || package[:station_id],
+      package_id: package["station_id"] || package[:station_id],
+      version: package["version"] || package[:version],
+      package_version: package["version"] || package[:version],
+      deadline_at_monotonic_ms: deadline_at,
+      generator: generator
+    ]
+
+    base_opts = maybe_put_adapter_opt(base_opts, params)
+    Keyword.merge(base_opts, custom_opts)
+  end
+
+  defp resolve_verify_deadline(params) do
+    case Map.get(params, :deadline_at_monotonic_ms) ||
+           Map.get(params, "deadline_at_monotonic_ms") do
+      d when is_integer(d) -> d
+      _ -> resolve_fallback_deadline(params)
+    end
+  end
+
+  defp resolve_fallback_deadline(params) do
+    case Map.get(params, :deadline_ms) || Map.get(params, "deadline_ms") do
+      ms when is_integer(ms) and ms > 0 -> JevDecision.monotonic_deadline_at(ms)
+      _ -> JevDecision.monotonic_deadline_at()
+    end
+  end
+
+  defp resolve_verify_generator(params, package, context) do
+    case Map.get(params, :generator) || Map.get(params, "generator") do
+      gen when is_function(gen) -> gen
+      _ -> fn -> generate_patient_reply(package, context) end
+    end
+  end
+
+  defp resolve_custom_verify_opts(params) do
+    case Map.get(params, :verify_opts) || Map.get(params, "verify_opts") do
+      opts when is_list(opts) -> opts
+      _ -> []
+    end
+  end
+
+  defp maybe_put_adapter_opt(base_opts, params) do
+    case Map.get(params, :adapter) || Map.get(params, "adapter") do
+      adapter when not is_nil(adapter) -> Keyword.put(base_opts, :adapter, adapter)
+      _ -> base_opts
+    end
+  end
+
+  defp extract_reply_text(%{text: text}) when is_binary(text), do: text
+  defp extract_reply_text(%{"text" => text}) when is_binary(text), do: text
+  defp extract_reply_text(text) when is_binary(text), do: text
+  defp extract_reply_text(other), do: other
+
+  defp extract_used_facts(%{used_facts: facts}) when is_list(facts), do: facts
+  defp extract_used_facts(%{"used_facts" => facts}) when is_list(facts), do: facts
+  defp extract_used_facts(_), do: []
+
+  defp update_reply_text(reply, text) do
+    cond do
+      is_map(reply) and Map.has_key?(reply, "text") -> Map.put(reply, "text", text)
+      is_map(reply) -> Map.put(reply, :text, text)
+      true -> text
+    end
+  end
+
+  defp put_used_facts(reply, facts) do
+    cond do
+      is_map(reply) and Map.has_key?(reply, "used_facts") -> Map.put(reply, "used_facts", facts)
+      is_map(reply) -> Map.put(reply, :used_facts, facts)
+      true -> reply
+    end
+  end
+
+  defp resolve_station_ai_adapter do
+    case Application.get_env(
+           :backend,
+           :station_ai_adapter,
+           StationAI.OpenAIAdapter
+         ) do
+      Backend.StationAI.OpenAIAdapter -> StationAI.OpenAIAdapter
+      Backend.StationAI.NoOpAdapter -> StationAI.NoOpAdapter
+      other -> other
+    end
+  end
+
   defp generate_patient_reply(package, context) do
-    StationAI.next_reply(package, context)
+    adapter = resolve_station_ai_adapter()
+
+    case adapter.next_reply(package, context) do
+      {:ok, %{text: text, used_facts: used_facts}} when is_list(used_facts) ->
+        {:ok, %{text: text, used_facts: used_facts}}
+
+      {:ok, %{text: text}} ->
+        {:ok, %{text: text, used_facts: []}}
+
+      {:ok, text} when is_binary(text) ->
+        {:ok, %{text: text, used_facts: []}}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        {:error, {:invalid_adapter_output, other}}
+    end
   end
 
   defp append_patient_reply(session_id, reply_text) do

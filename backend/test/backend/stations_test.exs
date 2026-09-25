@@ -29,15 +29,58 @@ defmodule Backend.StationsTest do
     end
   end
 
+  defmodule TestVerifyingJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request) do
+      {:ok, %{status: :verified}}
+    end
+
+    @impl true
+    def decide_rubric(_request) do
+      {:error, :not_implemented}
+    end
+  end
+
+  defmodule RefuseThenVerifyAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(request) do
+      decide_patient(request, [])
+    end
+
+    def decide_patient(request, _opts) do
+      if request.candidate_text == "initial_refused" do
+        {:ok, %{status: :semantic_refusal, reason: "hallucination"}}
+      else
+        {:ok, %{status: :verified}}
+      end
+    end
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup do
     prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+    prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
+
     Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+    Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
 
     on_exit(fn ->
       if prev_adapter do
         Application.put_env(:backend, :station_ai_adapter, prev_adapter)
       else
         Application.delete_env(:backend, :station_ai_adapter)
+      end
+
+      if prev_jev_adapter do
+        Application.put_env(:backend, :jev_decision_adapter, prev_jev_adapter)
+      else
+        Application.delete_env(:backend, :jev_decision_adapter)
       end
     end)
 
@@ -303,6 +346,34 @@ defmodule Backend.StationsTest do
       pkg = Stations.get_active_package()
       reply = %{text: "dor forte"}
       assert Stations.verify_patient_reply(pkg, reply) == {:ok, reply}
+    end
+
+    test "verify_patient_reply/3 purges stale used_facts when candidate is regenerated after refusal" do
+      pkg = Stations.get_active_package()
+      initial_reply = %{text: "initial_refused", used_facts: ["fact-initial-stale"]}
+
+      opts = [
+        adapter: RefuseThenVerifyAdapter,
+        generator: fn -> {:ok, "verified_regenerated_text"} end
+      ]
+
+      assert {:ok, verified_reply} = Stations.verify_patient_reply(pkg, initial_reply, opts)
+      assert verified_reply.text == "verified_regenerated_text"
+      assert verified_reply.used_facts == []
+    end
+
+    test "verify_patient_reply/3 purges stale used_facts on string-keyed reply maps" do
+      pkg = Stations.get_active_package()
+      initial_reply = %{"text" => "initial_refused", "used_facts" => ["fact-initial-stale"]}
+
+      opts = [
+        adapter: RefuseThenVerifyAdapter,
+        generator: fn -> {:ok, "verified_regenerated_text"} end
+      ]
+
+      assert {:ok, verified_reply} = Stations.verify_patient_reply(pkg, initial_reply, opts)
+      assert verified_reply["text"] == "verified_regenerated_text"
+      assert verified_reply["used_facts"] == []
     end
   end
 
