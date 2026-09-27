@@ -209,17 +209,17 @@ export const useVoiceSession = ({
       await room.connect(session.url, session.token);
     } catch (cause) {
       if (generationRef.current !== generation) {
-        void room.disconnect();
+        teardownRoom(room);
         return;
       }
       setError(describeFailure(cause));
       setStatusSafe("failed");
-      void room.disconnect();
+      teardownRoom(room);
       return;
     }
 
     if (generationRef.current !== generation) {
-      void room.disconnect();
+      teardownRoom(room);
       return;
     }
 
@@ -227,17 +227,17 @@ export const useVoiceSession = ({
       await room.localParticipant.setMicrophoneEnabled(true);
     } catch (cause) {
       if (generationRef.current !== generation) {
-        void room.disconnect();
+        teardownRoom(room);
         return;
       }
       setError(describeFailure(cause));
       setStatusSafe("failed");
-      void room.disconnect();
+      teardownRoom(room);
       return;
     }
 
     if (generationRef.current !== generation) {
-      void room.disconnect();
+      teardownRoom(room);
       return;
     }
 
@@ -249,6 +249,7 @@ export const useVoiceSession = ({
     detachPatientTrack,
     sessionId,
     setStatusSafe,
+    teardownRoom,
   ]);
 
   useEffect(() => {

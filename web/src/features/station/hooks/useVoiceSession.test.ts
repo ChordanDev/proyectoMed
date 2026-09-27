@@ -62,6 +62,9 @@ class FakeRoom implements VoiceRoom {
 
   disconnect(): Promise<void> {
     this.disconnectCalls += 1;
+    // Mirror the real livekit-client Room: disconnect() asynchronously emits
+    // RoomEvent.Disconnected to whatever listeners are still registered.
+    this.emit(RoomEvent.Disconnected, "CLIENT_INITIATED");
     return Promise.resolve();
   }
 }
