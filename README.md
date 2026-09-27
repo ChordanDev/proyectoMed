@@ -126,17 +126,18 @@ npm --prefix web run dev
 
    ```sh
    lk room list --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
-   lk room participants list station-session-<session_id> \
+   ROOM=station-session-xxxx   # paste the Name column from the table above
+   lk room participants list "$ROOM" \
      --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
    ```
 
-   One participant (`learner-<session_id>`) should show one published audio
-   track.
+   One participant (`learner-` followed by the session id) should show one
+   published audio track.
 3. Simulate the patient's audio track and confirm you can hear it in the
    browser:
 
    ```sh
-   lk load-test --room station-session-<session_id> --audio-publishers 1 \
+   lk load-test --room "$ROOM" --audio-publishers 1 \
      --identity-prefix patient-test \
      --url ws://127.0.0.1:7880 --api-key devkey --api-secret secret
    ```

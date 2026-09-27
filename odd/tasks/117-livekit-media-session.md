@@ -103,7 +103,15 @@ Mapper + 3 specialists COMPLETE, refuter over 8 candidates. RDD globally off (no
 - REJECTED: TR-1 (session no longer active, no reachable harm), TR-5 (stale generation guard holds).
 - After fixes: backend 235 passed, web 52 passed; format, compile, credo, dialyzer, typecheck, lint clean.
 
+## Manual test
+
+User ran the README "Voice session (LiveKit) — manual test" against `livekit-server --dev`:
+all steps passed (connect, room and learner audio track via `lk`, simulated patient audio heard,
+finish deletes the room, rate limit, no secret client-side, `voice_unavailable` without env).
+README `<session_id>` placeholders replaced with a `$ROOM` shell variable (zsh parsed `<...>` as
+a redirect).
+
 ## Next step
 
-User runs the README manual test; then push `feat/116-realtime-voice` and this branch, open the
-parent Draft PR to `develop` and this PR to `feat/116-realtime-voice`.
+Push `feat/116-realtime-voice` and this branch, open the parent Draft PR to `develop` and this PR
+to `feat/116-realtime-voice`.
