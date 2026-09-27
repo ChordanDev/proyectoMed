@@ -42,14 +42,14 @@ Strict TDD enabled (source: global `~/.claude/CLAUDE.md`). Runners: `cd backend 
 
 ## Tasks
 
-- [ ] T1 Backend: token module, `Stations.create_voice_session/2` (active, unexpired, consent,
+- [x] T1 Backend: token module, `Stations.create_voice_session/2` (active, unexpired, consent,
   rate limit), `POST /api/stations/active/sessions/:id/voice` endpoint, config, param filtering.
   Route: delegated writer (writer trigger: 4+ non-trivial files).
-- [ ] T2 Backend: RoomService adapter, room deletion on complete/discard, orphan sweep.
+- [x] T2 Backend: RoomService adapter, room deletion on complete/discard, orphan sweep.
   Route: delegated writer (same trigger).
-- [ ] T3 Web: `livekit-client`, API client method, `useVoiceSession`, `VoicePanel`, `App` wiring.
+- [x] T3 Web: `livekit-client`, API client method, `useVoiceSession`, `VoicePanel`, `App` wiring.
   Route: delegated writer (same trigger).
-- [ ] T4 Docs: README manual test with `livekit-server --dev`, env vars.
+- [x] T4 Docs: README manual test with `livekit-server --dev`, env vars.
   Route: bundled with T3 writer.
 - [ ] T5 Jorge el curioso advisory review, fix confirmed findings.
 
@@ -84,7 +84,14 @@ Errors `{"error", "message"}`: 404 `session_not_found`, 410 `session_expired`,
 
 ## Evidence
 
-- Commits: (pending)
+- `4b2c7c2` feat(stations): issue session-scoped LiveKit tokens (Refs #117)
+- `3304783` feat(stations): close LiveKit rooms when the station ends (Refs #117)
+- Backend checks (writer run): mix test 230 passed; format, compile --warnings-as-errors, credo --strict, dialyzer 0 errors.
+- `97320b7` feat(web): join the LiveKit room for voice stations (Refs #117)
+- `cebc786` docs(readme): document the LiveKit voice session manual test (Refs #117)
+- `2692468` feat(web): finish the station from the voice session screen (Refs #117) — parent added so the user can trigger completion cleanup manually; README shell syntax fixed.
+- Web checks: npm test 52 passed; typecheck, lint, build clean. livekit-client 2.22.3.
+- Notes: 403 code is `no_consent` (reused from TTS); server RoomService token TTL 30 s.
 
 ## Next step
 
