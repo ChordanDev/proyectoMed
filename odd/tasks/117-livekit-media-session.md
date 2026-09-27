@@ -51,7 +51,7 @@ Strict TDD enabled (source: global `~/.claude/CLAUDE.md`). Runners: `cd backend 
   Route: delegated writer (same trigger).
 - [x] T4 Docs: README manual test with `livekit-server --dev`, env vars.
   Route: bundled with T3 writer.
-- [ ] T5 Jorge el curioso advisory review, fix confirmed findings.
+- [x] T5 Jorge el curioso advisory review, fix confirmed findings.
 
 ## Acceptance Criteria
 
@@ -93,6 +93,17 @@ Errors `{"error", "message"}`: 404 `session_not_found`, 410 `session_expired`,
 - Web checks: npm test 52 passed; typecheck, lint, build clean. livekit-client 2.22.3.
 - Notes: 403 code is `no_consent` (reused from TTS); server RoomService token TTL 30 s.
 
+## Jorge el curioso (advisory, 40bb1c5)
+
+Mapper + 3 specialists COMPLETE, refuter over 8 candidates. RDD globally off (no native review).
+- CONFIRMED, fixed: C1 mic-denied `failed` overwritten by `disconnected` (`47df9cf`);
+  SEC-PERF-1 unbounded rate-limit ETS rows, SEC-PERF-2/TR-3 sweep HTTP blocking the
+  MediaSession mailbox + no Req timeout, TR-2 silent sweep delete failure (`5e6f2bd`).
+- CONFIRMED by design, no change: TR-4 expired-session rooms reclaimed by the 60 s sweep.
+- REJECTED: TR-1 (session no longer active, no reachable harm), TR-5 (stale generation guard holds).
+- After fixes: backend 235 passed, web 52 passed; format, compile, credo, dialyzer, typecheck, lint clean.
+
 ## Next step
 
-Ask the chain strategy, then T1.
+User runs the README manual test; then push `feat/116-realtime-voice` and this branch, open the
+parent Draft PR to `develop` and this PR to `feat/116-realtime-voice`.
