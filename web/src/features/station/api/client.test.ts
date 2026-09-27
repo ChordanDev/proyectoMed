@@ -8,6 +8,15 @@ const jsonResponse = (body: unknown, status = 200) =>
     status,
     json: async () => body,
   }) as Response;
+const blobResponse = (blob: Blob, status = 200) =>
+  ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => {
+      throw new Error("not json");
+    },
+    blob: async () => blob,
+  }) as unknown as Response;
 
 describe("station API client", () => {
   it("models every station flow request and decodes its response", async () => {
@@ -24,6 +33,7 @@ describe("station API client", () => {
       audio_consent: true,
       started_at: "2026-01-01T10:00:00Z",
       expires_at: "2026-01-01T10:30:00Z",
+      deadline_at: "2026-01-01T10:10:00Z",
       server_now: "2026-01-01T10:00:00Z",
     };
     const reply = {
@@ -77,6 +87,7 @@ describe("station API client", () => {
     await expect(client.fetchResult("session-1")).resolves.toEqual(result);
 
     const calls = fetchMock.mock.calls;
+
     expect(calls.map(([url]) => url)).toEqual([
       `${baseUrl}/api/stations/active`,
       `${baseUrl}/api/stations/active/sessions`,
@@ -98,6 +109,135 @@ describe("station API client", () => {
       body: JSON.stringify({ reason: "timer" }),
     });
     expect(calls[4][1]).toMatchObject({ method: "GET" });
+  });
+
+  it("sends audio blob as multipart form data and decodes transcription result", async () => {
+    const transcription = {
+      text: "Bom dia, o que você está sentindo?",
+      duration_seconds: 3.4,
+      transcribed_at: "2026-09-02T16:02:10Z",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(transcription));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    const blob = new Blob(["fake-audio-bytes"], { type: "audio/webm" });
+    const result = await client.transcribeAudio("session-1", blob);
+
+    expect(result).toEqual(transcription);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${baseUrl}/api/stations/active/sessions/session-1/transcribe`);
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeInstanceOf(FormData);
+
+    const formData = init?.body as FormData;
+    expect(formData.get("audio")).toBeInstanceOf(Blob);
+  });
+
+  it("decodes a session detail, including its transcript, for refresh/reconnect resume", async () => {
+    const sessionDetail = {
+      session_id: "session-1",
+      station_id: "station-1",
+      station_version: "1.0.0",
+      audio_consent: true,
+      started_at: "2026-01-01T10:00:00Z",
+      expires_at: "2026-01-01T10:30:00Z",
+      deadline_at: "2026-01-01T10:10:00Z",
+      status: "active",
+      completion_reason: null,
+      messages: [
+        { role: "learner", modality: "text", text: "Bom dia", at: "2026-01-01T10:00:05Z" },
+        { role: "patient", modality: "text", text: "Boa tarde", at: "2026-01-01T10:00:06Z" },
+      ],
+      server_now: "2026-01-01T10:05:00Z",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionDetail));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.getSession("session-1")).resolves.toEqual({
+      session_id: "session-1",
+      station_id: "station-1",
+      station_version: "1.0.0",
+      audio_consent: true,
+      started_at: "2026-01-01T10:00:00Z",
+      expires_at: "2026-01-01T10:30:00Z",
+      deadline_at: "2026-01-01T10:10:00Z",
+      status: "active",
+      completion_reason: null,
+      messages: [
+        { role: "learner", text: "Bom dia" },
+        { role: "patient", text: "Boa tarde" },
+      ],
+      server_now: "2026-01-01T10:05:00Z",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${baseUrl}/api/stations/active/sessions/session-1`,
+    );
+  });
+
+  it("posts JSON to synthesize and returns the audio blob", async () => {
+    const audioBlob = new Blob(["fake-mp3-bytes"], { type: "audio/mpeg" });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(blobResponse(audioBlob));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    const result = await client.synthesizeSpeech(
+      "session-1",
+      "A dor começou há duas horas.",
+      "alloy",
+    );
+
+    expect(result).toBe(audioBlob);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `${baseUrl}/api/stations/active/sessions/session-1/synthesize`,
+    );
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(
+      JSON.stringify({ text: "A dor começou há duas horas.", voice: "alloy" }),
+    );
+  });
+
+  it("posts JSON to synthesize without a voice when omitted", async () => {
+    const audioBlob = new Blob(["fake-mp3-bytes"], { type: "audio/mpeg" });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(blobResponse(audioBlob));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await client.synthesizeSpeech("session-1", "Boa tarde.");
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.body).toBe(JSON.stringify({ text: "Boa tarde." }));
+  });
+
+  it("decodes synthesize failures into ApiError", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: "session_not_found", message: "Sessão não encontrada." },
+          404,
+        ),
+      );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.synthesizeSpeech("missing", "Olá"),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 404,
+      code: "session_not_found",
+      message: "Sessão não encontrada.",
+    });
   });
 
   it("decodes API failures into ApiError", async () => {
