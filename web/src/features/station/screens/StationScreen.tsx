@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import type { Impresso, RequestImpressoResponse } from "../api/client";
 import strings from "../i18n/pt-BR.json";
 import "./StationScreen.css";
 
@@ -30,6 +31,12 @@ export interface StationScreenProps {
   remainingMs?: number | null;
   /** Transcript restored from a resumed session (refresh/reconnect). */
   initialMessages?: DisplayMessage[];
+  /** Request an Impresso (physical exam maneuver or complementary exam). Returns null on failure. */
+  onRequestImpresso: (text: string) => Promise<RequestImpressoResponse | null>;
+  /** Impressos released so far for the session, in release order. */
+  impressos?: Impresso[];
+  /** Error message from the most recent failed impresso request. */
+  impressoError?: string | null;
 }
 
 const isStationTimeElapsedError = (cause: unknown): boolean =>
@@ -56,6 +63,9 @@ export function StationScreen({
   disabled = false,
   remainingMs = null,
   initialMessages,
+  onRequestImpresso,
+  impressos = [],
+  impressoError = null,
 }: StationScreenProps): React.JSX.Element {
   const [messages, setMessages] = useState<DisplayMessage[]>(
     () => initialMessages ?? [],
@@ -73,6 +83,16 @@ export function StationScreen({
   const [unavailableAudioIndices, setUnavailableAudioIndices] = useState<
     Set<number>
   >(new Set());
+  const [impressoModalOpen, setImpressoModalOpen] = useState(false);
+  const [impressoRequestText, setImpressoRequestText] = useState("");
+  const [submittingImpresso, setSubmittingImpresso] = useState(false);
+  const [impressoFeedback, setImpressoFeedback] = useState<string | null>(
+    null,
+  );
+  const [impressoDrawerOpen, setImpressoDrawerOpen] = useState(false);
+  const [selectedImpressoId, setSelectedImpressoId] = useState<string | null>(
+    null,
+  );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -261,6 +281,48 @@ export function StationScreen({
     setInputValue("");
     await sendTurn(trimmed, onSend);
   }, [disabled, inputValue, onSend, sendTurn, sending, transcribing]);
+
+  const openImpressoModal = useCallback(() => {
+    setImpressoModalOpen(true);
+  }, []);
+
+  const closeImpressoModal = useCallback(() => {
+    setImpressoModalOpen(false);
+  }, []);
+
+  const handleRequestImpresso = useCallback(async () => {
+    const trimmed = impressoRequestText.trim();
+    if (!trimmed || submittingImpresso) return;
+
+    setSubmittingImpresso(true);
+    const response = await onRequestImpresso(trimmed);
+    setSubmittingImpresso(false);
+
+    if (response) {
+      setImpressoFeedback(response.feedback_message);
+      setImpressoRequestText("");
+      setImpressoModalOpen(false);
+    }
+  }, [impressoRequestText, onRequestImpresso, submittingImpresso]);
+
+  const toggleImpressoDrawer = useCallback(() => {
+    setImpressoDrawerOpen((previous) => !previous);
+  }, []);
+
+  const selectedImpresso = impressos.find(
+    (impresso) => impresso.id === selectedImpressoId,
+  );
+
+  useEffect(() => {
+    if (!impressoModalOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeImpressoModal();
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [closeImpressoModal, impressoModalOpen]);
 
   const startRecording = useCallback(async () => {
     if (
@@ -467,6 +529,16 @@ export function StationScreen({
         </div>
       )}
 
+      {impressoFeedback && (
+        <div
+          className="station-impresso-notice"
+          role="status"
+          data-testid="impresso-feedback"
+        >
+          {impressoFeedback}
+        </div>
+      )}
+
       <div className="station-input-area">
         <input
           type="text"
@@ -479,6 +551,15 @@ export function StationScreen({
           data-testid="message-input"
           aria-label={strings.inputPlaceholder}
         />
+        <button
+          type="button"
+          className="station-input-area__impresso-button"
+          disabled={disabled}
+          onClick={openImpressoModal}
+          data-testid="impresso-request-button"
+        >
+          {strings.impressoRequestButton}
+        </button>
         {showVoiceButton && (
           <button
             type="button"
@@ -501,6 +582,96 @@ export function StationScreen({
           {sending ? strings.sendingMessage : strings.sendButton}
         </button>
       </div>
+
+      <div className="impresso-drawer" data-testid="impresso-drawer">
+        <button
+          type="button"
+          className="impresso-drawer__toggle"
+          onClick={toggleImpressoDrawer}
+          aria-expanded={impressoDrawerOpen}
+          data-testid="impresso-drawer-toggle"
+        >
+          {strings.impressoDrawerToggle} ({impressos.length})
+        </button>
+        {impressoDrawerOpen && (
+          <div className="impresso-drawer__content">
+            {impressos.length === 0 ? (
+              <p>{strings.impressoDrawerEmpty}</p>
+            ) : (
+              impressos.map((impresso) => (
+                <button
+                  key={impresso.id}
+                  type="button"
+                  className="impresso-drawer__item"
+                  onClick={() => setSelectedImpressoId(impresso.id)}
+                  data-testid={`impresso-item-${impresso.id}`}
+                >
+                  <span>{impresso.title}</span>
+                  <span>{impresso.category}</span>
+                </button>
+              ))
+            )}
+            {selectedImpresso && (
+              <div
+                className="impresso-drawer__viewer"
+                data-testid="impresso-content"
+              >
+                {selectedImpresso.content}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {impressoModalOpen && (
+        <div className="impresso-modal-backdrop">
+          <div
+            className="impresso-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="impresso-modal-title"
+            data-testid="impresso-modal"
+          >
+            <h2 id="impresso-modal-title">{strings.impressoModalTitle}</h2>
+            <label htmlFor="impresso-modal-textarea">
+              {strings.impressoModalLabel}
+            </label>
+            <textarea
+              id="impresso-modal-textarea"
+              className="impresso-modal__textarea"
+              value={impressoRequestText}
+              onChange={(event) =>
+                setImpressoRequestText(event.target.value)
+              }
+              data-testid="impresso-modal-textarea"
+            />
+            {impressoError && (
+              <div role="alert" data-testid="impresso-error">
+                {impressoError}
+              </div>
+            )}
+            <div className="impresso-modal__actions">
+              <button
+                type="button"
+                onClick={closeImpressoModal}
+                data-testid="impresso-modal-cancel"
+              >
+                {strings.impressoModalCancel}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  impressoRequestText.trim().length === 0 || submittingImpresso
+                }
+                onClick={() => void handleRequestImpresso()}
+                data-testid="impresso-modal-submit"
+              >
+                {strings.impressoModalSubmit}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
