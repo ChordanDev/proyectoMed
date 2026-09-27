@@ -1,8 +1,8 @@
-defmodule Backend.StationPackage do
+defmodule Backend.Stations.StationPackage do
   @moduledoc """
   Validates the versioned Station Package contract supplied by the Content Partner.
 
-  `Backend.StationLoader` will decode a package JSON document and pass the resulting
+  `Backend.Stations.StationLoader` will decode a package JSON document and pass the resulting
   map to `validate/1` before making it available to the application.
   """
 
@@ -234,4 +234,10 @@ defmodule Backend.StationPackage do
       ["impressos entries must have unique ids" | errors]
     end
   end
+end
+
+defmodule Backend.StationPackage do
+  @moduledoc false
+  defdelegate version(), to: Backend.Stations.StationPackage
+  defdelegate validate(package), to: Backend.Stations.StationPackage
 end

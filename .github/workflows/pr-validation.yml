@@ -29,3 +29,67 @@ jobs:
       - run: npm --prefix web ci
       - run: ( cd backend && mix deps.get )
       - run: bash scripts/test.sh
+
+  lint:
+    name: Lint and Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: web/package.json
+
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: backend/.tool-versions
+          version-type: strict
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Web typecheck
+        run: npm --prefix web run typecheck
+
+      - name: Web lint
+        run: npm --prefix web run lint
+
+      - name: Install backend dependencies
+        run: ( cd backend && mix deps.get )
+
+      - name: Backend format check
+        run: ( cd backend && mix format --check-formatted )
+
+      - name: Backend compile with warnings as errors
+        run: ( cd backend && mix compile --warnings-as-errors )
+
+      - name: Backend Credo strict check
+        run: ( cd backend && mix credo --strict )
+
+  dialyzer:
+    name: Dialyzer Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          version-file: backend/.tool-versions
+          version-type: strict
+
+      - name: Install backend dependencies
+        run: ( cd backend && mix deps.get )
+
+      - name: Restore Dialyzer PLT Cache
+        uses: actions/cache@v4
+        with:
+          path: backend/priv/plts
+          key: >-
+            plt-${{ runner.os }}-${{ hashFiles('backend/.tool-versions',
+            'backend/mix.lock') }}
+          restore-keys: |
+            plt-${{ runner.os }}-
+
+      - name: Run Dialyzer
+        run: ( cd backend && mix dialyzer --format short )
