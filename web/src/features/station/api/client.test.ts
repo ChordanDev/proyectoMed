@@ -119,6 +119,49 @@ describe("station API client", () => {
     });
   });
 
+  it("requests a voice session and decodes its response", async () => {
+    const voiceSession = {
+      url: "wss://livekit.example.test",
+      token: "signed-jwt",
+      room: "station-session-session-1",
+      identity: "learner-session-1",
+      expires_at: "2026-01-01T10:02:00Z",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(voiceSession, 201));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.createVoiceSession("session-1")).resolves.toEqual(
+      voiceSession,
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${baseUrl}/api/stations/active/sessions/session-1/voice`);
+    expect(init).toMatchObject({ method: "POST" });
+  });
+
+  it.each([
+    [404, "session_not_found", "Sessão não encontrada."],
+    [410, "session_expired", "Sessão expirada."],
+    [422, "session_completed", "Sessão concluída."],
+    [403, "audio_consent_required", "Consentimento de áudio necessário."],
+    [429, "rate_limited", "Muitas tentativas. Aguarde um instante."],
+    [503, "voice_unavailable", "Voz indisponível no momento."],
+  ])(
+    "maps voice session %i responses to ApiError %s",
+    async (status, code, message) => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ error: code, message }, status));
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      await expect(client.createVoiceSession("session-1")).rejects.toMatchObject(
+        { name: "ApiError", status, code, message },
+      );
+    },
+  );
+
   it("cancels a stalled request at the configured deadline", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;

@@ -295,10 +295,6 @@ defmodule Backend.StationsTest do
                {:error, :not_implemented}
     end
 
-    test "create_voice_session/2 returns not_implemented" do
-      assert Stations.create_voice_session("session-id") == {:error, :not_implemented}
-    end
-
     test "verify_patient_reply/3 passes through reply" do
       pkg = Stations.get_active_package()
       reply = %{text: "dor forte"}
@@ -311,6 +307,181 @@ defmodule Backend.StationsTest do
       voices = Stations.allowed_tts_voices()
       assert is_list(voices)
       assert "alloy" in voices
+    end
+  end
+
+  describe "voice sessions" do
+    setup do
+      Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
+      Application.put_env(:backend, :livekit_api_key, "test-api-key")
+      Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :livekit_url)
+        Application.delete_env(:backend, :livekit_api_key)
+        Application.delete_env(:backend, :livekit_api_secret)
+        Application.delete_env(:backend, :livekit_rate_limit_max)
+        Application.delete_env(:backend, :conversation_timeout_ms)
+      end)
+
+      :ok
+    end
+
+    test "create_voice_session/2 issues a token for an active, consented session" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{url: url, token: token, room: room, identity: identity, expires_at: exp}} =
+               Stations.create_voice_session(session.session_id)
+
+      assert url == "wss://revalida.livekit.cloud"
+      assert is_binary(token)
+      assert room == "station-session-" <> session.session_id
+      assert identity == "learner-" <> session.session_id
+      assert %DateTime{} = exp
+    end
+
+    test "create_voice_session/2 returns :not_found for an unknown session" do
+      assert Stations.create_voice_session("unknown-id") == {:error, :not_found}
+    end
+
+    test "create_voice_session/2 returns :expired for an expired session" do
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :expired}
+    end
+
+    test "create_voice_session/2 returns :completed for a completed session" do
+      session = Stations.create_session(%{audio_consent: true})
+      {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :completed}
+    end
+
+    test "create_voice_session/2 returns :no_consent without audio consent" do
+      session = Stations.create_session(%{audio_consent: false})
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :no_consent}
+    end
+
+    test "create_voice_session/2 returns :voice_unavailable when LiveKit is not configured" do
+      Application.delete_env(:backend, :livekit_url)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :voice_unavailable}
+    end
+
+    test "create_voice_session/2 rate-limits repeated issuance for the same session" do
+      Application.put_env(:backend, :livekit_rate_limit_max, 2)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.create_voice_session(session.session_id)
+      assert {:ok, _} = Stations.create_voice_session(session.session_id)
+      assert Stations.create_voice_session(session.session_id) == {:error, :rate_limited}
+    end
+
+    test "create_voice_session/2 rate limit does not affect other sessions" do
+      Application.put_env(:backend, :livekit_rate_limit_max, 1)
+      session_a = Stations.create_session(%{audio_consent: true})
+      session_b = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.create_voice_session(session_a.session_id)
+      assert Stations.create_voice_session(session_a.session_id) == {:error, :rate_limited}
+      assert {:ok, _} = Stations.create_voice_session(session_b.session_id)
+    end
+
+    test "create_voice_session/2 caps the token expiry to the session's expiry" do
+      Application.put_env(:backend, :conversation_timeout_ms, 5_000)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{expires_at: exp}} = Stations.create_voice_session(session.session_id)
+      assert DateTime.compare(exp, session.expires_at) != :gt
+      assert_in_delta DateTime.to_unix(exp), DateTime.to_unix(session.expires_at), 1
+    end
+  end
+
+  describe "voice room cleanup" do
+    defmodule RecordingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(room) do
+        send(Backend.StationsTest.cleanup_test_pid(), {:deleted_room, room})
+        :ok
+      end
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+    end
+
+    defmodule FailingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: {:error, :livekit_unavailable}
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+    end
+
+    def cleanup_test_pid, do: Process.get(:stations_cleanup_test_pid)
+
+    setup do
+      Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
+      Application.put_env(:backend, :livekit_api_key, "test-api-key")
+      Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
+      Process.put(:stations_cleanup_test_pid, self())
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :livekit_url)
+        Application.delete_env(:backend, :livekit_api_key)
+        Application.delete_env(:backend, :livekit_api_secret)
+        Application.delete_env(:backend, :livekit_room_service)
+      end)
+
+      :ok
+    end
+
+    test "complete_session/2 deletes the session's LiveKit room" do
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+      assert_receive {:deleted_room, room}
+      assert room == "station-session-" <> session.session_id
+    end
+
+    test "discard_session/1 deletes the session's LiveKit room" do
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.discard_session(session.session_id) == :ok
+      assert_receive {:deleted_room, room}
+      assert room == "station-session-" <> session.session_id
+    end
+
+    test "complete_session/2 succeeds even when room cleanup fails" do
+      Application.put_env(:backend, :livekit_room_service, FailingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, completed} = Stations.complete_session(session.session_id, :user)
+      assert completed.status == :completed
+    end
+
+    test "discard_session/1 succeeds even when room cleanup fails" do
+      Application.put_env(:backend, :livekit_room_service, FailingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.discard_session(session.session_id) == :ok
+    end
+
+    test "cleanup is skipped entirely when LiveKit is not configured" do
+      Application.delete_env(:backend, :livekit_url)
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+      refute_receive {:deleted_room, _room}, 50
     end
   end
 end

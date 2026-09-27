@@ -10,5 +10,17 @@
   "finishStation": "Finalizar estação",
   "criterionMet": "Cumprido",
   "criterionOmitted": "Omitido",
-  "criterionUncertain": "Incerto"
+  "criterionUncertain": "Incerto",
+  "voiceStatusIdle": "Voz pronta para conectar.",
+  "voiceStatusRequesting": "Solicitando sessão de voz...",
+  "voiceStatusConnecting": "Conectando à voz...",
+  "voiceStatusConnected": "Voz conectada.",
+  "voiceStatusReconnecting": "Reconectando voz...",
+  "voiceStatusDisconnected": "Voz desconectada.",
+  "voiceStatusFailed": "Falha na conexão de voz.",
+  "voiceConnectButton": "Conectar voz",
+  "voiceDisconnectButton": "Desconectar voz",
+  "voiceMicOnIndicator": "Microfone ativo",
+  "finishStationButton": "Finalizar estação",
+  "voiceOffNotice": "Voz desativada para esta estação. O texto continua funcionando normalmente."
 }

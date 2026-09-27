@@ -10,8 +10,13 @@ defmodule Backend.Stations do
   directly by `BackendWeb` controllers.
   """
 
+  require Logger
+
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
+  alias Backend.Stations.LiveKit
+  alias Backend.Stations.LiveKit.RoomService
+  alias Backend.Stations.MediaSession
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
@@ -97,7 +102,14 @@ defmodule Backend.Stations do
   @spec complete_session(String.t(), :user | :timer | term()) ::
           {:ok, Conversation.session()} | {:error, :not_found | :expired}
   def complete_session(session_id, reason \\ :user) do
-    Conversation.complete(session_id, reason)
+    case Conversation.complete(session_id, reason) do
+      {:ok, session} ->
+        cleanup_voice_room(session_id)
+        {:ok, session}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -269,7 +281,9 @@ defmodule Backend.Stations do
   """
   @spec discard_session(String.t()) :: :ok
   def discard_session(session_id) do
-    Conversation.discard(session_id)
+    :ok = Conversation.discard(session_id)
+    cleanup_voice_room(session_id)
+    :ok
   end
 
   @doc """
@@ -299,14 +313,45 @@ defmodule Backend.Stations do
   end
 
   @doc """
-  Creates or joins a real-time conversational voice session via LiveKit/WebRTC.
+  Issues a short-lived, session-scoped LiveKit access token so the learner's
+  browser can join the voice room over WebRTC.
 
-  Stable extension point for Ticket 13 / ADR-009 (#116, #117).
+  Requires an active, unexpired session with audio consent and a configured
+  LiveKit deployment; enforces a per-session issuance rate limit.
+
+  Ticket 13 / ADR-009 (#116, #117).
   """
   @spec create_voice_session(String.t(), keyword()) ::
-          {:ok, map()} | {:error, :not_implemented | term()}
-  def create_voice_session(_session_id, _opts \\ []) do
-    {:error, :not_implemented}
+          {:ok,
+           %{
+             url: String.t(),
+             token: String.t(),
+             room: String.t(),
+             identity: String.t(),
+             expires_at: DateTime.t()
+           }}
+          | {:error,
+             :not_found | :expired | :completed | :no_consent | :voice_unavailable | :rate_limited}
+  def create_voice_session(session_id, _opts \\ []) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(session),
+         :ok <- ensure_audio_consent(session),
+         {:ok, config} <- LiveKit.config(),
+         :ok <- MediaSession.check_rate_limit(session_id) do
+      {token, expires_at} = LiveKit.learner_token(config, session_id, session.expires_at)
+
+      {:ok,
+       %{
+         url: config.url,
+         token: token,
+         room: LiveKit.room_name(session_id),
+         identity: LiveKit.identity(session_id),
+         expires_at: expires_at
+       }}
+    else
+      {:error, :not_configured} -> {:error, :voice_unavailable}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """
@@ -323,6 +368,35 @@ defmodule Backend.Stations do
   # ============================================================================
   # Internal Helpers
   # ============================================================================
+
+  # Best-effort LiveKit room cleanup: a RoomService failure never fails
+  # completion/discard. Only the session id and an error atom are noted,
+  # never the token, audio, or transcript.
+  defp cleanup_voice_room(session_id) do
+    if LiveKit.configured?() do
+      room = LiveKit.room_name(session_id)
+
+      case RoomService.delete_room(room) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "LiveKit room cleanup failed for session #{session_id}: #{inspect(reason)}"
+          )
+      end
+
+      MediaSession.clear_rate_limit(session_id)
+    end
+
+    :ok
+  end
+
+  defp ensure_active(%{status: :active}), do: :ok
+  defp ensure_active(%{status: :completed}), do: {:error, :completed}
+
+  defp ensure_audio_consent(%{audio_consent: true}), do: :ok
+  defp ensure_audio_consent(_session), do: {:error, :no_consent}
 
   defp generate_patient_reply(package, context) do
     StationAI.next_reply(package, context)

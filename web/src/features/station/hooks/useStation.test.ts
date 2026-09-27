@@ -83,6 +83,7 @@ describe("useStation", () => {
       result: null,
       error: null,
       audioConsent: false,
+      sessionId: null,
     });
 
     let blockedReply: MessageReply | null = reply;
@@ -111,6 +112,7 @@ describe("useStation", () => {
       await startPromise;
     });
     expect(result.current.status).toBe("active");
+    expect(result.current.sessionId).toBe("session-1");
 
     await act(async () => {
       await result.current.start(false);
@@ -185,6 +187,7 @@ describe("useStation", () => {
 
     expect(result.current.status).toBe("failed");
     expect(result.current.error).toBe("Estação indisponível.");
+    expect(result.current.sessionId).toBeNull();
   });
 
   it("retries a failed start with exactly one replacement session", async () => {
