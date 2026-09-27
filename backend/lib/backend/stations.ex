@@ -10,9 +10,12 @@ defmodule Backend.Stations do
   directly by `BackendWeb` controllers.
   """
 
+  require Logger
+
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
   alias Backend.Stations.LiveKit
+  alias Backend.Stations.LiveKit.RoomService
   alias Backend.Stations.MediaSession
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationLoader
@@ -99,7 +102,14 @@ defmodule Backend.Stations do
   @spec complete_session(String.t(), :user | :timer | term()) ::
           {:ok, Conversation.session()} | {:error, :not_found | :expired}
   def complete_session(session_id, reason \\ :user) do
-    Conversation.complete(session_id, reason)
+    case Conversation.complete(session_id, reason) do
+      {:ok, session} ->
+        cleanup_voice_room(session_id)
+        {:ok, session}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -271,7 +281,9 @@ defmodule Backend.Stations do
   """
   @spec discard_session(String.t()) :: :ok
   def discard_session(session_id) do
-    Conversation.discard(session_id)
+    :ok = Conversation.discard(session_id)
+    cleanup_voice_room(session_id)
+    :ok
   end
 
   @doc """
@@ -356,6 +368,29 @@ defmodule Backend.Stations do
   # ============================================================================
   # Internal Helpers
   # ============================================================================
+
+  # Best-effort LiveKit room cleanup: a RoomService failure never fails
+  # completion/discard. Only the session id and an error atom are noted,
+  # never the token, audio, or transcript.
+  defp cleanup_voice_room(session_id) do
+    if LiveKit.configured?() do
+      room = LiveKit.room_name(session_id)
+
+      case RoomService.delete_room(room) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "LiveKit room cleanup failed for session #{session_id}: #{inspect(reason)}"
+          )
+      end
+
+      MediaSession.clear_rate_limit(session_id)
+    end
+
+    :ok
+  end
 
   defp ensure_active(%{status: :active}), do: :ok
   defp ensure_active(%{status: :completed}), do: {:error, :completed}

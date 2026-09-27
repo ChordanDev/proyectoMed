@@ -399,4 +399,89 @@ defmodule Backend.StationsTest do
       assert_in_delta DateTime.to_unix(exp), DateTime.to_unix(session.expires_at), 1
     end
   end
+
+  describe "voice room cleanup" do
+    defmodule RecordingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(room) do
+        send(Backend.StationsTest.cleanup_test_pid(), {:deleted_room, room})
+        :ok
+      end
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+    end
+
+    defmodule FailingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: {:error, :livekit_unavailable}
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+    end
+
+    def cleanup_test_pid, do: Process.get(:stations_cleanup_test_pid)
+
+    setup do
+      Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
+      Application.put_env(:backend, :livekit_api_key, "test-api-key")
+      Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
+      Process.put(:stations_cleanup_test_pid, self())
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :livekit_url)
+        Application.delete_env(:backend, :livekit_api_key)
+        Application.delete_env(:backend, :livekit_api_secret)
+        Application.delete_env(:backend, :livekit_room_service)
+      end)
+
+      :ok
+    end
+
+    test "complete_session/2 deletes the session's LiveKit room" do
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+      assert_receive {:deleted_room, room}
+      assert room == "station-session-" <> session.session_id
+    end
+
+    test "discard_session/1 deletes the session's LiveKit room" do
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.discard_session(session.session_id) == :ok
+      assert_receive {:deleted_room, room}
+      assert room == "station-session-" <> session.session_id
+    end
+
+    test "complete_session/2 succeeds even when room cleanup fails" do
+      Application.put_env(:backend, :livekit_room_service, FailingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, completed} = Stations.complete_session(session.session_id, :user)
+      assert completed.status == :completed
+    end
+
+    test "discard_session/1 succeeds even when room cleanup fails" do
+      Application.put_env(:backend, :livekit_room_service, FailingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.discard_session(session.session_id) == :ok
+    end
+
+    test "cleanup is skipped entirely when LiveKit is not configured" do
+      Application.delete_env(:backend, :livekit_url)
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+      refute_receive {:deleted_room, _room}, 50
+    end
+  end
 end
