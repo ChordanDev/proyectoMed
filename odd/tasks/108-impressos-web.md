@@ -16,7 +16,7 @@ document at any time.
 
 ## Tasks
 - [x] T1 `client.ts`: `Impresso` types + decoders, `requestImpresso`, `getImpressos` (RED→GREEN)
-- [ ] T2 `useStation`: `impressos` state + `requestImpresso` action; request errors do not fail the
+- [x] T2 `useStation`: `impressos` state + `requestImpresso` action; request errors do not fail the
       station (RED→GREEN)
 - [ ] T3 `StationScreen`: exam button next to the input, request modal, feedback notice, impressos
       drawer (RED→GREEN)
@@ -37,4 +37,11 @@ Close each task with `npm --prefix web test`, `npm --prefix web run typecheck`,
   `ListImpressosResponse` types + decoders, `requestImpresso`/`getImpressos` client methods, and
   re-exports. RED confirmed (3 failing: `client.requestImpresso is not a function` /
   `client.getImpressos is not a function`). GREEN: web 104 passed (101 + 3 new), typecheck ok,
-  lint ok.
+  lint ok. Commit 17ade3c.
+- T2 done: `useStation` gained `impressos`/`impressoError` state and a `requestImpresso(text)`
+  action; a failed request sets `impressoError` (ApiError message or a pt-BR fallback) and keeps
+  the station active — it never calls `fail()`. No-op (resolves null) without a live session.
+  Resuming an active session (refresh) also restores previously released impressos via
+  `getImpressos`, best-effort. RED confirmed (5 failing: `requestImpresso is not a function` x2,
+  wrong impressoError state, undefined impressos on resume). GREEN: web 109 passed (104 + 5 new),
+  typecheck ok, lint ok.
