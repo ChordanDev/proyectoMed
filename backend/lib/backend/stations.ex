@@ -12,6 +12,7 @@ defmodule Backend.Stations do
 
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
+  alias Backend.Stations.Impressos
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
@@ -288,14 +289,62 @@ defmodule Backend.Stations do
   end
 
   @doc """
-  Evaluates and releases requested clinical Impressos (physical exam & complementary tests).
+  Matches a learner's Impresso request text against the active package's
+  authored impressos and atomically records the outcome on the session.
+
+  `request_params` accepts `"text"` (required, non-blank) and an optional
+  `"request_id"` for idempotent retries; the server generates one when
+  omitted.
+
+  Returns `{:ok, %{request_id, decision, released_impressos, newly_released,
+  feedback_message}}`, where `decision` is `"released"`, `"already_released"`,
+  or `"unavailable"`.
 
   Stable extension point for Ticket 12 / ADR-008 (#105, #107).
   """
   @spec request_impresso(String.t(), map()) ::
-          {:ok, map()} | {:error, :not_implemented | term()}
-  def request_impresso(_session_id, _request_params) do
-    {:error, :not_implemented}
+          {:ok, map()}
+          | {:error, :not_found | :expired | :completed | :invalid_request}
+  def request_impresso(session_id, request_params) do
+    text = get_param(request_params, :text)
+
+    with :ok <- validate_impresso_text(text) do
+      package = get_active_package()
+      normalized_text = Impressos.normalize(text)
+      matched_ids = Impressos.match(package["impressos"] || [], normalized_text)
+      request_id = resolve_request_id(request_params)
+
+      case Conversation.record_impresso_request(session_id, request_id, matched_ids, text) do
+        {:ok, %{event: event, session: session}} ->
+          {:ok, build_impresso_response(package, event, session)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Lists the impressos currently released for a session, in release order.
+
+  Allowed for both active and completed sessions.
+  """
+  @spec list_impressos(String.t()) ::
+          {:ok, %{released_impressos: [map()]}} | {:error, :not_found | :expired}
+  def list_impressos(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, session} ->
+        package = get_active_package()
+
+        {:ok,
+         %{
+           released_impressos:
+             to_impresso_objects(index_impressos(package), session.released_impressos)
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -381,4 +430,76 @@ defmodule Backend.Stations do
   end
 
   defp serialize_evidence(_), do: []
+
+  defp get_param(params, key) do
+    Map.get(params, key) || Map.get(params, Atom.to_string(key))
+  end
+
+  defp validate_impresso_text(text) when is_binary(text) do
+    if String.trim(text) == "" do
+      {:error, :invalid_request}
+    else
+      :ok
+    end
+  end
+
+  defp validate_impresso_text(_text), do: {:error, :invalid_request}
+
+  defp resolve_request_id(params) do
+    case get_param(params, :request_id) do
+      id when is_binary(id) and id != "" -> id
+      _ -> Impressos.generate_request_id()
+    end
+  end
+
+  defp build_impresso_response(package, event, session) do
+    impressos_by_id = index_impressos(package)
+
+    %{
+      request_id: event.request_id,
+      decision: to_string(event.decision),
+      released_impressos: to_impresso_objects(impressos_by_id, session.released_impressos),
+      newly_released: to_impresso_objects(impressos_by_id, event.released_ids),
+      feedback_message: impresso_feedback_message(event, impressos_by_id)
+    }
+  end
+
+  defp impresso_feedback_message(%{decision: :unavailable}, _impressos_by_id) do
+    "Exame não disponível nesta estação"
+  end
+
+  defp impresso_feedback_message(%{decision: :released, released_ids: ids}, impressos_by_id) do
+    "Impresso liberado: #{impresso_titles(impressos_by_id, ids)}"
+  end
+
+  defp impresso_feedback_message(
+         %{decision: :already_released, matched_ids: ids},
+         impressos_by_id
+       ) do
+    "Impresso já liberado: #{impresso_titles(impressos_by_id, ids)}"
+  end
+
+  defp impresso_titles(impressos_by_id, ids) do
+    ids
+    |> Enum.map(fn id -> impressos_by_id[id]["title"] end)
+    |> Enum.join(", ")
+  end
+
+  defp index_impressos(package) do
+    (package["impressos"] || [])
+    |> Enum.into(%{}, fn impresso -> {impresso["id"], impresso} end)
+  end
+
+  defp to_impresso_objects(impressos_by_id, ids) do
+    Enum.map(ids, fn id ->
+      impresso = impressos_by_id[id]
+
+      %{
+        id: impresso["id"],
+        title: impresso["title"],
+        category: impresso["category"],
+        content: impresso["content"]
+      }
+    end)
+  end
 end

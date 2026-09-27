@@ -290,9 +290,9 @@ defmodule Backend.StationsTest do
                {:error, :session_time_elapsed}
     end
 
-    test "request_impresso/2 returns not_implemented" do
-      assert Stations.request_impresso("session-id", %{"type" => "ecg"}) ==
-               {:error, :not_implemented}
+    test "request_impresso/2 returns not_found for an unknown session" do
+      assert Stations.request_impresso("unknown-session", %{"text" => "ecg"}) ==
+               {:error, :not_found}
     end
 
     test "create_voice_session/2 returns not_implemented" do
@@ -311,6 +311,204 @@ defmodule Backend.StationsTest do
       voices = Stations.allowed_tts_voices()
       assert is_list(voices)
       assert "alloy" in voices
+    end
+  end
+
+  describe "impresso requests" do
+    setup do
+      session = Stations.create_session(%{audio_consent: false})
+      %{session: session}
+    end
+
+    test "matches a single impresso and releases it", %{session: session} do
+      assert {:ok, result} =
+               Stations.request_impresso(session.session_id, %{
+                 "text" => "quero ver os sinais vitais"
+               })
+
+      assert result.decision == "released"
+      assert is_binary(result.request_id)
+
+      assert [%{id: "exame-fisico-geral", title: title, category: "physical_exam"}] =
+               result.newly_released
+
+      assert String.starts_with?(title, "IMPRESSO")
+      assert result.released_impressos == result.newly_released
+      assert result.feedback_message == "Impresso liberado: #{title}"
+
+      for impresso <- result.released_impressos do
+        assert Map.has_key?(impresso, :content)
+        refute Map.has_key?(impresso, :keywords)
+      end
+    end
+
+    test "an ambiguous request releases every matched impresso in authored order", %{
+      session: session
+    } do
+      assert {:ok, result} =
+               Stations.request_impresso(session.session_id, %{
+                 "text" => "preciso do exame físico, sinais vitais e do laudo de ecg"
+               })
+
+      assert result.decision == "released"
+      ids = Enum.map(result.newly_released, & &1.id)
+      assert ids == ["exame-fisico-geral", "laudo-eletrocardiograma"]
+    end
+
+    test "repeating the same request is already_released", %{session: session} do
+      {:ok, _} =
+        Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+
+      assert {:ok, result} =
+               Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+
+      assert result.decision == "already_released"
+      assert result.newly_released == []
+      assert length(result.released_impressos) == 1
+      assert result.feedback_message =~ "Impresso já liberado"
+    end
+
+    test "an unavailable exam returns the exact required message and releases nothing", %{
+      session: session
+    } do
+      assert {:ok, result} =
+               Stations.request_impresso(session.session_id, %{
+                 "text" => "quero uma tomografia de crânio"
+               })
+
+      assert result.decision == "unavailable"
+      assert result.newly_released == []
+      assert result.released_impressos == []
+      assert result.feedback_message == "Exame não disponível nesta estação"
+      refute result.feedback_message == "Não há alterações relatadas"
+    end
+
+    test "a repeated request_id is idempotent and does not append a new event", %{
+      session: session
+    } do
+      assert {:ok, first} =
+               Stations.request_impresso(session.session_id, %{
+                 "text" => "sinais vitais",
+                 "request_id" => "client-req-1"
+               })
+
+      assert {:ok, second} =
+               Stations.request_impresso(session.session_id, %{
+                 "text" => "exames laboratoriais",
+                 "request_id" => "client-req-1"
+               })
+
+      assert second.request_id == "client-req-1"
+      assert second.decision == first.decision
+      assert second.newly_released == first.newly_released
+
+      {:ok, raw_session} = Stations.get_session(session.session_id)
+      assert length(raw_session.impresso_requests) == 1
+    end
+
+    test "requests append events in order and preserve the session order field", %{
+      session: session
+    } do
+      {:ok, _} = Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+
+      {:ok, _} =
+        Stations.request_impresso(session.session_id, %{"text" => "tomografia de crânio"})
+
+      {:ok, _} =
+        Stations.request_impresso(session.session_id, %{"text" => "exames laboratoriais"})
+
+      {:ok, raw_session} = Stations.get_session(session.session_id)
+      assert Enum.map(raw_session.impresso_requests, & &1.order) == [1, 2, 3]
+    end
+
+    test "returns invalid_request on missing, blank or non-string text", %{session: session} do
+      for bad_text <- [nil, "", "   ", 123, %{}] do
+        params = if is_nil(bad_text), do: %{}, else: %{"text" => bad_text}
+        assert Stations.request_impresso(session.session_id, params) == {:error, :invalid_request}
+      end
+    end
+
+    test "returns not_found for an unknown session" do
+      assert Stations.request_impresso("nonexistent", %{"text" => "ecg"}) ==
+               {:error, :not_found}
+    end
+
+    test "returns expired for an expired session" do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      session =
+        try do
+          Stations.create_session(%{audio_consent: false})
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      assert Stations.request_impresso(session.session_id, %{"text" => "ecg"}) ==
+               {:error, :expired}
+    end
+
+    test "returns completed for a finished session", %{session: session} do
+      {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      assert Stations.request_impresso(session.session_id, %{"text" => "ecg"}) ==
+               {:error, :completed}
+    end
+
+    test "restarting the Conversation process discards all released impressos", %{
+      session: session
+    } do
+      {:ok, _} = Stations.request_impresso(session.session_id, %{"text" => "ecg"})
+
+      :ok = Supervisor.terminate_child(Backend.Supervisor, Backend.Stations.Conversation)
+      {:ok, _pid} = Supervisor.restart_child(Backend.Supervisor, Backend.Stations.Conversation)
+
+      assert Stations.get_session(session.session_id) == {:error, :not_found}
+    end
+  end
+
+  describe "list_impressos/1" do
+    test "returns released impressos in release order, without keywords" do
+      session = Stations.create_session(%{audio_consent: false})
+      {:ok, _} = Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+      {:ok, _} = Stations.request_impresso(session.session_id, %{"text" => "ecg"})
+
+      assert {:ok, %{released_impressos: released}} = Stations.list_impressos(session.session_id)
+      assert Enum.map(released, & &1.id) == ["exame-fisico-geral", "laudo-eletrocardiograma"]
+      refute Enum.any?(released, &Map.has_key?(&1, :keywords))
+    end
+
+    test "is allowed on a completed session" do
+      session = Stations.create_session(%{audio_consent: false})
+      {:ok, _} = Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+      {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      assert {:ok, %{released_impressos: released}} = Stations.list_impressos(session.session_id)
+      assert length(released) == 1
+    end
+
+    test "returns not_found and expired like the other reads" do
+      assert Stations.list_impressos("nonexistent") == {:error, :not_found}
+
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      session =
+        try do
+          Stations.create_session(%{audio_consent: false})
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      assert Stations.list_impressos(session.session_id) == {:error, :expired}
     end
   end
 end

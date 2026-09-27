@@ -21,10 +21,24 @@ defmodule Backend.Stations.Conversation do
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
           messages: [message()],
+          released_impressos: [String.t()],
+          impresso_requests: [impresso_request_event()],
           status: :active | :completed
         }
 
   @type message :: %{role: term(), modality: term(), text: String.t(), at: DateTime.t()}
+
+  @type impresso_request_event :: %{
+          request_id: String.t(),
+          station_id: String.t(),
+          station_version: String.t(),
+          order: pos_integer(),
+          text: String.t(),
+          matched_ids: [String.t()],
+          decision: :released | :already_released | :unavailable,
+          released_ids: [String.t()],
+          at: DateTime.t()
+        }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
@@ -54,6 +68,28 @@ defmodule Backend.Stations.Conversation do
   @spec fetch(String.t()) :: {:ok, session()} | {:error, :not_found | :expired}
   def fetch(session_id) do
     GenServer.call(__MODULE__, {:fetch, session_id})
+  end
+
+  @doc """
+  Atomically records an Impresso request against an active session.
+
+  `matched_ids` are the authored ids (in authored order) that the caller's
+  keyword matcher found for `text`. This call decides the release outcome
+  against the session's current `released_impressos`, appends the resulting
+  event, and updates `released_impressos` — all within a single GenServer
+  call, so concurrent requests for the same session never race.
+
+  A repeated `request_id` is idempotent: it returns the originally stored
+  event and does not append a new one or change `released_impressos`.
+  """
+  @spec record_impresso_request(String.t(), String.t(), [String.t()], String.t()) ::
+          {:ok, %{event: impresso_request_event(), session: session()}}
+          | {:error, :not_found | :expired | :completed}
+  def record_impresso_request(session_id, request_id, matched_ids, text) do
+    GenServer.call(
+      __MODULE__,
+      {:record_impresso_request, session_id, request_id, matched_ids, text}
+    )
   end
 
   @doc """
@@ -110,6 +146,8 @@ defmodule Backend.Stations.Conversation do
       started_at: now,
       expires_at: DateTime.add(now, timeout_ms(), :millisecond),
       messages: [],
+      released_impressos: [],
+      impresso_requests: [],
       status: :active
     }
 
@@ -168,6 +206,23 @@ defmodule Backend.Stations.Conversation do
     case active_session(session_id) do
       {:ok, %{status: :active} = session} ->
         {:reply, do_pop_last_message(session, expected_message), state}
+
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(
+        {:record_impresso_request, session_id, request_id, matched_ids, text},
+        _from,
+        state
+      ) do
+    case active_session(session_id) do
+      {:ok, %{status: :active} = session} ->
+        {:reply, do_record_impresso_request(session, request_id, matched_ids, text), state}
 
       {:ok, %{status: :completed}} ->
         {:reply, {:error, :completed}, state}
@@ -260,6 +315,38 @@ defmodule Backend.Stations.Conversation do
 
   defp session_id do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+  end
+
+  defp do_record_impresso_request(session, request_id, matched_ids, text) do
+    case Enum.find(session.impresso_requests, &(&1.request_id == request_id)) do
+      %{} = existing_event ->
+        {:ok, %{event: existing_event, session: session}}
+
+      nil ->
+        {decision, newly_released} =
+          Backend.Stations.Impressos.decide(matched_ids, session.released_impressos)
+
+        event = %{
+          request_id: request_id,
+          station_id: session.station_id,
+          station_version: session.station_version,
+          order: length(session.impresso_requests) + 1,
+          text: text,
+          matched_ids: matched_ids,
+          decision: decision,
+          released_ids: newly_released,
+          at: DateTime.utc_now()
+        }
+
+        updated_session = %{
+          session
+          | impresso_requests: session.impresso_requests ++ [event],
+            released_impressos: session.released_impressos ++ newly_released
+        }
+
+        true = :ets.insert(__MODULE__, {session.session_id, updated_session})
+        {:ok, %{event: event, session: updated_session}}
+    end
   end
 
   defp do_pop_last_message(session, expected_message) do
