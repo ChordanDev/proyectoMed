@@ -28,6 +28,8 @@ vi.mock("../api/client", async () => {
     ...actual,
     startSession: vi.fn().mockResolvedValue(session),
     createVoiceSession: vi.fn().mockResolvedValue(voiceSession),
+    finishSession: vi.fn().mockResolvedValue({ status: "completed" }),
+    fetchResult: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -49,5 +51,23 @@ describe("StationSession", () => {
 
     expect(getByTestId("voice-panel")).toBeTruthy();
     expect(getByText(strings.voiceStatusIdle)).toBeTruthy();
+  });
+
+  it("finishes the station from the session screen", async () => {
+    const client = await import("../api/client");
+    const { getByTestId } = await render(<StationSession />);
+
+    await act(async () => {
+      fireEvent.click(getByTestId("consent-checkbox"));
+    });
+    await act(async () => {
+      fireEvent.click(getByTestId("notice-button"));
+    });
+    await act(async () => {
+      fireEvent.click(getByTestId("finish-button"));
+    });
+
+    expect(client.finishSession).toHaveBeenCalledWith("session-1", "user");
+    expect(getByTestId("finish-button")).toBeDisabled();
   });
 });

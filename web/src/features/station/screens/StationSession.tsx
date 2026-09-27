@@ -8,13 +8,25 @@ import { VoicePanel } from "./VoicePanel";
  * either the LiveKit voice panel (audio consent given) or a text-only
  * notice, wired for manual end-to-end testing of #117. */
 export function StationSession(): React.JSX.Element {
-  const { start, status, audioConsent, sessionId } = useStation();
+  const { start, finish, status, audioConsent, sessionId } = useStation();
 
   if (status === "active" || status === "finishing" || status === "finished") {
-    return audioConsent ? (
-      <VoicePanel sessionId={sessionId} active={status === "active"} />
-    ) : (
-      <p data-testid="voice-off-notice">{strings.voiceOffNotice}</p>
+    return (
+      <>
+        {audioConsent ? (
+          <VoicePanel sessionId={sessionId} active={status === "active"} />
+        ) : (
+          <p data-testid="voice-off-notice">{strings.voiceOffNotice}</p>
+        )}
+        <button
+          type="button"
+          data-testid="finish-button"
+          disabled={status !== "active"}
+          onClick={() => void finish("user")}
+        >
+          {strings.finishStationButton}
+        </button>
+      </>
     );
   }
 

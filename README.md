@@ -110,8 +110,8 @@ livekit-server --dev
 **Start the backend** with LiveKit configured, then the web SPA as usual:
 
 ```sh
-LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
-  ( cd backend && mix phx.server )
+cd backend && LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey \
+  LIVEKIT_API_SECRET=secret mix phx.server
 
 npm --prefix web run dev
 ```
@@ -121,7 +121,8 @@ npm --prefix web run dev
 1. Open the SPA, accept the audio consent checkbox, press **Conectar voz**.
    The browser prompts for microphone permission; the panel status moves to
    "Voz conectada" once granted.
-2. From another terminal, confirm the room and the learner's published track:
+2. From another terminal, confirm the room and the learner's published track
+   (`lk room list` shows the room name, which carries the session id):
 
    ```sh
    lk room list --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
@@ -143,12 +144,13 @@ npm --prefix web run dev
    (`lk room join --publish-demo` only publishes a demo *video* track; use
    `load-test --audio-publishers` for an audio track, or `room join --publish
    <file>.ogg` to publish a specific pre-encoded audio file.)
-4. Finish or exit the station and confirm the room disappears from
-   `lk room list` (Phoenix deletes it on completion; the periodic sweep
-   catches anything left over).
+4. Press **Finalizar estação** and confirm the panel disconnects and the room
+   disappears from `lk room list` (Phoenix deletes it on completion). Closing
+   the tab also leaves the room; the periodic sweep (60 s) deletes rooms whose
+   session expired or no longer exists.
 5. Without `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` set on the
    backend, confirm the panel shows "Falha na conexão de voz" /
-   `voice_unavailable` and the text station still works end to end.
+   `voice_unavailable`; session start and finish keep working.
 6. Press **Conectar voz** repeatedly in a short burst to see the `429`
    rate-limit error surface in the panel.
 

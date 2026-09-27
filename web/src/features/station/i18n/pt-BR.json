@@ -21,5 +21,6 @@
   "voiceConnectButton": "Conectar voz",
   "voiceDisconnectButton": "Desconectar voz",
   "voiceMicOnIndicator": "Microfone ativo",
+  "finishStationButton": "Finalizar estação",
   "voiceOffNotice": "Voz desativada para esta estação. O texto continua funcionando normalmente."
 }
