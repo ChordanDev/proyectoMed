@@ -74,6 +74,32 @@ export interface SessionResult {
   criteria: ResultCriterion[];
 }
 
+export interface Impresso {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+}
+
+export interface RequestImpressoRequest {
+  text: string;
+  request_id?: string;
+}
+
+export type ImpressoDecision = "released" | "already_released" | "unavailable";
+
+export interface RequestImpressoResponse {
+  request_id: string;
+  decision: ImpressoDecision;
+  released_impressos: Impresso[];
+  newly_released: Impresso[];
+  feedback_message: string;
+}
+
+export interface ListImpressosResponse {
+  released_impressos: Impresso[];
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -261,6 +287,64 @@ const decodeSessionResult = (value: unknown): SessionResult => {
   };
 };
 
+const impressoDecisions: readonly ImpressoDecision[] = [
+  "released",
+  "already_released",
+  "unavailable",
+];
+
+const decodeImpresso = (value: unknown): Impresso => {
+  const body = objectValue(value, "impresso");
+  return {
+    id: stringValue(body, "id", "impresso"),
+    title: stringValue(body, "title", "impresso"),
+    category: stringValue(body, "category", "impresso"),
+    content: stringValue(body, "content", "impresso"),
+  };
+};
+
+const impressoList = (body: JsonObject, key: string, label: string): Impresso[] => {
+  const value = body[key];
+  return Array.isArray(value) ? value.map(decodeImpresso) : invalid(label);
+};
+
+const decodeRequestImpressoResponse = (
+  value: unknown,
+): RequestImpressoResponse => {
+  const body = objectValue(value, "impresso request");
+  return {
+    request_id: stringValue(body, "request_id", "impresso request"),
+    decision: literalValue(
+      body,
+      "decision",
+      impressoDecisions,
+      "impresso request",
+    ),
+    released_impressos: impressoList(
+      body,
+      "released_impressos",
+      "impresso request",
+    ),
+    newly_released: impressoList(body, "newly_released", "impresso request"),
+    feedback_message: stringValue(
+      body,
+      "feedback_message",
+      "impresso request",
+    ),
+  };
+};
+
+const decodeListImpressosResponse = (value: unknown): ListImpressosResponse => {
+  const body = objectValue(value, "impresso list");
+  return {
+    released_impressos: impressoList(
+      body,
+      "released_impressos",
+      "impresso list",
+    ),
+  };
+};
+
 const decodeApiError = (status: number, value: unknown): ApiError => {
   const body =
     typeof value === "object" && value !== null ? (value as JsonObject) : {};
@@ -405,6 +489,18 @@ export const createApiClient = ({
         { method: "GET" },
         decodeSessionResult,
       ),
+    requestImpresso: (sessionId: string, body: RequestImpressoRequest) =>
+      request(
+        `${sessionPath(sessionId)}/impressos/request`,
+        jsonPost(body),
+        decodeRequestImpressoResponse,
+      ),
+    getImpressos: (sessionId: string) =>
+      request(
+        `${sessionPath(sessionId)}/impressos`,
+        { method: "GET" },
+        decodeListImpressosResponse,
+      ),
   };
 };
 
@@ -422,4 +518,6 @@ export const {
   transcribeAudio,
   synthesizeSpeech,
   fetchResult,
+  requestImpresso,
+  getImpressos,
 } = defaultClient;

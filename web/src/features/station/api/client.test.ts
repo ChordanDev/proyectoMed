@@ -259,6 +259,95 @@ describe("station API client", () => {
     });
   });
 
+  it("requests an impresso and decodes the released documents", async () => {
+    const responseBody = {
+      request_id: "req-1",
+      decision: "released",
+      released_impressos: [
+        {
+          id: "chest-xray",
+          title: "Radiografia de tórax",
+          category: "Exame de imagem",
+          content: "Sem sinais de consolidação.",
+        },
+      ],
+      newly_released: [
+        {
+          id: "chest-xray",
+          title: "Radiografia de tórax",
+          category: "Exame de imagem",
+          content: "Sem sinais de consolidação.",
+        },
+      ],
+      feedback_message: "Impresso liberado: Radiografia de tórax",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(responseBody));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    const result = await client.requestImpresso("session-1", {
+      text: "Solicito radiografia de tórax",
+    });
+
+    expect(result).toEqual(responseBody);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `${baseUrl}/api/stations/active/sessions/session-1/impressos/request`,
+    );
+    expect(init).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ text: "Solicito radiografia de tórax" }),
+    });
+  });
+
+  it("lists the impressos released so far for a session", async () => {
+    const responseBody = {
+      released_impressos: [
+        {
+          id: "ecg",
+          title: "Eletrocardiograma",
+          category: "Exame complementar",
+          content: "Ritmo sinusal, sem alterações.",
+        },
+      ],
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(responseBody));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    const result = await client.getImpressos("session-1");
+
+    expect(result).toEqual(responseBody);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `${baseUrl}/api/stations/active/sessions/session-1/impressos`,
+    );
+    expect(init).toMatchObject({ method: "GET" });
+  });
+
+  it("decodes a 409 session_completed error when requesting an impresso", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: "session_completed", message: "A sessão já foi concluída." },
+          409,
+        ),
+      );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.requestImpresso("session-1", { text: "Solicito exame" }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 409,
+      code: "session_completed",
+      message: "A sessão já foi concluída.",
+    });
+  });
+
   it("cancels a stalled request at the configured deadline", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;

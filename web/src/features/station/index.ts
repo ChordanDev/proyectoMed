@@ -23,6 +23,13 @@ export {
   type CriterionStatus,
   type ResultCriterion,
   type SessionResult,
+  requestImpresso,
+  getImpressos,
+  type Impresso,
+  type ImpressoDecision,
+  type RequestImpressoRequest,
+  type RequestImpressoResponse,
+  type ListImpressosResponse,
 } from "./api/client";
 
 export {
