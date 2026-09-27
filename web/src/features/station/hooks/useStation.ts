@@ -42,6 +42,7 @@ export const useStation = (api: StationApi = defaultApi) => {
   const [result, setResult] = useState<SessionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [audioConsent, setAudioConsent] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const hasStartedRef = useRef(false);
   const isFinishingRef = useRef(false);
@@ -54,6 +55,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     isFinishingRef.current = false;
     pendingSendRef.current = null;
     pendingSendTokenRef.current = null;
+    setSessionId(null);
     setError(cause instanceof ApiError ? cause.message : unknownErrorMessage);
     setStatus("failed");
   }, []);
@@ -69,9 +71,11 @@ export const useStation = (api: StationApi = defaultApi) => {
       setAudioConsent(consent);
       setError(null);
       setResult(null);
+      setSessionId(null);
       setStatus("loading");
       try {
         sessionRef.current = await api.startSession({ audio_consent: consent });
+        setSessionId(sessionRef.current.session_id);
         setStatus("active");
       } catch (cause) {
         fail(cause);
@@ -149,5 +153,6 @@ export const useStation = (api: StationApi = defaultApi) => {
     status,
     error,
     audioConsent,
+    sessionId,
   };
 };
