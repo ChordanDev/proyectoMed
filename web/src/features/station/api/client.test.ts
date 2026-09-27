@@ -33,6 +33,7 @@ describe("station API client", () => {
       audio_consent: true,
       started_at: "2026-01-01T10:00:00Z",
       expires_at: "2026-01-01T10:30:00Z",
+      deadline_at: "2026-01-01T10:10:00Z",
       server_now: "2026-01-01T10:00:00Z",
     };
     const reply = {
@@ -134,6 +135,49 @@ describe("station API client", () => {
 
     const formData = init?.body as FormData;
     expect(formData.get("audio")).toBeInstanceOf(Blob);
+  });
+
+  it("decodes a session detail, including its transcript, for refresh/reconnect resume", async () => {
+    const sessionDetail = {
+      session_id: "session-1",
+      station_id: "station-1",
+      station_version: "1.0.0",
+      audio_consent: true,
+      started_at: "2026-01-01T10:00:00Z",
+      expires_at: "2026-01-01T10:30:00Z",
+      deadline_at: "2026-01-01T10:10:00Z",
+      status: "active",
+      completion_reason: null,
+      messages: [
+        { role: "learner", modality: "text", text: "Bom dia", at: "2026-01-01T10:00:05Z" },
+        { role: "patient", modality: "text", text: "Boa tarde", at: "2026-01-01T10:00:06Z" },
+      ],
+      server_now: "2026-01-01T10:05:00Z",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionDetail));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.getSession("session-1")).resolves.toEqual({
+      session_id: "session-1",
+      station_id: "station-1",
+      station_version: "1.0.0",
+      audio_consent: true,
+      started_at: "2026-01-01T10:00:00Z",
+      expires_at: "2026-01-01T10:30:00Z",
+      deadline_at: "2026-01-01T10:10:00Z",
+      status: "active",
+      completion_reason: null,
+      messages: [
+        { role: "learner", text: "Bom dia" },
+        { role: "patient", text: "Boa tarde" },
+      ],
+      server_now: "2026-01-01T10:05:00Z",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${baseUrl}/api/stations/active/sessions/session-1`,
+    );
   });
 
   it("posts JSON to synthesize and returns the audio blob", async () => {

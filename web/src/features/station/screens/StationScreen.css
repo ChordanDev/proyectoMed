@@ -24,6 +24,13 @@
   color: #111827;
 }
 
+.station-header__countdown {
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
 .station-header__finish-button {
   background: #dc2626;
   color: #ffffff;
