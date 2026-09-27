@@ -1,11 +1,12 @@
 defmodule BackendWeb.StationControllerTest do
   use BackendWeb.ConnCase, async: false
 
-  alias Backend.Conversation
-  alias Backend.StationLoader
+  alias Backend.Stations
+  alias Backend.Stations.Conversation
+  alias Backend.Stations.StationLoader
 
   defmodule TestSuccessAdapter do
-    @behaviour Backend.StationAI
+    @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
       {:ok, %{text: "Estou com um aperto forte no peito há duas horas."}}
@@ -13,7 +14,7 @@ defmodule BackendWeb.StationControllerTest do
   end
 
   defmodule TestErrorAdapter do
-    @behaviour Backend.StationAI
+    @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
       {:error, :provider_down}
@@ -21,7 +22,7 @@ defmodule BackendWeb.StationControllerTest do
   end
 
   defmodule BlockingStationAIAdapter do
-    @behaviour Backend.StationAI
+    @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
       parent = Application.get_env(:backend, :blocking_adapter_test_pid)
@@ -50,7 +51,7 @@ defmodule BackendWeb.StationControllerTest do
       conn = get(conn, ~p"/api/stations/active")
 
       assert %{"version" => version} = json_response(conn, 200)
-      assert version == StationLoader.active_version()
+      assert version == Stations.active_version()
     end
   end
 
@@ -72,7 +73,7 @@ defmodule BackendWeb.StationControllerTest do
                "server_now" => server_now_str
              } = response
 
-      active_pkg = StationLoader.active_package()
+      active_pkg = Stations.get_active_package()
       assert station_id == active_pkg["station_id"]
       assert station_version == active_pkg["version"]
 
@@ -83,8 +84,8 @@ defmodule BackendWeb.StationControllerTest do
       assert DateTime.diff(expires_at, started_at, :second) == 30 * 60
       assert abs(DateTime.diff(server_now, started_at, :second)) <= 2
 
-      # Verifies persistence in Backend.Conversation
-      assert {:ok, session} = Conversation.fetch(session_id)
+      # Verifies persistence in Backend.Stations
+      assert {:ok, session} = Stations.get_session(session_id)
       assert session.session_id == session_id
       assert session.station_id == station_id
       assert session.station_version == station_version
@@ -744,6 +745,244 @@ defmodule BackendWeb.StationControllerTest do
         refute Map.has_key?(criterion, "points")
         refute Map.has_key?(criterion, "weight")
       end
+    end
+  end
+
+  describe "POST /api/stations/active/sessions/:id/impressos/request" do
+    setup do
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: false
+        })
+
+      %{session: session}
+    end
+
+    test "matches and releases an impresso", %{conn: conn, session: session} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => "quero ver os sinais vitais"
+        })
+
+      response = json_response(conn, 200)
+
+      assert %{
+               "request_id" => request_id,
+               "decision" => "released",
+               "released_impressos" => released,
+               "newly_released" => newly_released,
+               "feedback_message" => feedback_message
+             } = response
+
+      assert is_binary(request_id)
+      assert [%{"id" => "exame-fisico-geral"}] = newly_released
+      assert released == newly_released
+      assert feedback_message =~ "Impresso liberado:"
+
+      for impresso <- released do
+        assert %{"id" => _, "title" => _, "category" => _, "content" => _} = impresso
+        refute Map.has_key?(impresso, "keywords")
+      end
+    end
+
+    test "an unavailable exam returns the exact required message", %{
+      conn: conn,
+      session: session
+    } do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => "tomografia de crânio"
+        })
+
+      assert %{
+               "decision" => "unavailable",
+               "newly_released" => [],
+               "released_impressos" => [],
+               "feedback_message" => "Exame não disponível nesta estação"
+             } = json_response(conn, 200)
+    end
+
+    test "repeating a request_id is idempotent", %{conn: conn, session: session} do
+      conn1 =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => "sinais vitais",
+          "request_id" => "client-1"
+        })
+
+      first = json_response(conn1, 200)
+
+      conn2 =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => "exames laboratoriais",
+          "request_id" => "client-1"
+        })
+
+      second = json_response(conn2, 200)
+
+      assert second["request_id"] == "client-1"
+      assert second["decision"] == first["decision"]
+      assert second["newly_released"] == first["newly_released"]
+
+      {:ok, updated} = Conversation.fetch(session.session_id)
+      assert length(updated.impresso_requests) == 1
+    end
+
+    test "rejects missing or blank text", %{conn: conn, session: session} do
+      for bad_text <- [nil, "", "   "] do
+        params = if is_nil(bad_text), do: %{}, else: %{"text" => bad_text}
+
+        conn_attempt =
+          post(
+            conn,
+            ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request",
+            params
+          )
+
+        assert json_response(conn_attempt, 422) == %{
+                 "error" => "invalid_request",
+                 "message" => "Requisição inválida: 'text' é obrigatório e não pode ser vazio."
+               }
+      end
+    end
+
+    test "returns 404 on unknown session id", %{conn: conn} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/nonexistent/impressos/request", %{
+          "text" => "ecg"
+        })
+
+      assert json_response(conn, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "returns 410 on expired session", %{conn: conn} do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      expired_session =
+        try do
+          pkg = StationLoader.active_package()
+
+          Conversation.start(%{
+            station_id: pkg["station_id"],
+            station_version: pkg["version"],
+            audio_consent: false
+          })
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      conn =
+        post(
+          conn,
+          ~p"/api/stations/active/sessions/#{expired_session.session_id}/impressos/request",
+          %{"text" => "ecg"}
+        )
+
+      assert json_response(conn, 410) == %{
+               "error" => "session_expired",
+               "message" => "A sessão expirou."
+             }
+    end
+
+    test "returns 409 on completed session", %{conn: conn, session: session} do
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => "ecg"
+        })
+
+      assert json_response(conn, 409) == %{
+               "error" => "session_completed",
+               "message" => "A sessão já foi concluída."
+             }
+    end
+  end
+
+  describe "GET /api/stations/active/sessions/:id/impressos" do
+    setup do
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: false
+        })
+
+      %{session: session}
+    end
+
+    test "returns released impressos in release order", %{conn: conn, session: session} do
+      {:ok, _} =
+        Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+
+      {:ok, _} =
+        Stations.request_impresso(session.session_id, %{"text" => "ecg"})
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos")
+
+      assert %{"released_impressos" => released} = json_response(conn, 200)
+      assert Enum.map(released, & &1["id"]) == ["exame-fisico-geral", "laudo-eletrocardiograma"]
+    end
+
+    test "is allowed on a completed session", %{conn: conn, session: session} do
+      {:ok, _} = Stations.request_impresso(session.session_id, %{"text" => "ecg"})
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos")
+
+      assert %{"released_impressos" => [%{"id" => "laudo-eletrocardiograma"}]} =
+               json_response(conn, 200)
+    end
+
+    test "returns 404 on unknown session id", %{conn: conn} do
+      conn = get(conn, ~p"/api/stations/active/sessions/nonexistent/impressos")
+
+      assert json_response(conn, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "returns 410 on expired session", %{conn: conn} do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      expired_session =
+        try do
+          pkg = StationLoader.active_package()
+
+          Conversation.start(%{
+            station_id: pkg["station_id"],
+            station_version: pkg["version"],
+            audio_consent: false
+          })
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      conn = get(conn, ~p"/api/stations/active/sessions/#{expired_session.session_id}/impressos")
+
+      assert json_response(conn, 410) == %{
+               "error" => "session_expired",
+               "message" => "A sessão expirou."
+             }
     end
   end
 end

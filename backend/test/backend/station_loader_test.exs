@@ -45,7 +45,7 @@ defmodule Backend.StationLoaderTest do
   end
 
   test "load_active logs and raises a localized error when a required field is invalid" do
-    with_canonical_package("{\"version\": \"1.0.0\"}", fn ->
+    with_canonical_package(~s({"version": "1.0.0"}), fn ->
       assert capture_log(fn ->
                assert_raise RuntimeError,
                             "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório.",

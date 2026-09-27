@@ -2,17 +2,17 @@ defmodule BackendWeb.TTSController do
   @moduledoc """
   `POST /api/stations/active/sessions/:id/synthesize`.
 
-  Accepts JSON `{text, voice?}`, hands it to `Backend.TTS` and streams the
+  Accepts JSON `{text, voice?}`, hands it to `Backend.Stations` and streams the
   synthesized audio back as `audio/mpeg`. The audio is never written to disk
   and neither the text nor the audio is logged.
   """
 
   use BackendWeb, :controller
 
-  alias Backend.TTS
+  alias Backend.Stations
 
   def create(conn, %{"id" => session_id} = params) do
-    case TTS.synthesize(session_id, params["text"], params["voice"]) do
+    case Stations.synthesize_speech(session_id, params["text"], params["voice"]) do
       {:ok, result} ->
         conn
         |> put_resp_content_type("audio/mpeg", nil)
@@ -41,5 +41,6 @@ defmodule BackendWeb.TTSController do
 
   defp error_details(_),
     do:
-      {400, "Texto ausente ou inválido. Vozes aceitas: #{Enum.join(TTS.allowed_voices(), ", ")}."}
+      {400,
+       "Texto ausente ou inválido. Vozes aceitas: #{Enum.join(Stations.allowed_tts_voices(), ", ")}."}
 end

@@ -1,4 +1,4 @@
-defmodule Backend.Transcription do
+defmodule Backend.Stations.Transcription do
   @moduledoc """
   Single point of contact between the backend and OpenAI's audio transcription API.
 
@@ -11,7 +11,7 @@ defmodule Backend.Transcription do
   and the client decides the fallback policy.
   """
 
-  alias Backend.Conversation
+  alias Backend.Stations.Conversation
 
   @allowed_formats ~w(m4a wav webm)
   @default_model "whisper-1"
@@ -98,4 +98,11 @@ defmodule Backend.Transcription do
   end
 
   defp parse(_body), do: {:error, :openai_unavailable}
+end
+
+defmodule Backend.Transcription do
+  @moduledoc false
+  defdelegate allowed_formats(), to: Backend.Stations.Transcription
+  defdelegate transcribe(session_id, audio, format), to: Backend.Stations.Transcription
+  defdelegate transcribe(session_id, audio, format, opts), to: Backend.Stations.Transcription
 end

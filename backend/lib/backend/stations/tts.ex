@@ -1,8 +1,8 @@
-defmodule Backend.TTS do
+defmodule Backend.Stations.TTS do
   @moduledoc """
   Single point of contact between the backend and OpenAI's text-to-speech API.
 
-  Symmetric to `Backend.Transcription`: text goes in, audio comes out. The
+  Symmetric to `Backend.Stations.Transcription`: text goes in, audio comes out. The
   synthesized audio is streamed straight back to the caller and discarded:
   nothing is persisted server-side and the text is never logged.
 
@@ -12,7 +12,7 @@ defmodule Backend.TTS do
   and the client decides the fallback policy (text-only render).
   """
 
-  alias Backend.Conversation
+  alias Backend.Stations.Conversation
 
   @allowed_voices ~w(alloy echo fable onyx nova shimmer)
   @default_voice "alloy"
@@ -113,4 +113,13 @@ defmodule Backend.TTS do
         {:error, :openai_unavailable}
     end
   end
+end
+
+defmodule Backend.TTS do
+  @moduledoc false
+  defdelegate allowed_voices(), to: Backend.Stations.TTS
+  defdelegate format(), to: Backend.Stations.TTS
+  defdelegate synthesize(session_id, text), to: Backend.Stations.TTS
+  defdelegate synthesize(session_id, text, voice), to: Backend.Stations.TTS
+  defdelegate synthesize(session_id, text, voice, opts), to: Backend.Stations.TTS
 end
