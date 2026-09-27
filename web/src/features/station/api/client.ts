@@ -16,7 +16,21 @@ export interface Session {
   audio_consent: boolean;
   started_at: string;
   expires_at: string;
+  deadline_at: string;
   server_now: string;
+}
+
+export type SessionStatus = "active" | "completed";
+
+export interface SessionMessage {
+  role: "learner" | "patient";
+  text: string;
+}
+
+export interface SessionDetail extends Session {
+  status: SessionStatus;
+  completion_reason: string | null;
+  messages: SessionMessage[];
 }
 
 export interface SendMessageRequest {
@@ -46,6 +60,12 @@ export interface ResultCriterion {
   status: CriterionStatus;
   evidence: string[];
   recommendation: string;
+}
+
+export interface TranscriptionResult {
+  text: string;
+  duration_seconds?: number | null;
+  transcribed_at: string;
 }
 
 export interface SessionResult {
@@ -120,7 +140,41 @@ const decodeSession = (value: unknown): Session => {
     audio_consent: booleanValue(body, "audio_consent", "session"),
     started_at: stringValue(body, "started_at", "session"),
     expires_at: stringValue(body, "expires_at", "session"),
+    deadline_at: stringValue(body, "deadline_at", "session"),
     server_now: stringValue(body, "server_now", "session"),
+  };
+};
+
+const sessionStatuses: readonly SessionStatus[] = ["active", "completed"];
+
+const decodeSessionMessage = (value: unknown): SessionMessage => {
+  const body = objectValue(value, "session message");
+  return {
+    role: literalValue(
+      body,
+      "role",
+      ["learner", "patient"],
+      "session message",
+    ),
+    text: stringValue(body, "text", "session message"),
+  };
+};
+
+const decodeSessionDetail = (value: unknown): SessionDetail => {
+  const body = objectValue(value, "session detail");
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : invalid("session detail");
+  const completionReason = body.completion_reason;
+  if (completionReason !== null && typeof completionReason !== "string") {
+    invalid("session detail");
+  }
+
+  return {
+    ...decodeSession(value),
+    status: literalValue(body, "status", sessionStatuses, "session detail"),
+    completion_reason: completionReason as string | null,
+    messages: messages.map(decodeSessionMessage),
   };
 };
 
@@ -157,6 +211,32 @@ const criterionStatuses: readonly CriterionStatus[] = [
   "omitted",
   "uncertain",
 ];
+
+const decodeAudio = (value: unknown): Blob => {
+  if (!(value instanceof Blob) || value.size === 0) throw new Error("audio");
+  return value;
+};
+
+const decodeTranscriptionResult = (value: unknown): TranscriptionResult => {
+  const body = objectValue(value, "transcription");
+  const duration = body.duration_seconds;
+  if (
+    duration !== undefined &&
+    duration !== null &&
+    typeof duration !== "number"
+  ) {
+    invalid("transcription");
+  }
+
+  const result: TranscriptionResult = {
+    text: stringValue(body, "text", "transcription"),
+    transcribed_at: stringValue(body, "transcribed_at", "transcription"),
+  };
+  if (duration !== undefined) {
+    result.duration_seconds = duration as number | null;
+  }
+  return result;
+};
 
 const decodeCriterion = (value: unknown): ResultCriterion => {
   const body = objectValue(value, "result criterion");
@@ -206,6 +286,8 @@ export const createApiClient = ({
     path: string,
     init: RequestInit,
     decode: (value: unknown) => T,
+    readBody: (response: Response) => Promise<unknown> = (response) =>
+      response.json(),
   ): Promise<T> => {
     const controller = new AbortController();
     let timedOut = false;
@@ -240,7 +322,7 @@ export const createApiClient = ({
 
       let body: unknown;
       try {
-        body = await response.json();
+        body = await (response.ok ? readBody(response) : response.json());
       } catch {
         if (timedOut) throw timeoutError();
 
@@ -280,6 +362,8 @@ export const createApiClient = ({
       request("/api/stations/active", { method: "GET" }, decodeActiveStation),
     startSession: (body: StartSessionRequest) =>
       request("/api/stations/active/sessions", jsonPost(body), decodeSession),
+    getSession: (sessionId: string) =>
+      request(sessionPath(sessionId), { method: "GET" }, decodeSessionDetail),
     sendMessage: (sessionId: string, body: SendMessageRequest) =>
       request(
         `${sessionPath(sessionId)}/messages`,
@@ -291,6 +375,29 @@ export const createApiClient = ({
         `${sessionPath(sessionId)}/finish`,
         jsonPost({ reason }),
         decodeCompletedSession,
+      ),
+    transcribeAudio: (
+      sessionId: string,
+      audioBlob: Blob,
+      filename = "audio.webm",
+    ) => {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, filename);
+      return request(
+        `${sessionPath(sessionId)}/transcribe`,
+        {
+          method: "POST",
+          body: formData,
+        },
+        decodeTranscriptionResult,
+      );
+    },
+    synthesizeSpeech: (sessionId: string, text: string, voice?: string) =>
+      request(
+        `${sessionPath(sessionId)}/synthesize`,
+        jsonPost(voice === undefined ? { text } : { text, voice }),
+        decodeAudio,
+        (response) => response.blob(),
       ),
     fetchResult: (sessionId: string) =>
       request(
@@ -309,7 +416,10 @@ const defaultClient = createApiClient({
 export const {
   getActiveStation,
   startSession,
+  getSession,
   sendMessage,
   finishSession,
+  transcribeAudio,
+  synthesizeSpeech,
   fetchResult,
 } = defaultClient;

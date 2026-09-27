@@ -24,7 +24,15 @@ defmodule Backend.StationsTest do
     @impl true
     def next_reply(_package, _context) do
       session_id = Process.get(:test_concurrent_session_id)
-      if session_id, do: Backend.Stations.complete_session(session_id, :user)
+
+      # A manual completion racing an in-flight turn is deferred until the turn
+      # resolves. Run it from a separate process so this synchronous adapter
+      # call does not deadlock waiting on its own future completion.
+      if session_id do
+        task = Task.async(fn -> Backend.Stations.complete_session(session_id, :user) end)
+        Process.put(:test_concurrent_complete_task, task)
+      end
+
       {:ok, %{text: "Resposta tardia", used_facts: []}}
     end
   end
@@ -124,6 +132,35 @@ defmodule Backend.StationsTest do
     test "complete_session/2 returns error on unknown session" do
       assert Stations.complete_session("non-existent", :user) == {:error, :not_found}
     end
+
+    test "complete_session/2 rejects an early reason=:timer finish arriving well before the deadline" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.complete_session(session.session_id, :timer) ==
+               {:error, :deadline_not_reached}
+
+      # The session stays active: the rejection did not complete it.
+      assert {:ok, %{status: :active}} = Stations.get_session(session.session_id)
+    end
+
+    test "complete_session/2 accepts reason=:timer within the tolerance window at the deadline" do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      Application.put_env(:backend, :station_duration_ms, 0)
+
+      on_exit(fn ->
+        if is_nil(original_duration) do
+          Application.delete_env(:backend, :station_duration_ms)
+        else
+          Application.put_env(:backend, :station_duration_ms, original_duration)
+        end
+      end)
+
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, completed} = Stations.complete_session(session.session_id, :timer)
+      assert completed.status == :completed
+      assert completed.completion_reason == :timer
+    end
   end
 
   describe "conversation & messaging" do
@@ -173,6 +210,31 @@ defmodule Backend.StationsTest do
              }) == {:error, :completed}
     end
 
+    test "create_message/2 rejects a turn received at/after the deadline without touching the transcript" do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      Application.put_env(:backend, :station_duration_ms, 30)
+
+      on_exit(fn ->
+        if is_nil(original_duration) do
+          Application.delete_env(:backend, :station_duration_ms)
+        else
+          Application.put_env(:backend, :station_duration_ms, original_duration)
+        end
+      end)
+
+      session = Stations.create_session(%{audio_consent: true})
+      Process.sleep(60)
+
+      assert Stations.create_message(session.session_id, %{
+               role: "learner",
+               modality: "text",
+               text: "Chegou tarde"
+             }) == {:error, :station_time_elapsed}
+
+      {:ok, unchanged} = Stations.get_session(session.session_id)
+      assert unchanged.messages == []
+    end
+
     test "create_message/2 returns error for unknown or expired session" do
       assert Stations.create_message("unknown", %{role: "learner", modality: "text", text: "Olá"}) ==
                {:error, :not_found}
@@ -208,7 +270,7 @@ defmodule Backend.StationsTest do
       assert List.last(session_after_retry.messages).text == result.reply_text
     end
 
-    test "create_message/2 handles race when session completes while generating reply" do
+    test "create_message/2 preserves an accepted pending turn's reply when completion races it" do
       Application.put_env(:backend, :station_ai_adapter, TestConcurrentCompleteAdapter)
       session = Stations.create_session(%{audio_consent: true})
       Process.put(:test_concurrent_session_id, session.session_id)
@@ -220,9 +282,19 @@ defmodule Backend.StationsTest do
                  text: "Olá"
                })
 
+      complete_task = Process.get(:test_concurrent_complete_task)
+      assert {:ok, completed_via_race} = Task.await(complete_task, 2_000)
+      assert completed_via_race.status == :completed
+      assert completed_via_race.completion_reason == :user
+
       assert {:ok, completed_session} = Stations.get_session(session.session_id)
       assert completed_session.status == :completed
-      assert length(completed_session.messages) == 1
+      assert completed_session.completion_reason == :user
+      assert length(completed_session.messages) == 2
+      [msg1, msg2] = completed_session.messages
+      assert msg1.role == :learner
+      assert msg2.role == :patient
+      assert msg2.text == "Resposta tardia"
     end
   end
 
@@ -286,6 +358,30 @@ defmodule Backend.StationsTest do
 
       {:ok, _} = Stations.complete_session(session.session_id, :user)
 
+      assert Stations.check_session_deadline(session.session_id) ==
+               {:error, :session_time_elapsed}
+    end
+
+    test "check_session_deadline/1 is genuinely time-based: it flips once the deadline passes, without completing the session" do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      Application.put_env(:backend, :station_duration_ms, 50)
+
+      on_exit(fn ->
+        if is_nil(original_duration) do
+          Application.delete_env(:backend, :station_duration_ms)
+        else
+          Application.put_env(:backend, :station_duration_ms, original_duration)
+        end
+      end)
+
+      session = Stations.create_session(%{audio_consent: true})
+      assert Stations.check_session_deadline(session.session_id) == {:ok, :within_deadline}
+
+      Process.sleep(80)
+
+      # Time-based regardless of whether the auto-completion timer has already
+      # fired: an active session past its deadline and a completed session both
+      # report :session_time_elapsed.
       assert Stations.check_session_deadline(session.session_id) ==
                {:error, :session_time_elapsed}
     end
