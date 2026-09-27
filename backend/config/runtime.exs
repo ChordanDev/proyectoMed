@@ -55,6 +55,18 @@ if voice = System.get_env("OPENAI_TTS_VOICE") do
   config :backend, :openai_tts_voice, voice
 end
 
+if url = System.get_env("LIVEKIT_URL") do
+  config :backend, :livekit_url, url
+end
+
+if api_key = System.get_env("LIVEKIT_API_KEY") do
+  config :backend, :livekit_api_key, api_key
+end
+
+if api_secret = System.get_env("LIVEKIT_API_SECRET") do
+  config :backend, :livekit_api_secret, api_secret
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

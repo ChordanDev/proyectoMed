@@ -27,5 +27,9 @@ defmodule BackendWeb.Router do
     post "/active/sessions/:id/synthesize",
          TTSController,
          :create
+
+    post "/active/sessions/:id/voice",
+         VoiceSessionController,
+         :create
   end
 end
