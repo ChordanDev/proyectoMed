@@ -12,6 +12,17 @@ defmodule Backend.Stations.Evaluator do
       tentative. The recommendation field provides what to practice next.
     * No global score, no readiness verdict, and no Revalida-readiness claims
       appear anywhere in the output.
+
+  A rubric criterion may also carry an optional `"impresso_ids"` list. When
+  present, the transcript argument may be the full session map (as returned
+  by `Backend.Stations.Conversation`) so its `impresso_requests` events are
+  available: an event whose `station_version` matches the package version
+  and whose `released_ids` include one of the criterion's `impresso_ids` (and
+  is authored in the package) upgrades the criterion to `:met`, adding one
+  evidence entry per contributing event (`"impresso:<id> (request
+  <request_id>)"`). Impresso evidence only ever upgrades a criterion; it
+  never downgrades one, and an event that released nothing (an unavailable
+  request) never counts. Criteria without `"impresso_ids"` are unaffected.
   """
 
   @type criterion_status :: :met | :omitted | :uncertain
@@ -197,10 +208,20 @@ defmodule Backend.Stations.Evaluator do
   defp evaluate_built_in(package, transcript, _opts) do
     rubric = get_rubric(package)
     normalized_messages = normalize_transcript(transcript)
+    impresso_requests = extract_impresso_requests(transcript)
+    authored_impresso_ids = extract_authored_impresso_ids(package)
+    package_version = get_field(package, "version")
 
     criteria =
       Enum.map(rubric, fn criterion ->
-        evaluate_criterion(criterion, package, normalized_messages)
+        evaluate_criterion(
+          criterion,
+          package,
+          normalized_messages,
+          impresso_requests,
+          authored_impresso_ids,
+          package_version
+        )
       end)
 
     %{criteria: criteria}
@@ -212,7 +233,14 @@ defmodule Backend.Stations.Evaluator do
 
   defp get_rubric(_), do: []
 
-  defp evaluate_criterion(criterion, package, messages) do
+  defp evaluate_criterion(
+         criterion,
+         package,
+         messages,
+         impresso_requests,
+         authored_impresso_ids,
+         package_version
+       ) do
     id = get_field(criterion, "id") || ""
 
     recommendation =
@@ -231,37 +259,89 @@ defmodule Backend.Stations.Evaluator do
     passive_matches = for {:passive, excerpt} <- classified_excerpts, do: excerpt
     partial_matches = for {:partial, excerpt} <- classified_excerpts, do: excerpt
 
-    cond do
-      decisive_matches != [] ->
-        %{
-          id: id,
-          status: :met,
-          evidence: decisive_matches,
-          recommendation: recommendation
-        }
+    base_result =
+      cond do
+        decisive_matches != [] ->
+          %{
+            id: id,
+            status: :met,
+            evidence: decisive_matches,
+            recommendation: recommendation
+          }
 
-      ambiguous_matches != [] or passive_matches != [] or partial_matches != [] ->
-        evidence =
-          case ambiguous_matches ++ passive_matches ++ partial_matches do
-            [] -> []
-            matches -> matches
-          end
+        ambiguous_matches != [] or passive_matches != [] or partial_matches != [] ->
+          %{
+            id: id,
+            status: :uncertain,
+            evidence: ambiguous_matches ++ passive_matches ++ partial_matches,
+            recommendation: recommendation
+          }
 
-        %{
-          id: id,
-          status: :uncertain,
-          evidence: evidence,
-          recommendation: recommendation
-        }
+        true ->
+          %{
+            id: id,
+            status: :omitted,
+            evidence: [],
+            recommendation: recommendation
+          }
+      end
 
-      true ->
-        %{
-          id: id,
-          status: :omitted,
-          evidence: [],
-          recommendation: recommendation
-        }
+    impresso_ids = get_field(criterion, "impresso_ids") || []
+
+    impresso_evidence =
+      if impresso_ids == [] do
+        []
+      else
+        collect_impresso_evidence(
+          impresso_ids,
+          impresso_requests,
+          authored_impresso_ids,
+          package_version
+        )
+      end
+
+    apply_impresso_evidence(base_result, impresso_evidence)
+  end
+
+  defp apply_impresso_evidence(result, []), do: result
+
+  defp apply_impresso_evidence(result, impresso_evidence) do
+    %{result | status: :met, evidence: result.evidence ++ impresso_evidence}
+  end
+
+  defp collect_impresso_evidence(
+         impresso_ids,
+         impresso_requests,
+         authored_impresso_ids,
+         package_version
+       ) do
+    for event <- impresso_requests,
+        event_field(event, :station_version) == package_version,
+        released_id <- event_field(event, :released_ids) || [],
+        released_id in impresso_ids,
+        MapSet.member?(authored_impresso_ids, released_id) do
+      %{
+        role: :impresso,
+        text: "impresso:#{released_id} (request #{event_field(event, :request_id)})"
+      }
     end
+  end
+
+  defp event_field(event, key) when is_map(event) do
+    Map.get(event, key) || Map.get(event, Atom.to_string(key))
+  end
+
+  defp extract_impresso_requests(transcript) when is_map(transcript) do
+    transcript[:impresso_requests] || transcript["impresso_requests"] || []
+  end
+
+  defp extract_impresso_requests(_transcript), do: []
+
+  defp extract_authored_impresso_ids(package) do
+    (get_field(package, "impressos") || [])
+    |> Enum.map(&get_field(&1, "id"))
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
   end
 
   defp classify_message(%{text: text} = msg, inquiry_terms, context_terms) do
