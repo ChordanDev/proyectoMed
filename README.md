@@ -88,6 +88,77 @@ may instead serve the SPA and API from the same origin.
 
 ---
 
+## Voice session (LiveKit) — manual test
+
+The real-time voice plane (#117) is not covered by the automated suites, which
+run without production credentials. Verify it manually against a local
+`livekit-server`.
+
+**Install:**
+
+```sh
+brew install livekit livekit-cli
+```
+
+**Run a dev LiveKit server** (uses the well-known dev keys `devkey` / `secret`,
+listening on `ws://127.0.0.1:7880`):
+
+```sh
+livekit-server --dev
+```
+
+**Start the backend** with LiveKit configured, then the web SPA as usual:
+
+```sh
+LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
+  ( cd backend && mix phx.server )
+
+npm --prefix web run dev
+```
+
+**Checklist:**
+
+1. Open the SPA, accept the audio consent checkbox, press **Conectar voz**.
+   The browser prompts for microphone permission; the panel status moves to
+   "Voz conectada" once granted.
+2. From another terminal, confirm the room and the learner's published track:
+
+   ```sh
+   lk room list --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   lk room participants list station-session-<session_id> \
+     --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ```
+
+   One participant (`learner-<session_id>`) should show one published audio
+   track.
+3. Simulate the patient's audio track and confirm you can hear it in the
+   browser:
+
+   ```sh
+   lk load-test --room station-session-<session_id> --audio-publishers 1 \
+     --identity-prefix patient-test \
+     --url ws://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ```
+
+   (`lk room join --publish-demo` only publishes a demo *video* track; use
+   `load-test --audio-publishers` for an audio track, or `room join --publish
+   <file>.ogg` to publish a specific pre-encoded audio file.)
+4. Finish or exit the station and confirm the room disappears from
+   `lk room list` (Phoenix deletes it on completion; the periodic sweep
+   catches anything left over).
+5. Without `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` set on the
+   backend, confirm the panel shows "Falha na conexão de voz" /
+   `voice_unavailable` and the text station still works end to end.
+6. Press **Conectar voz** repeatedly in a short burst to see the `429`
+   rate-limit error surface in the panel.
+
+**No secret reaches the browser:** open DevTools → Network while connecting
+and confirm the only LiveKit-related payload is the short-lived
+`POST .../voice` response (`url`, `token`, `room`, `identity`, `expires_at`);
+`LIVEKIT_API_SECRET` never appears client-side.
+
+---
+
 ## Test
 
 The root entry point runs web Vitest and Phoenix ExUnit in sequence and
@@ -148,11 +219,18 @@ bash tests/scripts/test_red.sh
 
 ### Audio / voice input
 
-The web SPA accepts voice input through the browser Web Audio API /
-`MediaRecorder` or Web Speech API (`webkitSpeechRecognition`). When voice is
-unavailable (permissions denied, unsupported browser), the SPA falls back to
-text-only input. `NoticeScreen` requires explicit audio consent whenever voice
-support is enabled; callers can pass `voiceSupport={false}` for text-only mode.
+Voice runs over a LiveKit WebRTC room (#117): the browser publishes one
+microphone track and subscribes to one patient audio track through
+`livekit-client`, joined with a short-lived, session-scoped token minted by
+`Backend.Stations` (`POST /api/stations/active/sessions/:id/voice`). LiveKit
+carries media only; Phoenix stays the authority for session state and deletes
+the room on completion, expiry, or learner exit. When LiveKit is not
+configured on the backend, or the microphone permission is denied, the panel
+reports the failure and the text path keeps working unaffected.
+`NoticeScreen` requires explicit audio consent whenever voice support is
+enabled; callers can pass `voiceSupport={false}` for text-only mode. See
+["Voice session (LiveKit) — manual test"](#voice-session-livekit--manual-test)
+above for how to exercise it locally.
 
 ### Other known limitations
 
