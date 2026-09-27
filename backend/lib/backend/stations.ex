@@ -480,9 +480,7 @@ defmodule Backend.Stations do
   end
 
   defp impresso_titles(impressos_by_id, ids) do
-    ids
-    |> Enum.map(fn id -> impressos_by_id[id]["title"] end)
-    |> Enum.join(", ")
+    Enum.map_join(ids, ", ", fn id -> impressos_by_id[id]["title"] end)
   end
 
   defp index_impressos(package) do
