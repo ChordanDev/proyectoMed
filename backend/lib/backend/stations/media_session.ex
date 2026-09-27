@@ -9,6 +9,7 @@ defmodule Backend.Stations.MediaSession do
   """
 
   use GenServer
+  require Logger
 
   alias Backend.Stations.Conversation
   alias Backend.Stations.LiveKit
@@ -45,22 +46,38 @@ defmodule Backend.Stations.MediaSession do
   end
 
   @doc """
-  Triggers one orphan-room sweep immediately: lists LiveKit rooms, keeps only
-  `station-session-*` rooms, and deletes each whose session is no longer
-  active (not found, expired, or completed). Covers expiry, invalidation,
-  and backend restarts. Exposed publicly because the periodic sweep is
+  Triggers one orphan-room sweep immediately, in the calling process: lists
+  LiveKit rooms, keeps only `station-session-*` rooms, and deletes each whose
+  session is no longer active (not found, expired, or completed). Covers
+  expiry, invalidation, and backend restarts. Runs outside the GenServer (the
+  ETS table is public) so it never contends with `check_rate_limit/1` or
+  `clear_rate_limit/1`. Exposed publicly because the periodic sweep is
   disabled in the test environment (see `config/test.exs`).
   """
   @spec sweep_orphans() :: :ok
   def sweep_orphans do
-    GenServer.call(__MODULE__, :sweep_orphans, :infinity)
+    do_sweep()
+  end
+
+  @doc """
+  Removes ETS rows whose newest recorded timestamp already fell outside the
+  rate-limit window. Runs on every periodic tick regardless of whether
+  LiveKit is configured or the orphan sweep is enabled, so a session that
+  received a token and never joined cannot leak a row forever. Exposed
+  publicly so tests can trigger it deterministically without waiting for the
+  tick interval.
+  """
+  @spec prune_stale_rate_limits() :: :ok
+  def prune_stale_rate_limits do
+    prune_stale_entries()
+    :ok
   end
 
   @impl true
   def init(_opts) do
     :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
-    if sweep_enabled?(), do: schedule_sweep()
-    {:ok, %{}}
+    schedule_tick()
+    {:ok, %{sweeping?: false}}
   end
 
   @impl true
@@ -87,16 +104,32 @@ defmodule Backend.Stations.MediaSession do
     {:reply, :ok, state}
   end
 
-  def handle_call(:sweep_orphans, _from, state) do
-    do_sweep()
-    {:reply, :ok, state}
+  @impl true
+  def handle_info(:tick, state) do
+    prune_stale_entries()
+    state = maybe_start_sweep(state)
+    schedule_tick()
+    {:noreply, state}
   end
 
-  @impl true
-  def handle_info(:scheduled_sweep, state) do
-    do_sweep()
-    schedule_sweep()
-    {:noreply, state}
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    {:noreply, %{state | sweeping?: false}}
+  end
+
+  # The scheduled sweep's HTTP work runs in its own unlinked task so a slow
+  # LiveKit never blocks this GenServer's mailbox (and therefore
+  # check_rate_limit/1, clear_rate_limit/1). `sweeping?` prevents overlapping
+  # sweeps if one tick's task outlives the next tick.
+  defp maybe_start_sweep(%{sweeping?: true} = state), do: state
+
+  defp maybe_start_sweep(state) do
+    if sweep_enabled?() and LiveKit.configured?() do
+      {:ok, pid} = Task.start(fn -> do_sweep() end)
+      Process.monitor(pid)
+      %{state | sweeping?: true}
+    else
+      state
+    end
   end
 
   defp do_sweep do
@@ -117,7 +150,16 @@ defmodule Backend.Stations.MediaSession do
     session_id = String.replace_prefix(room_name, @room_prefix, "")
 
     unless active_session?(session_id) do
-      RoomService.delete_room(room_name)
+      case RoomService.delete_room(room_name) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "LiveKit orphan room cleanup failed for session #{session_id}: #{inspect(reason)}"
+          )
+      end
+
       :ets.delete(@table, session_id)
     end
   end
@@ -126,8 +168,20 @@ defmodule Backend.Stations.MediaSession do
     match?({:ok, %{status: :active}}, Conversation.fetch(session_id))
   end
 
-  defp schedule_sweep do
-    Process.send_after(self(), :scheduled_sweep, sweep_interval_ms())
+  defp prune_stale_entries do
+    now = System.monotonic_time(:millisecond)
+    window = window_ms()
+
+    @table
+    |> :ets.tab2list()
+    |> Enum.each(fn {session_id, timestamps} ->
+      newest = Enum.max(timestamps, fn -> now - window end)
+      if now - newest >= window, do: :ets.delete(@table, session_id)
+    end)
+  end
+
+  defp schedule_tick do
+    Process.send_after(self(), :tick, sweep_interval_ms())
   end
 
   defp sweep_enabled? do

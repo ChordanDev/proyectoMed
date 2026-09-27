@@ -26,6 +26,11 @@ defmodule Backend.Stations.LiveKit.RoomService.HTTPAdapter do
     end
   end
 
+  # Bounded so a slow/unreachable LiveKit fails fast instead of holding a
+  # caller (e.g. the periodic orphan sweep, or session completion/discard)
+  # for Req's much longer 15 s default. Overridable via :livekit_req_options.
+  @default_timeout_ms :timer.seconds(3)
+
   defp request(rpc, payload) do
     with {:ok, config} <- LiveKit.config() do
       url = base_url(config.url) <> "/twirp/livekit.RoomService/" <> rpc
@@ -33,6 +38,10 @@ defmodule Backend.Stations.LiveKit.RoomService.HTTPAdapter do
 
       req_opts =
         [auth: {:bearer, token}, json: payload, retry: false]
+        |> Keyword.merge(
+          receive_timeout: @default_timeout_ms,
+          connect_options: [timeout: @default_timeout_ms]
+        )
         |> Keyword.merge(req_options())
 
       handle_response(Req.post(url, req_opts))

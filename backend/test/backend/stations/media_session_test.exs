@@ -1,5 +1,6 @@
 defmodule Backend.Stations.MediaSessionTest do
   use ExUnit.Case, async: false
+  import ExUnit.CaptureLog
 
   alias Backend.Stations.Conversation
   alias Backend.Stations.MediaSession
@@ -56,6 +57,67 @@ defmodule Backend.Stations.MediaSessionTest do
 
   defp unique_session_id do
     "media-session-test-" <> (:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false))
+  end
+
+  describe "prune_stale_rate_limits/0" do
+    test "removes rows whose newest timestamp fell outside the window, keeps fresh rows" do
+      Application.put_env(:backend, :livekit_rate_limit_window_ms, 10)
+      stale_id = unique_session_id()
+
+      assert MediaSession.check_rate_limit(stale_id) == :ok
+      Process.sleep(20)
+
+      fresh_id = unique_session_id()
+      assert MediaSession.check_rate_limit(fresh_id) == :ok
+
+      assert MediaSession.prune_stale_rate_limits() == :ok
+
+      assert :ets.lookup(MediaSession, stale_id) == []
+      assert :ets.lookup(MediaSession, fresh_id) != []
+    end
+  end
+
+  describe "scheduled sweep does not block the mailbox" do
+    defmodule BlockingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: :ok
+
+      @impl true
+      def list_rooms do
+        # Simulates a slow LiveKit: long enough to prove check_rate_limit/1
+        # stays fast, short enough to keep the test suite quick.
+        Process.sleep(300)
+        {:ok, []}
+      end
+    end
+
+    test "check_rate_limit/1 returns promptly while a scheduled sweep's HTTP call is slow" do
+      Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
+      Application.put_env(:backend, :livekit_api_key, "test-api-key")
+      Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
+      Application.put_env(:backend, :livekit_room_service, BlockingRoomService)
+      Application.put_env(:backend, :livekit_orphan_sweep_enabled, true)
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :livekit_url)
+        Application.delete_env(:backend, :livekit_api_key)
+        Application.delete_env(:backend, :livekit_api_secret)
+        Application.delete_env(:backend, :livekit_room_service)
+        Application.delete_env(:backend, :livekit_orphan_sweep_enabled)
+      end)
+
+      send(Process.whereis(MediaSession), :tick)
+      # Give the scheduled sweep time to start its (now slow) list_rooms call.
+      Process.sleep(20)
+
+      {elapsed_us, result} =
+        :timer.tc(fn -> MediaSession.check_rate_limit(unique_session_id()) end)
+
+      assert result == :ok
+      assert elapsed_us < 100_000
+    end
   end
 
   describe "sweep_orphans/0" do
@@ -142,6 +204,34 @@ defmodule Backend.Stations.MediaSessionTest do
 
       MediaSession.sweep_orphans()
       refute_receive {:deleted_room, _room}, 50
+    end
+
+    test "logs a warning (session id + reason only) when a room delete fails" do
+      defmodule FailingRoomService do
+        @behaviour Backend.Stations.LiveKit.RoomService
+
+        @impl true
+        def delete_room(room) do
+          send(Application.fetch_env!(:backend, :media_session_test_pid), {:deleted_room, room})
+          {:error, :livekit_unavailable}
+        end
+
+        @impl true
+        def list_rooms do
+          {:ok, Application.get_env(:backend, :media_session_test_rooms, [])}
+        end
+      end
+
+      Application.put_env(:backend, :livekit_room_service, FailingRoomService)
+
+      orphan_id = "does-not-exist"
+      Application.put_env(:backend, :media_session_test_rooms, ["station-session-" <> orphan_id])
+
+      log = capture_log(fn -> MediaSession.sweep_orphans() end)
+
+      assert_receive {:deleted_room, _room}
+      assert log =~ orphan_id
+      assert log =~ "livekit_unavailable"
     end
   end
 end
