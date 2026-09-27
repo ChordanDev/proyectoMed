@@ -164,6 +164,11 @@ const criterionStatuses: readonly CriterionStatus[] = [
   "uncertain",
 ];
 
+const decodeAudio = (value: unknown): Blob => {
+  if (!(value instanceof Blob) || value.size === 0) throw new Error("audio");
+  return value;
+};
+
 const decodeTranscriptionResult = (value: unknown): TranscriptionResult => {
   const body = objectValue(value, "transcription");
   const duration = body.duration_seconds;
@@ -233,6 +238,8 @@ export const createApiClient = ({
     path: string,
     init: RequestInit,
     decode: (value: unknown) => T,
+    readBody: (response: Response) => Promise<unknown> = (response) =>
+      response.json(),
   ): Promise<T> => {
     const controller = new AbortController();
     let timedOut = false;
@@ -267,7 +274,7 @@ export const createApiClient = ({
 
       let body: unknown;
       try {
-        body = await response.json();
+        body = await (response.ok ? readBody(response) : response.json());
       } catch {
         if (timedOut) throw timeoutError();
 
@@ -335,6 +342,13 @@ export const createApiClient = ({
         decodeTranscriptionResult,
       );
     },
+    synthesizeSpeech: (sessionId: string, text: string, voice?: string) =>
+      request(
+        `${sessionPath(sessionId)}/synthesize`,
+        jsonPost(voice === undefined ? { text } : { text, voice }),
+        decodeAudio,
+        (response) => response.blob(),
+      ),
     fetchResult: (sessionId: string) =>
       request(
         `${sessionPath(sessionId)}/result`,
@@ -355,5 +369,6 @@ export const {
   sendMessage,
   finishSession,
   transcribeAudio,
+  synthesizeSpeech,
   fetchResult,
 } = defaultClient;
