@@ -43,8 +43,14 @@ See issue #118.
 - T3 `70fbf20`: README "Voice transcription (Deepgram worker) — manual test".
 - RDD: not run (review mode not triggered in this session).
 
+- Manual test fixes: `cd5b76f` keyterm option, `51642b7` filter transcript text from logs,
+  `6bb5f22` endpointing 500 ms, `4eccc16` .env ignored + .env.example.
+- Manual test (LiveKit Cloud, real Deepgram key): worker joins, pt-BR turns committed in order,
+  `[FILTERED]` in Phoenix logs, duplicate -> 200, no bearer -> 401, reconnect continues numbering
+  (open risk resolved). `enable_recording: true` from LiveKit Cloud uploads only worker logs
+  without AgentSession (no audio/transcript/traces), verified in livekit-agents job.py.
+
 ## Next step
-User runs the README manual test with a real Deepgram key. Open risk: whether
-`AudioStream.from_participant` ends when the learner disconnects (checklist step 6).
-Then push + PR `feat/118-deepgram-worker` → `feat/116-realtime-voice` (user decision).
-Worker tests are not wired into `scripts/test.sh` / CI yet.
+Manual step E (finish station -> 422). Then push + PR `feat/118-deepgram-worker` ->
+`feat/116-realtime-voice` (user decision). Worker tests are not in `scripts/test.sh` / CI yet.
+Deepgram accuracy on clinical terms is imperfect; tune keyterms later (#121 realism check).
