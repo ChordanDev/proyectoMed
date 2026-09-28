@@ -67,6 +67,10 @@ if api_secret = System.get_env("LIVEKIT_API_SECRET") do
   config :backend, :livekit_api_secret, api_secret
 end
 
+if secret = System.get_env("VOICE_WORKER_SECRET") do
+  config :backend, :voice_worker_secret, secret
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

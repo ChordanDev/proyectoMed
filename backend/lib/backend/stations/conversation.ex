@@ -68,6 +68,17 @@ defmodule Backend.Stations.Conversation do
   end
 
   @doc """
+  Atomically appends a learner voice turn unless `turn_id` is not greater than
+  the last committed voice turn, which makes reconnects, retries and
+  reordered provider finals idempotent.
+  """
+  @spec commit_voice_turn(String.t(), pos_integer(), String.t()) ::
+          {:ok, :committed | :duplicate} | {:error, :not_found | :expired | :completed}
+  def commit_voice_turn(session_id, turn_id, text) do
+    GenServer.call(__MODULE__, {:commit_voice_turn, session_id, turn_id, text})
+  end
+
+  @doc """
   Idempotently discards a session from in-memory storage.
   Returns `:ok` whether the session existed or not.
   """
@@ -171,6 +182,31 @@ defmodule Backend.Stations.Conversation do
 
       {:ok, %{status: :completed}} ->
         {:reply, {:error, :completed}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:commit_voice_turn, session_id, turn_id, text}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        if turn_id <= Map.get(session, :last_voice_turn_id, 0) do
+          {:reply, {:ok, :duplicate}, state}
+        else
+          message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
+
+          session =
+            session
+            |> Map.put(:messages, session.messages ++ [message])
+            |> Map.put(:last_voice_turn_id, turn_id)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :committed}, state}
+        end
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}

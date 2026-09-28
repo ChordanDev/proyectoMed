@@ -26,5 +26,6 @@
       "practice_recommendation": "Practice opening chest pain assessments with onset questions.",
       "weight": 2
     }
-  ]
+  ],
+  "stt_keyterms": ["dor torácica", "precordial", "irradiação", "dispneia", "sudorese", "infarto", "angina", "eletrocardiograma"]
 }

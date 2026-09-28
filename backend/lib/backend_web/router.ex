@@ -32,4 +32,13 @@ defmodule BackendWeb.Router do
          VoiceSessionController,
          :create
   end
+
+  # Server-to-server API for the Python voice worker (#118); bearer-secret auth
+  # lives in the controller.
+  scope "/api/internal/voice", BackendWeb do
+    pipe_through :api
+
+    get "/sessions/:id", VoiceWorkerController, :show
+    post "/sessions/:id/transcripts", VoiceWorkerController, :create_transcript
+  end
 end

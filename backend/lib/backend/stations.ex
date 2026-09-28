@@ -355,6 +355,53 @@ defmodule Backend.Stations do
   end
 
   @doc """
+  Context the voice worker needs before streaming a session's audio to the
+  speech-to-text provider (#118). Only consented, active sessions qualify.
+  Keyterms come from the station package's optional `stt_keyterms`, so they
+  stay server-side.
+  """
+  @spec voice_worker_context(String.t()) ::
+          {:ok,
+           %{
+             session_id: String.t(),
+             language: String.t(),
+             keyterms: [String.t()],
+             last_turn_id: non_neg_integer()
+           }}
+          | {:error, :not_found | :expired | :completed | :no_consent}
+  def voice_worker_context(session_id) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(session),
+         :ok <- ensure_audio_consent(session) do
+      package = get_active_package()
+
+      {:ok,
+       %{
+         session_id: session_id,
+         language: package["language"] || "pt-BR",
+         keyterms: Enum.filter(List.wrap(package["stt_keyterms"]), &is_binary/1),
+         last_turn_id: Map.get(session, :last_voice_turn_id, 0)
+       }}
+    end
+  end
+
+  @doc """
+  Commits one final learner transcript from the voice worker as a learner
+  turn, at most once per monotonic `turn_id` (#118). Generating the patient
+  reply is #119.
+  """
+  @spec commit_voice_transcript(String.t(), pos_integer(), String.t()) ::
+          {:ok, :committed | :duplicate}
+          | {:error, :not_found | :expired | :completed | :no_consent}
+  def commit_voice_transcript(session_id, turn_id, text) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(session),
+         :ok <- ensure_audio_consent(session) do
+      Conversation.commit_voice_turn(session_id, turn_id, text)
+    end
+  end
+
+  @doc """
   Verification seam for generated patient replies before display or synthesis.
 
   Stable extension point for Ticket 14 / ADR-011 (#125, #127) Jev verification.

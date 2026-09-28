@@ -160,6 +160,91 @@ and confirm the only LiveKit-related payload is the short-lived
 `POST .../voice` response (`url`, `token`, `room`, `identity`, `expires_at`);
 `LIVEKIT_API_SECRET` never appears client-side.
 
+## Voice transcription (Deepgram worker) — manual test
+
+`voice-worker/` is a Python [LiveKit Agents](https://docs.livekit.io/agents/) worker
+(#118). It joins every `station-session-*` room, asks Phoenix whether the session is
+active and consented, streams only the learner microphone to Deepgram (`nova-3`,
+`pt-BR`, keyterms from the station package `stt_keyterms`), publishes interim
+transcripts to the room (data topic `transcript`) and POSTs each final utterance to
+Phoenix with a monotonic `turn_id`. Phoenix commits each turn at most once. The web
+does not render transcripts yet (#121) and no patient reply is generated yet (#119).
+
+**Prerequisites:** the LiveKit setup from the previous section, `brew install uv`, and
+a Deepgram API key.
+
+**Start the backend** with a worker secret, as an IEx session so you can read the
+committed turns:
+
+```sh
+cd backend && VOICE_WORKER_SECRET=dev-worker-secret LIVEKIT_URL=ws://127.0.0.1:7880 \
+  LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret iex -S mix phx.server
+```
+
+**Start the worker:**
+
+```sh
+cd voice-worker && uv sync
+LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
+  DEEPGRAM_API_KEY=<your-key> PHOENIX_URL=http://localhost:4000 \
+  VOICE_WORKER_SECRET=dev-worker-secret uv run python worker.py dev
+```
+
+The worker log shows it registered with the LiveKit server.
+
+**Checklist:**
+
+1. Open the SPA, accept audio consent, press **Conectar voz**. Then:
+
+   ```sh
+   lk room list --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ROOM=station-session-xxxx; SID=${ROOM#station-session-}
+   lk room participants list "$ROOM" \
+     --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ```
+
+   Two participants: `learner-$SID` and `voice-worker`.
+2. Say a short sentence in Portuguese (e.g. "Onde dói? Desde quando começou a dor
+   torácica?") and pause. Then:
+
+   ```sh
+   curl -s -H "authorization: Bearer dev-worker-secret" \
+     localhost:4000/api/internal/voice/sessions/$SID
+   ```
+
+   `last_turn_id` is `1` and `keyterms` lists the station terms. Speak again: it
+   becomes `2`. One utterance, even a long one, adds exactly one turn.
+3. In the IEx shell, read the committed text:
+
+   ```elixir
+   {:ok, s} = Backend.Stations.get_session("<SID>"); s.messages
+   ```
+
+   Each turn is a `%{role: :learner, modality: :voice, text: ...}` in order.
+4. Duplicates are ignored. Replay the last turn by hand:
+
+   ```sh
+   curl -s -X POST -H "authorization: Bearer dev-worker-secret" \
+     -H "content-type: application/json" -d '{"turn_id": 1, "text": "repetido"}' \
+     localhost:4000/api/internal/voice/sessions/$SID/transcripts
+   ```
+
+   It answers `{"status":"duplicate"}` and `s.messages` does not change.
+5. Without the header (or with a wrong secret) the same `curl` answers `401`.
+6. Reconnect: press **Desconectar voz**, then **Conectar voz**, speak again. The next
+   turn continues the numbering (no turn is reused or duplicated).
+7. Restart the worker (Ctrl-C, start again) and reconnect voice: numbering still
+   continues from Phoenix's `last_turn_id`.
+8. Start the worker with `DEEPGRAM_API_KEY=wrong`, connect and speak: the worker logs
+   `voice worker stopped for session <id>: auth`, with no key, transcript or audio in
+   the log. The station keeps working through text.
+9. Press **Finalizar estação**: the room is deleted, the worker job ends, and a
+   `curl` to the context endpoint answers `422` (`session_completed`).
+10. The worker never logs transcript text: scan its output from steps 2–7 and confirm
+    only lifecycle lines and session ids appear.
+
+Worker unit tests (no credentials): `cd voice-worker && uv run python -m unittest`.
+
 ---
 
 ## Test
@@ -230,6 +315,8 @@ carries media only; Phoenix stays the authority for session state and deletes
 the room on completion, expiry, or learner exit. When LiveKit is not
 configured on the backend, or the microphone permission is denied, the panel
 reports the failure and the text path keeps working unaffected.
+The `voice-worker/` Python process transcribes the learner microphone through
+Deepgram and commits final utterances to Phoenix (#118).
 `NoticeScreen` requires explicit audio consent whenever voice support is
 enabled; callers can pass `voiceSupport={false}` for text-only mode. See
 ["Voice session (LiveKit) — manual test"](#voice-session-livekit--manual-test)
