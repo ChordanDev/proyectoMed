@@ -17,6 +17,9 @@ from livekit.plugins import deepgram
 from transcripts import PhoenixClient, TurnTracker, VoiceFailure, classify_provider_error
 
 ROOM_PREFIX = "station-session-"
+# Silence that closes an utterance. Deepgram's plugin default (25 ms) split one sentence
+# into several turns in manual testing. ponytail: fixed value, tune from real sessions.
+ENDPOINTING_MS = 500
 logger = logging.getLogger("voice-worker")
 server = AgentServer()
 
@@ -55,6 +58,7 @@ async def transcribe(room, learner, context, tracker: TurnTracker, phoenix: Phoe
         model="nova-3",
         language=context["language"],
         interim_results=True,
+        endpointing_ms=ENDPOINTING_MS,
         keyterm=context["keyterms"],
     )
     audio = rtc.AudioStream.from_participant(
