@@ -1,3 +1,142 @@
+defmodule Backend.EvaluatorImpressoTest do
+  use ExUnit.Case, async: true
+
+  alias Backend.Evaluator
+
+  defp package_with_impresso_criterion(impresso_ids) do
+    %{
+      "station_id" => "chest-pain-initial-assessment",
+      "version" => "1.0.0",
+      "impressos" => [
+        %{"id" => "ecg", "title" => "ECG"},
+        %{"id" => "raio-x", "title" => "Raio-X"}
+      ],
+      "rubric" => [
+        %{
+          "id" => "ecg-request",
+          "description" => "Requests an ECG.",
+          "evidence_questions" => [],
+          "practice_recommendation" => "Ask for an ECG.",
+          "weight" => 1,
+          "impresso_ids" => impresso_ids
+        }
+      ]
+    }
+  end
+
+  defp impresso_event(overrides) do
+    Map.merge(
+      %{
+        request_id: "req-1",
+        station_id: "chest-pain-initial-assessment",
+        station_version: "1.0.0",
+        order: 1,
+        text: "ecg",
+        matched_ids: ["ecg"],
+        decision: :released,
+        released_ids: ["ecg"],
+        at: DateTime.utc_now()
+      },
+      overrides
+    )
+  end
+
+  test "criterion is met with impresso evidence when a listed impresso was released" do
+    package = package_with_impresso_criterion(["ecg"])
+
+    session = %{
+      messages: [],
+      impresso_requests: [impresso_event(%{})]
+    }
+
+    result = Evaluator.evaluate(package, session)
+    [criterion] = result.criteria
+
+    assert criterion.status == :met
+    assert [%{text: text}] = criterion.evidence
+    assert text == "impresso:ecg (request req-1)"
+  end
+
+  test "impresso evidence upgrades an otherwise-omitted criterion, never downgrades" do
+    package = package_with_impresso_criterion(["ecg"])
+
+    session = %{
+      messages: [%{role: :learner, text: "irrelevant question"}],
+      impresso_requests: [impresso_event(%{})]
+    }
+
+    result = Evaluator.evaluate(package, session)
+    [criterion] = result.criteria
+    assert criterion.status == :met
+  end
+
+  test "an event on a different station_version is ignored" do
+    package = package_with_impresso_criterion(["ecg"])
+
+    session = %{
+      messages: [],
+      impresso_requests: [impresso_event(%{station_version: "0.9.0"})]
+    }
+
+    result = Evaluator.evaluate(package, session)
+    [criterion] = result.criteria
+    assert criterion.status == :omitted
+    assert criterion.evidence == []
+  end
+
+  test "a released id that is not authored in the package is ignored" do
+    package = package_with_impresso_criterion(["unknown-id"])
+
+    session = %{
+      messages: [],
+      impresso_requests: [
+        impresso_event(%{released_ids: ["unknown-id"], matched_ids: ["unknown-id"]})
+      ]
+    }
+
+    result = Evaluator.evaluate(package, session)
+    [criterion] = result.criteria
+    assert criterion.status == :omitted
+  end
+
+  test "an unavailable request (empty released_ids) never counts as evidence" do
+    package = package_with_impresso_criterion(["ecg"])
+
+    session = %{
+      messages: [],
+      impresso_requests: [
+        impresso_event(%{decision: :unavailable, matched_ids: [], released_ids: []})
+      ]
+    }
+
+    result = Evaluator.evaluate(package, session)
+    [criterion] = result.criteria
+    assert criterion.status == :omitted
+  end
+
+  test "existing behaviour is unchanged when impresso_ids is absent" do
+    package =
+      package_with_impresso_criterion(nil)
+      |> put_in(["rubric", Access.at(0)], %{
+        "id" => "ecg-request",
+        "description" => "Requests an ECG.",
+        "evidence_questions" => [],
+        "practice_recommendation" => "Ask for an ECG.",
+        "weight" => 1
+      })
+
+    session = %{
+      messages: [],
+      impresso_requests: [impresso_event(%{})]
+    }
+
+    result = Evaluator.evaluate(package, session)
+    [criterion] = result.criteria
+    assert criterion.status == :omitted
+    assert criterion.evidence == []
+  end
+end
+
 defmodule Backend.EvaluatorTest do
   use ExUnit.Case, async: true
 

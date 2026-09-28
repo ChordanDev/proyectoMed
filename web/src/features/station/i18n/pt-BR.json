@@ -33,5 +33,12 @@
   "timeRemainingLabel": "Tempo restante para finalizar a estação",
   "playAudio": "Ouvir resposta",
   "stopAudio": "Parar áudio",
-  "loadingAudio": "Carregando áudio..."
+  "loadingAudio": "Carregando áudio...",
+  "impressoRequestButton": "Exame Físico / Exames",
+  "impressoModalTitle": "Solicitar Exame Físico ou Exame Complementar",
+  "impressoModalLabel": "Descreva a manobra de exame físico ou o exame complementar solicitado",
+  "impressoModalSubmit": "Solicitar",
+  "impressoModalCancel": "Cancelar",
+  "impressoDrawerToggle": "Documentos liberados",
+  "impressoDrawerEmpty": "Nenhum documento liberado ainda."
 }

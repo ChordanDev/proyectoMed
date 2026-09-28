@@ -21,6 +21,12 @@ defmodule BackendWeb.Router do
     post "/active/sessions/:id/finish", StationController, :finish_session
     get "/active/sessions/:id/result", StationController, :show_result
 
+    post "/active/sessions/:id/impressos/request",
+         StationController,
+         :request_impresso
+
+    get "/active/sessions/:id/impressos", StationController, :list_impressos
+
     post "/active/sessions/:id/transcribe",
          TranscriptionController,
          :create

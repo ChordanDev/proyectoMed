@@ -137,6 +137,185 @@ defmodule Backend.ConversationTest do
              })
   end
 
+  describe "record_impresso_request/4" do
+    test "starts a session with empty impresso state" do
+      session = Conversation.start()
+      assert session.released_impressos == []
+      assert session.impresso_requests == []
+    end
+
+    test "appends an event and releases newly matched ids in order" do
+      session = Conversation.start()
+
+      assert {:ok, %{event: event, session: updated}} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-1",
+                 ["ecg", "raio-x"],
+                 "quero ecg e raio-x"
+               )
+
+      assert event.request_id == "req-1"
+      assert event.station_id == session.station_id
+      assert event.station_version == session.station_version
+      assert event.order == 1
+      assert event.matched_ids == ["ecg", "raio-x"]
+      assert event.decision == :released
+      assert event.released_ids == ["ecg", "raio-x"]
+      assert %DateTime{} = event.at
+
+      assert updated.released_impressos == ["ecg", "raio-x"]
+      assert updated.impresso_requests == [event]
+    end
+
+    test "a second request only releases the newly matched ids and increments order" do
+      session = Conversation.start()
+
+      {:ok, _} =
+        Backend.Stations.Conversation.record_impresso_request(
+          session.session_id,
+          "req-1",
+          ["ecg"],
+          "ecg"
+        )
+
+      assert {:ok, %{event: event, session: updated}} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-2",
+                 ["ecg", "raio-x"],
+                 "ecg e raio-x"
+               )
+
+      assert event.order == 2
+      assert event.decision == :released
+      assert event.released_ids == ["raio-x"]
+      assert updated.released_impressos == ["ecg", "raio-x"]
+    end
+
+    test "already-released matches produce an already_released event with no new releases" do
+      session = Conversation.start()
+
+      {:ok, _} =
+        Backend.Stations.Conversation.record_impresso_request(
+          session.session_id,
+          "req-1",
+          ["ecg"],
+          "ecg"
+        )
+
+      assert {:ok, %{event: event, session: updated}} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-2",
+                 ["ecg"],
+                 "ecg de novo"
+               )
+
+      assert event.decision == :already_released
+      assert event.released_ids == []
+      assert updated.released_impressos == ["ecg"]
+    end
+
+    test "no matched ids produce an unavailable event releasing nothing" do
+      session = Conversation.start()
+
+      assert {:ok, %{event: event, session: updated}} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-1",
+                 [],
+                 "tomografia de cranio"
+               )
+
+      assert event.decision == :unavailable
+      assert event.released_ids == []
+      assert updated.released_impressos == []
+    end
+
+    test "a repeated request_id returns the original event without appending a new one" do
+      session = Conversation.start()
+
+      {:ok, %{event: first_event}} =
+        Backend.Stations.Conversation.record_impresso_request(
+          session.session_id,
+          "req-1",
+          ["ecg"],
+          "ecg"
+        )
+
+      assert {:ok, %{event: replayed_event, session: updated}} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-1",
+                 ["ecg", "raio-x"],
+                 "ecg (should be ignored)"
+               )
+
+      assert replayed_event == first_event
+      assert length(updated.impresso_requests) == 1
+    end
+
+    test "returns not_found, expired and completed like the other session calls" do
+      assert {:error, :not_found} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 "unknown",
+                 "req-1",
+                 ["ecg"],
+                 "ecg"
+               )
+
+      session = Conversation.start()
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      assert {:error, :completed} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-1",
+                 ["ecg"],
+                 "ecg"
+               )
+
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      expired_session =
+        try do
+          Conversation.start()
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      assert {:error, :expired} =
+               Backend.Stations.Conversation.record_impresso_request(
+                 expired_session.session_id,
+                 "req-1",
+                 ["ecg"],
+                 "ecg"
+               )
+    end
+
+    test "discard removes released impressos and requests along with the session" do
+      session = Conversation.start()
+
+      {:ok, _} =
+        Backend.Stations.Conversation.record_impresso_request(
+          session.session_id,
+          "req-1",
+          ["ecg"],
+          "ecg"
+        )
+
+      :ok = Conversation.discard(session.session_id)
+
+      assert {:error, :not_found} = Conversation.fetch(session.session_id)
+    end
+  end
+
   describe "authoritative deadline and pending turns (Ticket 133)" do
     setup do
       original_duration = Application.get_env(:backend, :station_duration_ms)

@@ -8,6 +8,7 @@ defmodule Backend.Stations.StationPackage do
 
   @version "1.0.0"
   @required_string_fields ~w(station_id version language display_title)a
+  @valid_impresso_categories ~w(physical_exam laboratory imaging report)
 
   @spec version() :: String.t()
   def version, do: @version
@@ -24,6 +25,7 @@ defmodule Backend.Stations.StationPackage do
       |> validate_list_of_entries(package, "response_rules", ["id", "instruction"])
       |> validate_list_of_entries(package, "expected_actions", ["id", "description"])
       |> validate_rubric(package)
+      |> validate_impressos(package)
 
     case errors do
       [] -> {:ok, package}
@@ -142,6 +144,96 @@ defmodule Backend.Stations.StationPackage do
 
   defp validate_weight(errors, _criterion),
     do: ["rubric criteria require a numeric weight" | errors]
+
+  defp validate_impressos(errors, %{"impressos" => impressos}) when is_list(impressos) do
+    errors
+    |> validate_impresso_entries(impressos)
+    |> validate_impresso_unique_ids(impressos)
+  end
+
+  defp validate_impressos(errors, %{"impressos" => nil}), do: errors
+  defp validate_impressos(errors, %{"impressos" => _}), do: ["impressos must be a list" | errors]
+  defp validate_impressos(errors, _package), do: errors
+
+  defp validate_impresso_entries(errors, impressos) do
+    Enum.reduce(impressos, errors, &validate_impresso_entry/2)
+  end
+
+  defp validate_impresso_entry(entry, errors) when is_map(entry) do
+    errors
+    |> validate_impresso_strings(entry)
+    |> validate_impresso_category(entry)
+    |> validate_impresso_keywords(entry)
+    |> validate_impresso_content(entry)
+  end
+
+  defp validate_impresso_entry(_entry, errors) do
+    ["impressos entries must be objects" | errors]
+  end
+
+  defp validate_impresso_strings(errors, entry) do
+    Enum.reduce(["id", "title"], errors, fn field, errors ->
+      if is_binary(entry[field]) and entry[field] != "" do
+        errors
+      else
+        ["impressos entries require a non-empty #{field}" | errors]
+      end
+    end)
+  end
+
+  defp validate_impresso_category(errors, %{"category" => category})
+       when category in @valid_impresso_categories,
+       do: errors
+
+  defp validate_impresso_category(errors, %{"category" => category})
+       when is_binary(category) and category != "" do
+    [
+      "impressos entries category must be one of: #{Enum.join(@valid_impresso_categories, ", ")}"
+      | errors
+    ]
+  end
+
+  defp validate_impresso_category(errors, _entry) do
+    ["impressos entries require a non-empty category" | errors]
+  end
+
+  defp validate_impresso_keywords(errors, %{"keywords" => keywords}) when is_list(keywords) do
+    if Enum.all?(keywords, &(is_binary(&1) and &1 != "")) do
+      errors
+    else
+      ["impressos entries keywords must contain non-empty strings" | errors]
+    end
+  end
+
+  defp validate_impresso_keywords(errors, _entry) do
+    ["impressos entries keywords must be a list" | errors]
+  end
+
+  defp validate_impresso_content(errors, %{"content" => content})
+       when is_binary(content) and content != "",
+       do: errors
+
+  defp validate_impresso_content(errors, %{"content" => content})
+       when is_map(content) and map_size(content) > 0,
+       do: errors
+
+  defp validate_impresso_content(errors, _entry) do
+    ["impressos entries require non-empty string or structured content" | errors]
+  end
+
+  defp validate_impresso_unique_ids(errors, impressos) do
+    ids =
+      Enum.flat_map(impressos, fn
+        %{"id" => id} when is_binary(id) and id != "" -> [id]
+        _ -> []
+      end)
+
+    if length(ids) == length(Enum.uniq(ids)) do
+      errors
+    else
+      ["impressos entries must have unique ids" | errors]
+    end
+  end
 end
 
 defmodule Backend.StationPackage do

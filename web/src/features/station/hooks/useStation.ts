@@ -3,13 +3,17 @@ import {
   ApiError,
   fetchResult,
   finishSession,
+  getImpressos,
   getSession,
+  requestImpresso as requestImpressoApi,
   sendMessage,
   startSession,
   synthesizeSpeech,
   transcribeAudio,
   type FinishReason,
+  type Impresso,
   type MessageReply,
+  type RequestImpressoResponse,
   type SendMessageRequest,
   type Session,
   type SessionMessage,
@@ -32,6 +36,8 @@ export interface StationApi {
   fetchResult: typeof fetchResult;
   transcribeAudio: typeof transcribeAudio;
   synthesizeSpeech: typeof synthesizeSpeech;
+  requestImpresso: typeof requestImpressoApi;
+  getImpressos: typeof getImpressos;
 }
 
 const defaultApi: StationApi = {
@@ -42,10 +48,15 @@ const defaultApi: StationApi = {
   fetchResult,
   transcribeAudio,
   synthesizeSpeech,
+  requestImpresso: requestImpressoApi,
+  getImpressos,
 };
 
 const unknownErrorMessage =
   "A estação não pôde ser concluída. Você pode reiniciar.";
+
+const unknownImpressoErrorMessage =
+  "Não foi possível solicitar o impresso. Tente novamente.";
 
 // A tick close to the deadline is deliberately more frequent than the
 // server's own ~2s early-finish tolerance, so the client rarely needs a
@@ -92,6 +103,8 @@ export const useStation = (api: StationApi = defaultApi) => {
   const [deadlineAtMs, setDeadlineAtMs] = useState<number | null>(null);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [initialMessages, setInitialMessages] = useState<SessionMessage[]>([]);
+  const [impressos, setImpressos] = useState<Impresso[]>([]);
+  const [impressoError, setImpressoError] = useState<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const hasStartedRef = useRef(false);
   const isFinishingRef = useRef(false);
@@ -117,6 +130,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     timerFinishTriggeredRef.current = false;
     setDeadlineAtMs(null);
     clearPersistedSessionId();
+    setImpressoError(null);
     setError(cause instanceof ApiError ? cause.message : unknownErrorMessage);
     setStatus("failed");
   }, []);
@@ -132,6 +146,8 @@ export const useStation = (api: StationApi = defaultApi) => {
     clearPersistedSessionId();
     setDeadlineAtMs(null);
     setInitialMessages([]);
+    setImpressos([]);
+    setImpressoError(null);
     setError(null);
     setResult(null);
     setStatus("idle");
@@ -151,6 +167,8 @@ export const useStation = (api: StationApi = defaultApi) => {
       setError(null);
       setResult(null);
       setInitialMessages([]);
+      setImpressos([]);
+      setImpressoError(null);
       setStatus("loading");
       try {
         const session = await api.startSession({ audio_consent: consent });
@@ -318,6 +336,32 @@ export const useStation = (api: StationApi = defaultApi) => {
     [api],
   );
 
+  const requestImpresso = useCallback(
+    async (text: string): Promise<RequestImpressoResponse | null> => {
+      const session = sessionRef.current;
+      if (!session || isFinishingRef.current) return null;
+
+      try {
+        const response = await api.requestImpresso(session.session_id, {
+          text,
+        });
+        if (sessionRef.current !== session) return null;
+
+        setImpressos(response.released_impressos);
+        setImpressoError(null);
+        return response;
+      } catch (cause) {
+        if (sessionRef.current !== session) return null;
+
+        setImpressoError(
+          cause instanceof ApiError ? cause.message : unknownImpressoErrorMessage,
+        );
+        return null;
+      }
+    },
+    [api],
+  );
+
   // Resume an in-progress (or just-completed) session after a refresh or
   // reconnect, from the session id persisted in sessionStorage.
   useEffect(() => {
@@ -355,6 +399,15 @@ export const useStation = (api: StationApi = defaultApi) => {
         timerFinishTriggeredRef.current = false;
         setInitialMessages(detail.messages);
         setStatus("active");
+
+        // Best effort: restore documents released before the refresh so
+        // they remain visible; a failure here does not block resume.
+        try {
+          const impressosResponse = await api.getImpressos(detail.session_id);
+          if (!cancelled) setImpressos(impressosResponse.released_impressos);
+        } catch {
+          // Ignore: the impressos drawer will simply start out empty.
+        }
       } catch (cause) {
         if (cancelled) return;
         // An unknown/expired/not-found session cannot be resumed: clear the
@@ -410,6 +463,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     send,
     transcribe,
     synthesize,
+    requestImpresso,
     finish,
     reset,
     result,
@@ -418,5 +472,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     audioConsent,
     remainingMs,
     initialMessages,
+    impressos,
+    impressoError,
   };
 };
