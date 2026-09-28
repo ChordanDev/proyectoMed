@@ -55,7 +55,7 @@ async def transcribe(room, learner, context, tracker: TurnTracker, phoenix: Phoe
         model="nova-3",
         language=context["language"],
         interim_results=True,
-        keyterms=context["keyterms"],
+        keyterm=context["keyterms"],
     )
     audio = rtc.AudioStream.from_participant(
         participant=learner, track_source=rtc.TrackSource.SOURCE_MICROPHONE, sample_rate=16000
