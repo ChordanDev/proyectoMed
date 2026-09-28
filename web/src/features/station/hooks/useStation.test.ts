@@ -4,7 +4,10 @@ import { afterEach } from "vitest";
 import {
   ApiError,
   type CompletedSession,
+  type Impresso,
+  type ListImpressosResponse,
   type MessageReply,
+  type RequestImpressoResponse,
   type Session,
   type SessionDetail,
   type SessionResult,
@@ -56,6 +59,25 @@ const message = {
   text: "Quando a dor começou?",
 };
 
+const chestXray: Impresso = {
+  id: "chest-xray",
+  title: "Radiografia de tórax",
+  category: "Exame de imagem",
+  content: "Sem sinais de consolidação.",
+};
+
+const impressoResponse: RequestImpressoResponse = {
+  request_id: "req-1",
+  decision: "released",
+  released_impressos: [chestXray],
+  newly_released: [chestXray],
+  feedback_message: "Impresso liberado: Radiografia de tórax",
+};
+
+const impressosListResponse: ListImpressosResponse = {
+  released_impressos: [chestXray],
+};
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -83,6 +105,8 @@ const apiMock = (overrides: Partial<StationApi> = {}): StationApi => ({
   synthesizeSpeech: vi
     .fn()
     .mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" })),
+  requestImpresso: vi.fn().mockResolvedValue(impressoResponse),
+  getImpressos: vi.fn().mockResolvedValue({ released_impressos: [] }),
   ...overrides,
 });
 
@@ -845,5 +869,111 @@ describe("useStation", () => {
     expect(blob).toBeNull();
     expect(result.current.status).toBe("active");
     expect(result.current.error).toBeNull();
+  });
+
+  describe("impresso requests", () => {
+    it("resolves null without calling the API when there is no live session", async () => {
+      const requestImpresso = vi.fn();
+      const api = apiMock({ requestImpresso });
+      const { result } = renderHook(() => useStation(api));
+
+      await expect(
+        result.current.requestImpresso("Solicito radiografia"),
+      ).resolves.toBeNull();
+      expect(requestImpresso).not.toHaveBeenCalled();
+    });
+
+    it("requests an impresso and updates the released impressos from the response", async () => {
+      const requestImpresso = vi.fn().mockResolvedValue(impressoResponse);
+      const api = apiMock({ requestImpresso });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      let response: RequestImpressoResponse | null = null;
+      await act(async () => {
+        response = await result.current.requestImpresso("Solicito radiografia");
+      });
+
+      expect(requestImpresso).toHaveBeenCalledWith("session-1", {
+        text: "Solicito radiografia",
+      });
+      expect(response).toEqual(impressoResponse);
+      expect(result.current.impressos).toEqual([chestXray]);
+      expect(result.current.impressoError).toBeNull();
+      expect(result.current.status).toBe("active");
+    });
+
+    it("surfaces an impresso request failure without failing the station", async () => {
+      const requestImpresso = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(422, "invalid_request", "Requisição inválida."),
+        );
+      const api = apiMock({ requestImpresso });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      let response: RequestImpressoResponse | null = impressoResponse;
+      await act(async () => {
+        response = await result.current.requestImpresso("");
+      });
+
+      expect(response).toBeNull();
+      expect(result.current.status).toBe("active");
+      expect(result.current.error).toBeNull();
+      expect(result.current.impressoError).toBe("Requisição inválida.");
+      expect(result.current.impressos).toEqual([]);
+    });
+
+    it("uses a safe pt-BR message when an unknown impresso request failure occurs", async () => {
+      const requestImpresso = vi
+        .fn()
+        .mockRejectedValue(new Error("socket details"));
+      const api = apiMock({ requestImpresso });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      await act(async () => {
+        await result.current.requestImpresso("Solicito radiografia");
+      });
+
+      expect(result.current.status).toBe("active");
+      expect(result.current.impressoError).toBe(
+        "Não foi possível solicitar o impresso. Tente novamente.",
+      );
+    });
+
+    it("restores previously released impressos when resuming an active session", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const resumedDetail: SessionDetail = {
+        ...session,
+        status: "active",
+        completion_reason: null,
+        messages: [],
+      };
+      const api = apiMock({
+        getSession: vi.fn().mockResolvedValue(resumedDetail),
+        getImpressos: vi.fn().mockResolvedValue(impressosListResponse),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("active");
+      });
+      await waitFor(() => {
+        expect(result.current.impressos).toEqual([chestXray]);
+      });
+      expect(api.getImpressos).toHaveBeenCalledWith("session-1");
+    });
   });
 });

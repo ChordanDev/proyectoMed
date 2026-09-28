@@ -79,6 +79,13 @@ describe("StationScreen", () => {
   const defaultProps = {
     onSend: vi.fn().mockResolvedValue("reply text"),
     onFinish: vi.fn(),
+    onRequestImpresso: vi.fn().mockResolvedValue({
+      request_id: "req-1",
+      decision: "released",
+      released_impressos: [],
+      newly_released: [],
+      feedback_message: "Impresso liberado.",
+    }),
   };
 
   it("renders the default title and controls", () => {
@@ -533,6 +540,13 @@ describe("StationScreen playback", () => {
   const defaultProps = {
     onSend: vi.fn().mockResolvedValue("reply text"),
     onFinish: vi.fn(),
+    onRequestImpresso: vi.fn().mockResolvedValue({
+      request_id: "req-1",
+      decision: "released",
+      released_impressos: [],
+      newly_released: [],
+      feedback_message: "Impresso liberado.",
+    }),
   };
 
   const renderWithPatientMessage = async (
@@ -675,5 +689,193 @@ describe("StationScreen playback", () => {
     await user.click(screen.getByTestId("voice-button"));
 
     await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("StationScreen impresso requests", () => {
+  const defaultProps = {
+    onSend: vi.fn().mockResolvedValue("reply text"),
+    onFinish: vi.fn(),
+  };
+
+  const chestXray = {
+    id: "chest-xray",
+    title: "Radiografia de tórax",
+    category: "Exame de imagem",
+    content: "Sem sinais de consolidação.",
+  };
+
+  it("opens the request modal when the impresso button is clicked", async () => {
+    const user = userEvent.setup();
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[]}
+      />,
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("impresso-request-button"));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByLabelText(strings.impressoModalLabel)).toBeInTheDocument();
+  });
+
+  it("requests an impresso, shows the feedback message, and closes the modal", async () => {
+    const user = userEvent.setup();
+    const onRequestImpresso = vi.fn().mockResolvedValue({
+      request_id: "req-1",
+      decision: "released",
+      released_impressos: [chestXray],
+      newly_released: [chestXray],
+      feedback_message: "Impresso liberado: Radiografia de tórax",
+    });
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={onRequestImpresso}
+        impressos={[]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-request-button"));
+    await user.type(
+      screen.getByLabelText(strings.impressoModalLabel),
+      "Solicito radiografia de tórax",
+    );
+    await user.click(screen.getByTestId("impresso-modal-submit"));
+
+    expect(onRequestImpresso).toHaveBeenCalledWith(
+      "Solicito radiografia de tórax",
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("impresso-feedback")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(
+      screen.getByText("Impresso liberado: Radiografia de tórax"),
+    ).toBeInTheDocument();
+  });
+
+  it("closes the modal via the cancel button", async () => {
+    const user = userEvent.setup();
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-request-button"));
+    await user.click(screen.getByTestId("impresso-modal-cancel"));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("closes the modal on Escape", async () => {
+    const user = userEvent.setup();
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-request-button"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows the impressoError prop on failure and keeps the modal open", async () => {
+    const user = userEvent.setup();
+    const onRequestImpresso = vi.fn().mockResolvedValue(null);
+    const { rerender } = render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={onRequestImpresso}
+        impressos={[]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-request-button"));
+    await user.type(
+      screen.getByLabelText(strings.impressoModalLabel),
+      "Solicito exame",
+    );
+    await user.click(screen.getByTestId("impresso-modal-submit"));
+
+    rerender(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={onRequestImpresso}
+        impressos={[]}
+        impressoError="Requisição inválida."
+      />,
+    );
+
+    expect(screen.getByText("Requisição inválida.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("disables the impresso request button when the station is disabled", () => {
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[]}
+        disabled
+      />,
+    );
+
+    expect(screen.getByTestId("impresso-request-button")).toBeDisabled();
+  });
+
+  it("lists released impressos in the drawer and shows full content when selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[chestXray]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+
+    expect(screen.getByText(chestXray.title)).toBeInTheDocument();
+    expect(screen.getByText(chestXray.category)).toBeInTheDocument();
+    expect(screen.queryByText(chestXray.content)).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId(`impresso-item-${chestXray.id}`));
+
+    expect(screen.getByText(chestXray.content)).toBeInTheDocument();
+  });
+
+  it("keeps the impressos drawer available while the station is disabled", async () => {
+    const user = userEvent.setup();
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[chestXray]}
+        disabled
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+
+    expect(screen.getByText(chestXray.title)).toBeInTheDocument();
   });
 });

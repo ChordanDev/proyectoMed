@@ -107,6 +107,9 @@ export default function App(): React.JSX.Element {
         disabled={timeElapsed}
         remainingMs={station.remainingMs}
         initialMessages={station.initialMessages}
+        onRequestImpresso={station.requestImpresso}
+        impressos={station.impressos}
+        impressoError={station.impressoError}
       />
     </main>
   );
