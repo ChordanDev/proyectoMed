@@ -32,7 +32,7 @@ Close each task with `npm --prefix web test`, `npm --prefix web run typecheck`,
 ## Progress
 - Base prepared: PR #111 merged into develop (ddf5555); develop merged into feat/105-impressos with
   3 additive conflicts resolved (impressos + Ticket 133 deadline). `mix precommit` 264 passed, web
-  101 passed, typecheck ok. Push of feat/105-impressos pending (user).
+  101 passed, typecheck ok. feat/105-impressos pushed (553e590).
 - T1 done: added `Impresso`/`ImpressoDecision`/`RequestImpressoRequest`/`RequestImpressoResponse`/
   `ListImpressosResponse` types + decoders, `requestImpresso`/`getImpressos` client methods, and
   re-exports. RED confirmed (3 failing: `client.requestImpresso is not a function` /
@@ -57,6 +57,8 @@ Close each task with `npm --prefix web test`, `npm --prefix web run typecheck`,
   found, `impresso-request-button`/`impresso-drawer-toggle` test ids missing, etc.). GREEN: web
   117 passed (109 + 8 new), typecheck ok, lint ok (fixed 4 jsx-a11y errors on the modal backdrop by
   dropping click-outside-to-dismiss in favor of Escape + explicit Cancel button).
+- Manual browser test PASSED (user): released, already_released, unavailable, multi-release,
+  reload restore, error inside the modal with the station kept active, Escape closes.
 
 Product decisions made while implementing (for review):
 - Impresso request button placed inside `.station-input-area`, between the text input and the
