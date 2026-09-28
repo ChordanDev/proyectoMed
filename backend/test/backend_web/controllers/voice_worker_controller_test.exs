@@ -14,6 +14,10 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
   defp context_path(id), do: ~p"/api/internal/voice/sessions/#{id}"
   defp transcripts_path(id), do: ~p"/api/internal/voice/sessions/#{id}/transcripts"
 
+  test "transcript text is filtered from request logs" do
+    assert %{"text" => "[FILTERED]"} = Phoenix.Logger.filter_values(%{"text" => "Onde dói?"})
+  end
+
   describe "authentication" do
     test "rejects a missing or wrong bearer token", %{conn: conn} do
       session = Stations.create_session(%{audio_consent: true})
