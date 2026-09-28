@@ -64,3 +64,5 @@ priv/static/assets/
 # Erlang build tooling.
 .rebar3/
 _ebin/
+
+.env
