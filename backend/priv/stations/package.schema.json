@@ -159,7 +159,50 @@
       "properties": {
         "template_id": {"type": "string", "minLength": 1},
         "text": {"type": "string", "minLength": 1},
-        "applicability": {"type": "string", "minLength": 1}
+        "applicability": {"$ref": "#/$defs/applicabilityPredicate"}
+      }
+    },
+    "applicabilityPredicate": {
+      "description": "Structured, machine-evaluable applicability predicate (issue #147). Prose strings are not part of the contract.",
+      "oneOf": [
+        {"$ref": "#/$defs/unconditionalPredicate"},
+        {"$ref": "#/$defs/firstLearnerTurnPredicate"},
+        {"$ref": "#/$defs/minLearnerTurnsPredicate"},
+        {"$ref": "#/$defs/maxLearnerTurnsPredicate"}
+      ]
+    },
+    "unconditionalPredicate": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "unconditional"}
+      }
+    },
+    "firstLearnerTurnPredicate": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "first_learner_turn"}
+      }
+    },
+    "minLearnerTurnsPredicate": {
+      "type": "object",
+      "required": ["type", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "min_learner_turns"},
+        "count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "maxLearnerTurnsPredicate": {
+      "type": "object",
+      "required": ["type", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "max_learner_turns"},
+        "count": {"type": "integer", "minimum": 1}
       }
     }
   }

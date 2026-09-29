@@ -104,12 +104,12 @@
     {
       "template_id": "opening-summary",
       "text": "Resuma o motivo da consulta.",
-      "applicability": "Use after the opening assessment."
+      "applicability": {"type": "min_learner_turns", "count": 1}
     },
     {
       "template_id": "safety-reminder",
       "text": "Confirme sinais de alarme.",
-      "applicability": "Use when the safety criterion is assessed."
+      "applicability": {"type": "unconditional"}
     }
   ]
 }
