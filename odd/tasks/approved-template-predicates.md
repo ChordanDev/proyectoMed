@@ -1,9 +1,9 @@
 # ODD feature: approved-template-predicates (#147)
 
 - Issue: #147 (child of #125) — https://github.com/ChordanDev/proyectoMed/issues/147
-- Branches: slice 1 `feat/147-template-predicate-contract` (from `feat/125-jev-evaluation`); slice 2 `feat/147-template-predicate-case-state` (from slice 1).
-- PR plan (feature-branch-chain, user-approved): PR A slice 1 → `feat/125-jev-evaluation`; PR B slice 2 → slice 1 branch.
-- Status: IN PROGRESS.
+- Branches (refined after actual slice-1 counts): `feat/147-predicate-vocabulary` → `feat/147-predicate-contract` → `feat/147-predicate-gate` (chain from `feat/125-jev-evaluation`); slice 2 `feat/147-predicate-case-state` from the gate branch.
+- PR plan (feature-branch-chain, user-approved): PR A vocabulary (373/400) → `feat/125-jev-evaluation`; PR B contract (215/400) → PR A branch; PR C gate + docs (333/400) → PR B branch; slice 2 PR D → PR C branch. Parent Draft PR #142 remains the integration tracker.
+- Status: SLICE 1 DELIVERED (T1+T2 complete, verified); slice 2 (T3+T4) pending.
 
 ## Objective
 
@@ -31,16 +31,16 @@ Prose applicability cannot be evaluated deterministically. Today the gate alread
 
 ## Tasks
 
-- [ ] T1 (delegated, writer trigger — 2+ files): Contract — schema `$defs` structured predicate for `approvedTemplate.applicability`; validator strict structural validation with distinct error messages; update `valid-package-v2.json` (opening template → `min_learner_turns: 1`; safety template → `unconditional`, the only honest deterministic mapping); add invalid fixtures + `station_package_test.exs` positive/negative/schema-shape cases. Verify: `cd backend && mix test test/backend/station_package_test.exs`.
-- [ ] T2 (delegated, writer trigger): Evaluator + gate — new internal module `backend/lib/backend/stations/template_applicability.ex` (pure, deterministic, fail-closed, string-key tolerant); rewire `check_template_applicability/2` preserving precedence (`predicate_evaluator` → embedded fn → structured map → legacy literals → fail-closed errors → Jev); extend `candidate_gate_test.exs` for every predicate type true/false + unknown/malformed/missing → Jev. Verify: `cd backend && mix test test/backend/stations/candidate_gate_test.exs`.
+- [x] T1 (delegated, writer trigger — 2+ files): Contract — DONE. Commits `fca257a` (module) + `39f13de` (contract). Evidence: `mix test test/backend/station_package_test.exs` 17 passed.
+- [x] T2 (delegated, writer trigger): Evaluator + gate — DONE. Commits `fca257a`/`67ac417`. Evidence: `mix test test/backend/stations/candidate_gate_test.exs` 63 passed; `template_applicability_test.exs` 11 passed.
 - [ ] T3 (slice 2, delegated): Trusted case-state projection — derive `learner_turns` from `session.messages` in `Backend.Stations.build_verify_opts/4` (and `verify_patient_reply/3` path), pass as `case_state:`; tests in `stations_test.exs` + `pre_delivery_gate_contract_test.exs`. Verify: `cd backend && mix test test/backend/stations_test.exs test/backend/stations/pre_delivery_gate_contract_test.exs`.
 - [ ] T4 (parent): Docs note + full suite (`cd backend && mix test`, `bash scripts/test.sh`), work-unit commits, slice PRs A/B, issue close evidence.
 
 ## Delivery strategy
 
 - Mode: `ask-on-risk` → resolved by user to **feature-branch-chain** (stacked slices).
-- Forecast: ~700–1000 authored lines total. Slice A = T1+T2; Slice B = T3+T4.
-- Slice boundaries / PR contents: PR A (branch `feat/147-template-predicate-contract`): contract + evaluator/gate commits. PR B (branch `feat/147-template-predicate-case-state`): case-state plumbing + docs, targets PR A branch.
+- Forecast was ~700–1000; actual slice 1 = 921 authored lines (838 code + docs), so slice 1 was resliced into three sub-400 PRs at work-unit boundaries: PR A vocabulary+unit tests (373), PR B contract (215), PR C gate+tests+docs (333). Slice 2 (T3+T4) follows from the gate branch.
+- Slice boundaries / PR contents: PR A = `fca257a`; PR B = `39f13de`; PR C = `67ac417` + docs commits.
 
 ## Checks / TDD
 
@@ -50,13 +50,21 @@ Prose applicability cannot be evaluated deterministically. Today the gate alread
 
 ## Verification evidence
 
-- (pending T1/T2 worker report)
+Slice 1 (T1+T2), branch `feat/147-predicate-gate` @ `847ebcf`:
+
+- Writer (gentle-ai-worker, self-verification): all green — station_package_test 17 passed; candidate_gate_test 63 passed; template_applicability_test 11 passed; full `mix test` 339 passed; `mix format --check-formatted` exit 0; `mix credo --strict` no issues.
+- Parent spot check: candidate_gate_test re-run 63 passed; format + station_package/candidate_gate suites re-run after external reformat: 80 passed.
+- Native assess: UNAVAILABLE (`unassessable`, native error) → per contract treated as high → independent verifier mandatory.
+- Independent verifier (gentle-ai-verify): zero findings. `mix test` 339 passed; `mix format --check-formatted` exit 0; `mix credo --strict` no issues; `bash scripts/test.sh` exit 0 (web + backend). Code-read confirmations: fail-closed semantics (classify/1 total, no raising path), case_state-only isolation, validator/evaluator single-sourcing via shared classifier, determinism across Jev retries, negative tests pin exact error strings.
+- Dialyzer (parent, CI parity): `mix dialyzer --format short` — 0 errors.
+- Per-task review tier record: T1/T2 assess unavailable → treated high → outcome: independent verifier ran, zero findings.
 
 ## Progress log
 
-- 2026-09-25: exploration delegated (gentle-ai-explore) — mapping complete, no edits. Feature doc created; user approved chained-slice delivery. Branch `feat/147-template-predicate-contract` created from `feat/125-jev-evaluation`.
+- 2026-09-25: exploration delegated (gentle-ai-explore) — mapping complete, no edits. Feature doc created; user approved chained-slice delivery.
+- 2026-09-25: T1+T2 delegated to gentle-ai-worker → all green (339 tests, format, credo strict). Work-unit commits `fca257a`, `39f13de`, `67ac417`; ODD doc `847ebcf`. Assess unassessable → high → gentle-ai-verify zero findings; Dialyzer 0 errors. Slice 1 resliced into 3 PRs (373/215/333 lines) and published to origin.
 - Engram mirror: PENDING (Engram server down at session time; will mirror on availability).
 
 ## Next step
 
-Launch bounded writer for T1+T2 (slice 1) with allowed edit surfaces below; parent commits each work unit.
+Slice 2 (T3): branch `feat/147-predicate-case-state` from `feat/147-predicate-gate`; delegate trusted case-state projection (`learner_turns` from `session.messages`) in `Backend.Stations.build_verify_opts/4` + `verify_patient_reply/3`, tests in `stations_test.exs` + `pre_delivery_gate_contract_test.exs`; then T4 full suite + PR D.
