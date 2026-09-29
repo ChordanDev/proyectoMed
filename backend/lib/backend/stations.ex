@@ -367,6 +367,12 @@ defmodule Backend.Stations do
   Verification seam for generated patient replies before display or synthesis.
 
   Wires directly to `Backend.Stations.CandidateGate.verify_and_deliver/4`.
+
+  Derives trusted case state once per call from the conversation it receives
+  (`opts[:conversation]`, an explicitly empty-safe source: absent or malformed
+  conversation data projects to `%{learner_turns: 0}`). A caller-supplied
+  `:case_state` always wins, so the derived map stays identical across gate
+  retries.
   """
   @spec verify_patient_reply(map(), map() | String.t(), keyword()) ::
           {:ok, map() | String.t()} | {:error, term()}
@@ -379,6 +385,7 @@ defmodule Backend.Stations do
       |> Keyword.delete(:conversation)
       |> Keyword.put_new(:station_id, package["station_id"] || package[:station_id])
       |> Keyword.put_new(:version, package["version"] || package[:version])
+      |> Keyword.put_new(:case_state, project_case_state(conversation))
 
     case CandidateGate.verify_and_deliver(candidate_text, package, conversation, gate_opts) do
       {:ok, verified_text} ->
@@ -416,12 +423,30 @@ defmodule Backend.Stations do
       version: package["version"] || package[:version],
       package_version: package["version"] || package[:version],
       deadline_at_monotonic_ms: deadline_at,
-      generator: generator
+      generator: generator,
+      case_state: project_case_state(session.messages)
     ]
 
     base_opts = maybe_put_adapter_opt(base_opts, params)
     Keyword.merge(base_opts, custom_opts)
   end
+
+  # Trusted case-state projection (issue #147): derived once per verification
+  # call, before the gate runs, so the Jev retry/recheck path observes the
+  # identical map. Only message ROLE labels are trusted; learner message text
+  # is never read.
+  @learner_role_labels [:learner, "learner", :student, "student"]
+
+  @spec project_case_state(term()) :: %{learner_turns: non_neg_integer()}
+  defp project_case_state(messages) when is_list(messages) do
+    %{learner_turns: Enum.count(messages, &learner_role_message?/1)}
+  end
+
+  defp project_case_state(_other), do: %{learner_turns: 0}
+
+  defp learner_role_message?(%{role: role}), do: role in @learner_role_labels
+  defp learner_role_message?(%{"role" => role}), do: role in @learner_role_labels
+  defp learner_role_message?(_other), do: false
 
   defp resolve_verify_deadline(params) do
     case Map.get(params, :deadline_at_monotonic_ms) ||
