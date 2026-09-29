@@ -137,6 +137,35 @@ defmodule Backend.Stations.CandidateGateTest do
             "template_id" => "predicate-template",
             "text" => "Estou pronto para o exame.",
             "applicability" => fn state -> state[:ready_for_exam] == true end
+          },
+          %{
+            "template_id" => "structured-min-turns",
+            "text" => "Vamos conversar sobre a dor.",
+            "applicability" => %{"type" => "min_learner_turns", "count" => 2}
+          },
+          %{
+            "template_id" => "structured-max-turns",
+            "text" => "Obrigado pela conversa.",
+            "applicability" => %{"type" => "max_learner_turns", "count" => 3}
+          },
+          %{
+            "template_id" => "structured-first-turn",
+            "text" => "Bom dia, doutor.",
+            "applicability" => %{"type" => "first_learner_turn"}
+          },
+          %{
+            "template_id" => "structured-unknown-type",
+            "text" => "Talvez eu conte mais.",
+            "applicability" => %{"type" => "when_the_learner_seems_ready"}
+          },
+          %{
+            "template_id" => "structured-malformed",
+            "text" => "Deixe-me pensar um pouco.",
+            "applicability" => %{"count" => 1}
+          },
+          %{
+            "template_id" => "missing-applicability",
+            "text" => "Continuamos em outro momento."
           }
         ]
       },
@@ -486,6 +515,204 @@ defmodule Backend.Stations.CandidateGateTest do
 
       # Version mismatch
       assert false == CandidateGate.template_bypass?(text, package, version: "3.0.0")
+    end
+  end
+
+  # ============================================================================
+  # 3b. Structured Applicability Predicates (issue #147)
+  # ============================================================================
+
+  describe "Structured applicability predicates" do
+    test "min_learner_turns bypasses when case_state meets the count, else routes to Jev" do
+      package = base_package()
+      text = "Vamos conversar sobre a dor."
+
+      # Meets the count: bypass without Jev
+      assert true ==
+               CandidateGate.template_bypass?(text, package, case_state: %{learner_turns: 2})
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: ExplosiveAdapter,
+                 case_state: %{learner_turns: 2}
+               )
+
+      # Below the count: fail closed to Jev
+      assert false ==
+               CandidateGate.template_bypass?(text, package, case_state: %{learner_turns: 1})
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 case_state: %{learner_turns: 1}
+               )
+    end
+
+    test "max_learner_turns bypasses while within the cap, else routes to Jev" do
+      package = base_package()
+      text = "Obrigado pela conversa."
+
+      assert true ==
+               CandidateGate.template_bypass?(text, package, case_state: %{learner_turns: 3})
+
+      assert {:error, :applicability_predicate_false} =
+               CandidateGate.check_approved_template(text, package,
+                 case_state: %{learner_turns: 4}
+               )
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 case_state: %{learner_turns: 4}
+               )
+    end
+
+    test "first_learner_turn bypasses only on turn 1, else routes to Jev" do
+      package = base_package()
+      text = "Bom dia, doutor."
+
+      assert true ==
+               CandidateGate.template_bypass?(text, package, case_state: %{learner_turns: 1})
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: ExplosiveAdapter,
+                 case_state: %{learner_turns: 1}
+               )
+
+      for turns <- [2, 0] do
+        assert false ==
+                 CandidateGate.template_bypass?(text, package,
+                   case_state: %{learner_turns: turns}
+                 )
+      end
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 case_state: %{learner_turns: 2}
+               )
+    end
+
+    test "missing learner_turns in case_state fails closed to Jev" do
+      package = base_package()
+      text = "Vamos conversar sobre a dor."
+
+      assert false == CandidateGate.template_bypass?(text, package, case_state: %{})
+      assert false == CandidateGate.template_bypass?(text, package)
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter
+               )
+    end
+
+    test "structured predicates read only case_state, never the AI context map" do
+      package = base_package()
+      text = "Vamos conversar sobre a dor."
+
+      # A tempting context map must NOT satisfy a structured predicate.
+      assert false ==
+               CandidateGate.template_bypass?(text, package, context: %{learner_turns: 9})
+
+      assert {:error, :applicability_predicate_false} =
+               CandidateGate.check_approved_template(text, package, context: %{learner_turns: 9})
+    end
+
+    test "unknown predicate type fails closed to Jev" do
+      package = base_package()
+      text = "Talvez eu conte mais."
+
+      assert {:error, :applicability_predicate_false} =
+               CandidateGate.check_approved_template(text, package,
+                 case_state: %{learner_turns: 9}
+               )
+
+      assert false ==
+               CandidateGate.template_bypass?(text, package, case_state: %{learner_turns: 9})
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 case_state: %{learner_turns: 9}
+               )
+    end
+
+    test "malformed predicate map fails closed to Jev" do
+      package = base_package()
+      text = "Deixe-me pensar um pouco."
+
+      assert {:error, :applicability_predicate_false} =
+               CandidateGate.check_approved_template(text, package,
+                 case_state: %{learner_turns: 1}
+               )
+
+      assert false ==
+               CandidateGate.template_bypass?(text, package, case_state: %{learner_turns: 1})
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 case_state: %{learner_turns: 1}
+               )
+    end
+
+    test "missing applicability in a template fails closed to Jev" do
+      package = base_package()
+      text = "Continuamos em outro momento."
+
+      assert {:error, :unexecutable_applicability} =
+               CandidateGate.check_approved_template(text, package,
+                 case_state: %{learner_turns: 1}
+               )
+
+      assert false ==
+               CandidateGate.template_bypass?(text, package, case_state: %{learner_turns: 1})
+
+      assert {:ok, ^text} =
+               CandidateGate.verify_and_deliver(
+                 text,
+                 package,
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 case_state: %{learner_turns: 1}
+               )
+    end
+
+    test "structured evaluation is deterministic across repeated attempts" do
+      package = base_package()
+      text = "Vamos conversar sobre a dor."
+      opts = [case_state: %{learner_turns: 2}]
+
+      results = for _ <- 1..5, do: CandidateGate.check_approved_template(text, package, opts)
+
+      assert {:ok, template} = hd(results)
+      assert template["template_id"] == "structured-min-turns"
+      assert Enum.all?(results, &(&1 == {:ok, template}))
     end
   end
 

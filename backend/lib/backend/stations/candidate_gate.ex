@@ -10,10 +10,15 @@ defmodule Backend.Stations.CandidateGate do
        immediately rejects the candidate without clinical refusal or text release.
     2. **Approved template check (Option B fail-closed)**:
        Exact byte-identical match against `package["approved_templates"]`
-       for active `station_id` and `version`. Natural-language prose strings
-       fail closed to Jev verification. Only explicit, executable predicates
-       (e.g., "unconditional" or executable functions evaluating to `true`) bypass Jev.
-       Shortness, tone, or model-provided IDs never authorize a bypass.
+       for active `station_id` and `version`. Applicability must be a
+       structured, machine-evaluable predicate from the vocabulary in
+       `Backend.Stations.TemplateApplicability` evaluating to `true` against
+       trusted case state (`opts[:case_state]`, never the AI `context` map).
+       Legacy deterministic literals (the `"unconditional"` string, `true`,
+       and the `unconditional` map) remain accepted as defense in depth.
+       Prose strings, malformed maps, unknown predicates, and predicates
+       evaluating `false` fail closed to Jev verification. Shortness, tone, or
+       model-provided IDs never authorize a bypass.
     3. **Jev verification**:
        Every non-bypassed candidate is verified via `Backend.Stations.JevDecision.decide_patient/2`.
        Verified candidates are delivered (`{:ok, candidate_text}`).
@@ -35,6 +40,7 @@ defmodule Backend.Stations.CandidateGate do
 
   alias Backend.Stations.JevDecision
   alias Backend.Stations.StationAI.BoundedReply
+  alias Backend.Stations.TemplateApplicability
 
   @type candidate_error ::
           {:denied, atom()}
@@ -94,7 +100,9 @@ defmodule Backend.Stations.CandidateGate do
   Under Option B (fail closed):
     * Text must match an entry in `package["approved_templates"]` byte-identically.
     * Active `station_id` and `version` must match.
-    * Applicability must be an explicit executable predicate evaluating to true.
+    * Applicability must be a structured predicate (see `Backend.Stations.TemplateApplicability`)
+      evaluating to true against trusted case state. Structured predicates read
+      only `opts[:case_state]`, never the AI `context` map.
       Natural-language prose strings fail closed and return `false`.
     * Model-provided IDs, shortness, or tone never authorize a bypass.
   """
@@ -107,7 +115,8 @@ defmodule Backend.Stations.CandidateGate do
   Validates candidate text against approved templates in `package`.
 
   Returns `{:ok, template}` if byte-identical and applicability predicate evaluates to true.
-  Returns `{:error, reason}` if not matched, identity mismatch, or unexecutable prose.
+  Returns `{:error, reason}` if not matched, identity mismatch, predicate false,
+  or unexecutable (prose/missing) applicability.
   """
   @spec check_approved_template(term(), map(), keyword()) ::
           {:ok, map()} | {:error, atom()}
@@ -204,7 +213,7 @@ defmodule Backend.Stations.CandidateGate do
           {:error, :applicability_predicate_false}
         end
 
-      # Template-embedded executable function
+      # Template-embedded executable function (test hatch)
       is_function(applicability, 1) ->
         case_state = opts[:case_state] || opts[:context] || %{}
 
@@ -214,14 +223,17 @@ defmodule Backend.Stations.CandidateGate do
           {:error, :applicability_predicate_false}
         end
 
-      # Explicit unconditional literal
+      # Structured predicate map: evaluates ONLY against trusted case state,
+      # never the AI `context` map (issue #147). The unconditional map literal
+      # is part of the vocabulary, so legacy map literals stay accepted here.
+      is_map(applicability) ->
+        apply_structured_applicability(applicability, opts)
+
+      # Legacy deterministic literals (defense in depth)
       applicability == "unconditional" ->
         :ok
 
       applicability === true ->
-        :ok
-
-      applicability == %{"type" => "unconditional"} or applicability == %{type: "unconditional"} ->
         :ok
 
       # Option B: Natural-language prose strings NEVER bypass Jev
@@ -231,6 +243,16 @@ defmodule Backend.Stations.CandidateGate do
       # Missing or unexecutable: fail closed
       true ->
         {:error, :unexecutable_applicability}
+    end
+  end
+
+  defp apply_structured_applicability(applicability, opts) do
+    case_state = opts[:case_state] || %{}
+
+    if TemplateApplicability.evaluate(applicability, case_state) == true do
+      :ok
+    else
+      {:error, :applicability_predicate_false}
     end
   end
 
