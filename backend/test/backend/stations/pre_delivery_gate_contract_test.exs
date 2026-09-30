@@ -715,4 +715,148 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
       assert empty_session.messages == []
     end
   end
+
+  # ============================================================================
+  # Issue #147: Trusted case-state projection (learner_turns)
+  # ============================================================================
+
+  describe "trusted case-state projection (issue #147)" do
+    defp package_with_templates(pkg, templates),
+      do: Map.put(pkg, "approved_templates", templates)
+
+    defp learner_msg(text), do: %{role: :learner, modality: :text, text: text}
+
+    defp patient_msg(text), do: %{role: :patient, modality: :text, text: text}
+
+    test "verify_patient_reply/3 derives learner_turns from the received conversation and bypasses at the turn count",
+         %{pkg: pkg} do
+      Application.put_env(:backend, :jev_decision_adapter, ExplosiveJevDouble)
+
+      template_text = "Estou sentindo uma dor no peito há duas horas."
+
+      pkg =
+        package_with_templates(pkg, [
+          %{
+            "template_id" => "min-turns-2",
+            "text" => template_text,
+            "applicability" => %{"type" => "min_learner_turns", "count" => 2}
+          }
+        ])
+
+      # Two learner turns (one atom-keyed, one string-keyed role label) meet
+      # the count of 2; the patient message must not inflate it. ExplosiveJevDouble
+      # proves the bypassed candidate never reaches Jev.
+      assert {:ok, verified} =
+               Stations.verify_patient_reply(pkg, template_text,
+                 conversation: [
+                   learner_msg("Quando começou a dor?"),
+                   patient_msg("Há duas horas."),
+                   %{"role" => "learner", "modality" => "text", "text" => "Onde dói?"}
+                 ]
+               )
+
+      assert verified == template_text
+    end
+
+    test "verify_patient_reply/3 routes the same byte-identical candidate to Jev below the turn count",
+         %{pkg: pkg} do
+      Application.put_env(:backend, :jev_decision_adapter, RefusingJevDouble)
+
+      template_text = "Estou sentindo uma dor no peito há duas horas."
+
+      pkg =
+        package_with_templates(pkg, [
+          %{
+            "template_id" => "min-turns-2",
+            "text" => template_text,
+            "applicability" => %{"type" => "min_learner_turns", "count" => 2}
+          }
+        ])
+
+      # Only one learner turn exists, so the predicate fails closed and the
+      # candidate routes to Jev (which refuses it).
+      assert {:error, {:refused, :semantic_refusal}} =
+               Stations.verify_patient_reply(pkg, template_text,
+                 conversation: [
+                   learner_msg("Quando começou a dor?"),
+                   patient_msg("Há duas horas.")
+                 ]
+               )
+    end
+
+    test "learner_turns counts only learner-role messages: a patient-only conversation projects zero",
+         %{pkg: pkg} do
+      template_text = "Obrigado pela conversa, doutor."
+
+      min_one_pkg =
+        package_with_templates(pkg, [
+          %{
+            "template_id" => "min-turns-1",
+            "text" => template_text,
+            "applicability" => %{"type" => "min_learner_turns", "count" => 1}
+          }
+        ])
+
+      max_two_pkg =
+        package_with_templates(pkg, [
+          %{
+            "template_id" => "max-turns-2",
+            "text" => template_text,
+            "applicability" => %{"type" => "max_learner_turns", "count" => 2}
+          }
+        ])
+
+      # Three patient messages project learner_turns: 0, so even a count of 1
+      # fails closed and routes to Jev.
+      Application.put_env(:backend, :jev_decision_adapter, RefusingJevDouble)
+
+      assert {:error, {:refused, :semantic_refusal}} =
+               Stations.verify_patient_reply(min_one_pkg, template_text,
+                 conversation: [
+                   patient_msg("Bom dia."),
+                   patient_msg("Há duas horas."),
+                   patient_msg("Sim, doutor.")
+                 ]
+               )
+
+      # Two learner turns plus three patient messages stay at learner_turns: 2;
+      # if patient messages were counted, the max-of-2 predicate would fail
+      # closed and reach ExplosiveJevDouble.
+      Application.put_env(:backend, :jev_decision_adapter, ExplosiveJevDouble)
+
+      assert {:ok, verified} =
+               Stations.verify_patient_reply(max_two_pkg, template_text,
+                 conversation: [
+                   learner_msg("Quando começou?"),
+                   patient_msg("Há duas horas."),
+                   learner_msg("Onde dói?"),
+                   patient_msg("No peito."),
+                   patient_msg("Desde ontem.")
+                 ]
+               )
+
+      assert verified == template_text
+    end
+
+    test "verify_patient_reply/3 with no conversation data projects learner_turns: 0 and fails closed",
+         %{pkg: pkg} do
+      Application.put_env(:backend, :jev_decision_adapter, RefusingJevDouble)
+
+      template_text = "Estou sentindo uma dor no peito há duas horas."
+
+      pkg =
+        package_with_templates(pkg, [
+          %{
+            "template_id" => "min-turns-1",
+            "text" => template_text,
+            "applicability" => %{"type" => "min_learner_turns", "count" => 1}
+          }
+        ])
+
+      # Absent conversation is an explicitly empty-safe source: the derived
+      # state is %{learner_turns: 0} and the predicate fails closed to Jev.
+      assert {:error, {:refused, :semantic_refusal}} =
+               Stations.verify_patient_reply(pkg, template_text)
+    end
+  end
 end

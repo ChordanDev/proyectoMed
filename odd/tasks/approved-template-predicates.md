@@ -3,7 +3,7 @@
 - Issue: #147 (child of #125) — https://github.com/ChordanDev/proyectoMed/issues/147
 - Branches (refined after actual slice-1 counts): `feat/147-predicate-vocabulary` → `feat/147-predicate-contract` → `feat/147-predicate-gate` (chain from `feat/125-jev-evaluation`); slice 2 `feat/147-predicate-case-state` from the gate branch.
 - PR plan (feature-branch-chain, user-approved): PR A vocabulary (373/400) → `feat/125-jev-evaluation`; PR B contract (215/400) → PR A branch; PR C gate + docs (333/400) → PR B branch; slice 2 PR D → PR C branch. Parent Draft PR #142 remains the integration tracker.
-- Status: SLICE 1 DELIVERED (T1+T2 complete, verified); slice 2 (T3+T4) pending.
+- Status: COMPLETE — implemented and verified; awaiting human review/merge (PRs #156 → #157 → #158 → #159).
 
 ## Objective
 
@@ -33,8 +33,8 @@ Prose applicability cannot be evaluated deterministically. Today the gate alread
 
 - [x] T1 (delegated, writer trigger — 2+ files): Contract — DONE. Commits `fca257a` (module) + `39f13de` (contract). Evidence: `mix test test/backend/station_package_test.exs` 17 passed.
 - [x] T2 (delegated, writer trigger): Evaluator + gate — DONE. Commits `fca257a`/`67ac417`. Evidence: `mix test test/backend/stations/candidate_gate_test.exs` 63 passed; `template_applicability_test.exs` 11 passed.
-- [ ] T3 (slice 2, delegated): Trusted case-state projection — derive `learner_turns` from `session.messages` in `Backend.Stations.build_verify_opts/4` (and `verify_patient_reply/3` path), pass as `case_state:`; tests in `stations_test.exs` + `pre_delivery_gate_contract_test.exs`. Verify: `cd backend && mix test test/backend/stations_test.exs test/backend/stations/pre_delivery_gate_contract_test.exs`.
-- [ ] T4 (parent): Docs note + full suite (`cd backend && mix test`, `bash scripts/test.sh`), work-unit commits, slice PRs A/B, issue close evidence.
+- [x] T3 (slice 2, delegated): Trusted case-state projection — DONE. Commit `bdd5375`. Evidence: stations_test 29 passed; pre_delivery_gate_contract_test 19 passed; full `mix test` 345 passed; format/credo/dialyzer clean; `bash scripts/test.sh` exit 0.
+- [x] T4 (parent): Docs + full suite + PRs — DONE. PRs #156 (373/400), #157 (215/400), #158 (333/400), #159 (~300/400); ODD doc commits `847ebcf`..final.
 
 ## Delivery strategy
 
@@ -59,12 +59,21 @@ Slice 1 (T1+T2), branch `feat/147-predicate-gate` @ `847ebcf`:
 - Dialyzer (parent, CI parity): `mix dialyzer --format short` — 0 errors.
 - Per-task review tier record: T1/T2 assess unavailable → treated high → outcome: independent verifier ran, zero findings.
 
+Slice 2 (T3), branch `feat/147-predicate-case-state` @ `bdd5375`:
+
+- Writer (gentle-ai-worker, self-verification): stations_test 29 passed; pre_delivery contract 19 passed; full `mix test` 345 passed; format exit 0; credo strict no issues; dialyzer 0 errors.
+- Parent spot check: stations_test re-run 29 passed.
+- Native assess: UNAVAILABLE again (`unassessable`) → treated high → independent verifier mandatory.
+- Independent verifier (gentle-ai-verify): PASS, zero findings — role-label-only trust boundary, single derivation stable across Jev retries, fail-closed zero projection, HTTP whitelist keeps `verify_opts`/`case_state` internal-only, loader-state swap restored in `on_exit`.
+- Per-task review tier record: T3 assess unavailable → treated high → outcome: independent verifier PASS, zero findings.
+
 ## Progress log
 
 - 2026-09-25: exploration delegated (gentle-ai-explore) — mapping complete, no edits. Feature doc created; user approved chained-slice delivery.
 - 2026-09-25: T1+T2 delegated to gentle-ai-worker → all green (339 tests, format, credo strict). Work-unit commits `fca257a`, `39f13de`, `67ac417`; ODD doc `847ebcf`. Assess unassessable → high → gentle-ai-verify zero findings; Dialyzer 0 errors. Slice 1 resliced into 3 PRs (373/215/333 lines) and published to origin.
+- 2026-09-25: PRs #156, #157, #158 published (chain into #142 tracker). T3 delegated → all green (345 tests, dialyzer 0). Commit `bdd5375`; assess unassessable → high → gentle-ai-verify PASS zero findings. PR #159 published. Feature complete pending human review/merge.
 - Engram mirror: PENDING (Engram server down at session time; will mirror on availability).
 
 ## Next step
 
-Slice 2 (T3): branch `feat/147-predicate-case-state` from `feat/147-predicate-gate`; delegate trusted case-state projection (`learner_turns` from `session.messages`) in `Backend.Stations.build_verify_opts/4` + `verify_patient_reply/3`, tests in `stations_test.exs` + `pre_delivery_gate_contract_test.exs`; then T4 full suite + PR D.
+Human review/merge in order: #156 → #157 → #158 → #159, then tracker #142 into `develop` (parent PR closes #147). If review findings arrive, address per the repo review-feedback loop (explicit PR comment with finding reference, commit SHA, solution, verification evidence, and chain propagation).

@@ -63,6 +63,33 @@ defmodule Backend.StationsTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  defmodule TemplateReplyAIAdapter do
+    @behaviour Backend.Stations.StationAI
+
+    @impl true
+    def next_reply(_package, _context) do
+      case Process.get(:template_reply_text) do
+        text when is_binary(text) -> {:ok, %{text: text, used_facts: []}}
+        _ -> {:error, :template_reply_text_not_set}
+      end
+    end
+  end
+
+  defmodule ProbingVerifyingJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request) do
+      # Runs inside a Task, so the probe pid is read from application env.
+      parent = Process.get(:jev_probe_pid) || Application.get_env(:backend, :jev_probe_pid)
+      if parent, do: send(parent, :jev_verification_invoked)
+      {:ok, %{status: :verified}}
+    end
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup do
     prev_adapter = Application.get_env(:backend, :station_ai_adapter)
     prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
@@ -266,6 +293,107 @@ defmodule Backend.StationsTest do
       assert {:ok, completed_session} = Stations.get_session(session.session_id)
       assert completed_session.status == :completed
       assert length(completed_session.messages) == 1
+    end
+  end
+
+  describe "approved template case-state bypass" do
+    # The loader state is the validated package map itself, so the active
+    # package is swapped temporarily (restored via on_exit) to serve approved
+    # templates through the real create_message/2 production path.
+    defp swap_active_templates(templates) do
+      loader = Backend.Stations.StationLoader
+      original = :sys.get_state(loader)
+      :sys.replace_state(loader, fn _ -> Map.put(original, "approved_templates", templates) end)
+
+      on_exit(fn ->
+        :sys.replace_state(loader, fn _ -> original end)
+      end)
+    end
+
+    defp activate_template_bypass_probe(template_text) do
+      Application.put_env(:backend, :station_ai_adapter, TemplateReplyAIAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, ProbingVerifyingJevAdapter)
+      Application.put_env(:backend, :jev_probe_pid, self())
+      Process.put(:template_reply_text, template_text)
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :jev_probe_pid)
+      end)
+    end
+
+    test "create_message/2 routes the byte-identical min_learner_turns candidate to Jev below the count and bypasses once met" do
+      template_text = "Estou sentindo uma dor no peito há duas horas."
+
+      swap_active_templates([
+        %{
+          "template_id" => "onset-summary",
+          "text" => template_text,
+          "applicability" => %{"type" => "min_learner_turns", "count" => 2}
+        }
+      ])
+
+      activate_template_bypass_probe(template_text)
+      session = Stations.create_session(%{audio_consent: true})
+
+      # Learner turn 1: learner_turns is 1, so the predicate is false and the
+      # same byte-identical candidate routes to Jev verification.
+      assert {:ok, first} =
+               Stations.create_message(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Onde dói?"
+               })
+
+      assert first.reply_text == template_text
+      assert_receive :jev_verification_invoked, 1_000
+
+      # Learner turn 2: learner_turns is 2, so the candidate bypasses Jev.
+      assert {:ok, second} =
+               Stations.create_message(session.session_id, %{
+                 role: :learner,
+                 modality: "text",
+                 text: "Há quanto tempo?"
+               })
+
+      assert second.reply_text == template_text
+      refute_receive :jev_verification_invoked, 100
+    end
+
+    test "create_message/2 honors first_learner_turn only when no learner turn precedes the candidate" do
+      template_text = "A dor começou de repente enquanto eu caminhava."
+
+      swap_active_templates([
+        %{
+          "template_id" => "opening-onset",
+          "text" => template_text,
+          "applicability" => %{"type" => "first_learner_turn"}
+        }
+      ])
+
+      activate_template_bypass_probe(template_text)
+      session = Stations.create_session(%{audio_consent: true})
+
+      # First learner turn: bypass without any Jev consultation.
+      assert {:ok, first} =
+               Stations.create_message(session.session_id, %{
+                 role: :learner,
+                 modality: "text",
+                 text: "Me conte o que aconteceu."
+               })
+
+      assert first.reply_text == template_text
+      refute_receive :jev_verification_invoked, 100
+
+      # Second learner turn: the predicate no longer holds, so Jev runs.
+      assert {:ok, second} =
+               Stations.create_message(session.session_id, %{
+                 role: :learner,
+                 modality: "text",
+                 text: "Já sentiu isso antes?"
+               })
+
+      assert second.reply_text == template_text
+      assert_receive :jev_verification_invoked, 1_000
     end
   end
 
