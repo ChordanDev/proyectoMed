@@ -182,6 +182,8 @@ defmodule Backend.StationPackageTest do
        "approved_templates applicability must be a structured predicate object, not a prose string"},
       {true,
        "approved_templates applicability must be a structured predicate object, not a boolean"},
+      {false,
+       "approved_templates applicability must be a structured predicate object, not a boolean"},
       {nil, "approved_templates entries require an applicability predicate object"},
       {42, "approved_templates applicability must be a structured predicate object"},
       {%{}, "approved_templates applicability requires a type"},
@@ -224,6 +226,24 @@ defmodule Backend.StationPackageTest do
     assert {:error, errors} = StationPackage.validate(package)
 
     assert "approved_templates entries require an applicability predicate object" in errors
+  end
+
+  test "rejects approved templates with atom-keyed false applicability as boolean" do
+    base = fixture("valid-package-v2.json")
+
+    package =
+      Map.update!(base, "approved_templates", fn [first | rest] ->
+        first =
+          first
+          |> Map.delete("applicability")
+          |> Map.put(:applicability, false)
+
+        [first | rest]
+      end)
+
+    assert {:error, errors} = StationPackage.validate(package)
+
+    assert "approved_templates applicability must be a structured predicate object, not a boolean" in errors
   end
 
   test "requires at least one rubric level" do

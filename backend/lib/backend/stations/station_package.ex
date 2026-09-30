@@ -349,7 +349,11 @@ defmodule Backend.Stations.StationPackage do
   # Applicability is a structured predicate object, not a string field, so it
   # gets dedicated structural validation single-sourced from TemplateApplicability.
   defp validate_template_applicability(errors, template) when is_map(template) do
-    applicability = Map.get(template, "applicability") || Map.get(template, :applicability)
+    applicability =
+      case Map.fetch(template, "applicability") do
+        {:ok, value} -> value
+        :error -> Map.get(template, :applicability)
+      end
 
     case TemplateApplicability.structural_errors(applicability) do
       [] -> errors
