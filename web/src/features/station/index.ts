@@ -8,6 +8,8 @@ export {
   transcribeAudio,
   synthesizeSpeech,
   fetchResult,
+  discardSession,
+  type DiscardSessionOptions,
   ApiError,
   type ActiveStation,
   type StartSessionRequest,

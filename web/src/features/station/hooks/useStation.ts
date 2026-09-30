@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
+  discardSession,
   fetchResult,
   finishSession,
   getImpressos,
@@ -19,6 +20,7 @@ import {
   type SessionMessage,
   type SessionResult,
 } from "../api/client";
+import strings from "../i18n/pt-BR.json";
 
 export type StationStatus =
   | "idle"
@@ -38,6 +40,7 @@ export interface StationApi {
   synthesizeSpeech: typeof synthesizeSpeech;
   requestImpresso: typeof requestImpressoApi;
   getImpressos: typeof getImpressos;
+  discardSession: typeof discardSession;
 }
 
 const defaultApi: StationApi = {
@@ -50,6 +53,7 @@ const defaultApi: StationApi = {
   synthesizeSpeech,
   requestImpresso: requestImpressoApi,
   getImpressos,
+  discardSession,
 };
 
 const unknownErrorMessage =
@@ -97,6 +101,7 @@ interface ClockAnchor {
 
 export const useStation = (api: StationApi = defaultApi) => {
   const [status, setStatus] = useState<StationStatus>("idle");
+  const statusRef = useRef<StationStatus>("idle");
   const [result, setResult] = useState<SessionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [audioConsent, setAudioConsent] = useState(false);
@@ -108,10 +113,19 @@ export const useStation = (api: StationApi = defaultApi) => {
   const sessionRef = useRef<Session | null>(null);
   const hasStartedRef = useRef(false);
   const isFinishingRef = useRef(false);
+  const isResettingRef = useRef(false);
+  const resetPromiseRef = useRef<Promise<void> | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+  const pageHideAttemptedRef = useRef<string | null>(null);
   const pendingSendRef = useRef<Promise<MessageReply | null> | null>(null);
   const pendingSendTokenRef = useRef<object | null>(null);
   const clockAnchorRef = useRef<ClockAnchor | null>(null);
   const timerFinishTriggeredRef = useRef(false);
+
+  const updateStatus = useCallback((nextStatus: StationStatus) => {
+    statusRef.current = nextStatus;
+    setStatus(nextStatus);
+  }, []);
 
   const anchorClock = useCallback((serverNowIso: string) => {
     clockAnchorRef.current = {
@@ -120,43 +134,101 @@ export const useStation = (api: StationApi = defaultApi) => {
     };
   }, []);
 
-  const fail = useCallback((cause: unknown) => {
-    sessionRef.current = null;
-    hasStartedRef.current = false;
-    isFinishingRef.current = false;
-    pendingSendRef.current = null;
-    pendingSendTokenRef.current = null;
-    clockAnchorRef.current = null;
-    timerFinishTriggeredRef.current = false;
-    setDeadlineAtMs(null);
-    clearPersistedSessionId();
-    setImpressoError(null);
-    setError(cause instanceof ApiError ? cause.message : unknownErrorMessage);
-    setStatus("failed");
-  }, []);
+  const fail = useCallback(
+    (cause: unknown) => {
+      hasStartedRef.current = false;
+      isFinishingRef.current = false;
+      pendingSendRef.current = null;
+      pendingSendTokenRef.current = null;
+      clockAnchorRef.current = null;
+      timerFinishTriggeredRef.current = false;
+      setDeadlineAtMs(null);
+      setRemainingMs(null);
+      setImpressoError(null);
+      setError(cause instanceof ApiError ? cause.message : unknownErrorMessage);
+      updateStatus("failed");
+    },
+    [updateStatus],
+  );
 
-  const reset = useCallback(() => {
-    sessionRef.current = null;
-    hasStartedRef.current = false;
-    isFinishingRef.current = false;
-    pendingSendRef.current = null;
-    pendingSendTokenRef.current = null;
-    clockAnchorRef.current = null;
-    timerFinishTriggeredRef.current = false;
-    clearPersistedSessionId();
-    setDeadlineAtMs(null);
-    setInitialMessages([]);
-    setImpressos([]);
-    setImpressoError(null);
-    setError(null);
-    setResult(null);
-    setStatus("idle");
-    setAudioConsent(false);
-  }, []);
+  const reset = useCallback(async (): Promise<void> => {
+    if (resetPromiseRef.current) {
+      return resetPromiseRef.current;
+    }
+
+    const sessionId =
+      sessionRef.current?.session_id ?? readPersistedSessionId();
+
+    if (!sessionId) {
+      sessionRef.current = null;
+      hasStartedRef.current = false;
+      isFinishingRef.current = false;
+      pendingSendRef.current = null;
+      pendingSendTokenRef.current = null;
+      clockAnchorRef.current = null;
+      timerFinishTriggeredRef.current = false;
+      clearPersistedSessionId();
+      setDeadlineAtMs(null);
+      setRemainingMs(null);
+      setInitialMessages([]);
+      setImpressos([]);
+      setImpressoError(null);
+      setError(null);
+      setResult(null);
+      updateStatus("idle");
+      setAudioConsent(false);
+      return;
+    }
+
+    const priorTimerFinishTriggered = timerFinishTriggeredRef.current;
+    isResettingRef.current = true;
+    timerFinishTriggeredRef.current = true;
+    setIsResetting(true);
+
+    const performReset = async () => {
+      try {
+        await api.discardSession(sessionId);
+
+        sessionRef.current = null;
+        hasStartedRef.current = false;
+        isFinishingRef.current = false;
+        pendingSendRef.current = null;
+        pendingSendTokenRef.current = null;
+        clockAnchorRef.current = null;
+        timerFinishTriggeredRef.current = false;
+        pageHideAttemptedRef.current = null;
+        clearPersistedSessionId();
+        setDeadlineAtMs(null);
+        setRemainingMs(null);
+        setInitialMessages([]);
+        setImpressos([]);
+        setImpressoError(null);
+        setError(null);
+        setResult(null);
+        updateStatus("idle");
+        setAudioConsent(false);
+      } catch (cause) {
+        timerFinishTriggeredRef.current = priorTimerFinishTriggered;
+        setError(
+          cause instanceof ApiError
+            ? cause.message
+            : strings.discardError ?? unknownErrorMessage,
+        );
+      } finally {
+        isResettingRef.current = false;
+        setIsResetting(false);
+        resetPromiseRef.current = null;
+      }
+    };
+
+    const promise = performReset();
+    resetPromiseRef.current = promise;
+    return promise;
+  }, [api, updateStatus]);
 
   const start = useCallback(
     async (consent: boolean): Promise<void> => {
-      if (hasStartedRef.current) return;
+      if (hasStartedRef.current || isResettingRef.current) return;
 
       hasStartedRef.current = true;
       isFinishingRef.current = false;
@@ -169,28 +241,28 @@ export const useStation = (api: StationApi = defaultApi) => {
       setInitialMessages([]);
       setImpressos([]);
       setImpressoError(null);
-      setStatus("loading");
+      updateStatus("loading");
       try {
         const session = await api.startSession({ audio_consent: consent });
         sessionRef.current = session;
         anchorClock(session.server_now);
         setDeadlineAtMs(Date.parse(session.deadline_at));
         persistSessionId(session.session_id);
-        setStatus("active");
+        updateStatus("active");
       } catch (cause) {
         fail(cause);
       }
     },
-    [anchorClock, api, fail],
+    [anchorClock, api, fail, updateStatus],
   );
 
   const finish = useCallback(
     async (reason: FinishReason = "user"): Promise<void> => {
       const session = sessionRef.current;
-      if (!session || isFinishingRef.current) return;
+      if (!session || isFinishingRef.current || isResettingRef.current) return;
 
       isFinishingRef.current = true;
-      setStatus("finishing");
+      updateStatus("finishing");
 
       const pendingSend = pendingSendRef.current;
       if (pendingSend) {
@@ -198,15 +270,28 @@ export const useStation = (api: StationApi = defaultApi) => {
         // only need it to settle before finishing, not to propagate here.
         await pendingSend.catch(() => null);
       }
-      if (sessionRef.current !== session || !isFinishingRef.current) return;
+      if (
+        sessionRef.current !== session ||
+        !isFinishingRef.current ||
+        isResettingRef.current
+      ) {
+        return;
+      }
 
       try {
         await api.finishSession(session.session_id, reason);
         const stationResult = await api.fetchResult(session.session_id);
-        clearPersistedSessionId();
+        if (
+          sessionRef.current !== session ||
+          !isFinishingRef.current ||
+          isResettingRef.current
+        ) {
+          return;
+        }
         setResult(stationResult);
-        setStatus("finished");
+        updateStatus("finished");
       } catch (cause) {
+        if (sessionRef.current !== session || isResettingRef.current) return;
         if (
           reason === "timer" &&
           cause instanceof ApiError &&
@@ -217,7 +302,7 @@ export const useStation = (api: StationApi = defaultApi) => {
           // recomputed remaining time actually reaches zero.
           isFinishingRef.current = false;
           timerFinishTriggeredRef.current = false;
-          setStatus("active");
+          updateStatus("active");
           try {
             const refreshed = await api.getSession(session.session_id);
             if (sessionRef.current === session) {
@@ -234,7 +319,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         fail(cause);
       }
     },
-    [anchorClock, api, fail],
+    [anchorClock, api, fail, updateStatus],
   );
 
   const send = useCallback(
@@ -242,7 +327,9 @@ export const useStation = (api: StationApi = defaultApi) => {
       const session = sessionRef.current;
       if (
         !session ||
+        statusRef.current !== "active" ||
         isFinishingRef.current ||
+        isResettingRef.current ||
         pendingSendRef.current !== null
       ) {
         return Promise.resolve(null);
@@ -256,11 +343,15 @@ export const useStation = (api: StationApi = defaultApi) => {
             session.session_id,
             message,
           );
-          if (sessionRef.current !== session) return null;
+          if (sessionRef.current !== session || isResettingRef.current) {
+            return null;
+          }
           anchorClock(messageReply.server_now);
           return messageReply;
         } catch (cause) {
-          if (sessionRef.current !== session) return null;
+          if (sessionRef.current !== session || isResettingRef.current) {
+            return null;
+          }
 
           if (cause instanceof ApiError && cause.code === "station_time_elapsed") {
             if (!timerFinishTriggeredRef.current) {
@@ -289,7 +380,13 @@ export const useStation = (api: StationApi = defaultApi) => {
   const transcribe = useCallback(
     async (audioBlob: Blob, filename?: string): Promise<string | null> => {
       const session = sessionRef.current;
-      if (!session || !session.audio_consent || isFinishingRef.current) {
+      if (
+        !session ||
+        statusRef.current !== "active" ||
+        !session.audio_consent ||
+        isFinishingRef.current ||
+        isResettingRef.current
+      ) {
         return null;
       }
 
@@ -315,7 +412,13 @@ export const useStation = (api: StationApi = defaultApi) => {
   const synthesize = useCallback(
     async (text: string): Promise<Blob | null> => {
       const session = sessionRef.current;
-      if (!session || !session.audio_consent || isFinishingRef.current) {
+      if (
+        !session ||
+        statusRef.current !== "active" ||
+        !session.audio_consent ||
+        isFinishingRef.current ||
+        isResettingRef.current
+      ) {
         return null;
       }
 
@@ -339,7 +442,14 @@ export const useStation = (api: StationApi = defaultApi) => {
   const requestImpresso = useCallback(
     async (text: string): Promise<RequestImpressoResponse | null> => {
       const session = sessionRef.current;
-      if (!session || isFinishingRef.current) return null;
+      if (
+        !session ||
+        statusRef.current !== "active" ||
+        isFinishingRef.current ||
+        isResettingRef.current
+      ) {
+        return null;
+      }
 
       try {
         const response = await api.requestImpresso(session.session_id, {
@@ -370,7 +480,7 @@ export const useStation = (api: StationApi = defaultApi) => {
 
     let cancelled = false;
     hasStartedRef.current = true;
-    setStatus("loading");
+    updateStatus("loading");
 
     void (async () => {
       try {
@@ -383,13 +493,12 @@ export const useStation = (api: StationApi = defaultApi) => {
         setDeadlineAtMs(Date.parse(detail.deadline_at));
 
         if (detail.status === "completed") {
-          setStatus("finishing");
+          updateStatus("finishing");
           try {
             const stationResult = await api.fetchResult(detail.session_id);
             if (cancelled) return;
-            clearPersistedSessionId();
             setResult(stationResult);
-            setStatus("finished");
+            updateStatus("finished");
           } catch (cause) {
             if (!cancelled) fail(cause);
           }
@@ -398,7 +507,7 @@ export const useStation = (api: StationApi = defaultApi) => {
 
         timerFinishTriggeredRef.current = false;
         setInitialMessages(detail.messages);
-        setStatus("active");
+        updateStatus("active");
 
         // Best effort: restore documents released before the refresh so
         // they remain visible; a failure here does not block resume.
@@ -415,7 +524,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         clearPersistedSessionId();
         hasStartedRef.current = false;
         sessionRef.current = null;
-        setStatus("idle");
+        updateStatus("idle");
         void cause;
       }
     })();
@@ -439,6 +548,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     }
 
     const tick = () => {
+      if (isResettingRef.current) return;
       const anchor = clockAnchorRef.current;
       if (!anchor) return;
 
@@ -458,6 +568,27 @@ export const useStation = (api: StationApi = defaultApi) => {
     return () => clearInterval(intervalId);
   }, [deadlineAtMs, status, finish]);
 
+  useEffect(() => {
+    const onPageHide = () => {
+      const sessionId =
+        sessionRef.current?.session_id ?? readPersistedSessionId();
+      if (!sessionId) return;
+      if (pageHideAttemptedRef.current === sessionId) return;
+
+      pageHideAttemptedRef.current = sessionId;
+      void api
+        .discardSession(sessionId, { keepalive: true })
+        .catch(() => {
+          // Best effort keepalive POST: no guarantee, no error-induced reset.
+        });
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [api]);
+
   return {
     start,
     send,
@@ -474,5 +605,6 @@ export const useStation = (api: StationApi = defaultApi) => {
     initialMessages,
     impressos,
     impressoError,
+    isResetting,
   };
 };

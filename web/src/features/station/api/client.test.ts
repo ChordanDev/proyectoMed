@@ -380,4 +380,92 @@ describe("station API client", () => {
       vi.useRealTimers();
     }
   });
+
+  describe("discardSession", () => {
+    it("sends a POST request to discard the session and resolves cleanly on 204 No Content", async () => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        json: async () => {
+          throw new Error("unexpected json parse on 204");
+        },
+      } as unknown as Response);
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      await expect(client.discardSession("session-1")).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe(
+        `${baseUrl}/api/stations/active/sessions/session-1/discard`,
+      );
+      expect(init?.method).toBe("POST");
+      expect(init?.keepalive).toBeUndefined();
+    });
+
+    it("sends a keepalive POST when keepalive option is true", async () => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        json: async () => null,
+      } as unknown as Response);
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      await expect(
+        client.discardSession("session-1", { keepalive: true }),
+      ).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.keepalive).toBe(true);
+      expect(init?.method).toBe("POST");
+    });
+
+    it("encodes session ID with special characters when discarding", async () => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        json: async () => null,
+      } as unknown as Response);
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      await client.discardSession("session/special 1");
+
+      const [url] = fetchMock.mock.calls[0];
+      expect(url).toBe(
+        `${baseUrl}/api/stations/active/sessions/session%2Fspecial%201/discard`,
+      );
+    });
+
+    it("decodes a 500 error on discard into an ApiError", async () => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+        jsonResponse(
+          { error: "internal_error", message: "Erro interno no servidor." },
+          500,
+        ),
+      );
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      await expect(client.discardSession("session-1")).rejects.toMatchObject({
+        name: "ApiError",
+        status: 500,
+        code: "internal_error",
+        message: "Erro interno no servidor.",
+      });
+    });
+
+    it("decodes a network error on discard into an ApiError with status 0", async () => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      await expect(client.discardSession("session-1")).rejects.toMatchObject({
+        name: "ApiError",
+        status: 0,
+        code: "network_error",
+        message: "Não foi possível conectar ao servidor.",
+      });
+    });
+  });
 });
