@@ -341,15 +341,105 @@ defmodule Backend.StationsTest do
   end
 
   describe "extension points" do
-    test "discard_session/1 idempotently removes session" do
+    test "discard_session/1 idempotently removes active session and denies subsequent operations" do
       session = Stations.create_session(%{audio_consent: true})
       assert {:ok, _} = Stations.get_session(session.session_id)
 
       assert Stations.discard_session(session.session_id) == :ok
+
+      # Subsequent operations are denied with :not_found
       assert Stations.get_session(session.session_id) == {:error, :not_found}
+      assert Stations.fetch_session(session.session_id) == {:error, :not_found}
+
+      assert Stations.create_message(session.session_id, %{
+               role: :learner,
+               modality: :text,
+               text: "Olá"
+             }) == {:error, :not_found}
+
+      assert Stations.complete_session(session.session_id, :user) == {:error, :not_found}
+      assert Stations.finish_session(session.session_id, :user) == {:error, :not_found}
+      assert Stations.get_session_result(session.session_id) == {:error, :not_found}
+      assert Stations.evaluate_session(session.session_id) == {:error, :not_found}
+
+      assert Stations.request_impresso(session.session_id, %{
+               "text" => "ecg",
+               "request_id" => "req-1"
+             }) == {:error, :not_found}
+
+      assert Stations.list_impressos(session.session_id) == {:error, :not_found}
+      assert Stations.check_session_deadline(session.session_id) == {:error, :not_found}
 
       # Idempotent: repeated discard is safe
       assert Stations.discard_session(session.session_id) == :ok
+    end
+
+    test "discard_session/1 removes completed session and denies subsequent result retrieval" do
+      session = Stations.create_session(%{audio_consent: true})
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      # Result is retrievable before discard
+      assert {:ok, _result} = Stations.get_session_result(session.session_id)
+
+      # Discard the completed session
+      assert Stations.discard_session(session.session_id) == :ok
+
+      # Result and session retrieval are now denied
+      assert Stations.get_session_result(session.session_id) == {:error, :not_found}
+      assert Stations.get_session(session.session_id) == {:error, :not_found}
+      assert Stations.complete_session(session.session_id, :user) == {:error, :not_found}
+
+      assert Stations.create_message(session.session_id, %{
+               role: :learner,
+               modality: :text,
+               text: "Depois de descartado"
+             }) == {:error, :not_found}
+
+      # Repeated discard remains safe
+      assert Stations.discard_session(session.session_id) == :ok
+    end
+
+    test "discard_session/1 is safe for unknown and expired sessions" do
+      assert Stations.discard_session("completely-unknown-session-id") == :ok
+
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      session =
+        try do
+          Stations.create_session(%{audio_consent: false})
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      assert Stations.discard_session(session.session_id) == :ok
+      assert Stations.get_session(session.session_id) == {:error, :not_found}
+    end
+
+    test "discard_session/1 immediately unblocks pending complete_session callers" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _session, _token} =
+               Backend.Stations.Conversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Pergunta em andamento"
+               })
+
+      waiter_task =
+        Task.async(fn ->
+          Stations.complete_session(session.session_id, :user)
+        end)
+
+      Process.sleep(20)
+
+      assert Stations.discard_session(session.session_id) == :ok
+      assert Task.await(waiter_task, 1_000) == {:error, :not_found}
+      assert Stations.get_session(session.session_id) == {:error, :not_found}
     end
 
     test "check_session_deadline/1 returns within_deadline for active session" do

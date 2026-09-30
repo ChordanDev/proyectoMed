@@ -1210,4 +1210,202 @@ defmodule BackendWeb.StationControllerTest do
              }
     end
   end
+
+  describe "POST /api/stations/active/sessions/:id/discard" do
+    setup do
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: true
+        })
+
+      %{session: session}
+    end
+
+    test "discards an active session returning 204 and denies subsequent operations", %{
+      conn: conn,
+      session: session
+    } do
+      conn_discard = post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/discard")
+      assert response(conn_discard, 204) == ""
+
+      # Subsequent session retrieval is denied with 404
+      conn_show = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
+
+      assert json_response(conn_show, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+
+      # Subsequent message posting is denied with 404
+      conn_msg =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Mensagem após descarte"
+        })
+
+      assert json_response(conn_msg, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+
+      # Subsequent finish is denied with 404
+      conn_finish =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+          "reason" => "user"
+        })
+
+      assert json_response(conn_finish, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+
+      # Subsequent result retrieval is denied with 404
+      conn_result = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}/result")
+
+      assert json_response(conn_result, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+
+      # Subsequent impresso request is denied with 404
+      conn_impresso =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => "ecg"
+        })
+
+      assert json_response(conn_impresso, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "discards a completed session returning 204 and denies subsequent result retrieval", %{
+      conn: conn,
+      session: session
+    } do
+      # Finish the session first
+      conn_finish =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+          "reason" => "user"
+        })
+
+      assert json_response(conn_finish, 200)["status"] == "completed"
+
+      # Result is accessible prior to discard
+      conn_result_before =
+        get(conn, ~p"/api/stations/active/sessions/#{session.session_id}/result")
+
+      assert json_response(conn_result_before, 200)["session_id"] == session.session_id
+
+      # Discard the completed session
+      conn_discard = post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/discard")
+      assert response(conn_discard, 204) == ""
+
+      # Result retrieval is now denied with 404
+      conn_result_after =
+        get(conn, ~p"/api/stations/active/sessions/#{session.session_id}/result")
+
+      assert json_response(conn_result_after, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+
+      # Session retrieval is also denied with 404
+      conn_show = get(conn, ~p"/api/stations/active/sessions/#{session.session_id}")
+
+      assert json_response(conn_show, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "returns identical 204 for unknown session id", %{conn: conn} do
+      conn_discard = post(conn, ~p"/api/stations/active/sessions/non-existent-session-id/discard")
+      assert response(conn_discard, 204) == ""
+    end
+
+    test "repeated discard returns identical 204 without error", %{
+      conn: conn,
+      session: session
+    } do
+      conn1 = post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/discard")
+      assert response(conn1, 204) == ""
+
+      conn2 = post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/discard")
+      assert response(conn2, 204) == ""
+
+      conn3 = post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/discard")
+      assert response(conn3, 204) == ""
+    end
+
+    test "discards an expired session returning identical 204", %{conn: conn} do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      expired_session =
+        try do
+          pkg = StationLoader.active_package()
+
+          Conversation.start(%{
+            station_id: pkg["station_id"],
+            station_version: pkg["version"],
+            audio_consent: false
+          })
+        after
+          if is_nil(original_timeout) do
+            Application.delete_env(:backend, :conversation_timeout_ms)
+          else
+            Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+          end
+        end
+
+      conn_discard =
+        post(conn, ~p"/api/stations/active/sessions/#{expired_session.session_id}/discard")
+
+      assert response(conn_discard, 204) == ""
+
+      conn_show = get(conn, ~p"/api/stations/active/sessions/#{expired_session.session_id}")
+
+      assert json_response(conn_show, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+
+    test "releases pending finish waiters when session is discarded via HTTP", %{
+      conn: conn,
+      session: session
+    } do
+      assert {:ok, _session, _token} =
+               Conversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Em andamento"
+               })
+
+      finish_task =
+        Task.async(fn ->
+          post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+            "reason" => "user"
+          })
+        end)
+
+      Process.sleep(20)
+
+      discard_conn = post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/discard")
+      assert response(discard_conn, 204) == ""
+
+      finish_conn = Task.await(finish_task, 1_000)
+
+      assert json_response(finish_conn, 404) == %{
+               "error" => "session_not_found",
+               "message" => "Sessão não encontrada."
+             }
+    end
+  end
 end

@@ -161,6 +161,11 @@ defmodule BackendWeb.StationController do
     end
   end
 
+  def discard(conn, %{"id" => session_id}) do
+    :ok = Stations.discard_session(session_id)
+    send_resp(conn, :no_content, "")
+  end
+
   def show_session(conn, %{"id" => session_id}) do
     case Stations.get_session(session_id) do
       {:ok, session} ->

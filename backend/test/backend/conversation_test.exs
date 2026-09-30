@@ -316,6 +316,99 @@ defmodule Backend.ConversationTest do
     end
   end
 
+  describe "discard/1" do
+    test "removes an active session from storage" do
+      session = Conversation.start()
+      assert {:ok, _} = Conversation.fetch(session.session_id)
+
+      assert :ok = Conversation.discard(session.session_id)
+      assert {:error, :not_found} = Conversation.fetch(session.session_id)
+    end
+
+    test "removes a completed session from storage" do
+      session = Conversation.start()
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      assert :ok = Conversation.discard(session.session_id)
+      assert {:error, :not_found} = Conversation.fetch(session.session_id)
+    end
+
+    test "is idempotent on repeated discard and non-existent sessions" do
+      assert :ok = Conversation.discard("non-existent-session-id")
+
+      session = Conversation.start()
+      assert :ok = Conversation.discard(session.session_id)
+      assert :ok = Conversation.discard(session.session_id)
+      assert :ok = Conversation.discard(session.session_id)
+    end
+
+    test "removes an expired session" do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      session =
+        try do
+          Conversation.start()
+        after
+          restore_env(:conversation_timeout_ms, original_timeout)
+        end
+
+      assert :ok = Conversation.discard(session.session_id)
+      assert {:error, :not_found} = Conversation.fetch(session.session_id)
+    end
+
+    test "atomically releases in-flight turn, cancels grace timer, unblocks pending waiters, and clears turn state" do
+      session = Conversation.start()
+
+      assert {:ok, _session, token} =
+               StationConversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Em andamento"
+               })
+
+      waiter_task =
+        Task.async(fn ->
+          Conversation.complete(session.session_id, :user)
+        end)
+
+      Process.sleep(20)
+
+      assert :ok = Conversation.discard(session.session_id)
+
+      assert Task.await(waiter_task, 1_000) == {:error, :not_found}
+      assert {:error, :not_found} = Conversation.fetch(session.session_id)
+
+      assert {:error, :station_time_elapsed} =
+               StationConversation.resolve_turn(
+                 session.session_id,
+                 token,
+                 {:ok, %{role: :patient, modality: :text, text: "Resposta tardia"}}
+               )
+    end
+
+    test "multiple completion waiters are all released when session is discarded" do
+      session = Conversation.start()
+
+      assert {:ok, _session, _token} =
+               StationConversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Em andamento"
+               })
+
+      waiter_1 = Task.async(fn -> Conversation.complete(session.session_id, :user) end)
+      waiter_2 = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+      Process.sleep(20)
+
+      assert :ok = Conversation.discard(session.session_id)
+
+      assert Task.await(waiter_1, 1_000) == {:error, :not_found}
+      assert Task.await(waiter_2, 1_000) == {:error, :not_found}
+    end
+  end
+
   describe "authoritative deadline and pending turns (Ticket 133)" do
     setup do
       original_duration = Application.get_env(:backend, :station_duration_ms)
@@ -475,6 +568,19 @@ defmodule Backend.ConversationTest do
       wait_until(fn -> Process.whereis(Backend.Stations.Conversation) not in [nil, pid] end)
 
       assert Conversation.fetch(session.session_id) == {:error, :not_found}
+    end
+
+    test "discard is safe and returns :ok after a process restart" do
+      session = Conversation.start()
+      pid = Process.whereis(Backend.Stations.Conversation)
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1_000
+
+      wait_until(fn -> Process.whereis(Backend.Stations.Conversation) not in [nil, pid] end)
+
+      assert Conversation.discard(session.session_id) == :ok
+      assert Conversation.discard("arbitrary-id") == :ok
     end
   end
 
