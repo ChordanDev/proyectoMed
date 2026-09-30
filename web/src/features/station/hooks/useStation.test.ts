@@ -107,6 +107,7 @@ const apiMock = (overrides: Partial<StationApi> = {}): StationApi => ({
     .mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" })),
   requestImpresso: vi.fn().mockResolvedValue(impressoResponse),
   getImpressos: vi.fn().mockResolvedValue({ released_impressos: [] }),
+  discardSession: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 });
 
@@ -525,8 +526,8 @@ describe("useStation", () => {
     expect(result.current.status).toBe("failed");
     expect(result.current.error).not.toBeNull();
 
-    act(() => {
-      result.current.reset();
+    await act(async () => {
+      await result.current.reset();
     });
 
     expect(result.current.status).toBe("idle");
@@ -974,6 +975,350 @@ describe("useStation", () => {
         expect(result.current.impressos).toEqual([chestXray]);
       });
       expect(api.getImpressos).toHaveBeenCalledWith("session-1");
+    });
+  });
+
+  describe("discard and ephemeral session lifecycle (#134)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("awaits server acknowledgement BEFORE clearing refs, sessionStorage, status, or beginning new session", async () => {
+      const pendingDiscard = deferred<void>();
+      const api = apiMock({
+        discardSession: vi.fn(() => pendingDiscard.promise),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      await act(async () => {
+        await result.current.finish("user");
+      });
+      expect(result.current.status).toBe("finished");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-1");
+
+      let resetPromise!: Promise<void>;
+      act(() => {
+        resetPromise = result.current.reset();
+      });
+
+      // While deferred: refs, storage, and status are NOT cleared yet
+      expect(result.current.isResetting).toBe(true);
+      expect(result.current.status).toBe("finished");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-1");
+      expect(api.discardSession).toHaveBeenCalledWith("session-1");
+
+      // Cannot begin a new session while reset is awaiting acknowledgement
+      await act(async () => {
+        await result.current.start(true);
+      });
+      expect(api.startSession).toHaveBeenCalledTimes(1); // not called again
+
+      // Double-click reset while in-flight does not duplicate the API call
+      let duplicateResetPromise!: Promise<void>;
+      act(() => {
+        duplicateResetPromise = result.current.reset();
+      });
+      expect(api.discardSession).toHaveBeenCalledTimes(1);
+
+      // Now server acknowledges with 204
+      await act(async () => {
+        pendingDiscard.resolve();
+        await Promise.all([resetPromise, duplicateResetPromise]);
+      });
+
+      // Now cleared upon acknowledgement
+      expect(result.current.isResetting).toBe(false);
+      expect(result.current.status).toBe("idle");
+      expect(result.current.result).toBeNull();
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBeNull();
+
+      // Now a new session can begin
+      await act(async () => {
+        await result.current.start(false);
+      });
+      expect(result.current.status).toBe("active");
+      expect(api.startSession).toHaveBeenCalledTimes(2);
+    });
+
+    it("preserves local state on discard 5xx/network failure, surfaces error, and enables retry", async () => {
+      const discardSession = vi
+        .fn<StationApi["discardSession"]>()
+        .mockRejectedValueOnce(
+          new ApiError(500, "internal_error", "Erro ao descartar sessão."),
+        )
+        .mockResolvedValueOnce(undefined);
+      const api = apiMock({ discardSession });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      await act(async () => {
+        await result.current.finish("user");
+      });
+      expect(result.current.status).toBe("finished");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-1");
+
+      // First attempt fails
+      await act(async () => {
+        await result.current.reset();
+      });
+
+      // Local state is preserved: not swallowed, not reset anyway
+      expect(result.current.status).toBe("finished");
+      expect(result.current.result).toEqual(stationResult);
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-1");
+      expect(result.current.error).toBe("Erro ao descartar sessão.");
+      expect(result.current.isResetting).toBe(false);
+
+      // Retry attempt succeeds
+      await act(async () => {
+        await result.current.reset();
+      });
+
+      expect(discardSession).toHaveBeenCalledTimes(2);
+      expect(result.current.status).toBe("idle");
+      expect(result.current.error).toBeNull();
+      expect(result.current.result).toBeNull();
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBeNull();
+    });
+
+    it("keeps completed session ID until discard acknowledgement; viewing results does not discard or clear storage", async () => {
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      await act(async () => {
+        await result.current.finish("user");
+      });
+
+      expect(result.current.status).toBe("finished");
+      expect(result.current.result).toEqual(stationResult);
+      // Completed session ID retained in storage
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-1");
+      expect(api.discardSession).not.toHaveBeenCalled();
+
+      // Explicit restart calls discard and resets
+      await act(async () => {
+        await result.current.reset();
+      });
+
+      expect(api.discardSession).toHaveBeenCalledWith("session-1");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBeNull();
+      expect(result.current.status).toBe("idle");
+    });
+
+    it("sends a single best-effort keepalive POST on pagehide without duplicate calls on repeated events", async () => {
+      const api = apiMock();
+      renderHook(() => useStation(api));
+
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+
+      // First pagehide event
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+      expect(api.discardSession).toHaveBeenCalledTimes(1);
+      expect(api.discardSession).toHaveBeenCalledWith("session-1", {
+        keepalive: true,
+      });
+
+      // Repeated pagehide event does not duplicate the attempt
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+      expect(api.discardSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("makes one keepalive discard on active abrupt exit without error-induced reset or state corruption", async () => {
+      const api = apiMock({
+        discardSession: vi
+          .fn()
+          .mockRejectedValue(new TypeError("Network error")),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      expect(result.current.status).toBe("active");
+
+      // Learner abruptly leaves (pagehide)
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+
+      expect(api.discardSession).toHaveBeenCalledWith("session-1", {
+        keepalive: true,
+      });
+      // No error-induced reset: state remains active, no error thrown
+      expect(result.current.status).toBe("active");
+      expect(result.current.error).toBeNull();
+    });
+
+    it("does not poll the server or extend TTL while viewing completed results", async () => {
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+          "performance",
+        ],
+      });
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      await act(async () => {
+        await result.current.finish("user");
+      });
+      expect(result.current.status).toBe("finished");
+      expect(api.fetchResult).toHaveBeenCalledTimes(1);
+
+      // Advance timers by 30 minutes while on the result screen
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      });
+
+      // No polling, no session pings, no TTL extension
+      expect(api.fetchResult).toHaveBeenCalledTimes(1);
+      expect(api.getSession).not.toHaveBeenCalled();
+      expect(api.finishSession).toHaveBeenCalledTimes(1);
+      expect(api.discardSession).not.toHaveBeenCalled();
+    });
+
+    it("ignores timer finish races when reset is initiated near deadline", async () => {
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+          "performance",
+        ],
+      });
+      const pendingDiscard = deferred<void>();
+      const api = apiMock({
+        discardSession: vi.fn(() => pendingDiscard.promise),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      expect(result.current.status).toBe("active");
+
+      // Advance to 1 second before deadline
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000 - 1000);
+      });
+
+      // Trigger reset right before expiration
+      act(() => {
+        void result.current.reset();
+      });
+
+      // Timer reaches zero while discard is in flight
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      // Timer finish must not race or be called
+      expect(api.finishSession).not.toHaveBeenCalled();
+
+      // Resolve discard
+      await act(async () => {
+        pendingDiscard.resolve();
+      });
+      expect(result.current.status).toBe("idle");
+    });
+
+    it("does not fail station when finish rejects after a successful reset cleared the session", async () => {
+      const pendingFinish = deferred<CompletedSession>();
+      const api = apiMock({
+        finishSession: vi.fn(() => pendingFinish.promise),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      expect(result.current.status).toBe("active");
+
+      // Trigger finish
+      act(() => {
+        void result.current.finish("user");
+      });
+      expect(result.current.status).toBe("finishing");
+
+      // While finish is in flight, user triggers and completes reset
+      await act(async () => {
+        await result.current.reset();
+      });
+      expect(result.current.status).toBe("idle");
+      expect(result.current.error).toBeNull();
+
+      // Now in-flight finish rejects (e.g. session was already discarded on server)
+      await act(async () => {
+        pendingFinish.reject(
+          new ApiError(404, "session_not_found", "Sessão não encontrada."),
+        );
+      });
+
+      // Status must remain idle and not transition to failed
+      expect(result.current.status).toBe("idle");
+      expect(result.current.error).toBeNull();
+    });
+
+    it("restores timer finish trigger on reset failure so timer completion still fires", async () => {
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+          "performance",
+        ],
+      });
+      const api = apiMock({
+        discardSession: vi
+          .fn()
+          .mockRejectedValue(
+            new ApiError(500, "internal_error", "Erro ao descartar sessão."),
+          ),
+      });
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      expect(result.current.status).toBe("active");
+
+      // User attempts explicit reset, which fails
+      await act(async () => {
+        await result.current.reset();
+      });
+      expect(result.current.status).toBe("active");
+      expect(result.current.error).toBe("Erro ao descartar sessão.");
+
+      // Advance time to expiration
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      });
+
+      // Timer completion must still fire despite prior failed reset
+      expect(api.finishSession).toHaveBeenCalledWith("session-1", "timer");
     });
   });
 });
