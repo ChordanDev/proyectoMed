@@ -327,6 +327,18 @@ defmodule Backend.Stations.Conversation do
 
   def handle_call({:discard, session_id}, _from, state) do
     :ets.delete(__MODULE__, session_id)
+
+    state =
+      case Map.pop(state.turns, session_id) do
+        {nil, state_turns} ->
+          %{state | turns: state_turns}
+
+        {%{waiters: waiters, grace_ref: grace_ref}, state_turns} ->
+          if grace_ref, do: Process.cancel_timer(grace_ref)
+          reply_waiters({:error, :not_found}, waiters)
+          %{state | turns: state_turns}
+      end
+
     {:reply, :ok, state}
   end
 
