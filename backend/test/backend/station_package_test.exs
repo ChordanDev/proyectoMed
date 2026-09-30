@@ -15,6 +15,11 @@ defmodule Backend.StationPackageTest do
     assert Enum.any?(package["rubric"], & &1["veto"])
     assert Enum.any?(package["rubric"], & &1["exclusion"])
     assert Enum.any?(package["rubric"], &is_binary(&1["modality_requirement"]))
+
+    [opening, safety] = package["approved_templates"]
+    assert opening["applicability"] == %{"type" => "min_learner_turns", "count" => 1}
+    assert safety["applicability"] == %{"type" => "unconditional"}
+
     assert {:ok, ^package} = StationPackage.validate(package)
   end
 
@@ -103,6 +108,27 @@ defmodule Backend.StationPackageTest do
     assert "levels" in criterion["required"]
     refute "weight" in criterion["required"]
     assert level["properties"]["points"]["multipleOf"] == 0.125
+
+    applicability = schema["$defs"]["approvedTemplate"]["properties"]["applicability"]
+    predicate = schema["$defs"]["applicabilityPredicate"]
+
+    assert applicability == %{"$ref" => "#/$defs/applicabilityPredicate"}
+
+    assert Enum.map(predicate["oneOf"], & &1["$ref"]) == [
+             "#/$defs/unconditionalPredicate",
+             "#/$defs/firstLearnerTurnPredicate",
+             "#/$defs/minLearnerTurnsPredicate",
+             "#/$defs/maxLearnerTurnsPredicate"
+           ]
+
+    assert schema["$defs"]["unconditionalPredicate"]["additionalProperties"] == false
+
+    assert schema["$defs"]["minLearnerTurnsPredicate"]["required"] == ["type", "count"]
+
+    assert schema["$defs"]["minLearnerTurnsPredicate"]["properties"]["count"] == %{
+             "type" => "integer",
+             "minimum" => 1
+           }
   end
 
   test "rejects every invalid v2 fixture with its contract error" do
@@ -112,13 +138,112 @@ defmodule Backend.StationPackageTest do
       {"invalid-package-v2-duplicate-levels.json", "rubric level labels must be unique"},
       {"invalid-package-v2-missing-placeholder.json", "placeholder must be a boolean"},
       {"invalid-package-v2-bad-disclosure.json",
-       "revealable_facts entries require a valid disclosure_condition"}
+       "revealable_facts entries require a valid disclosure_condition"},
+      {"invalid-package-v2-prose-applicability.json",
+       "approved_templates applicability must be a structured predicate object, not a prose string"},
+      {"invalid-package-v2-bad-predicate.json",
+       "approved_templates applicability type must be one of: unconditional, first_learner_turn, min_learner_turns, max_learner_turns"},
+      {"invalid-package-v2-bad-predicate.json",
+       "approved_templates min_learner_turns predicate requires an integer count >= 1"}
     ]
 
     Enum.each(cases, fn {fixture_name, expected_error} ->
       assert {:error, errors} = fixture_name |> fixture() |> StationPackage.validate()
       assert expected_error in errors
     end)
+  end
+
+  test "accepts every structured applicability predicate" do
+    base = fixture("valid-package-v2.json")
+
+    predicates = [
+      %{"type" => "unconditional"},
+      %{"type" => "first_learner_turn"},
+      %{"type" => "min_learner_turns", "count" => 1},
+      %{"type" => "max_learner_turns", "count" => 5}
+    ]
+
+    Enum.each(predicates, fn applicability ->
+      package = put_in(base, ["approved_templates", Access.at(0), "applicability"], applicability)
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end)
+  end
+
+  test "rejects invalid applicability with its exact error" do
+    base = fixture("valid-package-v2.json")
+
+    unknown_type_error =
+      "approved_templates applicability type must be one of: unconditional, first_learner_turn, min_learner_turns, max_learner_turns"
+
+    cases = [
+      {"Use after the opening assessment.",
+       "approved_templates applicability must be a structured predicate object, not a prose string"},
+      {"unconditional",
+       "approved_templates applicability must be a structured predicate object, not a prose string"},
+      {true,
+       "approved_templates applicability must be a structured predicate object, not a boolean"},
+      {false,
+       "approved_templates applicability must be a structured predicate object, not a boolean"},
+      {nil, "approved_templates entries require an applicability predicate object"},
+      {42, "approved_templates applicability must be a structured predicate object"},
+      {%{}, "approved_templates applicability requires a type"},
+      {%{"count" => 2}, "approved_templates applicability requires a type"},
+      {%{"type" => "whenever"}, unknown_type_error},
+      {%{"type" => 1}, unknown_type_error},
+      {%{"type" => "min_learner_turns"},
+       "approved_templates min_learner_turns predicate requires a count"},
+      {%{"type" => "max_learner_turns"},
+       "approved_templates max_learner_turns predicate requires a count"},
+      {%{"type" => "min_learner_turns", "count" => "2"},
+       "approved_templates min_learner_turns predicate requires an integer count >= 1"},
+      {%{"type" => "min_learner_turns", "count" => 0},
+       "approved_templates min_learner_turns predicate requires an integer count >= 1"},
+      {%{"type" => "max_learner_turns", "count" => 0},
+       "approved_templates max_learner_turns predicate requires an integer count >= 1"},
+      {%{"type" => "unconditional", "count" => 1},
+       "approved_templates unconditional predicates must not include additional fields"},
+      {%{"type" => "first_learner_turn", "extra" => true},
+       "approved_templates first_learner_turn predicates must not include additional fields"}
+    ]
+
+    Enum.each(cases, fn {applicability, expected_error} ->
+      package = put_in(base, ["approved_templates", Access.at(0), "applicability"], applicability)
+      assert {:error, errors} = StationPackage.validate(package)
+
+      assert expected_error in errors,
+             "expected #{inspect(expected_error)} for #{inspect(applicability)}"
+    end)
+  end
+
+  test "rejects approved templates missing the applicability key" do
+    package = fixture("valid-package-v2.json")
+
+    package =
+      Map.update!(package, "approved_templates", fn [first | rest] ->
+        [Map.delete(first, "applicability") | rest]
+      end)
+
+    assert {:error, errors} = StationPackage.validate(package)
+
+    assert "approved_templates entries require an applicability predicate object" in errors
+  end
+
+  test "rejects approved templates with atom-keyed false applicability as boolean" do
+    base = fixture("valid-package-v2.json")
+
+    package =
+      Map.update!(base, "approved_templates", fn [first | rest] ->
+        first =
+          first
+          |> Map.delete("applicability")
+          |> Map.put(:applicability, false)
+
+        [first | rest]
+      end)
+
+    assert {:error, errors} = StationPackage.validate(package)
+
+    assert "approved_templates applicability must be a structured predicate object, not a boolean" in errors
   end
 
   test "requires at least one rubric level" do

@@ -6,7 +6,13 @@ defmodule Backend.Stations.StationPackage do
   `Backend.Stations.StationLoader` decodes a package JSON document and passes the resulting
   map to `validate/1` before making it available to the application. Version 1
   packages can be upgraded explicitly with `migrate/1` before validation.
+
+  `approved_templates[].applicability` must be a structured predicate object
+  from the vocabulary owned by `Backend.Stations.TemplateApplicability`; prose
+  strings and booleans are load errors (issue #147).
   """
+
+  alias Backend.Stations.TemplateApplicability
 
   @version "2.0.0"
   @previous_version "1.0.0"
@@ -323,12 +329,9 @@ defmodule Backend.Stations.StationPackage do
       templates when is_list(templates) ->
         errors =
           Enum.reduce(templates, errors, fn template, errors ->
-            validate_entry(
-              errors,
-              template,
-              "approved_templates",
-              ["template_id", "text", "applicability"]
-            )
+            errors
+            |> validate_entry(template, "approved_templates", ["template_id", "text"])
+            |> validate_template_applicability(template)
           end)
 
         validate_unique_values(
@@ -342,6 +345,23 @@ defmodule Backend.Stations.StationPackage do
         ["approved_templates must be a list or null" | errors]
     end
   end
+
+  # Applicability is a structured predicate object, not a string field, so it
+  # gets dedicated structural validation single-sourced from TemplateApplicability.
+  defp validate_template_applicability(errors, template) when is_map(template) do
+    applicability =
+      case Map.fetch(template, "applicability") do
+        {:ok, value} -> value
+        :error -> Map.get(template, :applicability)
+      end
+
+    case TemplateApplicability.structural_errors(applicability) do
+      [] -> errors
+      applicability_errors -> Enum.reverse(applicability_errors) ++ errors
+    end
+  end
+
+  defp validate_template_applicability(errors, _template), do: errors
 
   defp validate_unique_ids(errors, entries, message),
     do: validate_unique_values(errors, entries, "id", message)
