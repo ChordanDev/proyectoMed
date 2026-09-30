@@ -71,6 +71,28 @@ defmodule Backend.StationLoaderTest do
     end)
   end
 
+  test "load_active logs field-level diagnostic when package has an applicability violation" do
+    invalid_package =
+      fixture_path("invalid-package-v2-prose-applicability.json")
+      |> File.read!()
+
+    with_canonical_package(invalid_package, fn ->
+      log =
+        capture_log(fn ->
+          assert_raise RuntimeError,
+                       "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório.",
+                       fn ->
+                         StationLoader.load_active()
+                       end
+        end)
+
+      assert log =~
+               "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."
+
+      assert log =~ "applicability"
+    end)
+  end
+
   defp fixture_path(name), do: Path.join(@fixtures_path, name)
 
   defp with_canonical_package(contents, test) do
