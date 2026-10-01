@@ -402,6 +402,110 @@ defmodule Backend.Stations do
   end
 
   @doc """
+  Processes a real-time learner voice turn (#119).
+
+  Encapsulates:
+    1. Validating active session state, deadline, and audio consent.
+    2. Atomically committing the learner turn via `Conversation.begin_voice_turn/3`
+       which assigns a session-scoped monotonic generation identity.
+       Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn.
+    3. Formatting role-labelled context from the active package and session messages.
+    4. Generating the next bounded patient reply via `StationAI.next_reply/2`.
+    5. Passing through the `verify_patient_reply/3` seam.
+    6. Failing closed: admitting only canonical refusal or exact package-authorized
+       fact content, otherwise substituting canonical refusal before resolution.
+    7. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
+    8. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
+       solely on success. Stale, cancelled, completed, or expired generations never return text.
+  """
+  @spec process_voice_turn(String.t(), pos_integer(), String.t()) ::
+          {:ok,
+           %{
+             reply_text: String.t(),
+             turn_id: pos_integer(),
+             generation_id: pos_integer(),
+             used_facts: StationAI.revealable_facts()
+           }}
+          | {:ok, :duplicate}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :no_consent
+             | :stale_generation
+             | :invalid_transcript
+             | :station_ai_unavailable
+             | term()}
+  def process_voice_turn(session_id, turn_id, text)
+      when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
+    case String.trim(text) do
+      "" ->
+        {:error, :invalid_transcript}
+
+      trimmed_text ->
+        with {:ok, session} <- Conversation.fetch(session_id),
+             :ok <- ensure_active(session),
+             :ok <- ensure_audio_consent(session),
+             {:ok, :committed, generation_id} <-
+               Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
+          package = get_active_package()
+
+          with {:ok, current_session} <- Conversation.fetch(session_id),
+               :ok <- ensure_active(current_session),
+               context = format_context(current_session, package),
+               {:ok, ai_reply} <- generate_patient_reply(package, context),
+               {:ok, verified_reply} <- verify_patient_reply(package, ai_reply),
+               raw_text = Map.get(verified_reply, :text) || Map.get(verified_reply, "text"),
+               {:ok, safe_text, used_facts} = admit_voice_reply(raw_text, package),
+               {:ok, _session} <-
+                 Conversation.resolve_patient_reply(session_id, generation_id, safe_text) do
+            {:ok,
+             %{
+               reply_text: safe_text,
+               turn_id: turn_id,
+               generation_id: generation_id,
+               used_facts: used_facts
+             }}
+          else
+            {:error, :stale_generation} ->
+              {:error, :stale_generation}
+
+            {:error, :completed} ->
+              {:error, :completed}
+
+            {:error, :expired} ->
+              {:error, :expired}
+
+            {:error, :not_found} ->
+              {:error, :not_found}
+
+            {:error, _reason} ->
+              _ = Conversation.cancel_generation(session_id, generation_id)
+              {:error, :station_ai_unavailable}
+          end
+        else
+          {:ok, :duplicate} ->
+            {:ok, :duplicate}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
+
+  @doc """
+  Explicitly cancels a pending voice turn generation (#119).
+  """
+  @spec cancel_voice_turn(String.t(), pos_integer() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_voice_turn(session_id, generation_id \\ nil) do
+    Conversation.cancel_generation(session_id, generation_id)
+  end
+
+  @doc """
   Verification seam for generated patient replies before display or synthesis.
 
   Stable extension point for Ticket 14 / ADR-011 (#125, #127) Jev verification.
@@ -444,6 +548,41 @@ defmodule Backend.Stations do
 
   defp ensure_audio_consent(%{audio_consent: true}), do: :ok
   defp ensure_audio_consent(_session), do: {:error, :no_consent}
+
+  defp admit_voice_reply(raw_text, package) do
+    refusal = StationAI.refusal_text()
+    trimmed_refusal = String.trim(refusal)
+    trimmed_text = if is_binary(raw_text), do: String.trim(raw_text), else: ""
+
+    revealable_facts = package["revealable_facts"] || []
+
+    matching_fact =
+      Enum.find(revealable_facts, fn fact ->
+        content = Map.get(fact, "content") || Map.get(fact, :content)
+
+        is_binary(content) and
+          (String.trim(content) == trimmed_text or
+             normalize_fact_text(content) == normalize_fact_text(trimmed_text))
+      end)
+
+    cond do
+      trimmed_text == trimmed_refusal ->
+        {:ok, refusal, []}
+
+      matching_fact != nil ->
+        fact_content = Map.get(matching_fact, "content") || Map.get(matching_fact, :content)
+        {:ok, fact_content, [matching_fact]}
+
+      true ->
+        {:ok, refusal, []}
+    end
+  end
+
+  defp normalize_fact_text(text) when is_binary(text) do
+    text
+    |> String.trim()
+    |> String.trim_trailing(".")
+  end
 
   defp generate_patient_reply(package, context) do
     StationAI.next_reply(package, context)
