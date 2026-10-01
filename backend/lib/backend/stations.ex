@@ -448,41 +448,7 @@ defmodule Backend.Stations do
              :ok <- ensure_audio_consent(session),
              {:ok, :committed, generation_id} <-
                Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
-          package = get_active_package()
-
-          with {:ok, current_session} <- Conversation.fetch(session_id),
-               :ok <- ensure_active(current_session),
-               context = format_context(current_session, package),
-               {:ok, ai_reply} <- generate_patient_reply(package, context),
-               {:ok, verified_reply} <- verify_patient_reply(package, ai_reply),
-               raw_text = Map.get(verified_reply, :text) || Map.get(verified_reply, "text"),
-               {:ok, safe_text, used_facts} = admit_voice_reply(raw_text, package),
-               {:ok, _session} <-
-                 Conversation.resolve_patient_reply(session_id, generation_id, safe_text) do
-            {:ok,
-             %{
-               reply_text: safe_text,
-               turn_id: turn_id,
-               generation_id: generation_id,
-               used_facts: used_facts
-             }}
-          else
-            {:error, :stale_generation} ->
-              {:error, :stale_generation}
-
-            {:error, :completed} ->
-              {:error, :completed}
-
-            {:error, :expired} ->
-              {:error, :expired}
-
-            {:error, :not_found} ->
-              {:error, :not_found}
-
-            {:error, _reason} ->
-              _ = Conversation.cancel_generation(session_id, generation_id)
-              {:error, :station_ai_unavailable}
-          end
+          process_voice_reply(session_id, turn_id, generation_id)
         else
           {:ok, :duplicate} ->
             {:ok, :duplicate}
@@ -564,6 +530,44 @@ defmodule Backend.Stations do
 
   defp ensure_audio_consent(%{audio_consent: true}), do: :ok
   defp ensure_audio_consent(_session), do: {:error, :no_consent}
+
+  defp process_voice_reply(session_id, turn_id, generation_id) do
+    package = get_active_package()
+
+    with {:ok, current_session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(current_session),
+         context = format_context(current_session, package),
+         {:ok, ai_reply} <- generate_patient_reply(package, context),
+         {:ok, verified_reply} <- verify_patient_reply(package, ai_reply),
+         raw_text = Map.get(verified_reply, :text) || Map.get(verified_reply, "text"),
+         {:ok, safe_text, used_facts} = admit_voice_reply(raw_text, package),
+         {:ok, _session} <-
+           Conversation.resolve_patient_reply(session_id, generation_id, safe_text) do
+      {:ok,
+       %{
+         reply_text: safe_text,
+         turn_id: turn_id,
+         generation_id: generation_id,
+         used_facts: used_facts
+       }}
+    else
+      {:error, :stale_generation} ->
+        {:error, :stale_generation}
+
+      {:error, :completed} ->
+        {:error, :completed}
+
+      {:error, :expired} ->
+        {:error, :expired}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _reason} ->
+        _ = Conversation.cancel_generation(session_id, generation_id)
+        {:error, :station_ai_unavailable}
+    end
+  end
 
   defp admit_voice_reply(raw_text, package) do
     refusal = StationAI.refusal_text()

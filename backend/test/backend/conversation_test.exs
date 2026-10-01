@@ -1,8 +1,8 @@
 defmodule Backend.ConversationTest do
   use ExUnit.Case, async: false
 
-  alias Backend.Stations.Conversation
   alias Backend.Conversation, as: LegacyConversation
+  alias Backend.Stations.Conversation
 
   test "start creates an active session with a thirty-minute safety timeout and default station identity" do
     session = Conversation.start()

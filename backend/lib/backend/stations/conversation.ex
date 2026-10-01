@@ -326,18 +326,16 @@ defmodule Backend.Stations.Conversation do
       {:ok, session} ->
         active_gen = Map.get(session, :active_generation_id)
 
-        cond do
-          generation_id != nil and active_gen != generation_id ->
-            {:reply, {:error, :stale_generation}, state}
+        if generation_id != nil and active_gen != generation_id do
+          {:reply, {:error, :stale_generation}, state}
+        else
+          session =
+            session
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
 
-          true ->
-            session =
-              session
-              |> Map.put(:active_generation_id, nil)
-              |> Map.put(:active_voice_turn_id, nil)
-
-            true = :ets.insert(__MODULE__, {session_id, session})
-            {:reply, {:ok, :cancelled}, state}
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :cancelled}, state}
         end
 
       {:error, reason} ->
@@ -423,35 +421,36 @@ defmodule Backend.Stations.Conversation do
         {:reply, {:error, :completed}, state}
 
       {:ok, session} ->
-        if turn_id <= Map.get(session, :last_voice_turn_id, 0) do
-          {:reply, {:ok, :duplicate}, state}
-        else
-          gen_id = Map.get(session, :next_generation_id, 1)
-          message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
-
-          session =
-            session
-            |> Map.put(:messages, session.messages ++ [message])
-            |> Map.put(:last_voice_turn_id, turn_id)
-            |> Map.put(:active_generation_id, gen_id)
-            |> Map.put(:active_voice_turn_id, turn_id)
-            |> Map.put(:next_generation_id, gen_id + 1)
-
-          true = :ets.insert(__MODULE__, {session_id, session})
-
-          reply =
-            case return_mode do
-              :legacy -> {:ok, :committed}
-              :with_generation -> {:ok, :committed, gen_id}
-            end
-
-          {:reply, reply, state}
-        end
+        reply = commit_voice_turn(session_id, session, turn_id, text, return_mode)
+        {:reply, reply, state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
   end
+
+  defp commit_voice_turn(session_id, session, turn_id, text, return_mode) do
+    if turn_id <= Map.get(session, :last_voice_turn_id, 0) do
+      {:ok, :duplicate}
+    else
+      gen_id = Map.get(session, :next_generation_id, 1)
+      message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
+
+      session =
+        session
+        |> Map.put(:messages, session.messages ++ [message])
+        |> Map.put(:last_voice_turn_id, turn_id)
+        |> Map.put(:active_generation_id, gen_id)
+        |> Map.put(:active_voice_turn_id, turn_id)
+        |> Map.put(:next_generation_id, gen_id + 1)
+
+      true = :ets.insert(__MODULE__, {session_id, session})
+      voice_turn_reply(return_mode, gen_id)
+    end
+  end
+
+  defp voice_turn_reply(:legacy, _gen_id), do: {:ok, :committed}
+  defp voice_turn_reply(:with_generation, gen_id), do: {:ok, :committed, gen_id}
 
   defp get_criterion(criteria, key) when is_list(criteria) do
     Keyword.get(criteria, key)
