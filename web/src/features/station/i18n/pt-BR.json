@@ -40,5 +40,6 @@
   "impressoModalSubmit": "Solicitar",
   "impressoModalCancel": "Cancelar",
   "impressoDrawerToggle": "Documentos liberados",
-  "impressoDrawerEmpty": "Nenhum documento liberado ainda."
+  "impressoDrawerEmpty": "Nenhum documento liberado ainda.",
+  "discardError": "Não foi possível encerrar a sessão no servidor. Tente novamente."
 }

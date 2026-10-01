@@ -48,8 +48,8 @@ export default function App(): React.JSX.Element {
     void station.finish("user");
   }, [station]);
 
-  const handleRestart = useCallback(() => {
-    station.reset();
+  const handleRestart = useCallback(async () => {
+    await station.reset();
   }, [station]);
 
   // Flow: notice → station → result
@@ -74,6 +74,8 @@ export default function App(): React.JSX.Element {
           status={resultStatus}
           result={station.result}
           onRestart={handleRestart}
+          disabled={station.isResetting}
+          errorMessage={station.error ?? undefined}
         />
       </main>
     );
@@ -87,6 +89,7 @@ export default function App(): React.JSX.Element {
           result={null}
           errorMessage={station.error ?? undefined}
           onRestart={handleRestart}
+          disabled={station.isResetting}
         />
       </main>
     );

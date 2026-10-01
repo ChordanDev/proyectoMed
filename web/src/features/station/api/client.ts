@@ -100,6 +100,10 @@ export interface ListImpressosResponse {
   released_impressos: Impresso[];
 }
 
+export interface DiscardSessionOptions {
+  keepalive?: boolean;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -371,7 +375,7 @@ export const createApiClient = ({
     init: RequestInit,
     decode: (value: unknown) => T,
     readBody: (response: Response) => Promise<unknown> = (response) =>
-      response.json(),
+      response.status === 204 ? Promise.resolve(null) : response.json(),
   ): Promise<T> => {
     const controller = new AbortController();
     let timedOut = false;
@@ -501,6 +505,21 @@ export const createApiClient = ({
         { method: "GET" },
         decodeListImpressosResponse,
       ),
+    discardSession: (
+      sessionId: string,
+      options?: DiscardSessionOptions,
+    ): Promise<void> => {
+      const init: RequestInit = { method: "POST" };
+      if (options?.keepalive) {
+        init.keepalive = true;
+      }
+      return request(
+        `${sessionPath(sessionId)}/discard`,
+        init,
+        () => undefined,
+        async () => undefined,
+      );
+    },
   };
 };
 
@@ -520,4 +539,5 @@ export const {
   fetchResult,
   requestImpresso,
   getImpressos,
+  discardSession,
 } = defaultClient;
