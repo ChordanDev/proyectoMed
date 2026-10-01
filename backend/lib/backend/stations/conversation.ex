@@ -16,6 +16,7 @@ defmodule Backend.Stations.Conversation do
           optional(:completion_reason) => term(),
           optional(:last_voice_turn_id) => pos_integer(),
           optional(:active_generation_id) => pos_integer() | nil,
+          optional(:active_voice_turn_id) => pos_integer() | nil,
           optional(:next_generation_id) => pos_integer(),
           session_id: String.t(),
           station_id: String.t(),
@@ -125,6 +126,27 @@ defmodule Backend.Stations.Conversation do
   end
 
   @doc """
+  Explicitly cancels a pending voice turn by expected turn_id (#119).
+  Cancels only if `turn_id` matches the currently active voice turn.
+  """
+  @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_voice_turn(session_id, criteria \\ nil)
+
+  def cancel_voice_turn(session_id, turn_id) when is_integer(turn_id) and turn_id > 0 do
+    GenServer.call(__MODULE__, {:cancel_voice_turn, session_id, turn_id})
+  end
+
+  def cancel_voice_turn(session_id, criteria) when is_list(criteria) or is_map(criteria) do
+    GenServer.call(__MODULE__, {:cancel_by_criteria, session_id, criteria})
+  end
+
+  def cancel_voice_turn(session_id, nil) do
+    cancel_generation(session_id, nil)
+  end
+
+  @doc """
   Returns the current active generation identity for the session, or nil if none is pending.
   """
   @spec active_generation(String.t()) ::
@@ -180,6 +202,7 @@ defmodule Backend.Stations.Conversation do
       status: :active,
       last_voice_turn_id: 0,
       active_generation_id: nil,
+      active_voice_turn_id: nil,
       next_generation_id: 1
     }
 
@@ -216,7 +239,8 @@ defmodule Backend.Stations.Conversation do
                 status: :completed,
                 completed_at: DateTime.utc_now(),
                 completion_reason: reason,
-                active_generation_id: nil
+                active_generation_id: nil,
+                active_voice_turn_id: nil
               })
 
             true = :ets.insert(__MODULE__, {session_id, session})
@@ -283,6 +307,7 @@ defmodule Backend.Stations.Conversation do
               session
               |> Map.put(:messages, session.messages ++ [patient_msg])
               |> Map.put(:active_generation_id, nil)
+              |> Map.put(:active_voice_turn_id, nil)
 
             true = :ets.insert(__MODULE__, {session_id, session})
             {:reply, {:ok, session}, state}
@@ -306,9 +331,55 @@ defmodule Backend.Stations.Conversation do
             {:reply, {:error, :stale_generation}, state}
 
           true ->
-            session = Map.put(session, :active_generation_id, nil)
+            session =
+              session
+              |> Map.put(:active_generation_id, nil)
+              |> Map.put(:active_voice_turn_id, nil)
+
             true = :ets.insert(__MODULE__, {session_id, session})
             {:reply, {:ok, :cancelled}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:cancel_voice_turn, session_id, expected_turn_id}, from, state) do
+    handle_call({:cancel_by_criteria, session_id, [turn_id: expected_turn_id]}, from, state)
+  end
+
+  def handle_call({:cancel_by_criteria, session_id, criteria}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        active_turn = Map.get(session, :active_voice_turn_id)
+        active_gen = Map.get(session, :active_generation_id)
+
+        expected_turn =
+          get_criterion(criteria, :turn_id) || get_criterion(criteria, :expected_turn_id)
+
+        expected_gen = get_criterion(criteria, :generation_id)
+
+        stale? =
+          cond do
+            expected_turn != nil and (active_turn != expected_turn or is_nil(active_gen)) -> true
+            expected_gen != nil and active_gen != expected_gen -> true
+            true -> false
+          end
+
+        if stale? do
+          {:reply, {:error, :stale_generation}, state}
+        else
+          session =
+            session
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :cancelled}, state}
         end
 
       {:error, reason} ->
@@ -363,6 +434,7 @@ defmodule Backend.Stations.Conversation do
             |> Map.put(:messages, session.messages ++ [message])
             |> Map.put(:last_voice_turn_id, turn_id)
             |> Map.put(:active_generation_id, gen_id)
+            |> Map.put(:active_voice_turn_id, turn_id)
             |> Map.put(:next_generation_id, gen_id + 1)
 
           true = :ets.insert(__MODULE__, {session_id, session})
@@ -380,6 +452,16 @@ defmodule Backend.Stations.Conversation do
         {:reply, {:error, reason}, state}
     end
   end
+
+  defp get_criterion(criteria, key) when is_list(criteria) do
+    Keyword.get(criteria, key)
+  end
+
+  defp get_criterion(criteria, key) when is_map(criteria) do
+    Map.get(criteria, key) || Map.get(criteria, to_string(key))
+  end
+
+  defp get_criterion(_criteria, _key), do: nil
 
   defp active_session(session_id) do
     case fetch_session(session_id) do

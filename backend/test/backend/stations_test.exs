@@ -862,6 +862,108 @@ defmodule Backend.StationsTest do
       assert current.messages == []
     end
 
+    test "cancel_voice_turn with expected turn_id cancels matching active turn" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      task =
+        Task.async(fn ->
+          Stations.process_voice_turn(
+            session.session_id,
+            1,
+            "Pergunta para cancelamento por turn_id"
+          )
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      # Cancel with matching expected turn_id
+      assert {:ok, :cancelled} =
+               Stations.cancel_voice_turn(session.session_id, turn_id: 1)
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+      assert Task.await(task) == {:error, :stale_generation}
+    end
+
+    test "delayed cancellation of earlier turn_id returns :stale_generation and does not invalidate newer turn" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      task1 =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 1, "Pergunta 1")
+        end)
+
+      assert_receive {:adapter_called, _ctx1}, 1000
+
+      # Newer turn 2 arrives and starts generation
+      task2 =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 2, "Pergunta 2")
+        end)
+
+      assert_receive {:adapter_called, _ctx2}, 1000
+
+      # Delayed cancellation for turn 1 arrives late
+      assert {:error, :stale_generation} =
+               Stations.cancel_voice_turn(session.session_id, turn_id: 1)
+
+      # Resume turn 1: superseded by turn 2
+      send(task1.pid, {:resume_adapter, "Resposta descartada 1"})
+      assert Task.await(task1) == {:error, :stale_generation}
+
+      # Turn 2 is untouched and resolves with authorized fact
+      send(task2.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      assert {:ok, result} = Task.await(task2)
+      assert result.turn_id == 2
+      assert result.reply_text == "A dor começou durante uma caminhada."
+    end
+
+    test "cancel_voice_turn and process_voice_turn enforce completed and expired session boundaries" do
+      session = Stations.create_session(%{audio_consent: true})
+      {:ok, _} = Stations.complete_session(session.session_id)
+
+      assert Stations.cancel_voice_turn(session.session_id, turn_id: 1) == {:error, :completed}
+      assert Stations.process_voice_turn(session.session_id, 1, "Fala") == {:error, :completed}
+
+      prev_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      try do
+        expired1 = Stations.create_session(%{audio_consent: true})
+        assert Stations.cancel_voice_turn(expired1.session_id, turn_id: 1) == {:error, :expired}
+
+        expired2 = Stations.create_session(%{audio_consent: true})
+        assert Stations.process_voice_turn(expired2.session_id, 1, "Fala") == {:error, :expired}
+      after
+        if prev_timeout,
+          do: Application.put_env(:backend, :conversation_timeout_ms, prev_timeout),
+          else: Application.delete_env(:backend, :conversation_timeout_ms)
+      end
+    end
+
+    test "process_voice_turn/3 handles duplicate and older turn_ids idempotently" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{turn_id: 2}} =
+               Stations.process_voice_turn(session.session_id, 2, "Segunda pergunta")
+
+      assert {:ok, :duplicate} =
+               Stations.process_voice_turn(session.session_id, 2, "Segunda repetida")
+
+      assert {:ok, :duplicate} =
+               Stations.process_voice_turn(session.session_id, 1, "Primeira atrasada")
+
+      {:ok, current} = Stations.get_session(session.session_id)
+      # Exactly learner + patient messages from turn 2
+      assert length(current.messages) == 2
+    end
+
     test "commit_voice_transcript/3 preserves #118 behavior" do
       session = Stations.create_session(%{audio_consent: true})
 

@@ -360,6 +360,97 @@ defmodule Backend.ConversationTest do
       assert {:ok, nil} = Conversation.active_generation(session.session_id)
       assert {:ok, :cancelled} = Conversation.cancel_generation(session.session_id)
     end
+
+    test "cancel_voice_turn cancels active generation when expected turn_id matches" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Pergunta turn 1")
+
+      assert {:ok, :cancelled} = Conversation.cancel_voice_turn(session.session_id, 1)
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 1,
+                 "Resposta tardia após cancelamento"
+               )
+    end
+
+    test "cancel_voice_turn protects newer turn against delayed cancellation of earlier turn" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      {:ok, :committed, 2} =
+        Conversation.begin_voice_turn(session.session_id, 2, "Turno 2")
+
+      # Delayed cancellation for turn 1 arrives late
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, 1)
+
+      # Active turn 2 generation remains active and can resolve
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, _} =
+               Conversation.resolve_patient_reply(session.session_id, 2, "Resposta do Turno 2")
+    end
+
+    test "cancel_voice_turn returns :stale_generation when turn has already resolved or session is idle" do
+      session = Conversation.start()
+
+      # Idle session: cancel by turn_id returns stale_generation
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, 1)
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      {:ok, _} =
+        Conversation.resolve_patient_reply(session.session_id, 1, "Resposta 1")
+
+      # Already resolved: late cancel returns stale_generation
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, 1)
+    end
+
+    test "cancel_voice_turn supports criteria keywords and maps" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      # Cancel with matching keyword criteria
+      assert {:ok, :cancelled} =
+               Conversation.cancel_voice_turn(session.session_id, turn_id: 1, generation_id: 1)
+
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+    end
+
+    test "duplicate turn_id does not disrupt active voice turn or generation identity" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      # Duplicate turn arrival
+      assert {:ok, :duplicate} =
+               Conversation.begin_voice_turn(session.session_id, 1, "Turno 1 repetido")
+
+      # Older turn arrival
+      assert {:ok, :duplicate} =
+               Conversation.begin_voice_turn(session.session_id, 0, "Turno 0 antigo")
+
+      # Active generation is still 1 and resolves normally
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, updated} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta válida")
+
+      assert length(updated.messages) == 2
+    end
   end
 
   describe "deterministic append order and text interleaving" do
@@ -425,6 +516,9 @@ defmodule Backend.ConversationTest do
                Conversation.cancel_generation(session.session_id, 1)
 
       assert {:error, :completed} =
+               Conversation.cancel_voice_turn(session.session_id, 1)
+
+      assert {:error, :completed} =
                Conversation.active_generation(session.session_id)
     end
 
@@ -475,6 +569,11 @@ defmodule Backend.ConversationTest do
 
       assert {:error, :expired} =
                Conversation.cancel_generation(session3.session_id, 1)
+
+      session3b = Conversation.start()
+
+      assert {:error, :expired} =
+               Conversation.cancel_voice_turn(session3b.session_id, 1)
 
       session4 = Conversation.start()
 

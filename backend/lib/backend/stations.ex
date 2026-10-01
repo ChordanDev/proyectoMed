@@ -497,12 +497,28 @@ defmodule Backend.Stations do
 
   @doc """
   Explicitly cancels a pending voice turn generation (#119).
+
+  Supports:
+    * `cancel_voice_turn(session_id)` — cancels active generation unconditionally.
+    * `cancel_voice_turn(session_id, generation_id)` when integer — cancels if generation matches (keeps generation cancel behavior for existing tests).
+    * `cancel_voice_turn(session_id, criteria)` when keyword list or map — cancels by expected `turn_id` and/or `generation_id`, e.g. `[turn_id: 1]`, `%{turn_id: 1}`, `%{expected_turn_id: 1}`.
   """
-  @spec cancel_voice_turn(String.t(), pos_integer() | nil) ::
+  @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
           {:ok, :cancelled}
           | {:error, :not_found | :expired | :completed | :stale_generation}
-  def cancel_voice_turn(session_id, generation_id \\ nil) do
+  def cancel_voice_turn(session_id, criteria \\ nil)
+
+  def cancel_voice_turn(session_id, nil) do
+    Conversation.cancel_generation(session_id, nil)
+  end
+
+  def cancel_voice_turn(session_id, generation_id)
+      when is_integer(generation_id) and generation_id > 0 do
     Conversation.cancel_generation(session_id, generation_id)
+  end
+
+  def cancel_voice_turn(session_id, criteria) when is_list(criteria) or is_map(criteria) do
+    Conversation.cancel_voice_turn(session_id, criteria)
   end
 
   @doc """
