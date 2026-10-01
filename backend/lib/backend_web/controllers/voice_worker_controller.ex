@@ -130,5 +130,4 @@ defmodule BackendWeb.VoiceWorkerController do
   defp error_details(:expired), do: {410, "session_expired"}
   defp error_details(:completed), do: {422, "session_completed"}
   defp error_details(:station_ai_unavailable), do: {503, "station_ai_unavailable"}
-  defp error_details(_), do: {500, "internal_error"}
 end
