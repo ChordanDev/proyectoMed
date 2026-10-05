@@ -255,15 +255,17 @@ class PhoenixClient:
 class TurnManager:
     """Manages bounded asynchronous pending turn tasks and turn-scoped cancellation (#119)."""
 
-    def __init__(self, tracker: TurnTracker, phoenix: PhoenixClient):
+    def __init__(self, tracker: TurnTracker, phoenix: PhoenixClient, on_reply=None):
         self.tracker = tracker
         self.phoenix = phoenix
+        self.on_reply = on_reply
         self.pending_turn_id: int | None = None
         self.pending_commit_task: asyncio.Task | None = None
         self.pending_cancel_task: asyncio.Task | None = None
         self._all_tasks: set[asyncio.Task] = set()
         self._unhandled_error: BaseException | None = None
         self._main_task: asyncio.Task | None = None
+        self._cleaning_up = False
 
     def set_main_task(self, task: asyncio.Task | None = None) -> None:
         self._main_task = task or asyncio.current_task()
@@ -332,8 +334,19 @@ class TurnManager:
             reply = await self.phoenix.commit(turn_id, text)
             if not self.tracker.is_turn_stale(turn_id):
                 accepted = self.tracker.accept_reply(reply)
+                if accepted is not None and self.on_reply is not None:
+                    result = self.on_reply(accepted)
+                    if asyncio.iscoroutine(result):
+                        await result
                 return accepted
             return None
+        except asyncio.CancelledError as exc:
+            # A consumer may deliberately cancel while handling a reply. Propagate that
+            # cancellation to the stream, but do not reinterpret cleanup's own task
+            # cancellation as an independent stream failure.
+            if not self._cleaning_up:
+                self._record_error(exc)
+            raise
         except VoiceFailure as failure:
             if failure.kind == "stale_generation":
                 self.tracker.mark_turn_stale(turn_id)
@@ -376,6 +389,7 @@ class TurnManager:
         self.check_errors()
 
     async def cleanup(self) -> None:
+        self._cleaning_up = True
         turn_to_cancel = self.pending_turn_id
         tasks = [t for t in self._all_tasks if not t.done()]
         for task in tasks:
@@ -403,8 +417,9 @@ async def process_speech_stream(
     tracker: TurnTracker,
     phoenix: PhoenixClient,
     on_publish=None,
+    on_reply=None,
 ) -> None:
-    turn_manager = TurnManager(tracker=tracker, phoenix=phoenix)
+    turn_manager = TurnManager(tracker=tracker, phoenix=phoenix, on_reply=on_reply)
     turn_manager.set_main_task(asyncio.current_task())
     try:
         async for speech_event in stream:

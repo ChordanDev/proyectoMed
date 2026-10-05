@@ -72,6 +72,7 @@ async def transcribe(
     phoenix: PhoenixClient,
     stt=None,
     audio=None,
+    on_reply=None,
 ) -> None:
     if stt is None:
         stt = deepgram.STT(
@@ -101,6 +102,7 @@ async def transcribe(
             tracker,
             phoenix,
             on_publish=lambda event: publish(room, event),
+            on_reply=on_reply,
         )
     finally:
         pump_task.cancel()

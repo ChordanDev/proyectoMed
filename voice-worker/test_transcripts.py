@@ -530,6 +530,29 @@ class MockSTT:
 
 
 class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_accepted_reply_is_delivered_to_private_consumer(self):
+        client = ControllablePhoenixClient()
+        tracker = TurnTracker("s1", last_turn_id=0)
+        replies: list[VoiceTurnReply] = []
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+
+        async def receive_reply(reply: VoiceTurnReply) -> None:
+            replies.append(reply)
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue), tracker, client, on_reply=receive_reply
+            )
+        )
+        queue.put_nowait(event(FINAL, "onde dói"))
+        queue.put_nowait(event(END))
+        queue.put_nowait(None)
+        await stream_task
+
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].turn_id, 1)
+        self.assertEqual(replies[0].reply_text, "Resposta clinica confidencial 1")
+
     async def test_delayed_commit_with_new_speech_event_and_cancellation_order(self):
         client = ControllablePhoenixClient()
         client.commit_delays[1] = asyncio.Event()
@@ -540,12 +563,17 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
 
         tracker = TurnTracker("s1", last_turn_id=0)
         published: list[dict] = []
+        replies: list[VoiceTurnReply] = []
         queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
         stream = MockStream(queue)
 
         stream_task = asyncio.create_task(
             process_speech_stream(
-                stream, tracker, client, on_publish=lambda ev: published.append(ev)
+                stream,
+                tracker,
+                client,
+                on_publish=lambda ev: published.append(ev),
+                on_reply=lambda reply: replies.append(reply),
             )
         )
 
@@ -610,6 +638,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         # tracker accepts turn 2, but turn 1 reply was rejected/suppressed
         self.assertEqual(tracker.last_accepted_turn_id, 2)
         self.assertEqual(tracker.active_generation_id, 2)
+        self.assertEqual([reply.turn_id for reply in replies], [2])
 
         # Verify patient text was NEVER published in transcript data channel
         for p in published:
@@ -655,11 +684,14 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
 
         tracker = TurnTracker("s1", last_turn_id=0)
+        replies: list[VoiceTurnReply] = []
         queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
         stream = MockStream(queue)
 
         stream_task = asyncio.create_task(
-            process_speech_stream(stream, tracker, client)
+            process_speech_stream(
+                stream, tracker, client, on_reply=lambda reply: replies.append(reply)
+            )
         )
 
         queue.put_nowait(event(FINAL, "repetida"))
@@ -670,6 +702,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         # Duplicate reply was not accepted into tracker
         self.assertEqual(tracker.last_accepted_turn_id, 0)
         self.assertIsNone(tracker.active_generation_id)
+        self.assertEqual(replies, [])
 
     async def test_cleanup_on_disconnect_cancels_in_flight_tasks(self):
         client = ControllablePhoenixClient()
@@ -727,6 +760,50 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tracker.last_accepted_turn_id, 2)
         self.assertEqual(len(client.commit_calls), 2)
         self.assertEqual(client.commit_calls[1][0], 2)
+
+    async def test_reply_callback_failure_uses_stream_error_pipeline(self):
+        client = ControllablePhoenixClient()
+        tracker = TurnTracker("s1", last_turn_id=0)
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+
+        def fail_on_reply(reply: VoiceTurnReply) -> None:
+            raise RuntimeError("private consumer failed")
+
+        with self.assertRaises(VoiceFailure) as ctx:
+            stream_task = asyncio.create_task(
+                process_speech_stream(
+                    MockStream(queue), tracker, client, on_reply=fail_on_reply
+                )
+            )
+            queue.put_nowait(event(FINAL, "pergunta"))
+            queue.put_nowait(event(END))
+            await stream_task
+
+        self.assertEqual(ctx.exception.kind, "malformed")
+
+    async def test_reply_callback_cancellation_cancels_stream(self):
+        client = ControllablePhoenixClient()
+        tracker = TurnTracker("s1", last_turn_id=0)
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+        tasks_before_stream = asyncio.all_tasks()
+
+        async def cancel_on_reply(reply: VoiceTurnReply) -> None:
+            raise asyncio.CancelledError
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue), tracker, client, on_reply=cancel_on_reply
+            )
+        )
+        queue.put_nowait(event(FINAL, "pergunta"))
+        queue.put_nowait(event(END))
+
+        with self.assertRaises(asyncio.CancelledError):
+            await stream_task
+
+        await asyncio.sleep(0)
+        self.assertTrue(stream_task.cancelled())
+        self.assertEqual(asyncio.all_tasks() - tasks_before_stream, set())
 
     async def test_unexpected_failure_in_commit_is_not_swallowed(self):
         client = ControllablePhoenixClient()
@@ -906,6 +983,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         stream = MockStream(queue)
         stt = MockSTT(stream)
         audio = MockAudioStream()
+        replies: list[VoiceTurnReply] = []
 
         transcribe_task = asyncio.create_task(
             transcribe(
@@ -916,6 +994,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 phoenix=client,
                 stt=stt,
                 audio=audio,
+                on_reply=lambda reply: replies.append(reply),
             )
         )
 
@@ -927,6 +1006,8 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         await transcribe_task
 
         self.assertEqual(tracker.last_accepted_turn_id, 1)
+        self.assertEqual([reply.turn_id for reply in replies], [1])
+        self.assertEqual(replies[0].reply_text, "Resposta clinica confidencial 1")
         self.assertTrue(room.local_participant.published_data)
         # Confirm topic is "transcript" and payload has NO patient text
         for data, topic, reliable in room.local_participant.published_data:
