@@ -59,8 +59,22 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
     end
   end
 
+  # The decided level, without the actions that earned it (see `counted/4`).
   defp decide(criterion, jev_level, performed, overrides \\ %{}) do
-    AuthoredRules.decide_level(criterion, jev_level, sub_actions(criterion, performed, overrides))
+    decisions = sub_actions(criterion, performed, overrides)
+
+    case AuthoredRules.decide_level(criterion, jev_level, decisions) do
+      {:ok, level, _counted} -> {:ok, level}
+      uncertain -> uncertain
+    end
+  end
+
+  # The identifiers of the actions whose count earned the decided level.
+  defp counted(criterion, jev_level, performed, overrides \\ %{}) do
+    decisions = sub_actions(criterion, performed, overrides)
+
+    assert {:ok, _level, counted} = AuthoredRules.decide_level(criterion, jev_level, decisions)
+    Enum.map(counted, & &1.id)
   end
 
   @history_actions ["ask-onset", "ask-duration", "ask-intensity", "ask-relief"]
@@ -112,6 +126,37 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
 
     test "a performed mandatory action without thresholds leaves Jev's level" do
       assert decide(without_thresholds(history()), @parcial, ["ask-onset"]) == {:ok, @parcial}
+    end
+  end
+
+  describe "rule 4: unresolved actions with one reachable outcome" do
+    test "an unresolved mandatory action is ignored when the count cannot leave zero" do
+      assert decide(history(), @adequado, [], %{"ask-onset" => {"uncertain", []}}) ==
+               {:ok, @inadequado}
+
+      assert decide(history(), @adequado, [], %{"ask-onset" => {"performed", []}}) ==
+               {:ok, @inadequado}
+    end
+
+    test "an unresolved forbidden action is ignored when the count cannot leave zero" do
+      assert decide(history_with_forbidden(), @adequado, ["ask-onset"], %{
+               "ask-leading" => {"uncertain", []}
+             }) == {:ok, @inadequado}
+    end
+
+    test "without thresholds they are ignored when the classifier chose the zero-point level" do
+      assert decide(without_thresholds(history()), @inadequado, ["ask-duration"], %{
+               "ask-onset" => {"uncertain", []}
+             }) == {:ok, @inadequado}
+
+      assert decide(treatment(), @inadequado, [], %{
+               "indicate-contraindicated" => {"performed", []}
+             }) == {:ok, @inadequado}
+    end
+
+    test "an unresolved mandatory action still matters when the count can leave zero" do
+      assert decide(history(), @adequado, ["ask-duration"], %{"ask-onset" => {"uncertain", []}}) ==
+               {:uncertain, {:uncertain_sub_action, "ask-onset"}}
     end
   end
 
@@ -181,6 +226,13 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
                "ask-duration" => {"performed", []},
                "ask-relief" => {"uncertain", []}
              }) == {:uncertain, {:unsupported_sub_action, "ask-duration"}}
+    end
+
+    test "an unresolved mandatory or forbidden action is reported before a countable one" do
+      assert decide(history_with_forbidden(), @adequado, ["ask-onset", "ask-intensity"], %{
+               "ask-duration" => {"uncertain", []},
+               "ask-leading" => {"performed", []}
+             }) == {:uncertain, {:unsupported_sub_action, "ask-leading"}}
     end
 
     test "an unresolved action that is not decisive is never the reported reason" do
@@ -257,7 +309,63 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
 
     test "a criterion without actions keeps Jev's level" do
       assert AuthoredRules.decide_level(Map.put(plain(), "actions", []), @adequado, []) ==
-               {:ok, @adequado}
+               {:ok, @adequado, []}
+    end
+  end
+
+  describe "a classifier that is uncertain at criterion level" do
+    test "thresholds decide the level without the classifier's class" do
+      assert decide(history(), :uncertain, @history_actions) == {:ok, @adequado}
+      assert decide(history(), :uncertain, ["ask-onset"]) == {:ok, @inadequado}
+    end
+
+    test "a certain zero needs no classifier class" do
+      assert decide(treatment(), :uncertain, ["indicate-expected", "indicate-contraindicated"]) ==
+               {:ok, @inadequado}
+
+      assert decide(without_thresholds(history()), :uncertain, ["ask-duration"]) ==
+               {:ok, @inadequado}
+    end
+
+    test "without thresholds and without a certain zero the outcome depends on the classifier" do
+      assert decide(treatment(), :uncertain, ["indicate-expected"]) ==
+               {:uncertain, :classifier_uncertain}
+
+      assert decide(plain(), :uncertain, ["ask-onset"]) == {:uncertain, :classifier_uncertain}
+
+      assert decide(treatment(), :uncertain, ["indicate-expected"], %{
+               "indicate-contraindicated" => {"uncertain", []}
+             }) == {:uncertain, :classifier_uncertain}
+    end
+
+    test "with thresholds a decisive unresolved action is still the reported reason" do
+      assert decide(history(), :uncertain, ["ask-onset", "ask-duration"], %{
+               "ask-intensity" => {"uncertain", []}
+             }) == {:uncertain, {:uncertain_sub_action, "ask-intensity"}}
+    end
+  end
+
+  describe "the actions that earned a level" do
+    test "with thresholds they are the performed countable actions, in authored order" do
+      assert counted(history(), @inadequado, ["ask-onset", "ask-intensity", "ask-relief"]) ==
+               ["ask-onset", "ask-intensity", "ask-relief"]
+
+      assert counted(history(), @adequado, ["ask-onset"]) == ["ask-onset"]
+    end
+
+    test "unresolved and forbidden actions are never among them" do
+      assert counted(
+               history_with_forbidden(),
+               @parcial,
+               ["ask-onset", "ask-duration", "ask-intensity"],
+               %{"ask-relief" => {"uncertain", ["turn-1"]}}
+             ) == ["ask-onset", "ask-duration", "ask-intensity"]
+    end
+
+    test "a level the count did not decide has none" do
+      assert counted(treatment(), @adequado, ["indicate-expected"]) == []
+      assert counted(plain(), @adequado, ["ask-onset"]) == []
+      assert counted(history(), @adequado, ["ask-duration", "ask-intensity"]) == []
     end
   end
 

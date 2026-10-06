@@ -475,7 +475,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert result.status == :assessed
       assert result.level == "adequado"
       assert result.points == 8
-      assert result.evidence_ids == ["turn-1"]
+      assert result.evidence_ids == ["turn-1", "turn-3"]
       assert result.sub_actions == actions
     end
 
@@ -603,10 +603,10 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert_unscored(result)
     end
 
-    test "a level earned by count still needs criterion-level evidence" do
+    test "a level earned by count is grounded by the actions that earned it" do
       actions = [
-        performed("ask-onset"),
-        performed("ask-duration"),
+        performed("ask-onset", ["turn-3"]),
+        performed("ask-duration", ["turn-1", "turn-3"]),
         not_performed("ask-intensity"),
         not_performed("ask-relief")
       ]
@@ -616,8 +616,145 @@ defmodule Backend.Stations.RubricAssessmentTest do
         |> assess!(session(), history_answer("inadequado", [], actions))
         |> criterion(@history)
 
+      assert result.status == :assessed
+      assert result.level == "parcialmente_adequado"
+      assert result.points == 4
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+
+      assert result.evidence == [
+               %{id: "turn-1", role: :learner, text: "Quando começou a dor?"},
+               %{id: "turn-3", role: :learner, text: "Como é a dor?"}
+             ]
+    end
+
+    test "without thresholds sub-action evidence does not ground the classifier's level" do
+      actions = [performed("indicate-expected"), not_performed("indicate-contraindicated")]
+
+      result =
+        rules()
+        |> assess!(session(), treatment_answer("adequado", [], actions))
+        |> criterion(@treatment)
+
       assert result.status == :uncertain
       assert result.reason == :unsupported_credit
+      assert_unscored(result)
+    end
+
+    test "an unresolved mandatory action is ignored when zero is the only outcome" do
+      actions = [
+        uncertain("ask-onset"),
+        not_performed("ask-duration"),
+        not_performed("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("adequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
+      assert result.reason == nil
+    end
+
+    test "an unresolved forbidden action is ignored when zero is the only outcome" do
+      actions = [not_performed("indicate-expected"), uncertain("indicate-contraindicated")]
+
+      result =
+        rules()
+        |> assess!(session(), treatment_answer("inadequado", [], actions))
+        |> criterion(@treatment)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
+    end
+
+    test "an uncertain classifier does not stop thresholds from deciding the level" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration", ["turn-3"]),
+        performed("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("uncertain", [], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.points == 8
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+      assert result.sub_actions == actions
+    end
+
+    test "an uncertain classifier does not stop a missing mandatory action from scoring zero" do
+      actions = [
+        not_performed("ask-onset"),
+        performed("ask-duration"),
+        performed("ask-intensity"),
+        performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("uncertain", [], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
+    end
+
+    test "an uncertain classifier leaves the criterion uncertain when its level is needed" do
+      actions = [performed("indicate-expected"), not_performed("indicate-contraindicated")]
+
+      result =
+        rules()
+        |> assess!(session(), treatment_answer("uncertain", ["turn-1"], actions))
+        |> criterion(@treatment)
+
+      assert result.status == :uncertain
+      assert result.reason == :classifier_uncertain
+      assert_unscored(result)
+    end
+
+    test "an uncertain classifier on a criterion without rule fields stays uncertain" do
+      for evidence_ids <- [["turn-1"], ["turn-99"]] do
+        result =
+          v2()
+          |> assess!(session(), %{
+            @onset => answer("uncertain", evidence_ids, onset_actions("performed", ["turn-1"]))
+          })
+          |> criterion(@onset)
+
+        assert result.status == :uncertain
+        assert result.reason == :classifier_uncertain
+        assert_unscored(result)
+      end
+    end
+
+    test "an invalid sub-action citation fails the criterion closed even when not decisive" do
+      # Three performed actions already earn the top level, so `ask-relief`
+      # could not change it; the invalid citation still discredits the reading.
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration"),
+        performed("ask-intensity"),
+        performed("ask-relief", ["turn-99"])
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("adequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :uncertain
+      assert result.reason == {:invalid_evidence, :nonexistent_evidence_id, "turn-99"}
       assert_unscored(result)
     end
 
@@ -630,6 +767,438 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert_invalid_attempt(
         assess(broken, session(), %{}),
         {:invalid_package, @treatment, :missing_zero_point_level}
+      )
+
+      refute_received {:batch_request, _}
+    end
+  end
+
+  # ============================================================================
+  # Task order
+  # ============================================================================
+
+  describe "assess/3 task order" do
+    @exams "exam-requests"
+    @order "task-order"
+
+    # history-taking (rank 1), treatment-plan (rank 2), exam-requests (rank 3)
+    # and the task-order criterion (0/0.25), which is assessed in code.
+    defp ordered, do: package("fixtures/valid-package-v2-authored-rules.json")
+
+    # turn-1, turn-3 and turn-5 are learner turns.
+    defp order_session do
+      %{
+        messages: [
+          turn(:learner, "Quando começou?", @t0),
+          turn(:patient, "Há duas horas.", @t1),
+          turn(:learner, "Vou indicar o tratamento.", @t2),
+          turn(:patient, "Está bem.", @t3),
+          turn(:learner, "Solicito o exame A.", ~U[2026-01-10 12:00:04.000000Z])
+        ],
+        impresso_requests: []
+      }
+    end
+
+    # An answer that assesses the step above zero, backed by `evidence_ids`.
+    defp done(@history, evidence_ids) do
+      actions = [
+        performed("ask-onset", evidence_ids),
+        performed("ask-duration", evidence_ids),
+        not_performed("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      answer("parcialmente_adequado", evidence_ids, %{actions: actions})
+    end
+
+    defp done(@treatment, evidence_ids) do
+      actions = [
+        performed("indicate-expected", evidence_ids),
+        not_performed("indicate-contraindicated")
+      ]
+
+      answer("adequado", evidence_ids, %{actions: actions})
+    end
+
+    defp done(@exams, evidence_ids) do
+      actions = [performed("request-exam-a", evidence_ids), not_performed("request-exam-b")]
+
+      answer("adequado", evidence_ids, %{actions: actions})
+    end
+
+    # An answer that assesses the step at its zero-point level.
+    defp skipped(id) do
+      action_ids = %{
+        @history => ["ask-onset", "ask-duration", "ask-intensity", "ask-relief"],
+        @treatment => ["indicate-expected", "indicate-contraindicated"],
+        @exams => ["request-exam-a", "request-exam-b"]
+      }
+
+      answer("inadequado", [], %{actions: Enum.map(action_ids[id], &not_performed/1)})
+    end
+
+    defp order_result(package \\ ordered(), answers) do
+      package |> assess!(order_session(), answers) |> criterion(@order)
+    end
+
+    defp assert_order(result, level, points, evidence_ids) do
+      assert result.status == :assessed
+      assert result.level == level
+      assert result.points == points
+      assert result.evidence_ids == evidence_ids
+      assert Enum.map(result.evidence, & &1.id) == evidence_ids
+      assert Enum.all?(result.evidence, &(&1.role == :learner))
+      assert result.reason == nil
+      assert result.sub_actions == []
+    end
+
+    test "steps performed in rank order earn the top level, grounded in their earliest evidence" do
+      result =
+        order_result(%{
+          @history => done(@history, ["turn-1", "turn-5"]),
+          @treatment => done(@treatment, ["turn-3"]),
+          @exams => done(@exams, ["turn-5"])
+        })
+
+      assert_order(result, "adequado", 2, ["turn-1", "turn-3", "turn-5"])
+    end
+
+    test "steps performed out of rank order score the zero-point level" do
+      result =
+        order_result(%{
+          @history => done(@history, ["turn-3"]),
+          @treatment => done(@treatment, ["turn-1"]),
+          @exams => done(@exams, ["turn-5"])
+        })
+
+      assert_order(result, "inadequado", Points.zero(), ["turn-1", "turn-3", "turn-5"])
+    end
+
+    test "the earliest evidence of a step decides its position" do
+      result =
+        order_result(%{
+          @history => done(@history, ["turn-3"]),
+          @treatment => done(@treatment, ["turn-1", "turn-5"]),
+          @exams => skipped(@exams)
+        })
+
+      assert_order(result, "inadequado", Points.zero(), ["turn-1", "turn-3"])
+    end
+
+    test "one turn may back two consecutive steps" do
+      result =
+        order_result(%{
+          @history => done(@history, ["turn-1"]),
+          @treatment => done(@treatment, ["turn-1"]),
+          @exams => done(@exams, ["turn-3"])
+        })
+
+      assert_order(result, "adequado", 2, ["turn-1", "turn-3"])
+    end
+
+    test "equal ranks are unordered among themselves" do
+      package = update_criterion(ordered(), @treatment, &Map.put(&1, "order", 1))
+
+      result =
+        order_result(package, %{
+          @history => done(@history, ["turn-3"]),
+          @treatment => done(@treatment, ["turn-1"]),
+          @exams => done(@exams, ["turn-5"])
+        })
+
+      assert_order(result, "adequado", 2, ["turn-1", "turn-3", "turn-5"])
+    end
+
+    test "a step assessed at its zero-point level is skipped" do
+      result =
+        order_result(%{
+          @history => done(@history, ["turn-1"]),
+          @treatment => skipped(@treatment),
+          @exams => done(@exams, ["turn-3"])
+        })
+
+      assert_order(result, "adequado", 2, ["turn-1", "turn-3"])
+    end
+
+    test "fewer than two performed steps score the zero-point level without evidence" do
+      result =
+        order_result(%{
+          @history => done(@history, ["turn-1"]),
+          @treatment => skipped(@treatment),
+          @exams => skipped(@exams)
+        })
+
+      assert_order(result, "inadequado", Points.zero(), [])
+    end
+
+    test "an unresolved ranked criterion leaves the order uncertain" do
+      assessment =
+        assess!(ordered(), order_session(), %{
+          @history => done(@history, ["turn-1"]),
+          @exams => done(@exams, ["turn-3"])
+        })
+
+      result = criterion(assessment, @order)
+
+      assert criterion(assessment, @treatment).status == :uncertain
+      assert result.status == :uncertain
+      assert result.reason == {:unresolved_ranked_criterion, @treatment}
+      assert_unscored(result)
+      assert %{id: @order, status: :uncertain} in assessment.estimates.unresolved
+      assert assessment.estimates.total == nil
+    end
+
+    test "a ranked criterion that is not observable is skipped" do
+      package =
+        update_criterion(ordered(), @exams, &Map.put(&1, "modality_requirement", "laboratory"))
+
+      assessment =
+        assess!(package, order_session(), %{
+          @history => done(@history, ["turn-1"]),
+          @treatment => done(@treatment, ["turn-3"])
+        })
+
+      assert criterion(assessment, @exams).status == :not_observable
+      assert_order(criterion(assessment, @order), "adequado", 2, ["turn-1", "turn-3"])
+    end
+
+    test "a step scored zero by a rule is skipped even though the learner attempted it" do
+      # Known limitation: the missing mandatory action zeroes history-taking, so
+      # its late attempt at turn-5 is not compared with the later steps.
+      attempted_late =
+        answer("adequado", ["turn-5"], %{
+          actions: [
+            not_performed("ask-onset"),
+            performed("ask-duration", ["turn-5"]),
+            performed("ask-intensity", ["turn-5"]),
+            not_performed("ask-relief")
+          ]
+        })
+
+      assessment =
+        assess!(ordered(), order_session(), %{
+          @history => attempted_late,
+          @treatment => done(@treatment, ["turn-1"]),
+          @exams => done(@exams, ["turn-3"])
+        })
+
+      assert criterion(assessment, @history).points == Points.zero()
+      assert_order(criterion(assessment, @order), "adequado", 2, ["turn-1", "turn-3"])
+    end
+
+    test "an Impressos event positions the step it backs" do
+      [_history, _treatment, _exams, order] = ordered()["rubric"]
+      package = update_rubric(chest_pain_with_lab(), &(&1 ++ [order]))
+      requested = fn at -> session([event("req-lab", ["laboratorio-sangue-enzimas"], at)]) end
+
+      order_result = fn session, onset_evidence ->
+        package
+        |> assess!(session, %{
+          @onset => answer("adequado", onset_evidence),
+          @lab => answer("adequado", ["impresso-req-lab"])
+        })
+        |> criterion(@order)
+      end
+
+      assert_order(order_result.(requested.(@t3), ["turn-1"]), "adequado", 2, [
+        "turn-1",
+        "impresso-req-lab"
+      ])
+
+      assert_order(order_result.(requested.(@t1), ["turn-3"]), "inadequado", Points.zero(), [
+        "impresso-req-lab",
+        "turn-3"
+      ])
+    end
+
+    test "a violation among resolved steps is certain whatever is unresolved" do
+      result =
+        order_result(%{
+          @history => done(@history, ["turn-3"]),
+          @exams => done(@exams, ["turn-1"])
+        })
+
+      assert_order(result, "inadequado", Points.zero(), ["turn-1", "turn-3"])
+    end
+
+    test "an excluded ranked criterion is not part of the order" do
+      package = update_criterion(ordered(), @exams, &Map.put(&1, "exclusion", true))
+
+      result =
+        order_result(package, %{
+          @history => done(@history, ["turn-1"]),
+          @treatment => done(@treatment, ["turn-3"])
+        })
+
+      assert_order(result, "adequado", 2, ["turn-1", "turn-3"])
+    end
+
+    test "a criterion without a rank is not part of the order" do
+      package = update_criterion(ordered(), @exams, &Map.put(&1, "order", nil))
+
+      result =
+        order_result(package, %{
+          @history => done(@history, ["turn-3"]),
+          @treatment => done(@treatment, ["turn-5"]),
+          @exams => done(@exams, ["turn-1"])
+        })
+
+      assert_order(result, "adequado", 2, ["turn-3", "turn-5"])
+    end
+
+    test "the classifier never receives the task-order criterion" do
+      assessment = assess!(ordered(), order_session(), %{})
+
+      assert_received {:batch_request, request}
+      assert asked_ids(request) == [@history, @treatment, @exams]
+      assert assessment.calls == [%{question_count: 3, justification: :single_batch}]
+    end
+
+    test "a decision for the task-order criterion is unknown to the batch contract" do
+      reply = fn request ->
+        extra = %{criterion_id: @order, classification: "adequado", evidence_ids: []}
+        {:ok, %{decisions: ScriptedDouble.decisions(request, %{}) ++ [extra]}}
+      end
+
+      # It was never asked, so its identifier is unknown rather than a duplicate.
+      assert_invalid_attempt(
+        assess(ordered(), order_session(), %{}, reply: reply),
+        {:invalid_response, :unknown_criterion_id}
+      )
+    end
+
+    test "a capacity split never carries the task-order criterion" do
+      assessment =
+        assess!(
+          ordered(),
+          order_session(),
+          %{
+            @history => done(@history, ["turn-1"]),
+            @treatment => done(@treatment, ["turn-3"]),
+            @exams => done(@exams, ["turn-5"])
+          },
+          max_questions_per_call: 2
+        )
+
+      assert assessment.calls == [
+               %{question_count: 2, justification: :single_batch},
+               %{question_count: 1, justification: :provider_capacity}
+             ]
+
+      assert_received {:batch_request, first}
+      assert_received {:batch_request, second}
+      refute_received {:batch_request, _}
+
+      assert asked_ids(first) == [@history, @treatment]
+      assert asked_ids(second) == [@exams]
+      assert_order(criterion(assessment, @order), "adequado", 2, ["turn-1", "turn-3", "turn-5"])
+    end
+
+    test "a rubric whose only active question is the order makes no call" do
+      package =
+        Enum.reduce([@history, @treatment, @exams], ordered(), fn id, package ->
+          update_criterion(package, id, &Map.put(&1, "exclusion", true))
+        end)
+
+      assessment = assess!(package, order_session(), %{})
+
+      refute_received {:batch_request, _}
+      assert assessment.calls == []
+      assert_order(criterion(assessment, @order), "inadequado", Points.zero(), [])
+    end
+
+    test "totals and the legacy projection treat it like any other criterion" do
+      assessment =
+        assess!(ordered(), order_session(), %{
+          @history => done(@history, ["turn-1"]),
+          @treatment => done(@treatment, ["turn-3"]),
+          @exams => done(@exams, ["turn-5"])
+        })
+
+      assert assessment.estimates == %{
+               total: 16,
+               scored_subtotal: 16,
+               scored_max: 20,
+               eligible_max: 20,
+               unresolved: []
+             }
+
+      assert Enum.map(assessment.criteria, & &1.id) == [@history, @treatment, @exams, @order]
+
+      assert %{status: :met, evidence: [_, _, _]} =
+               assessment |> RubricAssessment.to_legacy() |> criterion(@order)
+    end
+
+    test "the legacy projection maps a broken order to omitted and an open one to uncertain" do
+      legacy_order = fn answers ->
+        ordered()
+        |> assess!(order_session(), answers)
+        |> RubricAssessment.to_legacy()
+        |> criterion(@order)
+      end
+
+      broken =
+        legacy_order.(%{
+          @history => done(@history, ["turn-3"]),
+          @treatment => done(@treatment, ["turn-1"]),
+          @exams => skipped(@exams)
+        })
+
+      assert broken.status == :omitted
+
+      assert broken.evidence == [
+               %{role: :learner, text: "Quando começou?"},
+               %{role: :learner, text: "Vou indicar o tratamento."}
+             ]
+
+      open =
+        legacy_order.(%{
+          @history => done(@history, ["turn-1"]),
+          @exams => done(@exams, ["turn-3"])
+        })
+
+      assert open.status == :uncertain
+      assert open.evidence == []
+    end
+
+    test "an excluded order criterion is not assessed and stays outside the totals" do
+      package = update_criterion(ordered(), @order, &Map.put(&1, "exclusion", true))
+
+      assessment =
+        assess!(package, order_session(), %{
+          @history => done(@history, ["turn-1"]),
+          @treatment => done(@treatment, ["turn-3"]),
+          @exams => done(@exams, ["turn-5"])
+        })
+
+      result = criterion(assessment, @order)
+
+      assert result.status == :not_applicable
+      assert result.reason == :authored_exclusion
+      assert result.max_points == 2
+      assert_unscored(result)
+
+      assert assessment.estimates == %{
+               total: 14,
+               scored_subtotal: 14,
+               scored_max: 18,
+               eligible_max: 18,
+               unresolved: []
+             }
+
+      legacy = RubricAssessment.to_legacy(assessment)
+      assert Enum.map(legacy.criteria, & &1.id) == [@history, @treatment, @exams]
+    end
+
+    test "a task-order criterion without a zero-point level invalidates the attempt" do
+      broken =
+        update_criterion(ordered(), @order, fn criterion ->
+          put_in(criterion, ["levels", Access.at(0), "points"], 0.125)
+        end)
+
+      assert_invalid_attempt(
+        assess(broken, order_session(), %{}),
+        {:invalid_package, @order, :missing_zero_point_level}
       )
 
       refute_received {:batch_request, _}

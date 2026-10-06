@@ -7,7 +7,8 @@ defmodule Backend.Stations.RubricAssessment do
 
     1. **Triage without Jev.** An authored exclusion is `:not_applicable`; a
        criterion whose required modality the station cannot provide is
-       `:not_observable`. Every other criterion becomes a question.
+       `:not_observable`. The `task_order` criterion is set aside for step 5.
+       Every other criterion becomes a question.
     2. **One evidence pool** is built from the session and shared by every
        question. Only verified items are offered to Jev, while citations are
        checked against the full pool.
@@ -17,6 +18,10 @@ defmodule Backend.Stations.RubricAssessment do
     4. **Deterministic post-processing** validates each cited evidence
        identifier and fails closed per criterion: nothing is repaired, dropped
        or substituted.
+    5. **The task-order criterion** (`rule: "task_order"`) is assessed in code
+       from the results of the ranked criteria and the position of their
+       earliest evidence (`Backend.Stations.RubricAssessment.TaskOrder`). It is
+       never a question, and it counts in the totals like any other criterion.
 
   A technical failure of any call, or a rubric that cannot be converted to
   exact points, invalidates the whole attempt: no partial criteria are
@@ -27,11 +32,10 @@ defmodule Backend.Stations.RubricAssessment do
   or confidence ever multiplies or adjusts them.
 
   The authored rule fields change the level only through
-  `apply_authored_rules/2`, which delegates the per-criterion rules (action
-  roles, thresholds and `count_cap`) to
-  `Backend.Stations.RubricAssessment.AuthoredRules`. A criterion that authors
-  none of them keeps the level Jev chose. `order`, `first_n` and the
-  `task_order` rule are not applied yet.
+  `Backend.Stations.RubricAssessment.AuthoredRules`, which owns the
+  per-criterion rules (action roles, thresholds and `count_cap`). A criterion
+  that authors none of them keeps the level Jev chose, and stays `:uncertain`
+  when Jev chose none. `first_n` is not applied yet.
   """
 
   alias Backend.Stations.JevDecision
@@ -40,8 +44,10 @@ defmodule Backend.Stations.RubricAssessment do
   alias Backend.Stations.RubricAssessment.Estimates
   alias Backend.Stations.RubricAssessment.Evidence
   alias Backend.Stations.RubricAssessment.Points
+  alias Backend.Stations.RubricAssessment.TaskOrder
 
   @uncertain_class "uncertain"
+  @task_order "task_order"
   @own_opts [:max_questions_per_call]
 
   @typedoc "Why a criterion that is not assessed has no level."
@@ -52,6 +58,7 @@ defmodule Backend.Stations.RubricAssessment do
           | :unsupported_credit
           | {:invalid_evidence, Evidence.rejection(), term()}
           | AuthoredRules.uncertainty()
+          | TaskOrder.uncertainty()
 
   @typedoc "A pool item as reported on a criterion result."
   @type evidence_excerpt :: %{id: String.t(), role: term(), text: String.t()}
@@ -108,7 +115,7 @@ defmodule Backend.Stations.RubricAssessment do
           ]
         }
 
-  @typep route :: :ask | {:skip, :not_applicable | :not_observable, reason()}
+  @typep route :: :ask | :task_order | {:skip, :not_applicable | :not_observable, reason()}
 
   @typep plan :: %{
            id: term(),
@@ -143,7 +150,9 @@ defmodule Backend.Stations.RubricAssessment do
 
     with {:ok, plans} <- triage(package),
          {:ok, decisions, calls} <- ask(questions(plans), pool, opts) do
-      criteria = Enum.map(plans, &criterion_result(&1, decisions, pool))
+      criteria =
+        plans |> Enum.map(&criterion_result(&1, decisions, pool)) |> task_order(plans, pool)
+
       {:ok, %{criteria: criteria, estimates: Estimates.estimate(criteria), calls: calls}}
     else
       {:error, reason} -> {:error, {:invalid_attempt, reason}}
@@ -189,7 +198,8 @@ defmodule Backend.Stations.RubricAssessment do
 
     with {:ok, max_points} <- Estimates.max_points(criterion),
          :ok <- check_level_labels(criterion),
-         :ok <- AuthoredRules.check(criterion) do
+         :ok <- AuthoredRules.check(criterion),
+         :ok <- check_task_order(criterion) do
       requirement = Evidence.requirement(criterion)
 
       {:ok,
@@ -212,10 +222,22 @@ defmodule Backend.Stations.RubricAssessment do
     {:skip, :not_applicable, :authored_exclusion}
   end
 
-  defp route(_criterion, requirement, package) do
+  defp route(criterion, requirement, package) do
     case Evidence.providability(requirement, package) do
-      :ok -> :ask
+      :ok -> if task_order?(criterion), do: :task_order, else: :ask
       {:error, reason} -> {:skip, :not_observable, reason}
+    end
+  end
+
+  defp task_order?(criterion), do: Map.get(criterion, "rule") == @task_order
+
+  # The order criterion scores its zero-point level when the order is broken,
+  # so that level has to exist.
+  defp check_task_order(criterion) do
+    if task_order?(criterion) and not Enum.any?(list(criterion, "levels"), &(&1["points"] == 0)) do
+      {:error, :missing_zero_point_level}
+    else
+      :ok
     end
   end
 
@@ -336,10 +358,14 @@ defmodule Backend.Stations.RubricAssessment do
   # Deterministic post-processing
   # ============================================================================
 
-  @spec criterion_result(plan(), map(), Evidence.pool()) :: criterion_result()
+  # A task-order criterion gets `:pending` here and its result in `task_order/3`,
+  # once the criteria it ranks are decided.
+  @spec criterion_result(plan(), map(), Evidence.pool()) :: criterion_result() | :pending
   defp criterion_result(%{route: {:skip, status, reason}} = plan, _decisions, _pool) do
     unscored(plan, status, reason)
   end
+
+  defp criterion_result(%{route: :task_order}, _decisions, _pool), do: :pending
 
   defp criterion_result(plan, decisions, pool) do
     case judge(plan, Map.fetch!(decisions, plan.id), pool) do
@@ -348,38 +374,46 @@ defmodule Backend.Stations.RubricAssessment do
     end
   end
 
+  # A classifier that is uncertain about the criterion still classified its
+  # actions. The criterion stays uncertain at once only when no rule field
+  # could decide the level without the classifier's class.
   @spec judge(plan(), RubricBatch.decision(), Evidence.pool()) ::
           {:assessed, draft()} | {:uncertain, reason()}
-  defp judge(_plan, %{classification: @uncertain_class}, _pool) do
-    {:uncertain, :classifier_uncertain}
+  defp judge(%{criterion: criterion} = plan, %{classification: @uncertain_class} = decision, pool) do
+    if AuthoredRules.decides?(criterion) do
+      rule(plan, :uncertain, decision, pool)
+    else
+      {:uncertain, :classifier_uncertain}
+    end
   end
 
-  defp judge(%{criterion: criterion, requirement: requirement}, decision, pool) do
-    with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
-         {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement) do
-      draft = %{
-        level: level(criterion, decision.classification),
-        evidence: evidence,
-        sub_actions: sub_actions
-      }
+  defp judge(%{criterion: criterion} = plan, decision, pool) do
+    rule(plan, level(criterion, decision.classification), decision, pool)
+  end
 
-      with {:ok, ruled} <- apply_authored_rules(criterion, draft), do: grounded(ruled)
+  defp rule(%{criterion: criterion, requirement: requirement}, jev_level, decision, pool) do
+    with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
+         {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement),
+         {:ok, level, counted} <- AuthoredRules.decide_level(criterion, jev_level, sub_actions) do
+      grounded(%{
+        level: level,
+        evidence: with_counted(evidence, counted, pool),
+        sub_actions: sub_actions
+      })
     else
       {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
       {:uncertain, _reason} = uncertain -> uncertain
     end
   end
 
-  @doc false
-  # T5 seam (issue #128): the only place where the authored rule fields may
-  # change the level of a criterion whose evidence already validated. The
-  # sub-action evidence in the draft went through the same validation as the
-  # criterion evidence, so the rules need no access to the pool.
-  @spec apply_authored_rules(map(), draft()) :: {:ok, draft()} | {:uncertain, reason()}
-  defp apply_authored_rules(criterion, %{level: level, sub_actions: sub_actions} = draft) do
-    with {:ok, ruled_level} <- AuthoredRules.decide_level(criterion, level, sub_actions) do
-      {:ok, %{draft | level: ruled_level}}
-    end
+  # A level earned by count is grounded by the actions that earned it: their
+  # evidence, already validated, joins the criterion evidence in pool order.
+  defp with_counted(evidence, [], _pool), do: evidence
+
+  defp with_counted(evidence, counted, pool) do
+    ids = MapSet.new(Evidence.ids(evidence) ++ Enum.flat_map(counted, & &1.evidence_ids))
+
+    Enum.filter(pool, &(&1.id in ids))
   end
 
   # Credit is never awarded without grounded learner evidence; a zero-point
@@ -401,6 +435,45 @@ defmodule Backend.Stations.RubricAssessment do
          }}
       end
     end)
+  end
+
+  # ============================================================================
+  # Task order
+  # ============================================================================
+
+  # The station-level pass: replaces each pending task-order result with the
+  # decision over the ranked criteria, which are the other active criteria that
+  # author an `order` rank.
+  @spec task_order([criterion_result() | :pending], [plan()], Evidence.pool()) ::
+          [criterion_result()]
+  defp task_order(results, plans, pool) do
+    decided = Enum.zip(plans, results)
+
+    ranked =
+      for {%{id: id, criterion: %{"order" => rank} = criterion}, %{status: status} = result} <-
+            decided,
+          is_integer(rank) and status != :not_applicable and not task_order?(criterion) do
+        %{id: id, rank: rank, result: result}
+      end
+
+    Enum.map(decided, fn
+      {plan, :pending} -> order_result(plan, TaskOrder.decide(ranked, pool))
+      {_plan, result} -> result
+    end)
+  end
+
+  defp order_result(plan, {:uncertain, reason}), do: unscored(plan, :uncertain, reason)
+
+  defp order_result(%{criterion: criterion} = plan, {outcome, evidence}) do
+    levels = for label <- level_labels(criterion), do: level(criterion, label)
+
+    level =
+      case outcome do
+        :held -> Enum.max_by(levels, & &1.points)
+        _not_held -> Enum.find(levels, &(&1.points == Points.zero()))
+      end
+
+    assessed(plan, %{level: level, evidence: evidence, sub_actions: []})
   end
 
   # The classification is one of the authored labels (the batch contract
