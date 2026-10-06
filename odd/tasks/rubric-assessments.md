@@ -48,11 +48,11 @@ The v2 schema authors `actions`, `order`, `count_cap`, `first_n` and `veto` as b
 
 ## Tasks
 
-- [ ] **T1 Exact points and coverage-aware estimates.** `RubricAssessment.Points` (eighths) and `RubricAssessment.Estimates`. Route: delegated (2 non-trivial files + tests).
+- [x] **T1 Exact points and coverage-aware estimates.** `RubricAssessment.Points` (eighths) and `RubricAssessment.Estimates`. Route: delegated (2 non-trivial files + tests).
   - Accept: 0.125 arithmetic is exact; non-multiples are rejected; `total` is `nil` with any unresolved active criterion; subtotal / scored max / eligible max reconcile with the #126 reconciliation fixture (0.25 / 0.25 / 1.25 / nil); excluded criteria are outside both maxima.
-- [ ] **T2 Evidence pool and validation.** `RubricAssessment.Evidence`. Route: delegated.
+- [x] **T2 Evidence pool and validation.** `RubricAssessment.Evidence`. Route: delegated.
   - Accept: ordered role-labelled pool with stable IDs from a session map; one learner turn may back several criteria; patient turns, unknown IDs, wrong channel and wrong-version events are rejected with distinct reasons; event provenance covered.
-- [ ] **T3 Batched Jev rubric decision.** `JevDecision.decide_rubric_batch/2` plus adapter callback and disabled-adapter clause. Route: delegated.
+- [x] **T3 Batched Jev rubric decision.** `JevDecision.decide_rubric_batch/2` plus adapter callback and disabled-adapter clause. Route: delegated.
   - Accept: one call for N questions sharing one evidence pool; class and criterion-ID structure validated; technical-failure taxonomy reused; optional per-action classifications carried.
 - [ ] **T4 Assessment orchestration and context entry point.** `RubricAssessment.assess/3`, `Backend.Stations.assess_session/1`, `to_legacy/1`. Route: delegated.
   - Accept: statuses per decision 6; fail-closed evidence; technical failure invalidates the attempt; capacity split recorded; omission, uncertainty/missing modality and exclusion each covered by its own fixture test; legacy projection tested.
@@ -71,3 +71,5 @@ Forecast: about 1,500 authored changed lines, over the 400-line budget. Commits 
 
 | Task | Route | Commit | Tier / review | Evidence |
 |------|-------|--------|---------------|----------|
+| T1 | delegated (writer trigger: 2 non-trivial modules + tests) | `43bce67` | medium, `slice_budget_reached`; RDD off, writer self-verification + parent spot check | RED 0/32 (modules missing) -> GREEN 32/32; `mix test` 473 passed; format, compile `--warnings-as-errors`, Credo strict, Dialyzer clean. Empty/all-excluded rubric yields `total: nil`. Running count: 621 lines incl. this document. |
+| T2 | delegated (reading prepares the write; non-trivial module + tests) | `97f59b0` | medium, `slice_budget_reached`; RDD off, writer self-verification + parent spot check | RED 0/39 (module missing) -> GREEN 39/39; `mix test` 512 passed; format, compile, Credo strict, Dialyzer clean. An event that released nothing never counts as evidence (legacy rule); invalid events stay in the pool as `:unverified`. 770 lines: the rejection/providability matrix is 39 tests. Running count: 1,391. |
