@@ -515,7 +515,24 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert result.status == :assessed
       assert result.level == "inadequado"
       assert result.points == Points.zero()
-      assert result.evidence_ids == ["turn-1"]
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+    end
+
+    test "a veto zero is grounded by the forbidden action even without criterion evidence" do
+      actions = [
+        not_performed("indicate-expected"),
+        performed("indicate-contraindicated", ["turn-3", "turn-1", "turn-3"])
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), treatment_answer("inadequado", [], actions))
+        |> criterion(@treatment)
+
+      assert result.status == :assessed
+      assert result.points == Points.zero()
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+      assert Enum.map(result.evidence, & &1.id) == ["turn-1", "turn-3"]
     end
 
     test "an uncertain sub-action that could change the level leaves the criterion uncertain" do
@@ -991,6 +1008,38 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert_order(criterion(assessment, @order), "adequado", 2, ["turn-1", "turn-3"])
     end
 
+    test "a step grounded only by its actions is positioned by their evidence" do
+      # history-taking earns its level by count and cites no criterion evidence.
+      history = fn evidence_ids ->
+        actions = [
+          performed("ask-onset", evidence_ids),
+          performed("ask-duration", evidence_ids),
+          not_performed("ask-intensity"),
+          not_performed("ask-relief")
+        ]
+
+        answer("uncertain", [], %{actions: actions})
+      end
+
+      held =
+        order_result(%{
+          @history => history.(["turn-1"]),
+          @treatment => done(@treatment, ["turn-3"]),
+          @exams => skipped(@exams)
+        })
+
+      assert_order(held, "adequado", 2, ["turn-1", "turn-3"])
+
+      broken =
+        order_result(%{
+          @history => history.(["turn-5"]),
+          @treatment => done(@treatment, ["turn-1"]),
+          @exams => skipped(@exams)
+        })
+
+      assert_order(broken, "inadequado", Points.zero(), ["turn-1", "turn-5"])
+    end
+
     test "an Impressos event positions the step it backs" do
       [_history, _treatment, _exams, order] = ordered()["rubric"]
       package = update_rubric(chest_pain_with_lab(), &(&1 ++ [order]))
@@ -1237,9 +1286,37 @@ defmodule Backend.Stations.RubricAssessmentTest do
       ordered() |> only([@history]) |> update_criterion(@history, &Map.put(&1, "first_n", 3))
     end
 
-    # treatment-plan with `first_n: 1`: one counted and one forbidden action.
+    # treatment-plan with `first_n: 1` and thresholds 0/1: one counted and one
+    # forbidden action.
     defp first_one do
-      ordered() |> only([@treatment]) |> update_criterion(@treatment, &Map.put(&1, "first_n", 1))
+      ordered()
+      |> only([@treatment])
+      |> update_criterion(@treatment, &(&1 |> Map.put("first_n", 1) |> thresholds([0, 1])))
+    end
+
+    # history-taking with thresholds 0/1/2 capped at two: `ask-onset` mandatory
+    # and three counted actions.
+    defp capped_history(first_n) do
+      ordered()
+      |> only([@history])
+      |> update_criterion(@history, fn criterion ->
+        criterion |> Map.merge(%{"first_n" => first_n, "count_cap" => 2}) |> thresholds([0, 1, 2])
+      end)
+    end
+
+    defp thresholds(criterion, min_actions) do
+      Map.update!(criterion, "levels", fn levels ->
+        for {level, min} <- Enum.zip(levels, min_actions), do: Map.put(level, "min_actions", min)
+      end)
+    end
+
+    defp capped_history_result(first_n, actions, answers) do
+      decision = answer("adequado", [], %{actions: actions, answers: answers})
+
+      first_n
+      |> capped_history()
+      |> assess!(answers_session(), %{@history => decision})
+      |> criterion(@history)
     end
 
     # exam-requests as authored: `first_n: 2`, `count_cap: 1`, thresholds 0/1.
@@ -1396,6 +1473,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert vetoed.status == :assessed
       assert vetoed.level == "inadequado"
       assert vetoed.points == Points.zero()
+      assert vetoed.evidence_ids == ["turn-1", "turn-3"]
 
       kept =
         treatment.(not_performed("indicate-contraindicated"), [
@@ -1563,6 +1641,224 @@ defmodule Backend.Stations.RubricAssessmentTest do
         assert result.reason == {:listed_unperformed_action, "ask-relief"}
         assert_unscored(result)
       end
+    end
+
+    test "an unresolved action may displace an eligible answer once the list is full" do
+      # If `ask-intensity` was asked at turn-3, the mandatory `ask-onset` is the
+      # third answer and the criterion scores zero.
+      actions = [
+        performed("ask-onset", ["turn-4"]),
+        performed("ask-duration", ["turn-1"]),
+        uncertain("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      answers = [said("turn-1", "ask-duration"), said("turn-4", "ask-onset")]
+
+      full = capped_history_result(2, actions, answers)
+
+      assert full.status == :uncertain
+      assert full.reason == {:uncertain_sub_action, "ask-intensity"}
+      assert_unscored(full)
+
+      # With a free slot the extra answer displaces nothing, and the capped
+      # count is two either way.
+      free = capped_history_result(3, actions, answers)
+
+      assert free.status == :assessed
+      assert free.level == "adequado"
+      assert free.evidence_ids == ["turn-1", "turn-4"]
+    end
+
+    test "several unresolved actions may fill the free slots and displace an answer" do
+      actions = [
+        performed("ask-onset", ["turn-4"]),
+        performed("ask-duration", ["turn-1"]),
+        uncertain("ask-intensity"),
+        uncertain("ask-relief")
+      ]
+
+      answers = [said("turn-1", "ask-duration"), said("turn-4", "ask-onset")]
+
+      crowded = capped_history_result(3, actions, answers)
+
+      assert crowded.status == :uncertain
+      assert crowded.reason == {:uncertain_sub_action, "ask-intensity"}
+
+      roomy = capped_history_result(4, actions, answers)
+
+      assert roomy.status == :assessed
+      assert roomy.level == "adequado"
+    end
+
+    test "a certain zero stands whatever an unresolved action could displace" do
+      missing_mandatory =
+        capped_history_result(
+          2,
+          [
+            not_performed("ask-onset"),
+            performed("ask-duration", ["turn-1"]),
+            uncertain("ask-intensity"),
+            performed("ask-relief", ["turn-4"])
+          ],
+          [said("turn-1", "ask-duration"), said("turn-4", "ask-relief")]
+        )
+
+      mandatory_beyond =
+        capped_history_result(
+          2,
+          [
+            performed("ask-onset", ["turn-5"]),
+            performed("ask-duration", ["turn-1"]),
+            uncertain("ask-intensity"),
+            performed("ask-relief", ["turn-4"])
+          ],
+          [
+            said("turn-1", "ask-duration"),
+            said("turn-4", "ask-relief"),
+            said("turn-5", "ask-onset")
+          ]
+        )
+
+      for result <- [missing_mandatory, mandatory_beyond] do
+        assert result.status == :assessed
+        assert result.level == "inadequado"
+        assert result.points == Points.zero()
+      end
+
+      vetoed_decision =
+        answer("adequado", [], %{
+          actions: [
+            performed("indicate-expected", []),
+            performed("indicate-contraindicated", ["turn-3"])
+          ],
+          answers: [
+            said("turn-1", "indicate-expected"),
+            said("turn-3", "indicate-contraindicated")
+          ]
+        })
+
+      vetoed =
+        first_one()
+        |> assess!(answers_session(), %{@treatment => vetoed_decision})
+        |> criterion(@treatment)
+
+      assert vetoed.status == :assessed
+      assert vetoed.level == "inadequado"
+      assert vetoed.evidence_ids == ["turn-3"]
+    end
+
+    test "a classifier that is uncertain about the criterion does not stop the first N" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-3"]),
+        performed("ask-intensity", ["turn-5"]),
+        not_performed("ask-relief")
+      ]
+
+      answers = [
+        said("turn-1", "ask-onset"),
+        said("turn-3", "ask-duration"),
+        said("turn-4"),
+        said("turn-5", "ask-intensity")
+      ]
+
+      result = history_result(actions, answers, "uncertain")
+
+      assert result.status == :assessed
+      assert result.level == "parcialmente_adequado"
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+    end
+
+    test "an answer must cite evidence of the action it names" do
+      # The action is grounded at turn-4, the third answer; listing it at turn-1
+      # would make it the first.
+      mismatched =
+        exams_result(
+          [performed("request-exam-a", ["turn-4"]), not_performed("request-exam-b")],
+          [said("turn-1", "request-exam-a")]
+        )
+
+      assert mismatched.status == :uncertain
+      assert mismatched.reason == {:answer_evidence_mismatch, "request-exam-a"}
+      assert_unscored(mismatched)
+
+      # Any of the action's own evidence items is an acceptable position.
+      matched =
+        exams_result(
+          [performed("request-exam-a", ["turn-3", "turn-4"]), not_performed("request-exam-b")],
+          [said("turn-1"), said("turn-4", "request-exam-a")]
+        )
+
+      assert matched.status == :assessed
+      assert matched.level == "adequado"
+    end
+
+    test "first_n with actions and no thresholds invalidates the attempt before any call" do
+      # The classifier's holistic level cannot be limited to the first N answers.
+      package =
+        ordered()
+        |> only([@treatment])
+        |> update_criterion(@treatment, &Map.put(&1, "first_n", 1))
+
+      decision =
+        answer("adequado", ["turn-4"], %{
+          actions: [
+            performed("indicate-expected", ["turn-4"]),
+            not_performed("indicate-contraindicated")
+          ],
+          answers: [said("turn-1"), said("turn-4", "indicate-expected")]
+        })
+
+      assert_invalid_attempt(
+        assess(package, answers_session(), %{@treatment => decision}),
+        {:invalid_package, @treatment, :first_n_without_thresholds}
+      )
+
+      refute_received {:batch_request, _request}
+    end
+
+    test "an Impressos event is an answer like any turn" do
+      package =
+        update_criterion(chest_pain_with_lab(), @lab, fn criterion ->
+          action = %{"id" => "request-enzymes", "description" => "Requests cardiac enzymes."}
+
+          criterion |> Map.merge(%{"actions" => [action], "first_n" => 1}) |> thresholds([0, 1])
+        end)
+
+      events = [
+        event("req-other", ["laboratorio-sangue-enzimas"], @t1),
+        event("req-lab", ["laboratorio-sangue-enzimas"], @t3, %{order: 2})
+      ]
+
+      lab_result = fn answers ->
+        decision =
+          answer("adequado", [], %{
+            actions: [performed("request-enzymes", ["impresso-req-lab"])],
+            answers: answers
+          })
+
+        package |> assess!(session(events), %{@lab => decision}) |> criterion(@lab)
+      end
+
+      first = lab_result.([said("impresso-req-lab", "request-enzymes")])
+
+      assert first.status == :assessed
+      assert first.level == "adequado"
+      assert first.evidence_ids == ["impresso-req-lab"]
+
+      second =
+        lab_result.([said("impresso-req-other"), said("impresso-req-lab", "request-enzymes")])
+
+      assert second.status == :assessed
+      assert second.level == "inadequado"
+      assert second.points == Points.zero()
+
+      # A turn is not valid evidence for an Impressos-category criterion.
+      wrong_channel = lab_result.([said("turn-1"), said("impresso-req-lab", "request-enzymes")])
+
+      assert wrong_channel.status == :uncertain
+      assert wrong_channel.reason == {:invalid_evidence, :wrong_channel, "turn-1"}
     end
 
     test "a structurally invalid enumeration invalidates the attempt" do

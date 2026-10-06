@@ -816,17 +816,54 @@ defmodule Backend.StationPackageTest do
                ["rubric level min_actions must not exceed count_cap", first_n_error]
     end
 
-    test "accepts first_n at or above the top threshold, and first_n without thresholds" do
+    test "accepts first_n at or above the top threshold" do
       for first_n <- [3, 4] do
         package = put_criterion(authored_rules(), @history, ["first_n"], first_n)
 
         assert {:ok, ^package} = StationPackage.validate(package)
       end
+    end
 
+    test "rejects first_n on a criterion with actions and no thresholds" do
       # treatment-plan authors actions and no thresholds.
       package = put_criterion(authored_rules(), @treatment, ["first_n"], 1)
 
+      assert StationPackage.validate(package) ==
+               {:error, ["rubric criteria with first_n and actions must author thresholds"]}
+    end
+
+    test "accepts first_n on a criterion without actions, where it has no effect" do
+      package =
+        authored_rules()
+        |> put_criterion(@treatment, ["first_n"], 1)
+        |> put_criterion(@treatment, ["actions"], [])
+
       assert {:ok, ^package} = StationPackage.validate(package)
+
+      # The base v2 fixture relies on it.
+      assert {:ok, %{"rubric" => rubric}} =
+               StationPackage.validate(fixture("valid-package-v2.json"))
+
+      assert Enum.any?(rubric, &(is_integer(&1["first_n"]) and &1["actions"] == []))
+    end
+
+    test "JSON schema requires thresholds where first_n and actions are both authored" do
+      criterion = json_file(@schema_path)["$defs"]["rubricCriterion"]
+
+      assert %{
+               "if" => %{
+                 "required" => ["first_n", "actions"],
+                 "properties" => %{
+                   "first_n" => %{"type" => "integer"},
+                   "actions" => %{"minItems" => 1}
+                 }
+               },
+               "then" => %{
+                 "properties" => %{"levels" => %{"items" => %{"required" => ["min_actions"]}}}
+               }
+             } in criterion["allOf"]
+
+      assert criterion["description"] =~ "first_n and at least one action must author thresholds"
     end
 
     test "JSON schema documents the first_n reachability rule" do
@@ -897,6 +934,25 @@ defmodule Backend.StationPackageTest do
       end)
     end
 
+    test "an excluded criterion is not a ranked step of the task order" do
+      # Only history-taking is left as a ranked criterion the order pass reads.
+      package =
+        authored_rules()
+        |> put_criterion(@treatment, ["order"], nil)
+        |> put_criterion(@exams, ["exclusion"], true)
+
+      assert StationPackage.validate(package) ==
+               {:error,
+                [
+                  "rubric with a task_order criterion requires at least two other criteria with an order"
+                ]}
+
+      # Two ranked criteria that are not excluded are enough.
+      package = put_criterion(authored_rules(), @exams, ["exclusion"], true)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
     test "a task_order criterion needs only two ranked criteria, and equal ranks are valid" do
       package =
         authored_rules()
@@ -922,7 +978,7 @@ defmodule Backend.StationPackageTest do
         "properties" => %{"rule" => %{"const" => "task_order"}}
       }
 
-      assert [%{"if" => ^task_order, "then" => %{"properties" => constrained}}] =
+      assert [%{"if" => ^task_order, "then" => %{"properties" => constrained}}, _first_n] =
                criterion["allOf"]
 
       assert constrained["actions"] == %{"maxItems" => 0}
@@ -946,7 +1002,10 @@ defmodule Backend.StationPackageTest do
                  %{
                    "contains" => %{
                      "required" => ["order"],
-                     "properties" => %{"order" => %{"type" => "integer"}}
+                     "properties" => %{
+                       "order" => %{"type" => "integer"},
+                       "exclusion" => %{"const" => false}
+                     }
                    },
                    "minContains" => 2
                  }

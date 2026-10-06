@@ -40,8 +40,9 @@ defmodule Backend.Stations.RubricAssessment do
   `first_n` runs before those rules, through
   `Backend.Stations.RubricAssessment.FirstN`: a criterion that authors it and
   at least one action asks Jev to enumerate the learner's answers, and only the
-  first N of them are eligible. The reported `:sub_actions` stay as Jev
-  classified them; the level and its evidence use the eligible ones.
+  first N of them are eligible. Such a criterion must author thresholds; one
+  that does not invalidates the attempt. The reported `:sub_actions` stay as
+  Jev classified them; the level and its evidence use the eligible ones.
   """
 
   alias Backend.Stations.JevDecision
@@ -408,10 +409,10 @@ defmodule Backend.Stations.RubricAssessment do
          {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement),
          {:ok, eligible} <-
            FirstN.eligible(criterion, sub_actions, answers(decision), pool, requirement),
-         {:ok, level, counted} <- AuthoredRules.decide_level(criterion, jev_level, eligible) do
+         {:ok, level, grounding} <- AuthoredRules.decide_level(criterion, jev_level, eligible) do
       grounded(%{
         level: level,
-        evidence: with_counted(evidence, counted, pool),
+        evidence: with_actions(evidence, grounding, pool),
         sub_actions: sub_actions
       })
     else
@@ -423,12 +424,13 @@ defmodule Backend.Stations.RubricAssessment do
   # Present only on a decision whose question requested the enumeration.
   defp answers(decision), do: Map.get(decision, :answers, [])
 
-  # A level earned by count is grounded by the actions that earned it: their
-  # evidence, already validated, joins the criterion evidence in pool order.
-  defp with_counted(evidence, [], _pool), do: evidence
+  # A level earned by count is grounded by the actions that earned it, and a
+  # veto zero by the forbidden actions that triggered it: their evidence,
+  # already validated, joins the criterion evidence in pool order.
+  defp with_actions(evidence, [], _pool), do: evidence
 
-  defp with_counted(evidence, counted, pool) do
-    ids = MapSet.new(Evidence.ids(evidence) ++ Enum.flat_map(counted, & &1.evidence_ids))
+  defp with_actions(evidence, grounding, pool) do
+    ids = MapSet.new(Evidence.ids(evidence) ++ Enum.flat_map(grounding, & &1.evidence_ids))
 
     Enum.filter(pool, &(&1.id in ids))
   end

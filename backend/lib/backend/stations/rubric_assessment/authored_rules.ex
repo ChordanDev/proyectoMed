@@ -36,7 +36,9 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
   (`Backend.Stations.RubricAssessment.Points`). `first_n` runs before this
   module (`Backend.Stations.RubricAssessment.FirstN`), which hands over the
   decisions with every action beyond the first N answers already not
-  performed; the `task_order` rule is not applied here.
+  performed, and asks `certain_zero?/2` and `unresolved/2` whether an action
+  without a known position could still displace an eligible answer; the
+  `task_order` rule is not applied here.
   """
 
   alias Backend.Stations.RubricAssessment.Points
@@ -60,15 +62,19 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
   @type jev_level :: level() | :uncertain
 
   @typedoc "Why the rule fields of a criterion cannot be applied."
-  @type authoring_error :: :inconsistent_thresholds | :missing_zero_point_level
+  @type authoring_error ::
+          :inconsistent_thresholds | :missing_zero_point_level | :first_n_without_thresholds
 
   @typep threshold_level :: %{label: String.t(), points: Points.t(), min_actions: term()}
 
   @doc """
   Checks that the rule fields of a package criterion (string keys) can be
   applied: thresholds are set on every level or on none, as non-negative
-  integers; and a criterion with thresholds, a `mandatory` action or a
-  `forbidden` action has a zero-point level, whose threshold is zero.
+  integers; a criterion with thresholds, a `mandatory` action or a
+  `forbidden` action has a zero-point level, whose threshold is zero; and a
+  criterion that authors `first_n` and at least one action authors thresholds,
+  because a level Jev chose as a whole cannot be limited to the first N
+  answers.
 
   Expects levels whose points already converted to exact points. The Station
   Package loader enforces the same rules; this check keeps `decide_level/3`
@@ -82,6 +88,9 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
     cond do
       not consistent_thresholds?(levels) ->
         {:error, :inconsistent_thresholds}
+
+      first_n_without_thresholds?(criterion, levels) ->
+        {:error, :first_n_without_thresholds}
 
       not zero_scoring_rule?(criterion, levels) ->
         :ok
@@ -111,8 +120,10 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
   Decides the level of a criterion from the level Jev chose, or `:uncertain`
   when it chose none, and the validated decisions of its authored actions.
 
-  Returns the level to assess with the performed countable actions when their
-  count decided it, and no actions otherwise. Returns `{:uncertain, reason}`
+  Returns the level to assess with the actions that ground it: the performed
+  countable actions when their count decided it, the performed `forbidden`
+  actions when they scored the zero-point level, and no actions otherwise.
+  Returns `{:uncertain, reason}`
   when several outcomes are reachable: the reason names the first unresolved
   `mandatory` or `forbidden` action in authored order, or else the first
   unresolved countable one. It is `:classifier_uncertain` when the outcome
@@ -127,10 +138,10 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
     decided = decided(criterion, sub_actions)
 
     cond do
-      Enum.any?(decided, &match?({@forbidden, :performed, _sub_action}, &1)) ->
-        {:ok, zero_level(levels), []}
+      vetoing(decided) != [] ->
+        {:ok, zero_level(levels), vetoing(decided)}
 
-      Enum.any?(decided, &match?({@mandatory, :not_performed, _sub_action}, &1)) ->
+      missing_mandatory?(decided) ->
         {:ok, zero_level(levels), []}
 
       thresholds?(levels) ->
@@ -151,12 +162,44 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
     end
   end
 
+  @doc """
+  Says whether the classified facts already score the zero-point level,
+  whatever else is unresolved: a `forbidden` action performed with evidence
+  (rule 2) or a `mandatory` action that was not performed (rule 3).
+  """
+  @spec certain_zero?(map(), [sub_action()]) :: boolean()
+  def certain_zero?(criterion, sub_actions) when is_map(criterion) and is_list(sub_actions) do
+    decided = decided(criterion, sub_actions)
+
+    vetoing(decided) != [] or missing_mandatory?(decided)
+  end
+
+  @doc """
+  Returns the reason that names the unresolved action of a criterion, chosen
+  as `decide_level/3` chooses it, or `nil` when every action is resolved.
+  """
+  @spec unresolved(map(), [sub_action()]) :: uncertainty() | nil
+  def unresolved(criterion, sub_actions) when is_map(criterion) and is_list(sub_actions) do
+    case criterion |> decided(sub_actions) |> first_unresolved() do
+      nil -> nil
+      sub_action -> reason(sub_action)
+    end
+  end
+
   # Rule 4: one reachable outcome is the level, several are uncertainty.
   defp single(outcomes, decided, counted) do
     case Enum.uniq(outcomes) do
       [level] -> {:ok, level, counted}
       _several -> {:uncertain, decided |> first_unresolved() |> reason()}
     end
+  end
+
+  defp vetoing(decided) do
+    for {@forbidden, :performed, sub_action} <- decided, do: sub_action
+  end
+
+  defp missing_mandatory?(decided) do
+    Enum.any?(decided, &match?({@mandatory, :not_performed, _sub_action}, &1))
   end
 
   # An unresolved mandatory action may turn out not performed, and an
@@ -175,14 +218,17 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
     end
   end
 
-  # Several outcomes need an unresolved action, so one is always found.
+  # The first unresolved mandatory or forbidden action in authored order, or
+  # else the first unresolved countable one. Several reachable outcomes need
+  # an unresolved action, so `single/3` always finds one.
   defp first_unresolved(decided) do
-    {_role, :unresolved, sub_action} =
-      Enum.find(decided, &zero_scoring?/1) ||
-        Enum.find(decided, &match?({role, :unresolved, _} when role != @forbidden, &1))
-
-    sub_action
+    case Enum.find(decided, &zero_scoring?/1) || Enum.find(decided, &unresolved?/1) do
+      {_role, :unresolved, sub_action} -> sub_action
+      nil -> nil
+    end
   end
+
+  defp unresolved?({_role, state, _sub_action}), do: state == :unresolved
 
   defp zero_scoring?({role, :unresolved, _sub_action}), do: role in [@mandatory, @forbidden]
   defp zero_scoring?(_resolved), do: false
@@ -238,6 +284,11 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
         list(criterion, "actions"),
         &(is_map(&1) and &1["role"] in [@mandatory, @forbidden])
       )
+  end
+
+  defp first_n_without_thresholds?(criterion, levels) do
+    is_integer(Map.get(criterion, "first_n")) and
+      Enum.any?(list(criterion, "actions"), &is_map/1) and not thresholds?(levels)
   end
 
   defp thresholds?(levels), do: levels != [] and Enum.all?(levels, &threshold?/1)

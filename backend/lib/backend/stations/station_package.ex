@@ -218,6 +218,7 @@ defmodule Backend.Stations.StationPackage do
     |> validate_evidence_questions(criterion)
     |> validate_levels(criterion)
     |> validate_level_thresholds(criterion)
+    |> validate_first_n_thresholds(criterion)
     |> validate_criterion_actions(criterion)
     |> validate_nullable_integer_fields(criterion)
     |> validate_positive_integer_fields(criterion)
@@ -409,6 +410,22 @@ defmodule Backend.Stations.StationPackage do
 
   defp validate_threshold_within_first_n(errors, _highest, _first_n), do: errors
 
+  # first_n limits the count of eligible actions. Without thresholds the level
+  # would be the classifier's reading of the whole transcript, which no code
+  # can limit to the first N answers. Without actions first_n has no effect.
+  defp validate_first_n_thresholds(errors, %{"first_n" => first_n} = criterion)
+       when is_integer(first_n) and first_n >= 1 do
+    levels = criterion |> Map.get("levels") |> maps()
+
+    add_error_if(
+      errors,
+      maps(criterion["actions"]) != [] and not Enum.any?(levels, &Map.has_key?(&1, "min_actions")),
+      "rubric criteria with first_n and actions must author thresholds"
+    )
+  end
+
+  defp validate_first_n_thresholds(errors, _criterion), do: errors
+
   defp validate_level_description(errors, %{"description" => description}) do
     if non_empty_string?(description) do
       errors
@@ -559,9 +576,10 @@ defmodule Backend.Stations.StationPackage do
   end
 
   # An order needs steps to compare: at least two other criteria with a rank.
+  # An excluded criterion is never assessed, so it is not a step.
   defp validate_task_order_rubric(errors, criteria) do
     {order_criteria, others} = Enum.split_with(criteria, &(&1["rule"] == "task_order"))
-    ranked = Enum.count(others, &is_integer(&1["order"]))
+    ranked = Enum.count(others, &(is_integer(&1["order"]) and &1["exclusion"] != true))
 
     errors
     |> add_error_if(
