@@ -28,6 +28,7 @@ defmodule Backend.Stations.StationPackage do
   @action_roles ~w(counted mandatory forbidden)
   @zero_scoring_action_roles ~w(mandatory forbidden)
   @criterion_rules ~w(task_order)
+  @task_order_null_fields ~w(order count_cap first_n)
   @valid_impresso_categories ~w(physical_exam laboratory imaging report)
 
   @spec version() :: String.t()
@@ -202,7 +203,10 @@ defmodule Backend.Stations.StationPackage do
 
   defp validate_rubric(errors, %{"rubric" => rubric}) when is_list(rubric) do
     errors = Enum.reduce(rubric, errors, &validate_rubric_criterion/2)
-    validate_unique_ids(errors, rubric, "rubric criterion ids must be unique")
+
+    errors
+    |> validate_unique_ids(rubric, "rubric criterion ids must be unique")
+    |> validate_task_order_rubric(maps(rubric))
   end
 
   defp validate_rubric(errors, _package), do: ["rubric must be a list" | errors]
@@ -222,6 +226,7 @@ defmodule Backend.Stations.StationPackage do
     |> validate_criterion_rule(criterion)
     |> validate_forbidden_requires_veto(criterion)
     |> validate_zero_point_level(criterion)
+    |> validate_task_order_criterion(criterion)
   end
 
   defp validate_rubric_criterion(_criterion, errors),
@@ -505,6 +510,62 @@ defmodule Backend.Stations.StationPackage do
       errors
     end
   end
+
+  # The task-order criterion is assessed in code from the ranks of the other
+  # criteria, so it authors no rule field of its own.
+  defp validate_task_order_criterion(errors, %{"rule" => "task_order"} = criterion) do
+    levels = criterion |> Map.get("levels") |> maps()
+
+    errors
+    |> add_error_if(
+      criterion["actions"] not in [nil, []],
+      "rubric task_order criteria must not author actions"
+    )
+    |> add_error_if(
+      Enum.any?(levels, &Map.has_key?(&1, "min_actions")),
+      "rubric task_order criteria must not set min_actions"
+    )
+    |> validate_task_order_null_fields(criterion)
+    |> add_error_if(
+      criterion["veto"] == true,
+      "rubric task_order criteria must set veto to false"
+    )
+    |> add_error_if(
+      not Enum.any?(levels, &(&1["points"] == 0)),
+      "rubric task_order criteria require a zero-point level"
+    )
+  end
+
+  defp validate_task_order_criterion(errors, _criterion), do: errors
+
+  defp validate_task_order_null_fields(errors, criterion) do
+    Enum.reduce(@task_order_null_fields, errors, fn field, errors ->
+      add_error_if(
+        errors,
+        not is_nil(criterion[field]),
+        "rubric task_order criteria must set #{field} to null"
+      )
+    end)
+  end
+
+  # An order needs steps to compare: at least two other criteria with a rank.
+  defp validate_task_order_rubric(errors, criteria) do
+    {order_criteria, others} = Enum.split_with(criteria, &(&1["rule"] == "task_order"))
+    ranked = Enum.count(others, &is_integer(&1["order"]))
+
+    errors
+    |> add_error_if(
+      length(order_criteria) > 1,
+      "rubric must have at most one task_order criterion"
+    )
+    |> add_error_if(
+      order_criteria != [] and ranked < 2,
+      "rubric with a task_order criterion requires at least two other criteria with an order"
+    )
+  end
+
+  defp add_error_if(errors, true, message), do: [message | errors]
+  defp add_error_if(errors, false, _message), do: errors
 
   defp action_roles(criterion) do
     criterion |> Map.get("actions") |> maps() |> Enum.map(& &1["role"])

@@ -91,11 +91,34 @@
       }
     },
     "rubric": {
+      "description": "A rubric has at most one task_order criterion, and one that has it needs at least two other criteria with a non-null order. The task_order criterion is assessed in code from those ranks and is never sent to the classifier.",
       "type": "array",
-      "items": {"$ref": "#/$defs/rubricCriterion"}
+      "items": {"$ref": "#/$defs/rubricCriterion"},
+      "if": {
+        "contains": {
+          "required": ["rule"],
+          "properties": {"rule": {"const": "task_order"}}
+        }
+      },
+      "then": {
+        "contains": {
+          "required": ["rule"],
+          "properties": {"rule": {"const": "task_order"}}
+        },
+        "maxContains": 1,
+        "allOf": [
+          {
+            "contains": {
+              "required": ["order"],
+              "properties": {"order": {"type": "integer"}}
+            },
+            "minContains": 2
+          }
+        ]
+      }
     },
     "rubricCriterion": {
-      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden and at most count_cap when count_cap is set; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level.",
+      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden and at most count_cap when count_cap is set; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level. A task_order criterion authors no actions and no thresholds, sets order, count_cap and first_n to null and veto to false, and has a zero-point level; the loader reports each violation with its own message.",
       "type": "object",
       "required": [
         "id",
@@ -159,7 +182,28 @@
       },
       "then": {
         "properties": {"veto": {"const": true}}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["rule"],
+            "properties": {"rule": {"const": "task_order"}}
+          },
+          "then": {
+            "properties": {
+              "levels": {
+                "contains": {"properties": {"points": {"const": 0}}},
+                "items": {"not": {"required": ["min_actions"]}}
+              },
+              "actions": {"maxItems": 0},
+              "order": {"type": "null"},
+              "count_cap": {"type": "null"},
+              "first_n": {"type": "null"},
+              "veto": {"const": false}
+            }
+          }
+        }
+      ]
     },
     "rubricLevel": {
       "type": "object",

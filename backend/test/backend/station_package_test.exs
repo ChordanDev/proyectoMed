@@ -597,6 +597,7 @@ defmodule Backend.StationPackageTest do
     @history 0
     @treatment 1
     @exams 2
+    @order 3
 
     defp authored_rules, do: fixture("valid-package-v2-authored-rules.json")
 
@@ -804,6 +805,109 @@ defmodule Backend.StationPackageTest do
                },
                "then" => %{"properties" => %{"min_actions" => %{"minimum" => 1}}}
              } in level["allOf"]
+    end
+
+    test "rejects every task_order violation with only its own error" do
+      base = authored_rules()
+      [_history, _treatment, _exams, order] = base["rubric"]
+
+      task_order_errors = [
+        "rubric must have at most one task_order criterion",
+        "rubric task_order criteria must not author actions",
+        "rubric task_order criteria must not set min_actions",
+        "rubric task_order criteria must set order to null",
+        "rubric task_order criteria must set count_cap to null",
+        "rubric task_order criteria must set first_n to null",
+        "rubric task_order criteria must set veto to false",
+        "rubric task_order criteria require a zero-point level",
+        "rubric with a task_order criterion requires at least two other criteria with an order"
+      ]
+
+      second = Map.put(order, "id", "task-order-b")
+      action = %{"id" => "follow-order", "description" => "Follow the order."}
+
+      with_thresholds =
+        base
+        |> put_criterion(@order, ["levels", Access.at(0), "min_actions"], 0)
+        |> put_criterion(@order, ["levels", Access.at(1), "min_actions"], 1)
+
+      cases = [
+        {Map.update!(base, "rubric", &(&1 ++ [second])), Enum.at(task_order_errors, 0)},
+        {put_criterion(base, @order, ["actions"], [action]), Enum.at(task_order_errors, 1)},
+        {with_thresholds, Enum.at(task_order_errors, 2)},
+        {put_criterion(base, @order, ["order"], 4), Enum.at(task_order_errors, 3)},
+        {put_criterion(base, @order, ["count_cap"], 1), Enum.at(task_order_errors, 4)},
+        {put_criterion(base, @order, ["first_n"], 2), Enum.at(task_order_errors, 5)},
+        {put_criterion(base, @order, ["veto"], true), Enum.at(task_order_errors, 6)},
+        {put_criterion(base, @order, ["levels", Access.at(0), "points"], 0.125),
+         Enum.at(task_order_errors, 7)},
+        {base
+         |> put_criterion(@treatment, ["order"], nil)
+         |> put_criterion(@exams, ["order"], nil), Enum.at(task_order_errors, 8)}
+      ]
+
+      Enum.each(cases, fn {package, expected_error} ->
+        assert {:error, errors} = StationPackage.validate(package)
+
+        assert Enum.filter(errors, &(&1 in task_order_errors)) == [expected_error],
+               "expected only #{inspect(expected_error)} in #{inspect(errors)}"
+      end)
+    end
+
+    test "a task_order criterion needs only two ranked criteria, and equal ranks are valid" do
+      package =
+        authored_rules()
+        |> put_criterion(@history, ["order"], nil)
+        |> put_criterion(@exams, ["order"], 2)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "the task_order constraints do not apply to other criteria" do
+      package = put_criterion(authored_rules(), @order, ["rule"], nil)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "JSON schema constrains a task_order criterion and the rubric that has one" do
+      schema = json_file(@schema_path)
+      criterion = schema["$defs"]["rubricCriterion"]
+      rubric = schema["$defs"]["rubric"]
+
+      task_order = %{
+        "required" => ["rule"],
+        "properties" => %{"rule" => %{"const" => "task_order"}}
+      }
+
+      assert [%{"if" => ^task_order, "then" => %{"properties" => constrained}}] =
+               criterion["allOf"]
+
+      assert constrained["actions"] == %{"maxItems" => 0}
+      assert constrained["order"] == %{"type" => "null"}
+      assert constrained["count_cap"] == %{"type" => "null"}
+      assert constrained["first_n"] == %{"type" => "null"}
+      assert constrained["veto"] == %{"const" => false}
+
+      assert constrained["levels"] == %{
+               "contains" => %{"properties" => %{"points" => %{"const" => 0}}},
+               "items" => %{"not" => %{"required" => ["min_actions"]}}
+             }
+
+      assert rubric["if"] == %{"contains" => task_order}
+
+      assert rubric["then"] == %{
+               "contains" => task_order,
+               "maxContains" => 1,
+               "allOf" => [
+                 %{
+                   "contains" => %{
+                     "required" => ["order"],
+                     "properties" => %{"order" => %{"type" => "integer"}}
+                   },
+                   "minContains" => 2
+                 }
+               ]
+             }
     end
 
     test "the same action id may be reused by different criteria" do
