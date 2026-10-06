@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, cli
@@ -18,6 +19,7 @@ from transcripts import (
     PhoenixClient,
     TurnTracker,
     VoiceFailure,
+    classify_provider_error,
     process_speech_stream,
 )
 
@@ -73,6 +75,7 @@ async def transcribe(
     stt=None,
     audio=None,
     on_reply=None,
+    cleanup_timeout: float = 1.0,
 ) -> None:
     if stt is None:
         stt = deepgram.STT(
@@ -96,6 +99,39 @@ async def transcribe(
         stream.end_input()
 
     pump_task = asyncio.create_task(pump())
+    close_task = None
+
+    async def close_owned_resources() -> VoiceFailure | None:
+        pump_task.cancel()
+        await asyncio.gather(pump_task, return_exceptions=True)
+        failure = None
+        for resource in (audio, stream):
+            try:
+                if hasattr(resource, "aclose"):
+                    await resource.aclose()
+            except Exception as exc:
+                failure = classify_provider_error(exc)
+                logger.warning("local resource close failed: %s", failure.kind)
+        return failure
+
+    async def close_resources() -> None:
+        nonlocal close_task
+        if close_task is None:
+            close_task = asyncio.create_task(close_owned_resources())
+        cancelled = False
+        # Own and join one close attempt, even under repeated caller cancellation.
+        # Local provider close is cooperative; the remote drain budget is separate.
+        while not close_task.done():
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        failure = close_task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+        if failure is not None:
+            raise failure from None
+
     try:
         await process_speech_stream(
             stream,
@@ -103,13 +139,16 @@ async def transcribe(
             phoenix,
             on_publish=lambda event: publish(room, event),
             on_reply=on_reply,
+            on_close=close_resources,
+            cleanup_timeout=cleanup_timeout,
         )
     finally:
-        pump_task.cancel()
-        if hasattr(audio, "aclose"):
-            await audio.aclose()
-        if hasattr(stream, "aclose"):
-            await stream.aclose()
+        primary = sys.exception()
+        try:
+            await close_resources()
+        except (Exception, asyncio.CancelledError):
+            if primary is None:
+                raise
 
 
 async def publish(room: rtc.Room, payload: dict) -> None:

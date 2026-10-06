@@ -6,6 +6,7 @@ Nothing in this module logs or stores transcript text, audio or provider payload
 # pyright: reportMissingImports=false
 import asyncio
 import logging
+import sys
 
 import httpx
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError
@@ -50,6 +51,18 @@ class VoiceTurnReply:
         self.status = status
         self.generation_id = generation_id
         self.reply_text = reply_text
+
+    def is_committed_receipt(self) -> bool:
+        """Validate runtime metadata before trusting it as server fence evidence."""
+        return (
+            self.status == "committed"
+            and type(self.turn_id) is int
+            and self.turn_id > 0
+            and type(self.generation_id) is int
+            and self.generation_id > 0
+            and isinstance(self.reply_text, str)
+            and bool(self.reply_text.strip())
+        )
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, VoiceTurnReply):
@@ -126,7 +139,7 @@ class TurnTracker:
         """Validates that a reply is generation-bound, not duplicate, and not superseded/cancelled."""
         if not isinstance(reply, VoiceTurnReply):
             return False
-        if reply.status != "committed":
+        if not reply.is_committed_receipt():
             return False
         if reply.turn_id in self.cancelled_turns:
             return False
@@ -206,7 +219,7 @@ class PhoenixClient:
             result = await self._request("POST", self._path + "/transcripts", json=body)
 
         return VoiceTurnReply(
-            turn_id=result.get("turn_id", turn_id),
+            turn_id=result.get("turn_id"),
             status=result["status"],
             generation_id=result.get("generation_id"),
             reply_text=result.get("reply_text"),
@@ -255,7 +268,13 @@ class PhoenixClient:
 class TurnManager:
     """Manages bounded asynchronous pending turn tasks and turn-scoped cancellation (#119)."""
 
-    def __init__(self, tracker: TurnTracker, phoenix: PhoenixClient, on_reply=None):
+    def __init__(
+        self,
+        tracker: TurnTracker,
+        phoenix: PhoenixClient,
+        on_reply=None,
+        cleanup_timeout: float = 1.0,
+    ):
         self.tracker = tracker
         self.phoenix = phoenix
         self.on_reply = on_reply
@@ -268,6 +287,9 @@ class TurnManager:
         self._unhandled_error: BaseException | None = None
         self._main_task: asyncio.Task | None = None
         self._cleaning_up = False
+        # One second for the entire remote drain, not each HTTP attempt/retry.
+        # Injectable for deterministic tests; timeout cannot confirm a remote fence.
+        self.cleanup_timeout = cleanup_timeout
 
     def set_main_task(self, task: asyncio.Task | None = None) -> None:
         self._main_task = task or asyncio.current_task()
@@ -283,6 +305,16 @@ class TurnManager:
 
     def on_speech_event(self, speech_event: SpeechEvent) -> asyncio.Task | None:
         self.check_errors()
+        # Accounting and empty/duplicate boundaries are not a new utterance. Keep
+        # START handling here: the tracker intentionally normalizes it to None.
+        supersedes = speech_event.type == SpeechEventType.START_OF_SPEECH
+        if speech_event.type in (
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+        ):
+            supersedes = bool(self.tracker._text(speech_event))
+        if not supersedes:
+            return None
         if (
             self.pending_turn_id is not None
             and not self.tracker.is_turn_stale(self.pending_turn_id)
@@ -339,7 +371,19 @@ class TurnManager:
             if self.tracker.is_turn_stale(turn_id):
                 return None
             reply = await self.phoenix.commit(turn_id, text)
-            if not self.tracker.is_turn_stale(turn_id):
+            if (
+                isinstance(reply, VoiceTurnReply)
+                and reply.is_committed_receipt()
+                and reply.turn_id == turn_id
+            ):
+                # Phoenix atomically replaces the active generation on a newer
+                # accepted turn and never accepts an older turn again. Only this
+                # server receipt (not a queued POST or local stale flag) proves
+                # that older cancellation obligations are obsolete.
+                self._unresolved_cancel_turns.difference_update(
+                    old for old in tuple(self._unresolved_cancel_turns) if old < turn_id
+                )
+            if reply.turn_id == turn_id and not self.tracker.is_turn_stale(turn_id):
                 accepted = self.tracker.accept_reply(reply)
                 if accepted is not None and self.on_reply is not None:
                     result = self.on_reply(accepted)
@@ -395,11 +439,16 @@ class TurnManager:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.check_errors()
 
-    async def cleanup(self) -> None:
+    async def cleanup(self, on_close=None) -> VoiceFailure | None:
+        """Stop local tasks/resources, then best-effort fence owned remote turns.
+
+        A returned failure means the remote fence is unconfirmed. Outstanding
+        ownership remains only in this manager; it is not durable after its death.
+        """
         self._cleaning_up = True
-        turns_to_cancel = self._unresolved_cancel_turns.copy()
         if self.pending_turn_id is not None:
-            turns_to_cancel.add(self.pending_turn_id)
+            self._unresolved_cancel_turns.add(self.pending_turn_id)
+        turns_to_cancel = self._unresolved_cancel_turns.copy()
         tasks = [t for t in self._all_tasks if not t.done()]
         for task in tasks:
             task.cancel()
@@ -410,18 +459,35 @@ class TurnManager:
         self.pending_cancel_task = None
         self.pending_turn_id = None
 
-        for turn_to_cancel in sorted(turns_to_cancel):
+        for turn_to_cancel in turns_to_cancel:
             self.tracker.mark_turn_stale(turn_to_cancel)
+        failure = None
+        try:
+            if on_close is not None:
+                await on_close()
+        finally:
             try:
-                await self.phoenix.cancel(turn_id=turn_to_cancel)
-                self._unresolved_cancel_turns.discard(turn_to_cancel)
-            except VoiceFailure as failure:
-                if failure.kind == "stale_generation":
-                    self._unresolved_cancel_turns.discard(turn_to_cancel)
-                else:
-                    logger.debug("cleanup cancel returned: %s", failure.kind)
-            except Exception as exc:
-                logger.debug("cleanup cancel ignored exception: %s", type(exc).__name__)
+                async with asyncio.timeout(self.cleanup_timeout):
+                    for turn_to_cancel in sorted(turns_to_cancel):
+                        try:
+                            await self.phoenix.cancel(turn_id=turn_to_cancel)
+                            self._unresolved_cancel_turns.discard(turn_to_cancel)
+                        except VoiceFailure as exc:
+                            if exc.kind == "stale_generation":
+                                self._unresolved_cancel_turns.discard(turn_to_cancel)
+                            else:
+                                failure = exc
+                        except Exception as exc:
+                            failure = classify_provider_error(exc)
+            except TimeoutError:
+                failure = VoiceFailure("timeout")
+            if self._unresolved_cancel_turns:
+                logger.warning(
+                    "cleanup remote fence unconfirmed for %d owned turns: %s",
+                    len(self._unresolved_cancel_turns),
+                    failure.kind if failure is not None else "disconnected",
+                )
+        return failure
 
 
 async def process_speech_stream(
@@ -430,8 +496,15 @@ async def process_speech_stream(
     phoenix: PhoenixClient,
     on_publish=None,
     on_reply=None,
+    on_close=None,
+    cleanup_timeout: float = 1.0,
 ) -> None:
-    turn_manager = TurnManager(tracker=tracker, phoenix=phoenix, on_reply=on_reply)
+    turn_manager = TurnManager(
+        tracker=tracker,
+        phoenix=phoenix,
+        on_reply=on_reply,
+        cleanup_timeout=cleanup_timeout,
+    )
     turn_manager.set_main_task(asyncio.current_task())
     try:
         async for speech_event in stream:
@@ -463,4 +536,16 @@ async def process_speech_stream(
             turn_manager.check_errors()
         raise classify_provider_error(exc) from None
     finally:
-        await turn_manager.cleanup()
+        primary = sys.exception()
+        try:
+            await turn_manager.cleanup(on_close=on_close)
+        except asyncio.CancelledError:
+            if primary is None:
+                raise
+        except Exception as exc:
+            failure = (
+                exc if isinstance(exc, VoiceFailure) else classify_provider_error(exc)
+            )
+            logger.warning("stream cleanup failed: %s", failure.kind)
+            if primary is None:
+                raise failure from None

@@ -530,6 +530,410 @@ class MockSTT:
 
 
 class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
+    async def _assert_safe_close_failure(self, primary=None):
+        sentinel = "private closure sentinel"
+
+        class FailingAudio(MockAudioStream):
+            async def __anext__(self):
+                await asyncio.Event().wait()
+
+            async def aclose(self):
+                raise RuntimeError(sentinel)
+
+        queue = asyncio.Queue()
+        stream = MockStream(queue)
+        tasks_before = asyncio.all_tasks()
+
+        def receive_reply(reply):
+            raise primary
+
+        async with ControllablePhoenixClient() as client:
+            with self.assertLogs("voice-worker", level="WARNING") as logs:
+                task = asyncio.create_task(
+                    transcribe(
+                        MockRoom(),
+                        None,
+                        {},
+                        TurnTracker("s1", 0),
+                        client,
+                        stt=MockSTT(stream),
+                        audio=FailingAudio(),
+                        on_reply=(
+                            receive_reply if isinstance(primary, VoiceFailure) else None
+                        ),
+                    )
+                )
+                async with asyncio.timeout(1):
+                    if isinstance(primary, VoiceFailure):
+                        queue.put_nowait(event(FINAL, "Question"))
+                        queue.put_nowait(event(END))
+                    elif isinstance(primary, asyncio.CancelledError):
+                        await asyncio.sleep(0)
+                        task.cancel()
+                    else:
+                        queue.put_nowait(None)
+                    expected = (
+                        asyncio.CancelledError
+                        if isinstance(primary, asyncio.CancelledError)
+                        else VoiceFailure
+                    )
+                    with self.assertRaises(expected) as caught:
+                        await task
+                self.assertTrue(stream.closed)
+                self.assertNotIn(sentinel, str(caught.exception))
+                self.assertNotIn(sentinel, " ".join(logs.output))
+                if isinstance(primary, VoiceFailure):
+                    self.assertIs(caught.exception, primary)
+                elif primary is None:
+                    self.assertEqual(caught.exception.kind, "malformed")
+                self.assertEqual(asyncio.all_tasks() - tasks_before, set())
+
+    async def test_audio_close_error_preserves_primary_auth_failure(self):
+        await self._assert_safe_close_failure(VoiceFailure("auth"))
+
+    async def test_audio_close_error_preserves_primary_cancellation(self):
+        await self._assert_safe_close_failure(asyncio.CancelledError())
+
+    async def test_normal_audio_close_error_is_typed_and_content_free(self):
+        await self._assert_safe_close_failure()
+
+    async def test_double_cancellation_joins_local_resource_closure(self):
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+
+        class HeldAudio(MockAudioStream):
+            async def __anext__(self):
+                await asyncio.Event().wait()
+
+            async def aclose(self):
+                close_started.set()
+                await release_close.wait()
+                self.closed = True
+
+        audio = HeldAudio()
+        stream = MockStream(asyncio.Queue())
+        tasks_before = asyncio.all_tasks()
+        async with ControllablePhoenixClient() as client:
+            task = asyncio.create_task(
+                transcribe(
+                    MockRoom(),
+                    None,
+                    {},
+                    TurnTracker("s1", 0),
+                    client,
+                    stt=MockSTT(stream),
+                    audio=audio,
+                )
+            )
+            try:
+                async with asyncio.timeout(1):
+                    await asyncio.sleep(0)
+                    task.cancel()
+                    await close_started.wait()
+                    task.cancel()
+                    await asyncio.sleep(0)
+                    release_close.set()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    self.assertTrue(audio.closed)
+                    self.assertTrue(stream.closed)
+                    self.assertEqual(asyncio.all_tasks() - tasks_before, set())
+            finally:
+                release_close.set()
+                task.cancel()
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 1)
+
+    async def test_invalid_server_receipts_preserve_older_cancel_ownership(self):
+        cases = [
+            {"generation_id": value}
+            for value in ("invalid", True, 0, -1, [], None)
+        ] + [
+            {"turn_id": value} for value in (None, True, 0, -1, "2", 3)
+        ] + [{"status": "duplicate"}, {"reply_text": "  "}, {"reply_text": 7}]
+        for override in cases:
+            with self.subTest(override=override):
+                started = asyncio.Event()
+                release = asyncio.Event()
+                cancelled = []
+                response = dict(
+                    turn_id=2, status="committed", generation_id=2, reply_text="Reply"
+                )
+                response.update(override)
+                if response.get("turn_id") is None:
+                    response.pop("turn_id")
+                if response.get("generation_id") is None:
+                    response.pop("generation_id")
+
+                async def handler(request):
+                    body = json.loads(request.content)
+                    if request.url.path.endswith("/cancel"):
+                        cancelled.append(body["turn_id"])
+                        if len(cancelled) <= 2:
+                            raise httpx.ReadTimeout("private transport detail")
+                        return httpx.Response(200, json={"status": "cancelled"})
+                    if body["turn_id"] == 1:
+                        started.set()
+                        await release.wait()
+                        return httpx.Response(200, json={"status": "duplicate"})
+                    return httpx.Response(201, json=response)
+
+                async with phoenix(handler) as client:
+                    manager = TurnManager(TurnTracker("s1", 0), client)
+                    async with asyncio.timeout(1):
+                        manager.commit_turn(1, "Old question")
+                        await started.wait()
+                        await manager.on_speech_event(event(INTERIM, "Next question"))
+                        try:
+                            await manager.commit_turn(2, "Next question")
+                        except (VoiceFailure, TypeError):
+                            pass
+                        await manager.cleanup()
+                        self.assertEqual(cancelled, [1, 1, 1])
+
+    async def _assert_non_speech_preserves_pending_turn(self, held_commit=False):
+        async with ControllablePhoenixClient() as client:
+            tracker = TurnTracker("s1", last_turn_id=0)
+            replies = []
+            queue = asyncio.Queue()
+            client.commit_events[1] = asyncio.Event()
+            if held_commit:
+                client.commit_delays[1] = asyncio.Event()
+            task = asyncio.create_task(
+                process_speech_stream(
+                    MockStream(queue), tracker, client, on_reply=replies.append
+                )
+            )
+            try:
+                async with asyncio.timeout(1):
+                    queue.put_nowait(event(FINAL, "First segment"))
+                    queue.put_nowait(event(FINAL, "second segment"))
+                    queue.put_nowait(event(END))
+                    if held_commit:
+                        await client.commit_events[1].wait()
+                    # The queued case delivers these before the commit task first runs.
+                    queue.put_nowait(event(SpeechEventType.RECOGNITION_USAGE))
+                    queue.put_nowait(event(END))
+                    queue.put_nowait(event(INTERIM, "  "))
+                    queue.put_nowait(event(FINAL, "  "))
+                    await asyncio.sleep(0)
+                    self.assertFalse(tracker.is_turn_stale(1))
+                    self.assertEqual(client.cancel_calls, [])
+                    if held_commit:
+                        client.commit_delays[1].set()
+                    queue.put_nowait(None)
+                    await task
+                    self.assertEqual(
+                        client.commit_calls, [(1, "First segment second segment")]
+                    )
+                    self.assertEqual([reply.turn_id for reply in replies], [1])
+                    self.assertEqual(client.cancel_calls, [])
+            finally:
+                task.cancel()
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 1)
+
+    async def test_usage_and_empty_events_before_commit_start_preserve_turn(self):
+        await self._assert_non_speech_preserves_pending_turn()
+
+    async def test_usage_and_empty_events_during_held_commit_preserve_turn(self):
+        await self._assert_non_speech_preserves_pending_turn(held_commit=True)
+
+    async def test_nonempty_final_without_start_still_supersedes_pending_turn(self):
+        async with ControllablePhoenixClient() as client:
+            tracker = TurnTracker("s1", 0)
+            replies = []
+            manager = TurnManager(tracker, client, on_reply=replies.append)
+            try:
+                async with asyncio.timeout(1):
+                    old = manager.commit_turn(1, "First question")
+                    await manager.on_speech_event(event(FINAL, "Next question"))
+                    await old
+                    self.assertTrue(tracker.is_turn_stale(1))
+                    self.assertEqual(client.commit_calls, [])
+                    self.assertEqual(replies, [])
+                    self.assertEqual(
+                        client.cancel_calls, [{"generation_id": None, "turn_id": 1}]
+                    )
+            finally:
+                await asyncio.wait_for(manager.cleanup(), 1)
+
+    async def test_newer_server_commit_reconciles_failed_historical_cancels(self):
+        async with ControllablePhoenixClient() as client:
+            manager = TurnManager(TurnTracker("s1", 0), client)
+            try:
+                async with asyncio.timeout(1):
+                    for turn_id in range(1, 13, 2):
+                        client.commit_events[turn_id] = asyncio.Event()
+                        client.commit_delays[turn_id] = asyncio.Event()
+                        client.cancel_errors[turn_id] = VoiceFailure("timeout")
+                        old = manager.commit_turn(turn_id, "Old question")
+                        await client.commit_events[turn_id].wait()
+                        cancel = manager.on_speech_event(event(INTERIM, "New question"))
+                        await cancel
+                        newer = await manager.commit_turn(turn_id + 1, "New question")
+                        self.assertEqual(newer.turn_id, turn_id + 1)
+                        client.commit_delays[turn_id].set()
+                        await old
+                    calls_before_cleanup = list(client.cancel_calls)
+                    await manager.cleanup()
+                    self.assertEqual(client.cancel_calls, calls_before_cleanup)
+            finally:
+                await asyncio.wait_for(manager.cleanup(), 1)
+
+    async def test_cleanup_has_one_budget_for_unconfirmed_cancellation_obligations(self):
+        async with ControllablePhoenixClient() as client:
+            manager = TurnManager(TurnTracker("s1", 0), client, cleanup_timeout=0.03)
+            async with asyncio.timeout(1):
+                # No newer server receipt: these obligations must NOT be reconciled.
+                for turn_id in range(1, 13):
+                    client.commit_events[turn_id] = asyncio.Event()
+                    client.commit_delays[turn_id] = asyncio.Event()
+                    client.cancel_errors[turn_id] = VoiceFailure("disconnected")
+                    client.replies[turn_id] = VoiceTurnReply(turn_id, "duplicate")
+                    old = manager.commit_turn(turn_id, "Question")
+                    await client.commit_events[turn_id].wait()
+                    await manager.on_speech_event(event(INTERIM, "Next question"))
+                    client.commit_delays[turn_id].set()
+                    await old
+            calls_before = len(client.cancel_calls)
+            hold = asyncio.Event()
+            for turn_id in range(1, 13):
+                client.cancel_delays[turn_id] = hold
+            tasks_before = asyncio.all_tasks()
+            try:
+                try:
+                    failure = await asyncio.wait_for(manager.cleanup(), 0.2)
+                except TimeoutError:
+                    self.fail("cleanup exceeded its aggregate cancellation budget")
+                self.assertIsInstance(failure, VoiceFailure)
+                self.assertEqual(failure.kind, "timeout")
+                self.assertEqual(len(client.cancel_calls) - calls_before, 1)
+                self.assertEqual(asyncio.all_tasks(), tasks_before)
+            finally:
+                hold.set()
+                await asyncio.wait_for(manager.cleanup(), 1)
+
+    async def test_healthy_newer_commits_keep_teardown_bounded_independent_of_history(self):
+        for history_size in (1, 8):
+            with self.subTest(history_size=history_size):
+                async with ControllablePhoenixClient() as client:
+                    queue = asyncio.Queue()
+                    stream = MockStream(queue)
+                    audio = MockAudioStream()
+                    replies = []
+                    reply_received = asyncio.Event()
+
+                    def receive_reply(reply):
+                        replies.append(reply.turn_id)
+                        reply_received.set()
+
+                    task = asyncio.create_task(
+                        transcribe(
+                            MockRoom(),
+                            None,
+                            {},
+                            TurnTracker("s1", 0),
+                            client,
+                            stt=MockSTT(stream),
+                            audio=audio,
+                            on_reply=receive_reply,
+                            cleanup_timeout=0.03,
+                        )
+                    )
+                    try:
+                        async with asyncio.timeout(2):
+                            for turn_id in range(1, history_size * 2 + 1, 2):
+                                client.commit_events[turn_id] = asyncio.Event()
+                                client.commit_delays[turn_id] = asyncio.Event()
+                                client.cancel_events[turn_id] = asyncio.Event()
+                                client.cancel_errors[turn_id] = VoiceFailure("timeout")
+                                queue.put_nowait(event(FINAL, "Old question"))
+                                queue.put_nowait(event(END))
+                                await client.commit_events[turn_id].wait()
+                                queue.put_nowait(event(FINAL, "New question"))
+                                queue.put_nowait(event(END))
+                                await client.cancel_events[turn_id].wait()
+                                await reply_received.wait()
+                                reply_received.clear()
+                                client.commit_delays[turn_id].set()
+                            pending = history_size * 2 + 1
+                            client.commit_events[pending] = asyncio.Event()
+                            client.commit_delays[pending] = asyncio.Event()
+                            client.cancel_events[pending] = asyncio.Event()
+                            client.cancel_delays[pending] = asyncio.Event()
+                            queue.put_nowait(event(FINAL, "Pending question"))
+                            queue.put_nowait(event(END))
+                            await client.commit_events[pending].wait()
+                            calls_before = len(client.cancel_calls)
+                            task.cancel()
+                            await client.cancel_events[pending].wait()
+                            self.assertTrue(audio.closed)
+                            self.assertTrue(stream.closed)
+                            self.assertFalse(task.done())
+                            with self.assertRaises(asyncio.CancelledError):
+                                await asyncio.wait_for(task, 0.2)
+                            self.assertEqual(
+                                client.cancel_calls[calls_before:],
+                                [{"generation_id": None, "turn_id": pending}],
+                            )
+                            self.assertEqual(replies, list(range(2, pending, 2)))
+                    finally:
+                        task.cancel()
+                        await asyncio.wait_for(
+                            asyncio.gather(task, return_exceptions=True), 1
+                        )
+
+    async def test_transcribe_closes_local_resources_before_remote_cleanup_finishes(self):
+        queue = asyncio.Queue()
+        stream = MockStream(queue)
+        pump_stopped = asyncio.Event()
+
+        class HeldAudio(MockAudioStream):
+            async def __anext__(self):
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    pump_stopped.set()
+
+        audio = HeldAudio()
+        cancel_started = asyncio.Event()
+        release_cancel = asyncio.Event()
+        commit_started = asyncio.Event()
+
+        async def handler(request):
+            if request.url.path.endswith("/cancel"):
+                cancel_started.set()
+                await release_cancel.wait()
+                return httpx.Response(200, json={"status": "cancelled"})
+            commit_started.set()
+            await asyncio.Event().wait()
+
+        async with phoenix(handler) as client:
+            task = asyncio.create_task(
+                transcribe(
+                    MockRoom(),
+                    None,
+                    {},
+                    TurnTracker("s1", 0),
+                    client,
+                    stt=MockSTT(stream),
+                    audio=audio,
+                )
+            )
+            try:
+                async with asyncio.timeout(1):
+                    queue.put_nowait(event(FINAL, "Question"))
+                    queue.put_nowait(event(END))
+                    await commit_started.wait()
+                    task.cancel()
+                    await cancel_started.wait()
+                    self.assertTrue(audio.closed)
+                    self.assertTrue(stream.closed)
+                    self.assertTrue(pump_stopped.is_set())
+                    self.assertFalse(task.done())
+            finally:
+                release_cancel.set()
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 1)
+
     async def _assert_cleanup_preserves_scoped_cancel(self, newer_active=False):
         active_turn = None
         commit_calls = []
