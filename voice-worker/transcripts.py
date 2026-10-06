@@ -262,6 +262,8 @@ class TurnManager:
         self.pending_turn_id: int | None = None
         self.pending_commit_task: asyncio.Task | None = None
         self.pending_cancel_task: asyncio.Task | None = None
+        # Cancellation ownership survives a newer queued turn and local task aborts.
+        self._unresolved_cancel_turns: set[int] = set()
         self._all_tasks: set[asyncio.Task] = set()
         self._unhandled_error: BaseException | None = None
         self._main_task: asyncio.Task | None = None
@@ -287,6 +289,7 @@ class TurnManager:
         ):
             turn_to_cancel = self.pending_turn_id
             self.tracker.mark_turn_stale(turn_to_cancel)
+            self._unresolved_cancel_turns.add(turn_to_cancel)
             self.pending_cancel_task = asyncio.create_task(
                 self._do_cancel(turn_to_cancel)
             )
@@ -308,8 +311,12 @@ class TurnManager:
     async def _do_cancel(self, turn_id: int) -> dict | None:
         self.tracker.mark_turn_stale(turn_id)
         try:
-            return await self.phoenix.cancel(turn_id=turn_id)
+            result = await self.phoenix.cancel(turn_id=turn_id)
+            self._unresolved_cancel_turns.discard(turn_id)
+            return result
         except VoiceFailure as failure:
+            if failure.kind == "stale_generation":
+                self._unresolved_cancel_turns.discard(turn_id)
             if failure.kind in ("stale_generation", "timeout", "disconnected"):
                 logger.debug(
                     "cancel turn %d best-effort fallback: %s", turn_id, failure.kind
@@ -390,7 +397,9 @@ class TurnManager:
 
     async def cleanup(self) -> None:
         self._cleaning_up = True
-        turn_to_cancel = self.pending_turn_id
+        turns_to_cancel = self._unresolved_cancel_turns.copy()
+        if self.pending_turn_id is not None:
+            turns_to_cancel.add(self.pending_turn_id)
         tasks = [t for t in self._all_tasks if not t.done()]
         for task in tasks:
             task.cancel()
@@ -401,12 +410,15 @@ class TurnManager:
         self.pending_cancel_task = None
         self.pending_turn_id = None
 
-        if turn_to_cancel is not None:
+        for turn_to_cancel in sorted(turns_to_cancel):
             self.tracker.mark_turn_stale(turn_to_cancel)
             try:
                 await self.phoenix.cancel(turn_id=turn_to_cancel)
+                self._unresolved_cancel_turns.discard(turn_to_cancel)
             except VoiceFailure as failure:
-                if failure.kind != "stale_generation":
+                if failure.kind == "stale_generation":
+                    self._unresolved_cancel_turns.discard(turn_to_cancel)
+                else:
                     logger.debug("cleanup cancel returned: %s", failure.kind)
             except Exception as exc:
                 logger.debug("cleanup cancel ignored exception: %s", type(exc).__name__)

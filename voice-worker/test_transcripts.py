@@ -530,6 +530,107 @@ class MockSTT:
 
 
 class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
+    async def _assert_cleanup_preserves_scoped_cancel(self, newer_active=False):
+        active_turn = None
+        commit_calls = []
+        cancel_calls = []
+        fenced_turns = []
+        patient_appends = []
+        replies = []
+        generation_tasks = []
+        generation_started = asyncio.Event()
+        release_generation = asyncio.Event()
+        cancel_started = asyncio.Event()
+        hold_first_cancel = asyncio.Event()
+
+        async def generate(turn_id):
+            nonlocal active_turn
+            await release_generation.wait()
+            # Model the backend's generation fence, independently of local HTTP tasks.
+            if active_turn != turn_id:
+                return httpx.Response(409, json={})
+            patient_appends.append(turn_id)
+            active_turn = None
+            return httpx.Response(
+                201,
+                json={
+                    "turn_id": turn_id,
+                    "status": "committed",
+                    "generation_id": turn_id,
+                    "reply_text": "Patient reply",
+                },
+            )
+
+        async def handler(request):
+            nonlocal active_turn
+            body = json.loads(request.content)
+            turn_id = body["turn_id"]
+            if request.url.path.endswith("/cancel"):
+                self.assertEqual(body, {"turn_id": turn_id})
+                cancel_calls.append(turn_id)
+                if len(cancel_calls) == 1:
+                    cancel_started.set()
+                    await hold_first_cancel.wait()
+                # Match the immutable backend's scoped cancellation guard.
+                if active_turn != turn_id:
+                    return httpx.Response(409, json={})
+                active_turn = None
+                fenced_turns.append(turn_id)
+                return httpx.Response(200, json={"status": "cancelled"})
+            commit_calls.append(turn_id)
+            active_turn = turn_id
+            generation = asyncio.create_task(generate(turn_id))
+            generation_tasks.append(generation)
+            generation_started.set()
+            return await asyncio.shield(generation)
+
+        async with phoenix(handler) as client:
+            manager = TurnManager(
+                TurnTracker("s1", last_turn_id=0), client, on_reply=replies.append
+            )
+            try:
+                async with asyncio.timeout(3):
+                    commit1 = manager.commit_turn(1, "First question")
+                    await generation_started.wait()
+                    self.assertEqual(active_turn, 1)
+                    cancel1 = manager.on_speech_event(event(INTERIM, "Next question"))
+                    self.assertIsNotNone(cancel1)
+                    await cancel_started.wait()
+                    commit2 = manager.commit_turn(2, "Next question")
+                    # Run the queued commit until it blocks on cancel1, before POST.
+                    await asyncio.sleep(0)
+                    self.assertEqual(commit_calls, [1])
+                    self.assertFalse(commit2.done())
+                    if newer_active:
+                        # Another worker owns a newer turn, not this manager's queue.
+                        active_turn = 3
+                    await manager.cleanup()
+                    self.assertTrue(commit1.cancelled())
+                    self.assertTrue(cancel1.cancelled())
+                    self.assertTrue(commit2.cancelled())
+                    active_after_cleanup = active_turn
+                    release_generation.set()
+                    await asyncio.gather(*generation_tasks)
+                    self.assertEqual(patient_appends, [])
+                    self.assertEqual(replies, [])
+                    self.assertEqual(active_after_cleanup, 3 if newer_active else None)
+                    self.assertEqual(commit_calls, [1])
+                    self.assertEqual(cancel_calls, [1, 1, 2])
+                    self.assertEqual(fenced_turns, [] if newer_active else [1])
+            finally:
+                release_generation.set()
+                hold_first_cancel.set()
+                await asyncio.wait_for(manager.cleanup(), timeout=3)
+                await asyncio.wait_for(
+                    asyncio.gather(*generation_tasks, return_exceptions=True), timeout=3
+                )
+
+    async def test_cleanup_fences_older_turn_while_newer_commit_waits_for_cancel(self):
+        await self._assert_cleanup_preserves_scoped_cancel()
+
+    async def test_cleanup_does_not_cancel_independently_newer_active_turn(self):
+        await self._assert_cleanup_preserves_scoped_cancel(newer_active=True)
+
     async def test_accepted_reply_is_delivered_to_private_consumer(self):
         client = ControllablePhoenixClient()
         tracker = TurnTracker("s1", last_turn_id=0)
