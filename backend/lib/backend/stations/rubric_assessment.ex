@@ -26,13 +26,17 @@ defmodule Backend.Stations.RubricAssessment do
   integer eighths (`Backend.Stations.RubricAssessment.Points`); no probability
   or confidence ever multiplies or adjusts them.
 
-  The authored rule fields `actions`, `order`, `count_cap`, `first_n` and
-  `veto` do not change the level yet: `apply_authored_rules/2` is the single
-  seam where they will be applied.
+  The authored rule fields change the level only through
+  `apply_authored_rules/2`, which delegates the per-criterion rules (action
+  roles, thresholds and `count_cap`) to
+  `Backend.Stations.RubricAssessment.AuthoredRules`. A criterion that authors
+  none of them keeps the level Jev chose. `order`, `first_n` and the
+  `task_order` rule are not applied yet.
   """
 
   alias Backend.Stations.JevDecision
   alias Backend.Stations.JevDecision.RubricBatch
+  alias Backend.Stations.RubricAssessment.AuthoredRules
   alias Backend.Stations.RubricAssessment.Estimates
   alias Backend.Stations.RubricAssessment.Evidence
   alias Backend.Stations.RubricAssessment.Points
@@ -47,6 +51,7 @@ defmodule Backend.Stations.RubricAssessment do
           | :classifier_uncertain
           | :unsupported_credit
           | {:invalid_evidence, Evidence.rejection(), term()}
+          | AuthoredRules.uncertainty()
 
   @typedoc "A pool item as reported on a criterion result."
   @type evidence_excerpt :: %{id: String.t(), role: term(), text: String.t()}
@@ -83,7 +88,10 @@ defmodule Backend.Stations.RubricAssessment do
   @typedoc "An authoring defect that prevents exact, unambiguous assessment."
   @type package_error ::
           {:invalid_package, term(),
-           Estimates.max_points_error() | :invalid_level_labels | :duplicate_criterion_id}
+           Estimates.max_points_error()
+           | :invalid_level_labels
+           | :duplicate_criterion_id
+           | AuthoredRules.authoring_error()}
 
   @typedoc "Why an attempt is invalid as a whole."
   @type attempt_error :: package_error() | JevDecision.rubric_batch_error()
@@ -180,7 +188,8 @@ defmodule Backend.Stations.RubricAssessment do
     id = Map.get(criterion, "id")
 
     with {:ok, max_points} <- Estimates.max_points(criterion),
-         :ok <- check_level_labels(criterion) do
+         :ok <- check_level_labels(criterion),
+         :ok <- AuthoredRules.check(criterion) do
       requirement = Evidence.requirement(criterion)
 
       {:ok,
@@ -354,19 +363,24 @@ defmodule Backend.Stations.RubricAssessment do
         sub_actions: sub_actions
       }
 
-      criterion |> apply_authored_rules(draft) |> grounded()
+      with {:ok, ruled} <- apply_authored_rules(criterion, draft), do: grounded(ruled)
     else
       {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
+      {:uncertain, _reason} = uncertain -> uncertain
     end
   end
 
   @doc false
-  # T5 seam (issue #128): the only place where the authored rule fields
-  # `actions`, `order`, `count_cap`, `first_n` and `veto` may change the level
-  # of a criterion whose evidence already validated. Their semantics await a
-  # product decision, so the draft passes through unchanged.
-  @spec apply_authored_rules(map(), draft()) :: draft()
-  defp apply_authored_rules(_criterion, draft), do: draft
+  # T5 seam (issue #128): the only place where the authored rule fields may
+  # change the level of a criterion whose evidence already validated. The
+  # sub-action evidence in the draft went through the same validation as the
+  # criterion evidence, so the rules need no access to the pool.
+  @spec apply_authored_rules(map(), draft()) :: {:ok, draft()} | {:uncertain, reason()}
+  defp apply_authored_rules(criterion, %{level: level, sub_actions: sub_actions} = draft) do
+    with {:ok, ruled_level} <- AuthoredRules.decide_level(criterion, level, sub_actions) do
+      {:ok, %{draft | level: ruled_level}}
+    end
+  end
 
   # Credit is never awarded without grounded learner evidence; a zero-point
   # level needs none, because a genuine omission leaves nothing to cite.
