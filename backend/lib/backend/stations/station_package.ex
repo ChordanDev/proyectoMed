@@ -28,7 +28,7 @@ defmodule Backend.Stations.StationPackage do
   @action_roles ~w(counted mandatory forbidden)
   @zero_scoring_action_roles ~w(mandatory forbidden)
   @criterion_rules ~w(task_order)
-  @task_order_null_fields ~w(order count_cap first_n)
+  @task_order_null_fields ~w(order count_cap first_n modality_requirement)
   @valid_impresso_categories ~w(physical_exam laboratory imaging report)
 
   @spec version() :: String.t()
@@ -512,7 +512,8 @@ defmodule Backend.Stations.StationPackage do
   end
 
   # The task-order criterion is assessed in code from the ranks of the other
-  # criteria, so it authors no rule field of its own.
+  # criteria, so it authors no rule field of its own. Its evidence is the
+  # evidence of those criteria, so a modality requirement would never apply.
   defp validate_task_order_criterion(errors, %{"rule" => "task_order"} = criterion) do
     levels = criterion |> Map.get("levels") |> maps()
 

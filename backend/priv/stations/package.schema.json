@@ -118,7 +118,7 @@
       }
     },
     "rubricCriterion": {
-      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden and at most count_cap when count_cap is set; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level. A task_order criterion authors no actions and no thresholds, sets order, count_cap and first_n to null and veto to false, and has a zero-point level; the loader reports each violation with its own message.",
+      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden and at most count_cap when count_cap is set; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level. A task_order criterion authors no actions and no thresholds, sets order, count_cap, first_n and modality_requirement to null and veto to false, and has a zero-point level; the loader reports each violation with its own message.",
       "type": "object",
       "required": [
         "id",
@@ -199,7 +199,8 @@
               "order": {"type": "null"},
               "count_cap": {"type": "null"},
               "first_n": {"type": "null"},
-              "veto": {"const": false}
+              "veto": {"const": false},
+              "modality_requirement": {"type": "null"}
             }
           }
         }

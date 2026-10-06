@@ -7,7 +7,8 @@ defmodule Backend.Stations.RubricAssessment.TaskOrder do
   is *performed* when it was assessed above its zero-point level, and its
   position is the pool position of its earliest evidence item. Ranked criteria
   assessed at zero are skipped: order is judged among the steps the learner
-  actually did.
+  actually did. A `:not_observable` ranked criterion is skipped too: a step the
+  station cannot provide can never be performed.
 
   The order holds when, for every pair of performed criteria with rank `a`
   below rank `b`, the position of `a` is at most the position of `b`. Equal
@@ -17,8 +18,8 @@ defmodule Backend.Stations.RubricAssessment.TaskOrder do
 
     1. `:violated` when the performed criteria already break the order. No
        unresolved criterion can undo that.
-    2. Uncertain when any ranked criterion is `:uncertain` or
-       `:not_observable`: it could still add a violation or a second step.
+    2. Uncertain when any ranked criterion is `:uncertain`: its position is
+       unknown, so it could still add a violation or a second step.
     3. `:held` with at least two performed criteria in order.
     4. `:too_few` otherwise: there is nothing to compare.
 
@@ -27,8 +28,6 @@ defmodule Backend.Stations.RubricAssessment.TaskOrder do
   """
 
   alias Backend.Stations.RubricAssessment.Evidence
-
-  @unresolved_statuses [:uncertain, :not_observable]
 
   @typedoc "A ranked criterion with its authored rank and its criterion result."
   @type ranked :: %{id: String.t(), rank: integer(), result: map()}
@@ -52,7 +51,7 @@ defmodule Backend.Stations.RubricAssessment.TaskOrder do
   @spec decide([ranked()], Evidence.pool()) :: decision() | {:uncertain, uncertainty()}
   def decide(ranked, pool) when is_list(ranked) and is_list(pool) do
     steps = steps(ranked, pool)
-    unresolved = Enum.find(ranked, &(&1.result.status in @unresolved_statuses))
+    unresolved = Enum.find(ranked, &(&1.result.status == :uncertain))
 
     cond do
       violated?(steps) -> {:violated, evidence(steps)}

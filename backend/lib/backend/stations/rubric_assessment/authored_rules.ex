@@ -4,25 +4,31 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
   Jev assessed (issue #128, ADR-012).
 
   `decide_level/3` follows one principle: an unresolved action leaves the
-  criterion uncertain only when resolving it could change the result. A
-  sub-action is unresolved when it is classified `"uncertain"`, or
-  `"performed"` without validated learner evidence. The rules apply in this
-  order:
+  criterion uncertain only when resolving it could change the result. The
+  rules apply in this order:
 
-    1. A `forbidden` action performed with evidence scores the zero-point level.
-    2. A `mandatory` action that was not performed scores the zero-point level.
-    3. Otherwise the criterion is uncertain when an unresolved action could
-       change the level: any unresolved `forbidden` or `mandatory` action; and,
-       with authored thresholds (`levels[].min_actions`), the unresolved
-       countable actions when counting all of them gives another level than
-       counting none of them, both after `count_cap`.
-    4. With thresholds, the level is the highest one whose threshold is at most
-       the number of performed non-forbidden actions, capped by `count_cap`.
-       The count decides; Jev's criterion-level class does not.
-    5. Without thresholds, Jev's level stands.
+    1. A sub-action is unresolved when it is classified `"uncertain"`, or
+       `"performed"` without validated learner evidence.
+    2. A `forbidden` action performed with evidence scores the zero-point level.
+    3. A `mandatory` action that was not performed scores the zero-point level.
+    4. Otherwise the reachable outcomes are the levels the criterion can end at
+       across every resolution of the unresolved actions: the zero-point level
+       when a `mandatory` or `forbidden` action is unresolved, and the level of
+       rule 5 or 6. One reachable outcome is the level; several leave the
+       criterion uncertain.
+    5. With authored thresholds (`levels[].min_actions`), the level is the
+       highest one whose threshold is at most the number of performed
+       non-forbidden actions, capped by `count_cap`. The unresolved ones range
+       that number from none to all of them. The count decides; Jev's
+       criterion-level class does not.
+    6. Without thresholds, Jev's level stands.
 
   A criterion that authors no threshold and no `mandatory` or `forbidden`
   action therefore keeps Jev's level whatever its sub-actions say.
+
+  Jev may be uncertain about the criterion as a whole and still classify its
+  actions. Rules 2, 3 and 5 need no criterion-level class, so they still
+  decide; only an outcome that depends on rule 6 stays uncertain.
 
   The module is pure. Sub-action evidence arrives already validated against
   the evidence pool, so an empty `evidence_ids` list is the only way a
@@ -47,6 +53,9 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
   @typedoc "Why a sub-action leaves its criterion uncertain."
   @type uncertainty ::
           {:uncertain_sub_action, String.t()} | {:unsupported_sub_action, String.t()}
+
+  @typedoc "The level Jev chose for the criterion, or `:uncertain` when it chose none."
+  @type jev_level :: level() | :uncertain
 
   @typedoc "Why the rule fields of a criterion cannot be applied."
   @type authoring_error :: :inconsistent_thresholds | :missing_zero_point_level
@@ -87,15 +96,29 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
   end
 
   @doc """
-  Decides the level of a criterion from the level Jev chose and the validated
-  decisions of its authored actions.
-
-  Returns the level to assess, or `{:uncertain, reason}` naming the first
-  unresolved sub-action, in authored order, among those that could change the
-  level. The criterion must have passed `check/1`.
+  Says whether the rule fields of a package criterion (string keys) can decide
+  its level without Jev's criterion-level class: it authors thresholds, or a
+  `mandatory` or `forbidden` action.
   """
-  @spec decide_level(map(), level(), [sub_action()]) ::
-          {:ok, level()} | {:uncertain, uncertainty()}
+  @spec decides?(map()) :: boolean()
+  def decides?(criterion) when is_map(criterion) do
+    zero_scoring_rule?(criterion, levels(criterion))
+  end
+
+  @doc """
+  Decides the level of a criterion from the level Jev chose, or `:uncertain`
+  when it chose none, and the validated decisions of its authored actions.
+
+  Returns the level to assess with the performed countable actions when their
+  count decided it, and no actions otherwise. Returns `{:uncertain, reason}`
+  when several outcomes are reachable: the reason names the first unresolved
+  `mandatory` or `forbidden` action in authored order, or else the first
+  unresolved countable one. It is `:classifier_uncertain` when the outcome
+  depends on a level Jev did not choose. The criterion must have passed
+  `check/1`.
+  """
+  @spec decide_level(map(), jev_level(), [sub_action()]) ::
+          {:ok, level(), [sub_action()]} | {:uncertain, uncertainty() | :classifier_uncertain}
   def decide_level(criterion, jev_level, sub_actions)
       when is_map(criterion) and is_list(sub_actions) do
     levels = levels(criterion)
@@ -103,48 +126,64 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
 
     cond do
       Enum.any?(decided, &match?({@forbidden, :performed, _sub_action}, &1)) ->
-        {:ok, zero_level(levels)}
+        {:ok, zero_level(levels), []}
 
       Enum.any?(decided, &match?({@mandatory, :not_performed, _sub_action}, &1)) ->
-        {:ok, zero_level(levels)}
+        {:ok, zero_level(levels), []}
+
+      thresholds?(levels) ->
+        counted =
+          for {role, :performed, sub_action} <- decided, role != @forbidden, do: sub_action
+
+        single(
+          vetoable(levels, decided) ++ countable(criterion, levels, decided),
+          decided,
+          counted
+        )
+
+      jev_level == :uncertain ->
+        {:uncertain, :classifier_uncertain}
 
       true ->
-        count_or_keep(criterion, levels, decided, jev_level)
+        single(vetoable(levels, decided) ++ [jev_level], decided, [])
     end
   end
 
-  # Rules 3 to 5: no certain zero, so the count or Jev's level decides unless
-  # an unresolved action could still change it.
-  defp count_or_keep(criterion, levels, decided, jev_level) do
-    {level, count_open?} = counted_level(criterion, levels, decided, jev_level)
-
-    case Enum.find(decided, &decisive?(&1, count_open?)) do
-      nil -> {:ok, level}
-      {_role, :unresolved, sub_action} -> {:uncertain, reason(sub_action)}
+  # Rule 4: one reachable outcome is the level, several are uncertainty.
+  defp single(outcomes, decided, counted) do
+    case Enum.uniq(outcomes) do
+      [level] -> {:ok, level, counted}
+      _several -> {:uncertain, decided |> first_unresolved() |> reason()}
     end
   end
 
-  # The level from the resolved actions, and whether the unresolved countable
-  # actions could move it: counting all of them gives another level than
-  # counting none.
-  defp counted_level(criterion, levels, decided, jev_level) do
-    if thresholds?(levels) do
-      performed = count(decided, :performed)
-      unresolved = count(decided, :unresolved)
-      level = threshold_level(levels, capped(criterion, performed))
+  # An unresolved mandatory action may turn out not performed, and an
+  # unresolved forbidden one performed: either way the zero-point level.
+  defp vetoable(levels, decided) do
+    if Enum.any?(decided, &zero_scoring?/1), do: [zero_level(levels)], else: []
+  end
 
-      {level, level != threshold_level(levels, capped(criterion, performed + unresolved))}
-    else
-      {jev_level, false}
+  # The levels of every count the unresolved countable actions leave open,
+  # from none of them performed to all of them, each after `count_cap`.
+  defp countable(criterion, levels, decided) do
+    performed = count(decided, :performed)
+
+    for count <- performed..(performed + count(decided, :unresolved)) do
+      threshold_level(levels, capped(criterion, count))
     end
   end
 
-  defp decisive?({role, :unresolved, _sub_action}, _count_open?)
-       when role in [@mandatory, @forbidden],
-       do: true
+  # Several outcomes need an unresolved action, so one is always found.
+  defp first_unresolved(decided) do
+    {_role, :unresolved, sub_action} =
+      Enum.find(decided, &zero_scoring?/1) ||
+        Enum.find(decided, &match?({role, :unresolved, _} when role != @forbidden, &1))
 
-  defp decisive?({_role, :unresolved, _sub_action}, count_open?), do: count_open?
-  defp decisive?(_resolved, _count_open?), do: false
+    sub_action
+  end
+
+  defp zero_scoring?({role, :unresolved, _sub_action}), do: role in [@mandatory, @forbidden]
+  defp zero_scoring?(_resolved), do: false
 
   defp reason(%{classification: @uncertain, id: id}), do: {:uncertain_sub_action, id}
   defp reason(%{id: id}), do: {:unsupported_sub_action, id}

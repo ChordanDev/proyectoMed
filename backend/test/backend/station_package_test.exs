@@ -820,7 +820,8 @@ defmodule Backend.StationPackageTest do
         "rubric task_order criteria must set first_n to null",
         "rubric task_order criteria must set veto to false",
         "rubric task_order criteria require a zero-point level",
-        "rubric with a task_order criterion requires at least two other criteria with an order"
+        "rubric with a task_order criterion requires at least two other criteria with an order",
+        "rubric task_order criteria must set modality_requirement to null"
       ]
 
       second = Map.put(order, "id", "task-order-b")
@@ -843,7 +844,9 @@ defmodule Backend.StationPackageTest do
          Enum.at(task_order_errors, 7)},
         {base
          |> put_criterion(@treatment, ["order"], nil)
-         |> put_criterion(@exams, ["order"], nil), Enum.at(task_order_errors, 8)}
+         |> put_criterion(@exams, ["order"], nil), Enum.at(task_order_errors, 8)},
+        {put_criterion(base, @order, ["modality_requirement"], "verbal"),
+         Enum.at(task_order_errors, 9)}
       ]
 
       Enum.each(cases, fn {package, expected_error} ->
@@ -887,6 +890,7 @@ defmodule Backend.StationPackageTest do
       assert constrained["count_cap"] == %{"type" => "null"}
       assert constrained["first_n"] == %{"type" => "null"}
       assert constrained["veto"] == %{"const" => false}
+      assert constrained["modality_requirement"] == %{"type" => "null"}
 
       assert constrained["levels"] == %{
                "contains" => %{"properties" => %{"points" => %{"const" => 0}}},

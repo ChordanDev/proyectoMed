@@ -32,10 +32,10 @@ defmodule Backend.Stations.RubricAssessment do
   or confidence ever multiplies or adjusts them.
 
   The authored rule fields change the level only through
-  `apply_authored_rules/2`, which delegates the per-criterion rules (action
-  roles, thresholds and `count_cap`) to
-  `Backend.Stations.RubricAssessment.AuthoredRules`. A criterion that authors
-  none of them keeps the level Jev chose. `first_n` is not applied yet.
+  `Backend.Stations.RubricAssessment.AuthoredRules`, which owns the
+  per-criterion rules (action roles, thresholds and `count_cap`). A criterion
+  that authors none of them keeps the level Jev chose, and stays `:uncertain`
+  when Jev chose none. `first_n` is not applied yet.
   """
 
   alias Backend.Stations.JevDecision
@@ -374,38 +374,46 @@ defmodule Backend.Stations.RubricAssessment do
     end
   end
 
+  # A classifier that is uncertain about the criterion still classified its
+  # actions. The criterion stays uncertain at once only when no rule field
+  # could decide the level without the classifier's class.
   @spec judge(plan(), RubricBatch.decision(), Evidence.pool()) ::
           {:assessed, draft()} | {:uncertain, reason()}
-  defp judge(_plan, %{classification: @uncertain_class}, _pool) do
-    {:uncertain, :classifier_uncertain}
+  defp judge(%{criterion: criterion} = plan, %{classification: @uncertain_class} = decision, pool) do
+    if AuthoredRules.decides?(criterion) do
+      rule(plan, :uncertain, decision, pool)
+    else
+      {:uncertain, :classifier_uncertain}
+    end
   end
 
-  defp judge(%{criterion: criterion, requirement: requirement}, decision, pool) do
-    with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
-         {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement) do
-      draft = %{
-        level: level(criterion, decision.classification),
-        evidence: evidence,
-        sub_actions: sub_actions
-      }
+  defp judge(%{criterion: criterion} = plan, decision, pool) do
+    rule(plan, level(criterion, decision.classification), decision, pool)
+  end
 
-      with {:ok, ruled} <- apply_authored_rules(criterion, draft), do: grounded(ruled)
+  defp rule(%{criterion: criterion, requirement: requirement}, jev_level, decision, pool) do
+    with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
+         {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement),
+         {:ok, level, counted} <- AuthoredRules.decide_level(criterion, jev_level, sub_actions) do
+      grounded(%{
+        level: level,
+        evidence: with_counted(evidence, counted, pool),
+        sub_actions: sub_actions
+      })
     else
       {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
       {:uncertain, _reason} = uncertain -> uncertain
     end
   end
 
-  @doc false
-  # T5 seam (issue #128): the only place where the authored rule fields may
-  # change the level of a criterion whose evidence already validated. The
-  # sub-action evidence in the draft went through the same validation as the
-  # criterion evidence, so the rules need no access to the pool.
-  @spec apply_authored_rules(map(), draft()) :: {:ok, draft()} | {:uncertain, reason()}
-  defp apply_authored_rules(criterion, %{level: level, sub_actions: sub_actions} = draft) do
-    with {:ok, ruled_level} <- AuthoredRules.decide_level(criterion, level, sub_actions) do
-      {:ok, %{draft | level: ruled_level}}
-    end
+  # A level earned by count is grounded by the actions that earned it: their
+  # evidence, already validated, joins the criterion evidence in pool order.
+  defp with_counted(evidence, [], _pool), do: evidence
+
+  defp with_counted(evidence, counted, pool) do
+    ids = MapSet.new(Evidence.ids(evidence) ++ Enum.flat_map(counted, & &1.evidence_ids))
+
+    Enum.filter(pool, &(&1.id in ids))
   end
 
   # Credit is never awarded without grounded learner evidence; a zero-point
