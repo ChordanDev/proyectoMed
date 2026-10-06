@@ -110,7 +110,10 @@ defmodule Backend.Stations.RubricAssessment do
            | AuthoredRules.authoring_error()}
 
   @typedoc "Why an attempt is invalid as a whole."
-  @type attempt_error :: package_error() | JevDecision.rubric_batch_error()
+  @type attempt_error ::
+          package_error()
+          | JevDecision.rubric_batch_error()
+          | {:invalid_option, :max_questions_per_call}
 
   @typedoc "The legacy evaluator shape (`Backend.Stations.Evaluator`)."
   @type legacy :: %{
@@ -155,9 +158,9 @@ defmodule Backend.Stations.RubricAssessment do
           {:ok, t()} | {:error, {:invalid_attempt, attempt_error()}}
   def assess(package, session, opts \\ [])
       when is_map(package) and is_map(session) and is_list(opts) do
-    pool = Evidence.build(session, package)
-
-    with {:ok, plans} <- triage(package),
+    with :ok <- validate_batch_limit(opts),
+         pool <- Evidence.build(session, package),
+         {:ok, plans} <- triage(package),
          {:ok, decisions, calls} <- ask(questions(plans), pool, opts) do
       criteria =
         plans |> Enum.map(&criterion_result(&1, decisions, pool)) |> task_order(plans, pool)
@@ -326,6 +329,14 @@ defmodule Backend.Stations.RubricAssessment do
   # ============================================================================
   # Batching
   # ============================================================================
+
+  defp validate_batch_limit(opts) do
+    case Keyword.get(opts, :max_questions_per_call) do
+      nil -> :ok
+      max when is_integer(max) and max > 0 -> :ok
+      _invalid -> {:error, {:invalid_option, :max_questions_per_call}}
+    end
+  end
 
   @spec ask([RubricBatch.question()], Evidence.pool(), keyword()) ::
           {:ok, %{optional(String.t()) => RubricBatch.decision()}, [call()]}

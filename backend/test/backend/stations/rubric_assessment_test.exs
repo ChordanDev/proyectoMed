@@ -2006,6 +2006,17 @@ defmodule Backend.Stations.RubricAssessmentTest do
   # ============================================================================
 
   describe "assess/3 batching" do
+    test "invalid question caps are rejected before calling the provider" do
+      for invalid_cap <- [0, "2"] do
+        assert_invalid_attempt(
+          assess(v2(), session(), %{}, max_questions_per_call: invalid_cap),
+          {:invalid_option, :max_questions_per_call}
+        )
+
+        refute_received {:batch_request, _}
+      end
+    end
+
     test "all questions go in exactly one call with the pool sent once" do
       assessment = assess!(v2(), session(), %{})
 
