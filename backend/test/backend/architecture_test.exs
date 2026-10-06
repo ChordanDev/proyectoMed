@@ -25,7 +25,8 @@ defmodule Backend.ArchitectureTest do
     Backend.TTS,
     Backend.Stations.TTS,
     Backend.StationPackage,
-    Backend.Stations.StationPackage
+    Backend.Stations.StationPackage,
+    Backend.Stations.Impressos
   ]
 
   @web_dir Path.expand("../../lib/backend_web", __DIR__)

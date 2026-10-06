@@ -15,6 +15,8 @@ defmodule Backend.StationLoaderTest do
     package = StationLoader.load_active()
 
     assert package["station_id"] == "chest-pain-initial-assessment"
+    assert is_list(package["impressos"])
+    assert length(package["impressos"]) == 4
     assert File.exists?(@canonical_package_path)
   end
 
@@ -90,6 +92,22 @@ defmodule Backend.StationLoaderTest do
                "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."
 
       assert log =~ "applicability"
+    end)
+  end
+
+  test "load_active logs and raises a localized error when impressos is malformed" do
+    package = fixture_path("valid-package.json") |> File.read!() |> Jason.decode!()
+    malformed_impressos_package = put_in(package, ["impressos"], "not_a_list") |> Jason.encode!()
+
+    with_canonical_package(malformed_impressos_package, fn ->
+      assert capture_log(fn ->
+               assert_raise RuntimeError,
+                            "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório.",
+                            fn ->
+                              StationLoader.load_active()
+                            end
+             end) =~
+               "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."
     end)
   end
 
