@@ -79,3 +79,5 @@ Forecast: about 1,500 authored changed lines, over the 400-line budget. Commits 
 ## Next step
 
 T5 waits for the product decision on rule semantics; T6 follows T5. Before the first PR: confirm the chain strategy (four linear work-unit commits so far, each above 400 lines because of test matrices).
+
+Engram mirror `odd/rubric-assessments/tasks`: pending. The last successful save predates T1; the update after T4 was refused because several runtime sessions were active on this project. Resynchronize from this file.
