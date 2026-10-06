@@ -515,12 +515,12 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert result.evidence_ids == ["turn-1"]
     end
 
-    test "an uncertain sub-action leaves the criterion uncertain with its reason" do
+    test "an uncertain sub-action that could change the level leaves the criterion uncertain" do
       actions = [
         performed("ask-onset"),
         performed("ask-duration"),
         uncertain("ask-intensity"),
-        performed("ask-relief")
+        not_performed("ask-relief")
       ]
 
       assessment = assess!(rules(), session(), history_answer("adequado", ["turn-1"], actions))
@@ -531,6 +531,42 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert result.sub_actions == []
       assert_unscored(result)
       assert %{id: @history, status: :uncertain} in assessment.estimates.unresolved
+    end
+
+    test "an uncertain sub-action that cannot change the level leaves it assessed" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration"),
+        performed("ask-intensity"),
+        uncertain("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("inadequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.sub_actions == actions
+    end
+
+    test "a missing mandatory action is certain whatever else is unresolved" do
+      actions = [
+        not_performed("ask-onset"),
+        uncertain("ask-duration"),
+        performed("ask-intensity", []),
+        performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("adequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
     end
 
     test "a sub-action performed without evidence leaves the criterion uncertain" do

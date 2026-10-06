@@ -58,17 +58,18 @@ What the booklet states:
 Decisions:
 
 10. **Schema additions are optional**, so every existing v2 package stays valid and the version does not change: `levels[].min_actions` (integer >= 0), `actions[].role` (`counted` default, `mandatory`, `forbidden`), and `rule` on a criterion (`null` default, `task_order`). `count_cap` and `first_n` must be >= 1 when set. Action IDs are unique within a criterion. If any level of a criterion sets `min_actions`, every level does, the zero-point level has 0, and thresholds do not decrease as points increase. A criterion with a `forbidden` action must set `veto: true`; `veto: true` without one has no effect. Added after independent verification of T5a: when thresholds are authored, every level with points above zero has `min_actions` >= 1, and the highest `min_actions` is reachable, so it is at most the number of non-`forbidden` actions (which requires at least one such action) and at most `count_cap` when `count_cap` is set. Otherwise a level could be earned with no action, or count in the station maximum without being earnable.
-11. **Per-criterion rules**, applied in code to a criterion Jev assessed, in this order:
-    1. Any sub-action classified `uncertain`, or `performed` without validated learner evidence, makes the criterion `uncertain`.
-    2. A `forbidden` action that was performed scores the criterion at its zero-point level.
-    3. A `mandatory` action that was not performed scores the criterion at its zero-point level.
-    4. When thresholds are authored, the level is the highest one whose `min_actions` is at most the number of performed non-forbidden actions, capped by `count_cap`. The count decides the level; Jev's criterion-level class does not.
-    5. Without thresholds, Jev's level stands.
+11. **Per-criterion rules**, applied in code to a criterion Jev assessed. One principle (owner decision, 2026-10-06, replacing the earlier rule 1): an unresolved action makes the criterion `uncertain` only when resolving it could change the result. In this order:
+    1. A `performed` action without validated learner evidence is unresolved: it is treated like an action classified `uncertain` and keeps its own reason.
+    2. A `forbidden` action that was performed, with evidence, scores the criterion at its zero-point level.
+    3. A `mandatory` action that was `not_performed` scores the criterion at its zero-point level.
+    4. Otherwise the criterion is `uncertain` when an unresolved action could change the level: any unresolved `forbidden` or `mandatory` action; and, when thresholds are authored, the unresolved countable (non-`forbidden`) actions only if the level computed with all of them counted as performed differs from the level computed with none of them counted, both after `count_cap`.
+    5. When thresholds are authored, the level is the highest one whose `min_actions` is at most the number of performed non-forbidden actions, capped by `count_cap`. The count decides the level; Jev's criterion-level class does not.
+    6. Without thresholds, Jev's level stands.
+
+    The zeros of rules 2 and 3 are certain whatever else is unresolved, with or without thresholds. The reported reason is the first unresolved action, in authored order, among those that could change the result: `{:uncertain_sub_action, action_id}` or `{:unsupported_sub_action, action_id}`. A counted action on a criterion without thresholds never makes it `uncertain`.
 12. **`first_n`**: only the learner's first N answers to the criterion are eligible, including answers that match no authored action. This needs Jev to report answer positions in the batch contract; code validates them against evidence order.
 13. **Task order**: a criterion with `rule: "task_order"` is assessed in code, not by Jev, from the `order` ranks of the other criteria and the position of their earliest evidence.
     Implementation notes (T5a/T5b, open to being overruled):
-    - Rule 1 looks only at actions that can change the level: every action when thresholds are authored, otherwise the `mandatory` and `forbidden` ones. A plain action on a criterion without rule fields is carried but never makes it `uncertain`; this keeps the pre-T5 behaviour and its tests unchanged.
-    - Uncertain reasons are `{:uncertain_sub_action, action_id}` and `{:unsupported_sub_action, action_id}`, for the first unresolved action in authored order.
     - A criterion with thresholds, a `mandatory` action or a `forbidden` action must author a zero-point level. The loader rejects it otherwise, and `assess/3` invalidates the attempt (`:missing_zero_point_level`, `:inconsistent_thresholds`) for a package that skipped the loader.
     - A level earned by count still needs criterion-level evidence: sub-action evidence is not merged into the criterion evidence, so a positive level with no criterion evidence stays `:unsupported_credit`.
     - The role decides the veto in code; `veto: true` is a loader requirement only.
@@ -88,6 +89,7 @@ Decisions:
   - Accept: decision 10 enforced by the loader with a distinct error per violation; existing v2 packages and the v1 migration stay valid; one valid fixture exercises every new field.
 - [x] **T5b Per-criterion rules.** `apply_authored_rules/2`. Route: delegated.
   - Accept: decision 11 in its stated order, each rule covered by its own test; a criterion without the new fields behaves exactly as before.
+  - Reopened and closed again on 2026-10-06: decision 11 was rewritten around one principle (doubt matters only when it can change the outcome), with the precedence cases the independent verification found missing.
 - [ ] **T5c Task-order criterion.** Route: delegated.
   - Accept: decision 13; the criterion is never sent to Jev; unresolved ranked criteria make it `uncertain`.
 - [ ] **T5d First-N answers.** Batch contract extension plus the rule. Route: delegated.

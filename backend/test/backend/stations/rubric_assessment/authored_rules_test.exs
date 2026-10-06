@@ -65,30 +65,22 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
 
   @history_actions ["ask-onset", "ask-duration", "ask-intensity", "ask-relief"]
 
-  describe "rule 1: unresolved sub-actions" do
-    test "an uncertain sub-action makes the criterion uncertain" do
-      assert decide(history(), @adequado, @history_actions, %{"ask-duration" => {"uncertain", []}}) ==
-               {:uncertain, {:uncertain_sub_action, "ask-duration"}}
+  describe "rule 1: performed without evidence" do
+    test "a mandatory action performed without validated evidence is unresolved" do
+      assert decide(history(), @adequado, @history_actions, %{"ask-onset" => {"performed", []}}) ==
+               {:uncertain, {:unsupported_sub_action, "ask-onset"}}
     end
 
-    test "an uncertain sub-action is unresolved even when it cites evidence" do
-      assert decide(history(), @adequado, @history_actions, %{
-               "ask-relief" => {"uncertain", ["turn-1"]}
-             }) == {:uncertain, {:uncertain_sub_action, "ask-relief"}}
+    test "a forbidden action performed without validated evidence is unresolved, not a veto" do
+      assert decide(treatment(), @adequado, ["indicate-expected"], %{
+               "indicate-contraindicated" => {"performed", []}
+             }) == {:uncertain, {:unsupported_sub_action, "indicate-contraindicated"}}
     end
 
-    test "a sub-action performed without validated evidence makes the criterion uncertain" do
-      assert decide(history(), @adequado, @history_actions, %{
+    test "a counted action performed without validated evidence is not counted" do
+      assert decide(history(), @adequado, ["ask-onset", "ask-duration"], %{
                "ask-intensity" => {"performed", []}
-             }) ==
-               {:uncertain, {:unsupported_sub_action, "ask-intensity"}}
-    end
-
-    test "the first unresolved sub-action in authored order is reported" do
-      assert decide(history(), @adequado, @history_actions, %{
-               "ask-duration" => {"performed", []},
-               "ask-relief" => {"uncertain", []}
-             }) == {:uncertain, {:unsupported_sub_action, "ask-duration"}}
+             }) == {:uncertain, {:unsupported_sub_action, "ask-intensity"}}
     end
 
     test "a sub-action that was not performed needs no evidence" do
@@ -123,7 +115,85 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
     end
   end
 
-  describe "rule 4: thresholds" do
+  describe "rule 4: unresolved actions that could change the level" do
+    test "an unresolved forbidden action makes the criterion uncertain" do
+      assert decide(treatment(), @adequado, ["indicate-expected"], %{
+               "indicate-contraindicated" => {"uncertain", []}
+             }) == {:uncertain, {:uncertain_sub_action, "indicate-contraindicated"}}
+    end
+
+    test "an unresolved mandatory action makes the criterion uncertain" do
+      assert decide(history(), @adequado, @history_actions, %{"ask-onset" => {"uncertain", []}}) ==
+               {:uncertain, {:uncertain_sub_action, "ask-onset"}}
+    end
+
+    test "an unresolved mandatory action is decisive without thresholds too" do
+      assert decide(without_thresholds(history()), @adequado, ["ask-duration"], %{
+               "ask-onset" => {"uncertain", []}
+             }) == {:uncertain, {:uncertain_sub_action, "ask-onset"}}
+    end
+
+    test "an uncertain sub-action is unresolved even when it cites evidence" do
+      assert decide(history(), @adequado, ["ask-onset", "ask-duration"], %{
+               "ask-relief" => {"uncertain", ["turn-1"]}
+             }) == {:uncertain, {:uncertain_sub_action, "ask-relief"}}
+    end
+
+    test "unresolved countable actions that can change the level make it uncertain" do
+      assert decide(history(), @adequado, ["ask-onset", "ask-duration"], %{
+               "ask-intensity" => {"uncertain", []}
+             }) == {:uncertain, {:uncertain_sub_action, "ask-intensity"}}
+    end
+
+    test "unresolved countable actions that cannot change the level are ignored" do
+      # Three resolved actions already earn the top level.
+      assert decide(history(), @parcial, ["ask-onset", "ask-duration", "ask-intensity"], %{
+               "ask-relief" => {"uncertain", []}
+             }) == {:ok, @adequado}
+
+      # The next threshold is two actions away and only one is unresolved.
+      distant = put_level(history(), 1, "min_actions", 3)
+
+      assert decide(distant, @adequado, ["ask-onset"], %{"ask-duration" => {"performed", []}}) ==
+               {:ok, @inadequado}
+    end
+
+    test "unresolved countable actions are judged together, not one by one" do
+      assert decide(history(), @adequado, ["ask-onset"], %{
+               "ask-duration" => {"uncertain", []},
+               "ask-intensity" => {"uncertain", []}
+             }) == {:uncertain, {:uncertain_sub_action, "ask-duration"}}
+    end
+
+    test "count_cap is applied before the levels are compared" do
+      capped = Map.put(history(), "count_cap", 2)
+      overrides = %{"ask-intensity" => {"uncertain", []}}
+
+      assert decide(capped, @adequado, ["ask-onset", "ask-duration"], overrides) ==
+               {:ok, @parcial}
+
+      assert decide(history(), @adequado, ["ask-onset", "ask-duration"], overrides) ==
+               {:uncertain, {:uncertain_sub_action, "ask-intensity"}}
+    end
+
+    test "the first decisive unresolved action in authored order is reported" do
+      assert decide(history(), @adequado, ["ask-onset"], %{
+               "ask-duration" => {"performed", []},
+               "ask-relief" => {"uncertain", []}
+             }) == {:uncertain, {:unsupported_sub_action, "ask-duration"}}
+    end
+
+    test "an unresolved action that is not decisive is never the reported reason" do
+      assert decide(
+               history_with_forbidden(),
+               @adequado,
+               ["ask-onset", "ask-duration", "ask-intensity"],
+               %{"ask-relief" => {"uncertain", []}, "ask-leading" => {"uncertain", []}}
+             ) == {:uncertain, {:uncertain_sub_action, "ask-leading"}}
+    end
+  end
+
+  describe "rule 5: thresholds" do
     test "the count of performed actions decides the level" do
       cases = [
         {["ask-onset"], @inadequado},
@@ -168,7 +238,7 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
     end
   end
 
-  describe "rule 5: no thresholds" do
+  describe "rule 6: no thresholds" do
     test "Jev's level stands on a criterion without rule fields" do
       assert decide(plain(), @adequado, []) == {:ok, @adequado}
       assert decide(plain(), @inadequado, ["ask-onset"]) == {:ok, @inadequado}
@@ -192,26 +262,30 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
   end
 
   describe "precedence" do
-    test "an uncertain sub-action wins over a performed forbidden action" do
-      assert decide(history_with_forbidden(), @adequado, ["ask-onset", "ask-leading"], %{
-               "ask-relief" => {"uncertain", []}
-             }) == {:uncertain, {:uncertain_sub_action, "ask-relief"}}
+    test "a missing mandatory action wins over an unrelated unresolved action" do
+      overrides = %{"ask-relief" => {"uncertain", []}}
+
+      assert decide(history(), @adequado, ["ask-duration"], overrides) == {:ok, @inadequado}
+
+      assert decide(without_thresholds(history()), @adequado, ["ask-duration"], overrides) ==
+               {:ok, @inadequado}
     end
 
-    test "an uncertain forbidden action is unresolved, not a veto" do
-      assert decide(treatment(), @adequado, ["indicate-expected"], %{
-               "indicate-contraindicated" => {"uncertain", []}
-             }) == {:uncertain, {:uncertain_sub_action, "indicate-contraindicated"}}
+    test "a performed forbidden action wins over an unresolved mandatory action" do
+      assert decide(history_with_forbidden(), @adequado, ["ask-duration", "ask-leading"], %{
+               "ask-onset" => {"uncertain", []}
+             }) == {:ok, @inadequado}
+    end
+
+    test "a performed forbidden action wins over an unresolved countable action" do
+      assert decide(history_with_forbidden(), @adequado, ["ask-onset", "ask-leading"], %{
+               "ask-relief" => {"uncertain", []}
+             }) == {:ok, @inadequado}
     end
 
     test "a performed forbidden action wins over thresholds" do
       assert decide(history_with_forbidden(), @adequado, @history_actions ++ ["ask-leading"]) ==
                {:ok, @inadequado}
-    end
-
-    test "a forbidden action that was not performed is not counted" do
-      assert decide(history_with_forbidden(), @inadequado, ["ask-onset", "ask-duration"]) ==
-               {:ok, @parcial}
     end
 
     test "a missing mandatory action wins over thresholds" do
