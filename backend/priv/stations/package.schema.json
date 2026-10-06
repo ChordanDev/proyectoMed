@@ -41,6 +41,12 @@
         {"type": "null"},
         {"type": "array", "items": {"$ref": "#/$defs/approvedTemplate"}}
       ]
+    },
+    "impressos": {
+      "oneOf": [
+        {"$ref": "#/$defs/impressos"},
+        {"type": "null"}
+      ]
     }
   },
   "$defs": {
@@ -203,6 +209,32 @@
       "properties": {
         "type": {"const": "max_learner_turns"},
         "count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "impressos": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/impresso"}
+    },
+    "impresso": {
+      "type": "object",
+      "required": ["id", "title", "category", "keywords", "content"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "category": {
+          "type": "string",
+          "enum": ["physical_exam", "laboratory", "imaging", "report"]
+        },
+        "keywords": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "content": {
+          "oneOf": [
+            {"type": "string", "minLength": 1},
+            {"type": "object", "minProperties": 1}
+          ]
+        }
       }
     }
   }

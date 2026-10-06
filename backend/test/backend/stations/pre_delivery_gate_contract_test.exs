@@ -598,10 +598,28 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
   # ============================================================================
 
   describe "Requirement 4(e): Stale / cancelled decisions" do
+    setup do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      original_grace = Application.get_env(:backend, :turn_grace_ms)
+
+      on_exit(fn ->
+        if is_nil(original_duration),
+          do: Application.delete_env(:backend, :station_duration_ms),
+          else: Application.put_env(:backend, :station_duration_ms, original_duration)
+
+        if is_nil(original_grace),
+          do: Application.delete_env(:backend, :turn_grace_ms),
+          else: Application.put_env(:backend, :turn_grace_ms, original_grace)
+      end)
+
+      :ok
+    end
+
     test "session completed by user while verification running: late approval rejected and NOT appended to session",
          %{session: session} do
       Application.put_env(:backend, :jev_decision_adapter, BlockingJevDouble)
       Application.put_env(:backend, :blocking_jev_test_pid, self())
+      Application.put_env(:backend, :turn_grace_ms, 50)
 
       task =
         Task.async(fn ->
@@ -612,10 +630,12 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
           })
         end)
 
-      # 1. Wait for verification to start (learner message was already appended)
+      # 1. Wait for verification to start (the learner turn is pending, not yet settled)
       assert_receive {:jev_verification_started, adapter_pid}, 1_000
 
-      # 2. While verification is in-flight, complete session with :user reason
+      # 2. While verification is in-flight, complete session with :user reason.
+      #    Completion is deferred for the bounded grace window, then the
+      #    unanswered learner turn is rolled back and the session completes.
       assert {:ok, completed_session} = Stations.complete_session(session.session_id, :user)
       assert completed_session.status == :completed
       orig_completed_at = completed_session.completed_at
@@ -624,23 +644,27 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
       # 3. Unblock Jev verification to emit approval
       send(adapter_pid, :jev_verification_release)
 
-      # 4. Await task completion
-      _res = Task.await(task, 2_000)
+      # 4. Await task completion: the late approval is rejected
+      assert Task.await(task, 2_000) == {:error, :station_time_elapsed}
 
       # 5. Verify late approval was NOT appended to session history
       assert {:ok, final_session} = Stations.get_session(session.session_id)
       assert final_session.status == :completed
       assert final_session.completed_at == orig_completed_at
       assert final_session.completion_reason == orig_completion_reason
-      assert length(final_session.messages) == 1
-      assert hd(final_session.messages).role == :learner
+      assert final_session.messages == []
       refute Enum.any?(final_session.messages, &(&1.role == :patient))
     end
 
-    test "session completed by timer while verification running: late approval rejected and NOT appended to session",
-         %{session: session} do
+    test "session completed by timer while verification running: late approval rejected and NOT appended to session" do
       Application.put_env(:backend, :jev_decision_adapter, BlockingJevDouble)
       Application.put_env(:backend, :blocking_jev_test_pid, self())
+      Application.put_env(:backend, :turn_grace_ms, 50)
+
+      # A deadline inside the timer-finish tolerance window makes the :timer
+      # completion legitimate while still leaving room to accept the turn.
+      Application.put_env(:backend, :station_duration_ms, 1_000)
+      session = Stations.create_session(%{audio_consent: true})
 
       task =
         Task.async(fn ->
@@ -659,13 +683,12 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
       assert completed_session.completion_reason == :timer
 
       send(adapter_pid, :jev_verification_release)
-      _res = Task.await(task, 2_000)
+      assert Task.await(task, 2_000) == {:error, :station_time_elapsed}
 
       assert {:ok, final_session} = Stations.get_session(session.session_id)
       assert final_session.status == :completed
       assert final_session.completion_reason == :timer
-      assert length(final_session.messages) == 1
-      assert hd(final_session.messages).role == :learner
+      assert final_session.messages == []
       refute Enum.any?(final_session.messages, &(&1.role == :patient))
     end
   end

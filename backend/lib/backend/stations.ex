@@ -13,11 +13,14 @@ defmodule Backend.Stations do
   alias Backend.Stations.CandidateGate
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
+  alias Backend.Stations.Impressos
   alias Backend.Stations.JevDecision
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
+
+  @early_timer_finish_tolerance_ms 2_000
 
   # ============================================================================
   # Station Package & Metadata
@@ -95,10 +98,34 @@ defmodule Backend.Stations do
 
   @doc """
   Completes a session with a completion reason (`:user` or `:timer`).
+
+  A `:timer` completion is only accepted at or after `deadline_at` (with a
+  small tolerance): a client-driven timer finish arriving more than
+  `@early_timer_finish_tolerance_ms` before the deadline is rejected with
+  `{:error, :deadline_not_reached}`.
   """
   @spec complete_session(String.t(), :user | :timer | term()) ::
-          {:ok, Conversation.session()} | {:error, :not_found | :expired}
-  def complete_session(session_id, reason \\ :user) do
+          {:ok, Conversation.session()} | {:error, :not_found | :expired | :deadline_not_reached}
+  def complete_session(session_id, reason \\ :user)
+
+  def complete_session(session_id, :timer) do
+    case Conversation.fetch(session_id) do
+      {:ok, %{status: :active} = session} ->
+        if timer_finish_allowed?(session) do
+          Conversation.complete(session_id, :timer)
+        else
+          {:error, :deadline_not_reached}
+        end
+
+      {:ok, %{status: :completed} = session} ->
+        {:ok, session}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def complete_session(session_id, reason) do
     Conversation.complete(session_id, reason)
   end
 
@@ -126,7 +153,13 @@ defmodule Backend.Stations do
   """
   @spec create_message(String.t(), map()) ::
           {:ok, map()}
-          | {:error, :not_found | :expired | :completed | :station_ai_unavailable | term()}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :station_time_elapsed
+             | :station_ai_unavailable
+             | term()}
   def create_message(session_id, params) do
     role = Map.get(params, :role) || Map.get(params, "role") || :learner
     modality = normalize_modality(Map.get(params, :modality) || Map.get(params, "modality"))
@@ -138,74 +171,59 @@ defmodule Backend.Stations do
       text: text
     }
 
-    with {:ok, _session} <- Conversation.append_message(session_id, learner_message),
-         package = get_active_package(),
-         {:ok, current_session} <- Conversation.fetch(session_id) do
-      context = format_context(current_session, package)
+    case Conversation.begin_turn(session_id, learner_message) do
+      {:ok, _session, token} -> generate_and_resolve_turn(session_id, token, params)
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-      deliver_generated_reply(
+  defp generate_and_resolve_turn(session_id, token, params) do
+    package = get_active_package()
+
+    with {:ok, current_session} <- Conversation.fetch(session_id),
+         context = format_context(current_session, package),
+         {:ok, ai_reply} <- generate_patient_reply(package, context) do
+      verify_and_resolve_turn(
         session_id,
+        token,
         package,
         current_session,
         context,
-        learner_message,
+        ai_reply,
         params
       )
+    else
+      {:error, _reason} ->
+        rollback_turn(session_id, token, :station_ai_unavailable)
     end
   end
 
-  defp deliver_generated_reply(
+  defp verify_and_resolve_turn(
          session_id,
-         package,
-         current_session,
-         context,
-         learner_message,
-         params
-       ) do
-    case generate_patient_reply(package, context) do
-      {:ok, ai_reply} ->
-        verify_and_append_reply(
-          session_id,
-          package,
-          current_session,
-          context,
-          ai_reply,
-          learner_message,
-          params
-        )
-
-      {:error, _gen_error} ->
-        _ = rollback_learner_message(session_id, learner_message)
-        {:error, :station_ai_unavailable}
-    end
-  end
-
-  defp verify_and_append_reply(
-         session_id,
+         token,
          package,
          current_session,
          context,
          ai_reply,
-         learner_message,
          params
        ) do
     verify_opts = build_verify_opts(package, current_session, context, params)
 
     case verify_patient_reply(package, ai_reply, verify_opts) do
       {:ok, verified_reply} ->
-        commit_patient_reply(session_id, verified_reply)
+        commit_patient_reply(session_id, token, verified_reply)
 
       {:error, reason} ->
-        _ = rollback_learner_message(session_id, learner_message)
-        {:error, reason}
+        rollback_turn(session_id, token, reason)
     end
   end
 
-  defp commit_patient_reply(session_id, verified_reply) do
+  defp commit_patient_reply(session_id, token, verified_reply) do
     verified_text = extract_reply_text(verified_reply)
     used_facts = extract_used_facts(verified_reply)
+    patient_message = %{role: :patient, modality: :text, text: verified_text}
 
-    case append_patient_reply(session_id, verified_text) do
+    case Conversation.resolve_turn(session_id, token, {:ok, patient_message}) do
       {:ok, _session} ->
         {:ok,
          %{
@@ -214,8 +232,20 @@ defmodule Backend.Stations do
            used_facts: used_facts
          }}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, :station_time_elapsed} ->
+        {:error, :station_time_elapsed}
+
+      {:error, _reason} ->
+        rollback_turn(session_id, token, :station_ai_unavailable)
+    end
+  end
+
+  # Rolls back the pending learner turn. A turn already settled by the deadline
+  # grace timer reports `:station_time_elapsed`, which wins over `reason`.
+  defp rollback_turn(session_id, token, reason) do
+    case Conversation.resolve_turn(session_id, token, :rollback) do
+      {:error, :station_time_elapsed} -> {:error, :station_time_elapsed}
+      _ -> {:error, reason}
     end
   end
 
@@ -327,29 +357,87 @@ defmodule Backend.Stations do
   end
 
   @doc """
-  Checks if a session is within its authoritative deadline.
+  Checks whether a session is within its authoritative ten-minute deadline.
 
-  Stable extension point for Ticket 133 (ten-minute station deadline).
+  Returns `{:error, :session_time_elapsed}` once `deadline_at` has passed, even
+  if the session has not yet been auto-completed by the timer.
   """
   @spec check_session_deadline(String.t()) ::
           {:ok, :within_deadline} | {:error, :session_time_elapsed | :not_found | :expired}
   def check_session_deadline(session_id) do
     case Conversation.fetch(session_id) do
-      {:ok, %{status: :active}} -> {:ok, :within_deadline}
-      {:ok, %{status: :completed}} -> {:error, :session_time_elapsed}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{status: :completed}} ->
+        {:error, :session_time_elapsed}
+
+      {:ok, %{status: :active} = session} ->
+        if DateTime.compare(DateTime.utc_now(), session.deadline_at) == :lt do
+          {:ok, :within_deadline}
+        else
+          {:error, :session_time_elapsed}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   @doc """
-  Evaluates and releases requested clinical Impressos (physical exam & complementary tests).
+  Matches a learner's Impresso request text against the active package's
+  authored impressos and atomically records the outcome on the session.
+
+  `request_params` accepts `"text"` (required, non-blank) and an optional
+  `"request_id"` for idempotent retries; the server generates one when
+  omitted.
+
+  Returns `{:ok, %{request_id, decision, released_impressos, newly_released,
+  feedback_message}}`, where `decision` is `"released"`, `"already_released"`,
+  or `"unavailable"`.
 
   Stable extension point for Ticket 12 / ADR-008 (#105, #107).
   """
   @spec request_impresso(String.t(), map()) ::
-          {:ok, map()} | {:error, :not_implemented | term()}
-  def request_impresso(_session_id, _request_params) do
-    {:error, :not_implemented}
+          {:ok, map()}
+          | {:error, :not_found | :expired | :completed | :invalid_request}
+  def request_impresso(session_id, request_params) do
+    text = get_param(request_params, :text)
+
+    with :ok <- validate_impresso_text(text) do
+      package = get_active_package()
+      normalized_text = Impressos.normalize(text)
+      matched_ids = Impressos.match(package["impressos"] || [], normalized_text)
+      request_id = resolve_request_id(request_params)
+
+      case Conversation.record_impresso_request(session_id, request_id, matched_ids, text) do
+        {:ok, %{event: event, session: session}} ->
+          {:ok, build_impresso_response(package, event, session)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Lists the impressos currently released for a session, in release order.
+
+  Allowed for both active and completed sessions.
+  """
+  @spec list_impressos(String.t()) ::
+          {:ok, %{released_impressos: [map()]}} | {:error, :not_found | :expired}
+  def list_impressos(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, session} ->
+        package = get_active_package()
+
+        {:ok,
+         %{
+           released_impressos:
+             to_impresso_objects(index_impressos(package), session.released_impressos)
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -542,20 +630,9 @@ defmodule Backend.Stations do
     end
   end
 
-  defp append_patient_reply(session_id, reply_text) do
-    case Conversation.append_message(session_id, %{
-           role: :patient,
-           modality: :text,
-           text: reply_text
-         }) do
-      {:ok, session} -> {:ok, session}
-      {:error, :completed} -> {:ok, :completed}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp rollback_learner_message(session_id, learner_message) do
-    Conversation.pop_last_message(session_id, learner_message)
+  defp timer_finish_allowed?(session) do
+    DateTime.diff(session.deadline_at, DateTime.utc_now(), :millisecond) <=
+      @early_timer_finish_tolerance_ms
   end
 
   defp format_context(session, package) do
@@ -595,4 +672,74 @@ defmodule Backend.Stations do
   end
 
   defp serialize_evidence(_), do: []
+
+  defp get_param(params, key) do
+    Map.get(params, key) || Map.get(params, Atom.to_string(key))
+  end
+
+  defp validate_impresso_text(text) when is_binary(text) do
+    if String.trim(text) == "" do
+      {:error, :invalid_request}
+    else
+      :ok
+    end
+  end
+
+  defp validate_impresso_text(_text), do: {:error, :invalid_request}
+
+  defp resolve_request_id(params) do
+    case get_param(params, :request_id) do
+      id when is_binary(id) and id != "" -> id
+      _ -> Impressos.generate_request_id()
+    end
+  end
+
+  defp build_impresso_response(package, event, session) do
+    impressos_by_id = index_impressos(package)
+
+    %{
+      request_id: event.request_id,
+      decision: to_string(event.decision),
+      released_impressos: to_impresso_objects(impressos_by_id, session.released_impressos),
+      newly_released: to_impresso_objects(impressos_by_id, event.released_ids),
+      feedback_message: impresso_feedback_message(event, impressos_by_id)
+    }
+  end
+
+  defp impresso_feedback_message(%{decision: :unavailable}, _impressos_by_id) do
+    "Exame não disponível nesta estação"
+  end
+
+  defp impresso_feedback_message(%{decision: :released, released_ids: ids}, impressos_by_id) do
+    "Impresso liberado: #{impresso_titles(impressos_by_id, ids)}"
+  end
+
+  defp impresso_feedback_message(
+         %{decision: :already_released, matched_ids: ids},
+         impressos_by_id
+       ) do
+    "Impresso já liberado: #{impresso_titles(impressos_by_id, ids)}"
+  end
+
+  defp impresso_titles(impressos_by_id, ids) do
+    Enum.map_join(ids, ", ", fn id -> impressos_by_id[id]["title"] end)
+  end
+
+  defp index_impressos(package) do
+    (package["impressos"] || [])
+    |> Enum.into(%{}, fn impresso -> {impresso["id"], impresso} end)
+  end
+
+  defp to_impresso_objects(impressos_by_id, ids) do
+    Enum.map(ids, fn id ->
+      impresso = impressos_by_id[id]
+
+      %{
+        id: impresso["id"],
+        title: impresso["title"],
+        category: impresso["category"],
+        content: impresso["content"]
+      }
+    end)
+  end
 end
