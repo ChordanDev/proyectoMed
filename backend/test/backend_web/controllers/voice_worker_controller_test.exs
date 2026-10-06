@@ -111,6 +111,44 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
   end
 
   describe "GET context" do
+    test "restart allocation skips cancelled prefixes without claiming committed history", %{
+      conn: conn
+    } do
+      for fence <- [1, 7] do
+        session = Stations.create_session(%{audio_consent: true})
+        id = session.session_id
+
+        assert json_response(post(conn, cancel_path(id), %{turn_id: fence}), 409)
+        body = conn |> get(context_path(id)) |> json_response(200)
+        assert body["last_turn_id"] == 0
+        assert body["turn_id_floor"] == fence
+        assert {:ok, %{messages: []}} = Stations.get_session(id)
+
+        for _attempt <- 1..2 do
+          assert json_response(
+                   post(conn, transcripts_path(id), %{turn_id: fence, text: "Cancelled question"}),
+                   409
+                 )
+        end
+
+        next_id = body["turn_id_floor"] + 1
+
+        assert %{"status" => "committed", "turn_id" => ^next_id} =
+                 conn
+                 |> post(transcripts_path(id), %{turn_id: next_id, text: "New question"})
+                 |> json_response(201)
+
+        assert %{"status" => "duplicate", "turn_id" => ^next_id} =
+                 conn
+                 |> post(transcripts_path(id), %{turn_id: next_id, text: "New question"})
+                 |> json_response(200)
+
+        updated = conn |> get(context_path(id)) |> json_response(200)
+        assert updated["last_turn_id"] == next_id
+        assert updated["turn_id_floor"] == next_id
+      end
+    end
+
     test "returns pt-BR, station keyterms and last_turn_id for a consented active session",
          %{conn: conn} do
       session = Stations.create_session(%{audio_consent: true})

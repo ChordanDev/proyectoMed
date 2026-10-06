@@ -2,8 +2,11 @@
 import asyncio
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
+import worker
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError
 from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
@@ -68,6 +71,25 @@ class VoiceTurnReplyTest(unittest.TestCase):
 
 
 class TurnTrackerTest(unittest.TestCase):
+    def test_allocation_floor_does_not_claim_acceptance_or_replay_cancelled_reply(self):
+        tracker = TurnTracker("s1", last_turn_id=0, turn_id_floor=7)
+        self.assertEqual(tracker.last_accepted_turn_id, 0)
+        self.assertIsNone(
+            tracker.accept_reply(
+                VoiceTurnReply(
+                    turn_id=7,
+                    status="committed",
+                    generation_id=1,
+                    reply_text="Cancelled reply",
+                )
+            )
+        )
+        tracker.handle(event(FINAL, "New question"))
+        final = tracker.handle(event(END))
+        assert final is not None
+        self.assertEqual(final["turn_id"], 8)
+        self.assertEqual(tracker.last_accepted_turn_id, 0)
+
     def test_interims_are_turn_scoped_and_one_final_turn_per_utterance(self):
         tracker = TurnTracker("s1", last_turn_id=0)
 
@@ -530,6 +552,80 @@ class MockSTT:
 
 
 class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fresh_job_bootstrap_allocates_above_context_floor(self):
+        # Offline wire-contract proof; real Phoenix admission is covered by controller tests.
+        for committed, floor, expected in [
+            (0, 1, 2), (0, 7, 8), (9, 3, 10), (3, None, 4)
+        ]:
+            with self.subTest(committed=committed, floor=floor):
+                context = {
+                    "last_turn_id": committed, "language": "pt-BR", "keyterms": []
+                }
+                if floor is not None:
+                    context["turn_id_floor"] = floor
+                posted = []
+
+                def handler(request):
+                    if request.method == "GET":
+                        return httpx.Response(200, json=context)
+                    body = json.loads(request.content)
+                    posted.append(body)
+                    if body["turn_id"] < expected:
+                        return httpx.Response(409, json={"error": "stale_generation"})
+                    return httpx.Response(
+                        201,
+                        json={
+                            "status": "committed",
+                            "turn_id": body["turn_id"],
+                            "generation_id": 1,
+                            "reply_text": "Verified reply",
+                        },
+                    )
+
+                room = MockRoom()
+                room.name = "station-session-s1"
+                ctx = SimpleNamespace(
+                    room=room,
+                    connect=AsyncMock(),
+                    wait_for_participant=AsyncMock(
+                        return_value=MockParticipant("learner-s1")
+                    ),
+                    shutdown=Mock(),
+                )
+                queue = asyncio.Queue()
+                for speech_event in [event(FINAL, "New question"), event(END), None]:
+                    queue.put_nowait(speech_event)
+                stream = MockStream(queue)
+                stream.end_input = Mock()
+                replies = []
+
+                async def run_transcribe(room, learner, context, tracker, phoenix):
+                    self.assertEqual(tracker.last_accepted_turn_id, committed)
+                    await transcribe(
+                        room, learner, context, tracker, phoenix,
+                        stt=MockSTT(stream),
+                        audio=MockAudioStream(),
+                        on_reply=replies.append,
+                    )
+                    if floor is not None and floor > committed:
+                        self.assertTrue(tracker.is_turn_stale(floor))
+                    room._connected = False
+
+                with (
+                    patch.dict(
+                        "os.environ",
+                        {"PHOENIX_URL": "http://phoenix", "VOICE_WORKER_SECRET": "secret"},
+                    ),
+                    patch.object(worker, "PhoenixClient", return_value=phoenix(handler)),
+                    patch.object(worker, "transcribe", side_effect=run_transcribe),
+                ):
+                    await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
+
+                self.assertEqual(posted, [{"turn_id": expected, "text": "New question"}])
+                self.assertEqual(len(replies), 1)
+                self.assertEqual(replies[0].turn_id, expected)
+                ctx.shutdown.assert_called_once()
+
     async def test_cancel_first_fences_held_http_admission_and_transport_retry(self):
         # Offline protocol model, paired with real GenServer/controller tests.
         # The POST reaches the transport but is held BEFORE server admission.

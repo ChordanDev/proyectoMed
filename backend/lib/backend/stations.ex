@@ -359,6 +359,8 @@ defmodule Backend.Stations do
   speech-to-text provider (#118). Only consented, active sessions qualify.
   Keyterms come from the station package's optional `stt_keyterms`, so they
   stay server-side.
+  `last_turn_id` is the committed learner cursor. `turn_id_floor` also covers
+  cancelled turn IDs; a fresh worker must allocate strictly above this floor.
   """
   @spec voice_worker_context(String.t()) ::
           {:ok,
@@ -366,7 +368,8 @@ defmodule Backend.Stations do
              session_id: String.t(),
              language: String.t(),
              keyterms: [String.t()],
-             last_turn_id: non_neg_integer()
+             last_turn_id: non_neg_integer(),
+             turn_id_floor: non_neg_integer()
            }}
           | {:error, :not_found | :expired | :completed | :no_consent}
   def voice_worker_context(session_id) do
@@ -380,7 +383,12 @@ defmodule Backend.Stations do
          session_id: session_id,
          language: package["language"] || "pt-BR",
          keyterms: Enum.filter(List.wrap(package["stt_keyterms"]), &is_binary/1),
-         last_turn_id: Map.get(session, :last_voice_turn_id, 0)
+         last_turn_id: Map.get(session, :last_voice_turn_id, 0),
+         turn_id_floor:
+           max(
+             Map.get(session, :last_voice_turn_id, 0),
+             Map.get(session, :cancelled_voice_turn_id, 0)
+           )
        }}
     end
   end

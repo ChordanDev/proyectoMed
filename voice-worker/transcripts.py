@@ -88,19 +88,23 @@ class TurnTracker:
 
     Deepgram may split one utterance into several FINAL segments; they are joined and
     committed as exactly one learner turn at END_OF_SPEECH. Turn ids continue after the
-    last turn Phoenix already committed, so a restarted worker never reuses an id.
+    authoritative allocation floor, covering committed and cancelled turn IDs.
     Tracks active generation identity and cancels/rejects superseded or duplicate replies.
     """
 
-    def __init__(self, session_id: str, last_turn_id: int):
+    def __init__(
+        self, session_id: str, last_turn_id: int, turn_id_floor: int | None = None
+    ):
         self.session_id = session_id
-        self.turn_id = last_turn_id + 1
+        allocation_floor = max(last_turn_id, turn_id_floor or 0)
+        self.turn_id = allocation_floor + 1
         self.segments: list[str] = []
         self.active_generation_id: int | None = None
         self.last_accepted_turn_id: int = last_turn_id
         self.cancelled_generations: set[int] = set()
         self.cancelled_turns: set[int] = set()
-        self._stale_turn_floor = last_turn_id
+        # Allocation is not acceptance, but replies from this prefix must not replay.
+        self._stale_turn_floor = allocation_floor
 
     def handle(self, event: SpeechEvent) -> dict | None:
         if event.type == SpeechEventType.INTERIM_TRANSCRIPT:

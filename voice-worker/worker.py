@@ -49,7 +49,13 @@ async def entrypoint(ctx: JobContext) -> None:
             # Consent/active check happens before any audio reaches Deepgram.
             context = await phoenix.context()
             await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-            tracker = TurnTracker(session_id, context["last_turn_id"])
+            # Older Phoenix contexts expose only the committed cursor. Deploy the
+            # additive server floor before relying on restart-safe allocation.
+            tracker = TurnTracker(
+                session_id,
+                context["last_turn_id"],
+                turn_id_floor=context.get("turn_id_floor"),
+            )
             # The job lives as long as the room; a reconnecting learner is a new participant.
             while ctx.room.isconnected():
                 learner = await ctx.wait_for_participant(
