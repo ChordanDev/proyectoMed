@@ -95,7 +95,7 @@
       "items": {"$ref": "#/$defs/rubricCriterion"}
     },
     "rubricCriterion": {
-      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level.",
+      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden and at most count_cap when count_cap is set; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level.",
       "type": "object",
       "required": [
         "id",
@@ -172,13 +172,26 @@
         "min_actions": {"type": "integer", "minimum": 0},
         "description": {"type": "string", "minLength": 1}
       },
-      "if": {
-        "required": ["points", "min_actions"],
-        "properties": {"points": {"const": 0}}
-      },
-      "then": {
-        "properties": {"min_actions": {"const": 0}}
-      }
+      "allOf": [
+        {
+          "if": {
+            "required": ["points", "min_actions"],
+            "properties": {"points": {"const": 0}}
+          },
+          "then": {
+            "properties": {"min_actions": {"const": 0}}
+          }
+        },
+        {
+          "if": {
+            "required": ["points", "min_actions"],
+            "properties": {"points": {"exclusiveMinimum": 0}}
+          },
+          "then": {
+            "properties": {"min_actions": {"minimum": 1}}
+          }
+        }
+      ]
     },
     "rubricAction": {
       "type": "object",

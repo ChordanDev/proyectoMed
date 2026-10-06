@@ -298,7 +298,8 @@ defmodule Backend.Stations.StationPackage do
   # Thresholds are all-or-none across the levels of a criterion. The value
   # checks run only on a complete, well-typed set, so each defect is reported
   # by exactly one message.
-  defp validate_level_thresholds(errors, %{"levels" => levels}) when is_list(levels) do
+  defp validate_level_thresholds(errors, %{"levels" => levels} = criterion)
+       when is_list(levels) do
     levels = Enum.filter(levels, &is_map/1)
     thresholds = Enum.filter(levels, &Map.has_key?(&1, "min_actions"))
 
@@ -312,7 +313,9 @@ defmodule Backend.Stations.StationPackage do
       Enum.all?(levels, &well_typed_threshold?/1) ->
         errors
         |> validate_zero_point_thresholds(levels)
+        |> validate_positive_point_thresholds(levels)
         |> validate_threshold_order(levels)
+        |> validate_threshold_reachability(levels, criterion)
 
       true ->
         errors
@@ -322,7 +325,7 @@ defmodule Backend.Stations.StationPackage do
   defp validate_level_thresholds(errors, _criterion), do: errors
 
   defp well_typed_threshold?(%{"points" => points, "min_actions" => min_actions}),
-    do: is_number(points) and is_integer(min_actions)
+    do: is_number(points) and is_integer(min_actions) and min_actions >= 0
 
   defp well_typed_threshold?(_level), do: false
 
@@ -331,6 +334,15 @@ defmodule Backend.Stations.StationPackage do
       errors
     else
       ["rubric zero-point levels must set min_actions to 0" | errors]
+    end
+  end
+
+  # A positive level reachable with no action would be earned by doing nothing.
+  defp validate_positive_point_thresholds(errors, levels) do
+    if Enum.all?(levels, &(&1["points"] <= 0 or &1["min_actions"] >= 1)) do
+      errors
+    else
+      ["rubric levels with points above zero must set min_actions to at least 1" | errors]
     end
   end
 
@@ -346,6 +358,42 @@ defmodule Backend.Stations.StationPackage do
       ["rubric level min_actions must not decrease as points increase" | errors]
     end
   end
+
+  # The highest threshold has to be earnable: the assessment counts performed
+  # actions that are not forbidden and caps that count at count_cap. A top
+  # level out of reach would still count in the station maximum.
+  defp validate_threshold_reachability(errors, levels, %{"actions" => actions} = criterion)
+       when is_list(actions) do
+    highest = levels |> Enum.map(& &1["min_actions"]) |> Enum.max()
+    countable = Enum.count(actions, &(is_map(&1) and &1["role"] != "forbidden"))
+
+    errors
+    |> validate_threshold_within_actions(highest, countable)
+    |> validate_threshold_within_count_cap(highest, criterion["count_cap"])
+  end
+
+  defp validate_threshold_reachability(errors, _levels, _criterion), do: errors
+
+  defp validate_threshold_within_actions(errors, highest, countable) when highest <= countable,
+    do: errors
+
+  defp validate_threshold_within_actions(errors, _highest, 0),
+    do: [
+      "rubric criteria with thresholds require at least one action that is not forbidden" | errors
+    ]
+
+  defp validate_threshold_within_actions(errors, _highest, _countable) do
+    [
+      "rubric level min_actions must not exceed the number of actions that are not forbidden"
+      | errors
+    ]
+  end
+
+  defp validate_threshold_within_count_cap(errors, highest, count_cap)
+       when is_integer(count_cap) and count_cap >= 1 and highest > count_cap,
+       do: ["rubric level min_actions must not exceed count_cap" | errors]
+
+  defp validate_threshold_within_count_cap(errors, _highest, _count_cap), do: errors
 
   defp validate_level_description(errors, %{"description" => description}) do
     if non_empty_string?(description) do

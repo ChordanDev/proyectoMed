@@ -742,6 +742,70 @@ defmodule Backend.StationPackageTest do
       end)
     end
 
+    test "rejects thresholds that grade wrongly, each with only its own error" do
+      base = authored_rules()
+
+      threshold_errors = [
+        "rubric criteria must set min_actions on every level or on none",
+        "rubric zero-point levels must set min_actions to 0",
+        "rubric level min_actions must not decrease as points increase",
+        "rubric levels with points above zero must set min_actions to at least 1",
+        "rubric level min_actions must not exceed the number of actions that are not forbidden",
+        "rubric level min_actions must not exceed count_cap",
+        "rubric criteria with thresholds require at least one action that is not forbidden"
+      ]
+
+      uncapped = put_criterion(base, @history, ["count_cap"], nil)
+
+      two_countable_actions =
+        uncapped
+        |> put_criterion(@history, ["veto"], true)
+        |> put_criterion(@history, ["actions", Access.at(2), "role"], "forbidden")
+        |> put_criterion(@history, ["actions", Access.at(3), "role"], "forbidden")
+
+      cases = [
+        {put_criterion(base, @history, ["levels", Access.at(1), "min_actions"], 0),
+         Enum.at(threshold_errors, 3)},
+        {base
+         |> put_criterion(@history, ["levels", Access.at(1), "min_actions"], 0)
+         |> put_criterion(@history, ["levels", Access.at(2), "min_actions"], 0),
+         Enum.at(threshold_errors, 3)},
+        {put_criterion(uncapped, @history, ["levels", Access.at(2), "min_actions"], 9),
+         Enum.at(threshold_errors, 4)},
+        {two_countable_actions, Enum.at(threshold_errors, 4)},
+        {put_criterion(base, @history, ["count_cap"], 2), Enum.at(threshold_errors, 5)},
+        {put_criterion(base, @exams, ["actions"], []), Enum.at(threshold_errors, 6)}
+      ]
+
+      Enum.each(cases, fn {package, expected_error} ->
+        assert {:error, errors} = StationPackage.validate(package)
+
+        assert Enum.filter(errors, &(&1 in threshold_errors)) == [expected_error],
+               "expected only #{inspect(expected_error)} in #{inspect(errors)}"
+      end)
+    end
+
+    test "accepts a top threshold equal to the number of countable actions" do
+      package =
+        authored_rules()
+        |> put_criterion(@history, ["count_cap"], nil)
+        |> put_criterion(@history, ["levels", Access.at(2), "min_actions"], 4)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "JSON schema requires a positive threshold on levels with points above zero" do
+      level = json_file(@schema_path)["$defs"]["rubricLevel"]
+
+      assert %{
+               "if" => %{
+                 "required" => ["points", "min_actions"],
+                 "properties" => %{"points" => %{"exclusiveMinimum" => 0}}
+               },
+               "then" => %{"properties" => %{"min_actions" => %{"minimum" => 1}}}
+             } in level["allOf"]
+    end
+
     test "the same action id may be reused by different criteria" do
       package =
         put_criterion(authored_rules(), @exams, ["actions", Access.at(0), "id"], "ask-onset")
