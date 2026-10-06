@@ -1,0 +1,102 @@
+{
+  "station_id": "authored-rules",
+  "version": "2.0.0",
+  "language": "pt-BR",
+  "display_title": "Regras de rubrica fictícias",
+  "placeholder": true,
+  "patient_profile": {
+    "persona": "Paciente fictício e colaborativo",
+    "age": 40,
+    "presenting_context": "Contexto fictício para exercitar as regras da rubrica.",
+    "tone": "Responde de forma breve."
+  },
+  "revealable_facts": [],
+  "response_rules": [
+    {"id": "unknown-fact", "instruction": "Do not invent facts absent from this package."}
+  ],
+  "expected_actions": [],
+  "rubric": [
+    {
+      "id": "history-taking",
+      "description": "Investigates the synthetic history items.",
+      "evidence_questions": ["Which history items were investigated?"],
+      "practice_recommendation": "Cover every history item, starting with the mandatory one.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "min_actions": 0, "description": "Investigates one item or misses the mandatory one."},
+        {"label": "parcialmente_adequado", "points": 0.5, "min_actions": 2, "description": "Investigates two items."},
+        {"label": "adequado", "points": 1, "min_actions": 3, "description": "Investigates three or more items."}
+      ],
+      "actions": [
+        {"id": "ask-onset", "description": "Ask about onset.", "role": "mandatory"},
+        {"id": "ask-duration", "description": "Ask about duration.", "role": "counted"},
+        {"id": "ask-intensity", "description": "Ask about intensity."},
+        {"id": "ask-relief", "description": "Ask about relieving factors."}
+      ],
+      "order": 1,
+      "count_cap": 3,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": "verbal",
+      "rule": null
+    },
+    {
+      "id": "treatment-plan",
+      "description": "Indicates the synthetic treatment without the contraindicated one.",
+      "evidence_questions": ["Which treatments were indicated?"],
+      "practice_recommendation": "Indicate the expected treatment and never the contraindicated one.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "description": "Indicates no adequate treatment."},
+        {"label": "adequado", "points": 1, "description": "Indicates the expected treatment."}
+      ],
+      "actions": [
+        {"id": "indicate-expected", "description": "Indicate the expected treatment."},
+        {"id": "indicate-contraindicated", "description": "Indicate the contraindicated treatment.", "role": "forbidden"}
+      ],
+      "order": 2,
+      "count_cap": null,
+      "first_n": null,
+      "veto": true,
+      "exclusion": false,
+      "modality_requirement": "verbal"
+    },
+    {
+      "id": "exam-requests",
+      "description": "Requests the synthetic exams.",
+      "evidence_questions": ["Which exams were requested?"],
+      "practice_recommendation": "Request the most relevant exams first.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "min_actions": 0, "description": "Requests no expected exam."},
+        {"label": "adequado", "points": 0.25, "min_actions": 1, "description": "Requests an expected exam."}
+      ],
+      "actions": [
+        {"id": "request-exam-a", "description": "Request exam A."},
+        {"id": "request-exam-b", "description": "Request exam B."}
+      ],
+      "order": 3,
+      "count_cap": 1,
+      "first_n": 2,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null
+    },
+    {
+      "id": "task-order",
+      "description": "Performs the tasks in the determined order.",
+      "evidence_questions": [],
+      "practice_recommendation": "Follow the order of the tasks.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "description": "Does not follow the order."},
+        {"label": "adequado", "points": 0.25, "description": "Follows the order."}
+      ],
+      "actions": [],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": "task_order"
+    }
+  ]
+}

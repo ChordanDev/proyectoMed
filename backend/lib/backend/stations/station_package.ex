@@ -10,6 +10,10 @@ defmodule Backend.Stations.StationPackage do
   `approved_templates[].applicability` must be a structured predicate object
   from the vocabulary owned by `Backend.Stations.TemplateApplicability`; prose
   strings and booleans are load errors (issue #147).
+
+  The authored rubric rule fields are optional (issue #128): `levels[].min_actions`,
+  `actions[].role` and a criterion `rule`. Their cross-field consistency is
+  checked here, because the JSON schema cannot express all of it.
   """
 
   alias Backend.Stations.TemplateApplicability
@@ -20,6 +24,10 @@ defmodule Backend.Stations.StationPackage do
   @disclosure_conditions ~w(on_request after_action timed unconditional)
   @level_labels ~w(inadequado parcialmente_adequado adequado)
   @criterion_nullable_integer_fields ~w(order count_cap first_n)
+  @criterion_positive_integer_fields ~w(count_cap first_n)
+  @action_roles ~w(counted mandatory forbidden)
+  @zero_scoring_action_roles ~w(mandatory forbidden)
+  @criterion_rules ~w(task_order)
   @valid_impresso_categories ~w(physical_exam laboratory imaging report)
 
   @spec version() :: String.t()
@@ -204,11 +212,16 @@ defmodule Backend.Stations.StationPackage do
     |> validate_rubric_strings(criterion)
     |> validate_evidence_questions(criterion)
     |> validate_levels(criterion)
+    |> validate_level_thresholds(criterion)
     |> validate_criterion_actions(criterion)
     |> validate_nullable_integer_fields(criterion)
+    |> validate_positive_integer_fields(criterion)
     |> validate_criterion_boolean(criterion, "veto")
     |> validate_criterion_boolean(criterion, "exclusion")
     |> validate_modality_requirement(criterion)
+    |> validate_criterion_rule(criterion)
+    |> validate_forbidden_requires_veto(criterion)
+    |> validate_zero_point_level(criterion)
   end
 
   defp validate_rubric_criterion(_criterion, errors),
@@ -251,6 +264,7 @@ defmodule Backend.Stations.StationPackage do
     errors
     |> validate_level_label(level)
     |> validate_level_points(level)
+    |> validate_level_min_actions(level)
     |> validate_level_description(level)
   end
 
@@ -272,6 +286,115 @@ defmodule Backend.Stations.StationPackage do
   defp validate_level_points(errors, _level),
     do: ["rubric levels require numeric points" | errors]
 
+  defp validate_level_min_actions(errors, %{"min_actions" => min_actions})
+       when is_integer(min_actions) and min_actions >= 0,
+       do: errors
+
+  defp validate_level_min_actions(errors, %{"min_actions" => _invalid}),
+    do: ["rubric levels min_actions must be a non-negative integer" | errors]
+
+  defp validate_level_min_actions(errors, _level), do: errors
+
+  # Thresholds are all-or-none across the levels of a criterion. The value
+  # checks run only on a complete, well-typed set, so each defect is reported
+  # by exactly one message.
+  defp validate_level_thresholds(errors, %{"levels" => levels} = criterion)
+       when is_list(levels) do
+    levels = Enum.filter(levels, &is_map/1)
+    thresholds = Enum.filter(levels, &Map.has_key?(&1, "min_actions"))
+
+    cond do
+      thresholds == [] ->
+        errors
+
+      length(thresholds) < length(levels) ->
+        ["rubric criteria must set min_actions on every level or on none" | errors]
+
+      Enum.all?(levels, &well_typed_threshold?/1) ->
+        errors
+        |> validate_zero_point_thresholds(levels)
+        |> validate_positive_point_thresholds(levels)
+        |> validate_threshold_order(levels)
+        |> validate_threshold_reachability(levels, criterion)
+
+      true ->
+        errors
+    end
+  end
+
+  defp validate_level_thresholds(errors, _criterion), do: errors
+
+  defp well_typed_threshold?(%{"points" => points, "min_actions" => min_actions}),
+    do: is_number(points) and is_integer(min_actions) and min_actions >= 0
+
+  defp well_typed_threshold?(_level), do: false
+
+  defp validate_zero_point_thresholds(errors, levels) do
+    if Enum.all?(levels, &(&1["points"] != 0 or &1["min_actions"] == 0)) do
+      errors
+    else
+      ["rubric zero-point levels must set min_actions to 0" | errors]
+    end
+  end
+
+  # A positive level reachable with no action would be earned by doing nothing.
+  defp validate_positive_point_thresholds(errors, levels) do
+    if Enum.all?(levels, &(&1["points"] <= 0 or &1["min_actions"] >= 1)) do
+      errors
+    else
+      ["rubric levels with points above zero must set min_actions to at least 1" | errors]
+    end
+  end
+
+  defp validate_threshold_order(errors, levels) do
+    thresholds =
+      levels
+      |> Enum.sort_by(&{&1["points"], &1["min_actions"]})
+      |> Enum.map(& &1["min_actions"])
+
+    if thresholds == Enum.sort(thresholds) do
+      errors
+    else
+      ["rubric level min_actions must not decrease as points increase" | errors]
+    end
+  end
+
+  # The highest threshold has to be earnable: the assessment counts performed
+  # actions that are not forbidden and caps that count at count_cap. A top
+  # level out of reach would still count in the station maximum.
+  defp validate_threshold_reachability(errors, levels, %{"actions" => actions} = criterion)
+       when is_list(actions) do
+    highest = levels |> Enum.map(& &1["min_actions"]) |> Enum.max()
+    countable = Enum.count(actions, &(is_map(&1) and &1["role"] != "forbidden"))
+
+    errors
+    |> validate_threshold_within_actions(highest, countable)
+    |> validate_threshold_within_count_cap(highest, criterion["count_cap"])
+  end
+
+  defp validate_threshold_reachability(errors, _levels, _criterion), do: errors
+
+  defp validate_threshold_within_actions(errors, highest, countable) when highest <= countable,
+    do: errors
+
+  defp validate_threshold_within_actions(errors, _highest, 0),
+    do: [
+      "rubric criteria with thresholds require at least one action that is not forbidden" | errors
+    ]
+
+  defp validate_threshold_within_actions(errors, _highest, _countable) do
+    [
+      "rubric level min_actions must not exceed the number of actions that are not forbidden"
+      | errors
+    ]
+  end
+
+  defp validate_threshold_within_count_cap(errors, highest, count_cap)
+       when is_integer(count_cap) and count_cap >= 1 and highest > count_cap,
+       do: ["rubric level min_actions must not exceed count_cap" | errors]
+
+  defp validate_threshold_within_count_cap(errors, _highest, _count_cap), do: errors
+
   defp validate_level_description(errors, %{"description" => description}) do
     if non_empty_string?(description) do
       errors
@@ -284,13 +407,25 @@ defmodule Backend.Stations.StationPackage do
     do: ["rubric levels require a non-empty description" | errors]
 
   defp validate_criterion_actions(errors, %{"actions" => actions}) when is_list(actions) do
-    Enum.reduce(actions, errors, fn action, errors ->
-      validate_entry(errors, action, "rubric actions", ["id", "description"])
-    end)
+    errors =
+      Enum.reduce(actions, errors, fn action, errors ->
+        errors
+        |> validate_entry(action, "rubric actions", ["id", "description"])
+        |> validate_action_role(action)
+      end)
+
+    validate_unique_ids(errors, actions, "rubric action ids must be unique within a criterion")
   end
 
   defp validate_criterion_actions(errors, _criterion),
     do: ["rubric criteria actions must be a list" | errors]
+
+  defp validate_action_role(errors, %{"role" => role}) when role in @action_roles, do: errors
+
+  defp validate_action_role(errors, %{"role" => _invalid}),
+    do: ["rubric actions role must be one of: #{Enum.join(@action_roles, ", ")}" | errors]
+
+  defp validate_action_role(errors, _action), do: errors
 
   defp validate_nullable_integer_fields(errors, criterion) do
     Enum.reduce(@criterion_nullable_integer_fields, errors, fn field, errors ->
@@ -300,6 +435,18 @@ defmodule Backend.Stations.StationPackage do
         errors
       else
         ["rubric criteria #{field} must be an integer or null" | errors]
+      end
+    end)
+  end
+
+  defp validate_positive_integer_fields(errors, criterion) do
+    Enum.reduce(@criterion_positive_integer_fields, errors, fn field, errors ->
+      value = criterion[field]
+
+      if is_integer(value) and value < 1 do
+        ["rubric criteria #{field} must be at least 1 when set" | errors]
+      else
+        errors
       end
     end)
   end
@@ -322,6 +469,49 @@ defmodule Backend.Stations.StationPackage do
       ["rubric criteria modality_requirement must be a non-empty string or null" | errors]
     end
   end
+
+  defp validate_criterion_rule(errors, %{"rule" => rule})
+       when is_nil(rule) or rule in @criterion_rules,
+       do: errors
+
+  defp validate_criterion_rule(errors, %{"rule" => _invalid}),
+    do: ["rubric criteria rule must be #{Enum.join(@criterion_rules, ", ")} or null" | errors]
+
+  defp validate_criterion_rule(errors, _criterion), do: errors
+
+  defp validate_forbidden_requires_veto(errors, criterion) do
+    if "forbidden" in action_roles(criterion) and criterion["veto"] != true do
+      ["rubric criteria with a forbidden action must set veto to true" | errors]
+    else
+      errors
+    end
+  end
+
+  # Thresholds and mandatory or forbidden actions score a criterion at its
+  # zero-point level, so that level has to exist.
+  defp validate_zero_point_level(errors, criterion) do
+    levels = criterion |> Map.get("levels") |> maps()
+
+    zero_scoring_rule? =
+      Enum.any?(levels, &Map.has_key?(&1, "min_actions")) or
+        Enum.any?(action_roles(criterion), &(&1 in @zero_scoring_action_roles))
+
+    if zero_scoring_rule? and not Enum.any?(levels, &(&1["points"] == 0)) do
+      [
+        "rubric criteria with thresholds, mandatory or forbidden actions require a zero-point level"
+        | errors
+      ]
+    else
+      errors
+    end
+  end
+
+  defp action_roles(criterion) do
+    criterion |> Map.get("actions") |> maps() |> Enum.map(& &1["role"])
+  end
+
+  defp maps(entries) when is_list(entries), do: Enum.filter(entries, &is_map/1)
+  defp maps(_entries), do: []
 
   defp validate_approved_templates(errors, package) do
     case package["approved_templates"] do

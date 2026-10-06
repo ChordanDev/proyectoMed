@@ -42,9 +42,38 @@ Out (owned elsewhere): versioned HTTP result contract, web decoder and pt-BR dis
 8. **Batching.** One Jev call carries every active question with the full shared evidence pool. A second call happens only for a provider capacity limit (`:max_questions_per_call`) and each call records its justification in the result.
 9. **Legacy compatibility.** The legacy evaluator and endpoint are untouched. `RubricAssessment.to_legacy/1` is the explicit, tested migration projection (`assessed` at the zero level -> `omitted`, `assessed` above zero -> `met`, everything else -> `uncertain`; `not_applicable` criteria are dropped).
 
-## Open decision (blocks T5 only)
+## Authored rule semantics (T5, resolved 2026-10-06)
 
-The v2 schema authors `actions`, `order`, `count_cap`, `first_n` and `veto` as bare fields with no semantics: no count-to-level thresholds, no mandatory flag on actions, no veto effect, no meaning for `order` across criteria. T5 needs the product owner to confirm the semantics before any code is written.
+The v2 schema authored `actions`, `order`, `count_cap`, `first_n` and `veto` as bare fields with no semantics. The product owner decided to define them inside #128, extending the schema and the Jev batch contract where needed. The structural reference is the official booklet ADR-012 cites, `2023_1_PEP_publicacao.pdf` (INEP, https://download.inep.gov.br/revalida/provas_e_gabaritos/2023_1_PEP_publicacao.pdf). It is a reference for the shape of the rules only; rubric content stays original. The copies under `docs/` are byte-corrupted in the committed blob (`0d27786`) and cannot be read.
+
+What the booklet states:
+
+- Count to level: "Adequado: pergunta quatro OU cinco itens. Parcialmente adequado: pergunta dois OU três itens. Inadequado: pergunta apenas um item" (p. 10).
+- Mandatory action: "investiga três ou mais achados, incluindo obrigatoriamente o item 3 ... Inadequado: não investiga o item 3" (p. 4). A missing mandatory action scores the item at zero.
+- First N: "Só serão pontuados os DEZ primeiros exames laboratoriais citados" (pp. 10-11).
+- Order: a dedicated binary item, "Execução das tarefas na ordem determinada" (pp. 5, 11).
+- Veto: "Caso o(a) participante indique a vacina do rotavírus, AVALIAR COMO INADEQUADO" (p. 15). It is local to the item, not to the station.
+- Annulment: "(ITEM ANULADO)" (p. 46), already covered by `exclusion`.
+
+Decisions:
+
+10. **Schema additions are optional**, so every existing v2 package stays valid and the version does not change: `levels[].min_actions` (integer >= 0), `actions[].role` (`counted` default, `mandatory`, `forbidden`), and `rule` on a criterion (`null` default, `task_order`). `count_cap` and `first_n` must be >= 1 when set. Action IDs are unique within a criterion. If any level of a criterion sets `min_actions`, every level does, the zero-point level has 0, and thresholds do not decrease as points increase. A criterion with a `forbidden` action must set `veto: true`; `veto: true` without one has no effect. Added after independent verification of T5a: when thresholds are authored, every level with points above zero has `min_actions` >= 1, and the highest `min_actions` is reachable, so it is at most the number of non-`forbidden` actions (which requires at least one such action) and at most `count_cap` when `count_cap` is set. Otherwise a level could be earned with no action, or count in the station maximum without being earnable.
+11. **Per-criterion rules**, applied in code to a criterion Jev assessed. One principle (owner decision, 2026-10-06, replacing the earlier rule 1): an unresolved action makes the criterion `uncertain` only when resolving it could change the result. In this order:
+    1. A `performed` action without validated learner evidence is unresolved: it is treated like an action classified `uncertain` and keeps its own reason.
+    2. A `forbidden` action that was performed, with evidence, scores the criterion at its zero-point level.
+    3. A `mandatory` action that was `not_performed` scores the criterion at its zero-point level.
+    4. Otherwise the criterion is `uncertain` when an unresolved action could change the level: any unresolved `forbidden` or `mandatory` action; and, when thresholds are authored, the unresolved countable (non-`forbidden`) actions only if the level computed with all of them counted as performed differs from the level computed with none of them counted, both after `count_cap`.
+    5. When thresholds are authored, the level is the highest one whose `min_actions` is at most the number of performed non-forbidden actions, capped by `count_cap`. The count decides the level; Jev's criterion-level class does not.
+    6. Without thresholds, Jev's level stands.
+
+    The zeros of rules 2 and 3 are certain whatever else is unresolved, with or without thresholds. The reported reason is the first unresolved action, in authored order, among those that could change the result: `{:uncertain_sub_action, action_id}` or `{:unsupported_sub_action, action_id}`. A counted action on a criterion without thresholds never makes it `uncertain`.
+12. **`first_n`**: only the learner's first N answers to the criterion are eligible, including answers that match no authored action. This needs Jev to report answer positions in the batch contract; code validates them against evidence order.
+13. **Task order**: a criterion with `rule: "task_order"` is assessed in code, not by Jev, from the `order` ranks of the other criteria and the position of their earliest evidence.
+    Implementation notes (T5a/T5b, open to being overruled):
+    - A criterion with thresholds, a `mandatory` action or a `forbidden` action must author a zero-point level. The loader rejects it otherwise, and `assess/3` invalidates the attempt (`:missing_zero_point_level`, `:inconsistent_thresholds`) for a package that skipped the loader.
+    - A level earned by count still needs criterion-level evidence: sub-action evidence is not merged into the criterion evidence, so a positive level with no criterion evidence stays `:unsupported_credit`.
+    - The role decides the veto in code; `veto: true` is a loader requirement only.
+14. **Not implemented**: pairwise "only what was said before X counts" gates (booklet pp. 10 and 20) and verbalization requirements (p. 20). They need their own authoring fields and are recorded as a follow-up.
 
 ## Tasks
 
@@ -56,7 +85,15 @@ The v2 schema authors `actions`, `order`, `count_cap`, `first_n` and `veto` as b
   - Accept: one call for N questions sharing one evidence pool; class and criterion-ID structure validated; technical-failure taxonomy reused; optional per-action classifications carried.
 - [x] **T4 Assessment orchestration and context entry point.** `RubricAssessment.assess/3`, `Backend.Stations.assess_session/1`, `to_legacy/1`. Route: delegated.
   - Accept: statuses per decision 6; fail-closed evidence; technical failure invalidates the attempt; capacity split recorded; omission, uncertainty/missing modality and exclusion each covered by its own fixture test; legacy projection tested.
-- [ ] **T5 Authored rules.** Counts and thresholds, mandatory sub-actions, chronology, first-N caps, veto. Blocked on the open decision.
+- [x] **T5a Schema and loader for authored rules.** `package.schema.json`, `StationPackage` validation, fixtures. Route: delegated.
+  - Accept: decision 10 enforced by the loader with a distinct error per violation; existing v2 packages and the v1 migration stay valid; one valid fixture exercises every new field.
+- [x] **T5b Per-criterion rules.** `apply_authored_rules/2`. Route: delegated.
+  - Accept: decision 11 in its stated order, each rule covered by its own test; a criterion without the new fields behaves exactly as before.
+  - Reopened and closed again on 2026-10-06: decision 11 was rewritten around one principle (doubt matters only when it can change the outcome), with the precedence cases the independent verification found missing.
+- [ ] **T5c Task-order criterion.** Route: delegated.
+  - Accept: decision 13; the criterion is never sent to Jev; unresolved ranked criteria make it `uncertain`.
+- [ ] **T5d First-N answers.** Batch contract extension plus the rule. Route: delegated.
+  - Accept: decision 12; positions that contradict evidence order fail closed.
 - [ ] **T6 Docs.** Update `docs/design/jev-prototype.md` and `CONTEXT.md` with the implemented contract and the evidence-ID scheme.
 
 ## Checks
@@ -75,9 +112,12 @@ Forecast: about 1,500 authored changed lines, over the 400-line budget. Commits 
 | T2 | delegated (reading prepares the write; non-trivial module + tests) | `97f59b0` | medium, `slice_budget_reached`; RDD off, writer self-verification + parent spot check | RED 0/39 (module missing) -> GREEN 39/39; `mix test` 512 passed; format, compile, Credo strict, Dialyzer clean. An event that released nothing never counts as evidence (legacy rule); invalid events stay in the pool as `:unverified`. 770 lines: the rejection/providability matrix is 39 tests. Running count: 1,391. |
 | T3 | delegated (writer trigger: 4 lib files + tests) | `8506231` | medium, `slice_budget_reached`; RDD off, writer self-verification + parent spot check (277 station tests re-run; diff to existing lib files is additive, 106+/1-) | RED 0/57 (function undefined) -> GREEN 57/57 plus 48 untouched `jev_decision_test.exs`; `mix test` 569 passed; format, compile, Credo strict, Dialyzer clean. `technical_failure?/1` already treats `{:invalid_request, _}` and `{:invalid_response, _}` as technical. Running count: 2,571 (forecast of 1,500 exceeded; test matrices dominate). |
 | T4 | delegated (writer trigger: new module + context function + 2 test files) | `9ad867e` | medium, `slice_budget_reached`; RDD off, writer self-verification + parent spot check (`mix test` 606 passed re-run, format clean, `stations.ex` diff additive +35) | RED 0/37 (functions undefined) -> GREEN 37/37; Credo strict and Dialyzer clean. T5 seam: private `apply_authored_rules/2` in `rubric_assessment.ex`, identity for now, runs before the credit-grounding check. `to_legacy/1` emits impresso evidence with role `:learner` and the event text, not the legacy `:impresso` marker string. Running count: 3,947. |
+| T5a | delegated (one writer for T5a and T5b) | `3a4f47a` | not assessed by the writer | RED 3 failed / 34 passed of 37 in `station_package_test.exs` (4 of the 7 new tests are acceptance cases that already passed) -> GREEN 37/37; `mix test` 613 passed; format, compile `--force --warnings-as-errors`, Credo strict clean. One valid fixture (`valid-package-v2-authored-rules.json`); violations are inline cases. 477 lines incl. this document. |
+| T5b | delegated (same writer) | `5e242ba` | not assessed by the writer | RED 37 failed / 33 passed of 70 (module missing; one integration test already passed because sub-action evidence was validated since T4) -> GREEN 70/70; `mix test` 651 passed; format, compile, Credo strict and Dialyzer clean. New internal module `RubricAssessment.AuthoredRules`; the seam now returns `{:ok, draft} | {:uncertain, reason}` and needs no pool. No existing test changed. |
+| T5a fix | delegated (bounded writer; correction from independent verification) | this commit (`fix(stations): reject unreachable authored rubric thresholds`) | not assessed by the writer | RED 2 failed / 38 passed of 40 in `station_package_test.exs` (the acceptance case for a top threshold equal to the countable actions already passed) -> GREEN 40/40; `mix test` 654 passed; format, compile `--force --warnings-as-errors`, Credo strict and Dialyzer clean. The loader rejects a positive-point level with `min_actions: 0`, a top threshold above the non-forbidden actions or above `count_cap`, and thresholds with no countable action, each with its own message. A negative `min_actions` no longer also trips the value checks. No fixture changed. `first_n` is not part of the reachability check. |
 
 ## Next step
 
-T5 waits for the product decision on rule semantics; T6 follows T5. Before the first PR: confirm the chain strategy (four linear work-unit commits so far, each above 400 lines because of test matrices).
+T5c, T5d and T6. Before the first PR: confirm the chain strategy (four linear work-unit commits so far, each above 400 lines because of test matrices).
 
 Engram mirror `odd/rubric-assessments/tasks`: pending. The last successful save predates T1; the update after T4 was refused because several runtime sessions were active on this project. Resynchronize from this file.

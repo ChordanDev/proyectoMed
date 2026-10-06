@@ -430,6 +430,213 @@ defmodule Backend.Stations.RubricAssessmentTest do
   end
 
   # ============================================================================
+  # Authored rules
+  # ============================================================================
+
+  describe "assess/3 authored rules" do
+    @history "history-taking"
+    @treatment "treatment-plan"
+
+    # history-taking: thresholds 0/2/3 for 0/0.5/1, `ask-onset` mandatory.
+    # treatment-plan: 0/1 without thresholds, one counted and one forbidden action.
+    defp rules do
+      only(package("fixtures/valid-package-v2-authored-rules.json"), [@history, @treatment])
+    end
+
+    defp performed(id, evidence_ids \\ ["turn-1"]) do
+      %{id: id, classification: "performed", evidence_ids: evidence_ids}
+    end
+
+    defp not_performed(id), do: %{id: id, classification: "not_performed", evidence_ids: []}
+
+    defp uncertain(id), do: %{id: id, classification: "uncertain", evidence_ids: []}
+
+    defp history_answer(classification, evidence_ids, actions) do
+      %{@history => answer(classification, evidence_ids, %{actions: actions})}
+    end
+
+    defp treatment_answer(classification, evidence_ids, actions) do
+      %{@treatment => answer(classification, evidence_ids, %{actions: actions})}
+    end
+
+    test "the count of performed actions decides the level, not Jev's class" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration", ["turn-3"]),
+        performed("ask-intensity", ["turn-1", "turn-3"]),
+        not_performed("ask-relief")
+      ]
+
+      assessment =
+        assess!(rules(), session(), history_answer("inadequado", ["turn-1"], actions))
+
+      result = criterion(assessment, @history)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.points == 8
+      assert result.evidence_ids == ["turn-1"]
+      assert result.sub_actions == actions
+    end
+
+    test "a missing mandatory action is assessed at the zero-point level" do
+      actions = [
+        not_performed("ask-onset"),
+        performed("ask-duration"),
+        performed("ask-intensity"),
+        performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("adequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
+      assert result.reason == nil
+    end
+
+    test "a performed forbidden action is assessed at the zero-point level" do
+      actions = [
+        performed("indicate-expected"),
+        performed("indicate-contraindicated", ["turn-3"])
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), treatment_answer("adequado", ["turn-1"], actions))
+        |> criterion(@treatment)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
+      assert result.evidence_ids == ["turn-1"]
+    end
+
+    test "an uncertain sub-action that could change the level leaves the criterion uncertain" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration"),
+        uncertain("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      assessment = assess!(rules(), session(), history_answer("adequado", ["turn-1"], actions))
+      result = criterion(assessment, @history)
+
+      assert result.status == :uncertain
+      assert result.reason == {:uncertain_sub_action, "ask-intensity"}
+      assert result.sub_actions == []
+      assert_unscored(result)
+      assert %{id: @history, status: :uncertain} in assessment.estimates.unresolved
+    end
+
+    test "an uncertain sub-action that cannot change the level leaves it assessed" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration"),
+        performed("ask-intensity"),
+        uncertain("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("inadequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.sub_actions == actions
+    end
+
+    test "a missing mandatory action is certain whatever else is unresolved" do
+      actions = [
+        not_performed("ask-onset"),
+        uncertain("ask-duration"),
+        performed("ask-intensity", []),
+        performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("adequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
+    end
+
+    test "a sub-action performed without evidence leaves the criterion uncertain" do
+      actions = [
+        performed("ask-onset", []),
+        performed("ask-duration"),
+        performed("ask-intensity"),
+        performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("adequado", ["turn-1"], actions))
+        |> criterion(@history)
+
+      assert result.status == :uncertain
+      assert result.reason == {:unsupported_sub_action, "ask-onset"}
+      assert_unscored(result)
+    end
+
+    test "sub-action evidence goes through the same validation as criterion evidence" do
+      actions = [
+        performed("indicate-expected"),
+        performed("indicate-contraindicated", ["turn-2"])
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), treatment_answer("adequado", ["turn-1"], actions))
+        |> criterion(@treatment)
+
+      assert result.status == :uncertain
+      assert result.reason == {:invalid_evidence, :wrong_role, "turn-2"}
+      assert_unscored(result)
+    end
+
+    test "a level earned by count still needs criterion-level evidence" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration"),
+        not_performed("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("inadequado", [], actions))
+        |> criterion(@history)
+
+      assert result.status == :uncertain
+      assert result.reason == :unsupported_credit
+      assert_unscored(result)
+    end
+
+    test "rule fields that cannot be applied invalidate the attempt before any call" do
+      broken =
+        update_criterion(rules(), @treatment, fn criterion ->
+          put_in(criterion, ["levels", Access.at(0), "points"], 0.5)
+        end)
+
+      assert_invalid_attempt(
+        assess(broken, session(), %{}),
+        {:invalid_package, @treatment, :missing_zero_point_level}
+      )
+
+      refute_received {:batch_request, _}
+    end
+  end
+
+  # ============================================================================
   # Exact arithmetic
   # ============================================================================
 
