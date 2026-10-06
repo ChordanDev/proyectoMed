@@ -795,6 +795,46 @@ defmodule Backend.StationPackageTest do
       assert {:ok, ^package} = StationPackage.validate(package)
     end
 
+    test "rejects a top threshold that the first N answers cannot reach" do
+      first_n_error = "rubric level min_actions must not exceed first_n"
+      uncapped = put_criterion(authored_rules(), @history, ["count_cap"], nil)
+
+      # history-taking authors thresholds 0/2/3 over four countable actions.
+      assert {:error, errors} =
+               StationPackage.validate(put_criterion(uncapped, @history, ["first_n"], 2))
+
+      assert errors == [first_n_error]
+
+      # Both caps out of reach are two defects, each with its own message.
+      assert {:error, errors} =
+               authored_rules()
+               |> put_criterion(@history, ["count_cap"], 2)
+               |> put_criterion(@history, ["first_n"], 2)
+               |> StationPackage.validate()
+
+      assert Enum.sort(errors) ==
+               ["rubric level min_actions must not exceed count_cap", first_n_error]
+    end
+
+    test "accepts first_n at or above the top threshold, and first_n without thresholds" do
+      for first_n <- [3, 4] do
+        package = put_criterion(authored_rules(), @history, ["first_n"], first_n)
+
+        assert {:ok, ^package} = StationPackage.validate(package)
+      end
+
+      # treatment-plan authors actions and no thresholds.
+      package = put_criterion(authored_rules(), @treatment, ["first_n"], 1)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "JSON schema documents the first_n reachability rule" do
+      description = json_file(@schema_path)["$defs"]["rubricCriterion"]["description"]
+
+      assert description =~ "at most first_n when first_n is set"
+    end
+
     test "JSON schema requires a positive threshold on levels with points above zero" do
       level = json_file(@schema_path)["$defs"]["rubricLevel"]
 

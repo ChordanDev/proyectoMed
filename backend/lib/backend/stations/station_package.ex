@@ -12,7 +12,8 @@ defmodule Backend.Stations.StationPackage do
   strings and booleans are load errors (issue #147).
 
   The authored rubric rule fields are optional (issue #128): `levels[].min_actions`,
-  `actions[].role` and a criterion `rule`. Their cross-field consistency is
+  `actions[].role` and a criterion `rule`. Their cross-field consistency, and
+  the reachability of the thresholds under `count_cap` and `first_n`, are
   checked here, because the JSON schema cannot express all of it.
   """
 
@@ -365,8 +366,9 @@ defmodule Backend.Stations.StationPackage do
   end
 
   # The highest threshold has to be earnable: the assessment counts performed
-  # actions that are not forbidden and caps that count at count_cap. A top
-  # level out of reach would still count in the station maximum.
+  # actions that are not forbidden, only among the first first_n answers, and
+  # caps that count at count_cap. A top level out of reach would still count
+  # in the station maximum.
   defp validate_threshold_reachability(errors, levels, %{"actions" => actions} = criterion)
        when is_list(actions) do
     highest = levels |> Enum.map(& &1["min_actions"]) |> Enum.max()
@@ -375,6 +377,7 @@ defmodule Backend.Stations.StationPackage do
     errors
     |> validate_threshold_within_actions(highest, countable)
     |> validate_threshold_within_count_cap(highest, criterion["count_cap"])
+    |> validate_threshold_within_first_n(highest, criterion["first_n"])
   end
 
   defp validate_threshold_reachability(errors, _levels, _criterion), do: errors
@@ -399,6 +402,12 @@ defmodule Backend.Stations.StationPackage do
        do: ["rubric level min_actions must not exceed count_cap" | errors]
 
   defp validate_threshold_within_count_cap(errors, _highest, _count_cap), do: errors
+
+  defp validate_threshold_within_first_n(errors, highest, first_n)
+       when is_integer(first_n) and first_n >= 1 and highest > first_n,
+       do: ["rubric level min_actions must not exceed first_n" | errors]
+
+  defp validate_threshold_within_first_n(errors, _highest, _first_n), do: errors
 
   defp validate_level_description(errors, %{"description" => description}) do
     if non_empty_string?(description) do

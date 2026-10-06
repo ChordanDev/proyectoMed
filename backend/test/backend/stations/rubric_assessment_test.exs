@@ -16,7 +16,8 @@ defmodule Backend.Stations.RubricAssessmentTest do
     `opts[:test_pid]`. The reply is `opts[:reply]` (a term or a one-arity
     function of the request) or, by default, one decision per question taken
     from `opts[:answers]` (`criterion_id => decision overrides`); a question
-    without an answer is classified `"uncertain"`.
+    without an answer is classified `"uncertain"`, and enumerates no learner
+    answers when the question requests the enumeration.
     """
     @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -42,17 +43,19 @@ defmodule Backend.Stations.RubricAssessmentTest do
     @doc "Builds one decision per question from the scripted answers."
     def decisions(request, answers) do
       Enum.map(request.questions, fn question ->
-        Map.merge(
-          %{
-            criterion_id: question.criterion.id,
-            classification: "uncertain",
-            evidence_ids: [],
-            actions: Enum.map(question.actions, &action(&1.id, "uncertain", []))
-          },
-          Map.get(answers, question.criterion.id, %{})
-        )
+        %{
+          criterion_id: question.criterion.id,
+          classification: "uncertain",
+          evidence_ids: [],
+          actions: Enum.map(question.actions, &action(&1.id, "uncertain", []))
+        }
+        |> Map.merge(enumeration(question))
+        |> Map.merge(Map.get(answers, question.criterion.id, %{}))
       end)
     end
+
+    defp enumeration(%{enumerate_answers: true}), do: %{answers: []}
+    defp enumeration(_question), do: %{}
 
     defp action(id, classification, evidence_ids) do
       %{id: id, classification: classification, evidence_ids: evidence_ids}
@@ -820,10 +823,12 @@ defmodule Backend.Stations.RubricAssessmentTest do
       answer("adequado", evidence_ids, %{actions: actions})
     end
 
+    # exam-requests authors `first_n`, so its answer enumerates what was said.
     defp done(@exams, evidence_ids) do
       actions = [performed("request-exam-a", evidence_ids), not_performed("request-exam-b")]
+      answers = [%{evidence_id: hd(evidence_ids), action_id: "request-exam-a"}]
 
-      answer("adequado", evidence_ids, %{actions: actions})
+      answer("adequado", evidence_ids, %{actions: actions, answers: answers})
     end
 
     # An answer that assesses the step at its zero-point level.
@@ -1202,6 +1207,428 @@ defmodule Backend.Stations.RubricAssessmentTest do
       )
 
       refute_received {:batch_request, _}
+    end
+  end
+
+  # ============================================================================
+  # First-N answers
+  # ============================================================================
+
+  describe "assess/3 first-N answers" do
+    # turn-2 is the only patient turn; every other turn is a learner turn.
+    defp answers_session do
+      texts = ["Primeira.", "Resposta.", "Segunda.", "Terceira.", "Quarta.", "Quinta."]
+
+      messages =
+        for {text, index} <- Enum.with_index(texts) do
+          role = if index == 1, do: :patient, else: :learner
+          turn(role, text, DateTime.add(@t0, index, :second))
+        end
+
+      %{messages: messages, impresso_requests: []}
+    end
+
+    defp said(evidence_id, action_id \\ nil),
+      do: %{evidence_id: evidence_id, action_id: action_id}
+
+    # history-taking with `first_n: 3`: thresholds 0/2/3 for 0/0.5/1, capped at
+    # three, `ask-onset` mandatory and three counted actions.
+    defp first_three do
+      ordered() |> only([@history]) |> update_criterion(@history, &Map.put(&1, "first_n", 3))
+    end
+
+    # treatment-plan with `first_n: 1`: one counted and one forbidden action.
+    defp first_one do
+      ordered() |> only([@treatment]) |> update_criterion(@treatment, &Map.put(&1, "first_n", 1))
+    end
+
+    # exam-requests as authored: `first_n: 2`, `count_cap: 1`, thresholds 0/1.
+    defp first_two, do: only(ordered(), [@exams])
+
+    defp history_result(actions, answers, classification \\ "inadequado") do
+      decision = answer(classification, [], %{actions: actions, answers: answers})
+
+      first_three() |> assess!(answers_session(), %{@history => decision}) |> criterion(@history)
+    end
+
+    defp exams_result(actions, answers) do
+      decision = answer("uncertain", [], %{actions: actions, answers: answers})
+
+      first_two() |> assess!(answers_session(), %{@exams => decision}) |> criterion(@exams)
+    end
+
+    defp all_history_performed do
+      [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-3"]),
+        performed("ask-intensity", ["turn-4"]),
+        performed("ask-relief", ["turn-5"])
+      ]
+    end
+
+    test "the enumeration is requested only where first_n and actions are both authored" do
+      assess!(ordered(), order_session(), %{})
+      assert_received {:batch_request, %{questions: [history, treatment, exams]}}
+
+      refute Map.has_key?(history, :enumerate_answers)
+      refute Map.has_key?(treatment, :enumerate_answers)
+      assert exams.enumerate_answers == true
+
+      # symptom-characterization authors `first_n: 1` and no action.
+      assess!(v2(), session(), %{})
+      assert_received {:batch_request, %{questions: questions}}
+
+      refute Enum.any?(questions, &Map.has_key?(&1, :enumerate_answers))
+    end
+
+    test "first_n without actions behaves as before" do
+      result =
+        v2()
+        |> assess!(session(), %{@symptom => answer("adequado", ["turn-3"])})
+        |> criterion(@symptom)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.points == 2
+    end
+
+    test "the N-th answer is scored" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-3"]),
+        performed("ask-intensity", ["turn-4"]),
+        not_performed("ask-relief")
+      ]
+
+      answers = [
+        said("turn-1", "ask-onset"),
+        said("turn-3", "ask-duration"),
+        said("turn-4", "ask-intensity")
+      ]
+
+      result = history_result(actions, answers)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.points == 8
+      assert result.evidence_ids == ["turn-1", "turn-3", "turn-4"]
+    end
+
+    test "the answer after the N-th is not scored and does not ground the level" do
+      answers = [
+        said("turn-1", "ask-onset"),
+        said("turn-3", "ask-duration"),
+        said("turn-4", "ask-intensity"),
+        said("turn-5", "ask-relief")
+      ]
+
+      result = history_result(all_history_performed(), answers)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.evidence_ids == ["turn-1", "turn-3", "turn-4"]
+      # The classifier's reading is reported as it was given.
+      assert result.sub_actions == all_history_performed()
+    end
+
+    test "an answer that matches no authored action consumes a slot" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-3"]),
+        performed("ask-intensity", ["turn-5"]),
+        not_performed("ask-relief")
+      ]
+
+      answers = [
+        said("turn-1", "ask-onset"),
+        said("turn-3", "ask-duration"),
+        said("turn-4"),
+        said("turn-5", "ask-intensity")
+      ]
+
+      result = history_result(actions, answers, "adequado")
+
+      assert result.status == :assessed
+      assert result.level == "parcialmente_adequado"
+      assert result.points == 4
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+    end
+
+    test "a mandatory action beyond the first N scores the zero-point level" do
+      answers = [
+        said("turn-1", "ask-duration"),
+        said("turn-3", "ask-intensity"),
+        said("turn-4", "ask-relief"),
+        said("turn-5", "ask-onset")
+      ]
+
+      actions = [
+        performed("ask-onset", ["turn-5"]),
+        performed("ask-duration", ["turn-1"]),
+        performed("ask-intensity", ["turn-3"]),
+        performed("ask-relief", ["turn-4"])
+      ]
+
+      result = history_result(actions, answers, "adequado")
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
+      assert result.reason == nil
+    end
+
+    test "a forbidden action beyond the first N still scores the zero-point level" do
+      treatment = fn contraindicated, answers ->
+        actions = [performed("indicate-expected", ["turn-1"]), contraindicated]
+        decision = answer("adequado", ["turn-1"], %{actions: actions, answers: answers})
+
+        first_one()
+        |> assess!(answers_session(), %{@treatment => decision})
+        |> criterion(@treatment)
+      end
+
+      vetoed =
+        treatment.(
+          performed("indicate-contraindicated", ["turn-3"]),
+          [said("turn-1", "indicate-expected"), said("turn-3", "indicate-contraindicated")]
+        )
+
+      assert vetoed.status == :assessed
+      assert vetoed.level == "inadequado"
+      assert vetoed.points == Points.zero()
+
+      kept =
+        treatment.(not_performed("indicate-contraindicated"), [
+          said("turn-1", "indicate-expected")
+        ])
+
+      assert kept.level == "adequado"
+      assert kept.points == 8
+    end
+
+    test "thresholds and count_cap apply to the eligible answers only" do
+      both = [performed("request-exam-a", ["turn-3"]), performed("request-exam-b", ["turn-4"])]
+
+      one_eligible =
+        exams_result(both, [
+          said("turn-1"),
+          said("turn-3", "request-exam-a"),
+          said("turn-4", "request-exam-b")
+        ])
+
+      assert one_eligible.level == "adequado"
+      assert one_eligible.points == 2
+      assert one_eligible.evidence_ids == ["turn-3"]
+
+      none_eligible =
+        exams_result(both, [
+          said("turn-1"),
+          said("turn-1"),
+          said("turn-3", "request-exam-a"),
+          said("turn-4", "request-exam-b")
+        ])
+
+      assert none_eligible.status == :assessed
+      assert none_eligible.level == "inadequado"
+      assert none_eligible.points == Points.zero()
+      assert none_eligible.evidence_ids == []
+
+      # Two eligible actions are capped at one, and both ground the level.
+      capped =
+        exams_result(both, [said("turn-3", "request-exam-a"), said("turn-4", "request-exam-b")])
+
+      assert capped.level == "adequado"
+      assert capped.points == 2
+      assert capped.evidence_ids == ["turn-3", "turn-4"]
+    end
+
+    test "an unsupported action stays unresolved within the first N and is certain beyond it" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-3"]),
+        performed("ask-intensity", []),
+        not_performed("ask-relief")
+      ]
+
+      within =
+        history_result(actions, [
+          said("turn-1", "ask-onset"),
+          said("turn-3", "ask-duration"),
+          said("turn-4", "ask-intensity")
+        ])
+
+      assert within.status == :uncertain
+      assert within.reason == {:unsupported_sub_action, "ask-intensity"}
+
+      beyond =
+        history_result(actions, [
+          said("turn-1", "ask-onset"),
+          said("turn-3", "ask-duration"),
+          said("turn-4"),
+          said("turn-5", "ask-intensity")
+        ])
+
+      assert beyond.status == :assessed
+      assert beyond.level == "parcialmente_adequado"
+    end
+
+    test "an answer whose evidence fails validation fails the criterion closed" do
+      cases = [
+        {"turn-2", {:invalid_evidence, :wrong_role, "turn-2"}},
+        {"turn-99", {:invalid_evidence, :nonexistent_evidence_id, "turn-99"}}
+      ]
+
+      for {evidence_id, reason} <- cases do
+        answers = [
+          said("turn-1", "ask-onset"),
+          said(evidence_id),
+          said("turn-3", "ask-duration"),
+          said("turn-4", "ask-intensity"),
+          said("turn-5", "ask-relief")
+        ]
+
+        result = history_result(all_history_performed(), answers)
+
+        assert result.status == :uncertain
+        assert result.reason == reason
+        assert_unscored(result)
+      end
+    end
+
+    test "answers listed against the evidence order fail the criterion closed" do
+      answers = [
+        said("turn-1", "ask-onset"),
+        said("turn-4", "ask-intensity"),
+        said("turn-3", "ask-duration"),
+        said("turn-5", "ask-relief")
+      ]
+
+      result = history_result(all_history_performed(), answers)
+
+      assert result.status == :uncertain
+      assert result.reason == {:answer_out_of_order, "turn-3"}
+      assert_unscored(result)
+    end
+
+    test "one turn may hold several answers" do
+      actions = Enum.map(all_history_performed(), &%{&1 | evidence_ids: ["turn-1"]})
+
+      answers = [
+        said("turn-1", "ask-onset"),
+        said("turn-1", "ask-duration"),
+        said("turn-1", "ask-intensity"),
+        said("turn-1", "ask-relief")
+      ]
+
+      result = history_result(actions, answers)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.evidence_ids == ["turn-1"]
+    end
+
+    test "a performed action that is not enumerated fails the criterion closed" do
+      answers = [
+        said("turn-1", "ask-onset"),
+        said("turn-3", "ask-duration"),
+        said("turn-5", "ask-relief")
+      ]
+
+      result = history_result(all_history_performed(), answers)
+
+      assert result.status == :uncertain
+      assert result.reason == {:unlisted_performed_action, "ask-intensity"}
+      assert_unscored(result)
+    end
+
+    test "an enumerated action that was not classified performed fails the criterion closed" do
+      for unperformed <- [not_performed("ask-relief"), uncertain("ask-relief")] do
+        actions = [
+          performed("ask-onset", ["turn-1"]),
+          performed("ask-duration", ["turn-3"]),
+          performed("ask-intensity", ["turn-4"]),
+          unperformed
+        ]
+
+        answers = [
+          said("turn-1", "ask-onset"),
+          said("turn-3", "ask-duration"),
+          said("turn-4", "ask-intensity"),
+          said("turn-5", "ask-relief")
+        ]
+
+        result = history_result(actions, answers)
+
+        assert result.status == :uncertain
+        assert result.reason == {:listed_unperformed_action, "ask-relief"}
+        assert_unscored(result)
+      end
+    end
+
+    test "a structurally invalid enumeration invalidates the attempt" do
+      exams = fn overrides ->
+        actions = [performed("request-exam-a", ["turn-1"]), not_performed("request-exam-b")]
+        decision = Map.merge(answer("adequado", ["turn-1"], %{actions: actions}), overrides)
+
+        assess(first_two(), answers_session(), %{@exams => decision})
+      end
+
+      cases = [
+        {%{answers: nil}, :missing_answers},
+        {%{answers: "turn-1"}, :expected_answers_list},
+        {%{answers: [said("turn-1", "request-exam-z")]}, :unknown_answer_action_id},
+        {%{answers: [said("turn-1", "request-exam-a"), said("turn-3", "request-exam-a")]},
+         :duplicate_answer_action_id}
+      ]
+
+      for {overrides, reason} <- cases do
+        assert {:error, {:invalid_attempt, {_kind, ^reason}}} = exams.(overrides)
+      end
+
+      # symptom-characterization authors no action, so nothing was requested.
+      unrequested = answer("adequado", ["turn-3"], %{answers: [said("turn-3")]})
+
+      assert_invalid_attempt(
+        assess(v2(), session(), %{@symptom => unrequested}),
+        {:invalid_response, :unexpected_answers}
+      )
+    end
+
+    test "a capacity split keeps the enumeration with its question" do
+      beyond = [
+        said("turn-1"),
+        said("turn-3"),
+        said("turn-5", "request-exam-a")
+      ]
+
+      assessment =
+        assess!(
+          ordered(),
+          order_session(),
+          %{
+            @history => done(@history, ["turn-1"]),
+            @treatment => done(@treatment, ["turn-3"]),
+            @exams => Map.put(done(@exams, ["turn-5"]), :answers, beyond)
+          },
+          max_questions_per_call: 1
+        )
+
+      assert Enum.map(assessment.calls, & &1.justification) ==
+               [:single_batch, :provider_capacity, :provider_capacity]
+
+      assert_received {:batch_request, %{questions: [first]}}
+      assert_received {:batch_request, %{questions: [second]}}
+      assert_received {:batch_request, %{questions: [third]}}
+
+      refute Map.has_key?(first, :enumerate_answers)
+      refute Map.has_key?(second, :enumerate_answers)
+      assert third.enumerate_answers == true
+
+      result = criterion(assessment, @exams)
+
+      assert result.status == :assessed
+      assert result.level == "inadequado"
+      assert result.points == Points.zero()
     end
   end
 

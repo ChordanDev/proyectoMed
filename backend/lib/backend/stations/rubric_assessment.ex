@@ -35,7 +35,13 @@ defmodule Backend.Stations.RubricAssessment do
   `Backend.Stations.RubricAssessment.AuthoredRules`, which owns the
   per-criterion rules (action roles, thresholds and `count_cap`). A criterion
   that authors none of them keeps the level Jev chose, and stays `:uncertain`
-  when Jev chose none. `first_n` is not applied yet.
+  when Jev chose none.
+
+  `first_n` runs before those rules, through
+  `Backend.Stations.RubricAssessment.FirstN`: a criterion that authors it and
+  at least one action asks Jev to enumerate the learner's answers, and only the
+  first N of them are eligible. The reported `:sub_actions` stay as Jev
+  classified them; the level and its evidence use the eligible ones.
   """
 
   alias Backend.Stations.JevDecision
@@ -43,6 +49,7 @@ defmodule Backend.Stations.RubricAssessment do
   alias Backend.Stations.RubricAssessment.AuthoredRules
   alias Backend.Stations.RubricAssessment.Estimates
   alias Backend.Stations.RubricAssessment.Evidence
+  alias Backend.Stations.RubricAssessment.FirstN
   alias Backend.Stations.RubricAssessment.Points
   alias Backend.Stations.RubricAssessment.TaskOrder
 
@@ -58,6 +65,7 @@ defmodule Backend.Stations.RubricAssessment do
           | :unsupported_credit
           | {:invalid_evidence, Evidence.rejection(), term()}
           | AuthoredRules.uncertainty()
+          | FirstN.uncertainty()
           | TaskOrder.uncertainty()
 
   @typedoc "A pool item as reported on a criterion result."
@@ -272,11 +280,15 @@ defmodule Backend.Stations.RubricAssessment do
   end
 
   defp question(%{id: id, criterion: criterion}) do
-    %{
+    question = %{
       criterion: %{id: id, description: compose_description(criterion)},
       allowed_classes: level_labels(criterion) ++ [@uncertain_class],
       actions: authored_actions(criterion)
     }
+
+    # The enumeration of the learner's answers is requested only where the
+    # first-N rule needs it.
+    if FirstN.applies?(criterion), do: Map.put(question, :enumerate_answers, true), else: question
   end
 
   # The authored description, then the evidence questions and one line per
@@ -394,7 +406,9 @@ defmodule Backend.Stations.RubricAssessment do
   defp rule(%{criterion: criterion, requirement: requirement}, jev_level, decision, pool) do
     with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
          {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement),
-         {:ok, level, counted} <- AuthoredRules.decide_level(criterion, jev_level, sub_actions) do
+         {:ok, eligible} <-
+           FirstN.eligible(criterion, sub_actions, answers(decision), pool, requirement),
+         {:ok, level, counted} <- AuthoredRules.decide_level(criterion, jev_level, eligible) do
       grounded(%{
         level: level,
         evidence: with_counted(evidence, counted, pool),
@@ -405,6 +419,9 @@ defmodule Backend.Stations.RubricAssessment do
       {:uncertain, _reason} = uncertain -> uncertain
     end
   end
+
+  # Present only on a decision whose question requested the enumeration.
+  defp answers(decision), do: Map.get(decision, :answers, [])
 
   # A level earned by count is grounded by the actions that earned it: their
   # evidence, already validated, joins the criterion evidence in pool order.
