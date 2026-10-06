@@ -362,6 +362,14 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
              ) == ["ask-onset", "ask-duration", "ask-intensity"]
     end
 
+    test "a veto zero is grounded by the performed forbidden actions" do
+      assert counted(treatment(), @adequado, ["indicate-expected", "indicate-contraindicated"]) ==
+               ["indicate-contraindicated"]
+
+      assert counted(history_with_forbidden(), @adequado, @history_actions ++ ["ask-leading"]) ==
+               ["ask-leading"]
+    end
+
     test "a level the count did not decide has none" do
       assert counted(treatment(), @adequado, ["indicate-expected"]) == []
       assert counted(plain(), @adequado, ["ask-onset"]) == []
@@ -432,6 +440,14 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
     test "a zero-point level with a positive threshold is inconsistent" do
       assert AuthoredRules.check(put_level(history(), 0, "min_actions", 1)) ==
                {:error, :inconsistent_thresholds}
+    end
+
+    test "first_n with actions needs thresholds, and first_n without actions does not" do
+      assert AuthoredRules.check(Map.put(treatment(), "first_n", 1)) ==
+               {:error, :first_n_without_thresholds}
+
+      assert AuthoredRules.check(Map.put(history(), "first_n", 3)) == :ok
+      assert AuthoredRules.check(Map.merge(plain(), %{"first_n" => 1, "actions" => []})) == :ok
     end
 
     test "thresholds, mandatory and forbidden actions need a zero-point level" do

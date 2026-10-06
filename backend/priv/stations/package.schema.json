@@ -91,7 +91,7 @@
       }
     },
     "rubric": {
-      "description": "A rubric has at most one task_order criterion, and one that has it needs at least two other criteria with a non-null order. The task_order criterion is assessed in code from those ranks and is never sent to the classifier.",
+      "description": "A rubric has at most one task_order criterion, and one that has it needs at least two other criteria with a non-null order that are not excluded (exclusion is not true). The task_order criterion is assessed in code from those ranks and is never sent to the classifier.",
       "type": "array",
       "items": {"$ref": "#/$defs/rubricCriterion"},
       "if": {
@@ -110,7 +110,10 @@
           {
             "contains": {
               "required": ["order"],
-              "properties": {"order": {"type": "integer"}}
+              "properties": {
+                "order": {"type": "integer"},
+                "exclusion": {"const": false}
+              }
             },
             "minContains": 2
           }
@@ -118,7 +121,7 @@
       }
     },
     "rubricCriterion": {
-      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden and at most count_cap when count_cap is set; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level. A task_order criterion authors no actions and no thresholds, sets order, count_cap, first_n and modality_requirement to null and veto to false, and has a zero-point level; the loader reports each violation with its own message.",
+      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden, at most count_cap when count_cap is set and at most first_n when first_n is set; first_n limits scoring to the learner's first N answers to the criterion, including answers that match no authored action, and has no effect on a criterion without actions; a criterion that authors first_n and at least one action must author thresholds, because a level the classifier chooses as a whole cannot be limited to the first N answers; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level. A task_order criterion authors no actions and no thresholds, sets order, count_cap, first_n and modality_requirement to null and veto to false, and has a zero-point level; the loader reports each violation with its own message.",
       "type": "object",
       "required": [
         "id",
@@ -201,6 +204,20 @@
               "first_n": {"type": "null"},
               "veto": {"const": false},
               "modality_requirement": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["first_n", "actions"],
+            "properties": {
+              "first_n": {"type": "integer"},
+              "actions": {"minItems": 1}
+            }
+          },
+          "then": {
+            "properties": {
+              "levels": {"items": {"required": ["min_actions"]}}
             }
           }
         }

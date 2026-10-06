@@ -116,6 +116,13 @@ defmodule Backend.Stations.JevDecision.Adapter do
   (`"performed"`, `"not_performed"` or `"uncertain"`). Returns `{:error, reason}`
   on technical failure.
 
+  A question that carries `enumerate_answers: true` must also be answered with
+  `answers`: the ordered list of the distinct answers the learner gave to that
+  criterion, each `%{evidence_id, action_id}`, where `action_id` is the authored
+  action the answer matches or `nil`. Answers that match no authored action are
+  listed too. An adapter that does not enumerate fails the batch, like any
+  other missing output.
+
   This callback is optional: an adapter that does not implement it cannot serve
   batched rubric decisions and the caller receives a typed technical failure.
   """

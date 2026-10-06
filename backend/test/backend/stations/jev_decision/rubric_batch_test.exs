@@ -604,6 +604,164 @@ defmodule Backend.Stations.JevDecision.RubricBatchTest do
   end
 
   # ============================================================================
+  # Answer enumeration
+  # ============================================================================
+
+  describe "decide_rubric_batch/2 answer enumeration" do
+    defp enumerating_question, do: Map.put(actions_question(), :enumerate_answers, true)
+
+    defp answer_entry(evidence_id, action_id) do
+      %{evidence_id: evidence_id, action_id: action_id}
+    end
+
+    defp performed_actions, do: [action_decision("act-a"), action_decision("act-b")]
+
+    defp decide_answers(answers) do
+      decide(
+        request([enumerating_question()]),
+        reply_with([decision("crit-1", %{actions: performed_actions(), answers: answers})])
+      )
+    end
+
+    test "carries the enumeration flag only on the questions that request it" do
+      questions = [
+        enumerating_question(),
+        question("crit-2", %{"enumerate_answers" => true}),
+        question("crit-3", %{enumerate_answers: false}),
+        question("crit-4")
+      ]
+
+      reply = fn request ->
+        decisions =
+          Enum.map(request.questions, fn question ->
+            decision(question.criterion.id, %{
+              actions: Enum.map(question.actions, &action_decision(&1.id)),
+              answers: if(question[:enumerate_answers], do: [])
+            })
+          end)
+
+        reply_with(decisions)
+      end
+
+      assert {:ok, [first, second, third, fourth]} = decide(request(questions), reply)
+      assert_received {:batch_request, sent}
+
+      assert Enum.map(sent.questions, &Map.get(&1, :enumerate_answers, :absent)) ==
+               [true, true, :absent, :absent]
+
+      assert first.answers == []
+      assert second.answers == []
+      refute Map.has_key?(third, :answers)
+      refute Map.has_key?(fourth, :answers)
+    end
+
+    test "rejects an enumeration flag that is not a boolean" do
+      assert_invalid_request(
+        request([question("crit-1", %{enumerate_answers: "yes"})]),
+        :invalid_enumerate_answers
+      )
+    end
+
+    test "returns the normalized answers in the order the adapter listed them" do
+      answers = [
+        answer_entry("turn-1", "act-b"),
+        %{"evidence_id" => "turn-1"},
+        %{"evidence_id" => "impresso-req-1", "action_id" => "act-a"},
+        answer_entry("turn-404", nil)
+      ]
+
+      assert {:ok, [decision]} = decide_answers(answers)
+
+      assert decision.answers == [
+               %{evidence_id: "turn-1", action_id: "act-b"},
+               %{evidence_id: "turn-1", action_id: nil},
+               %{evidence_id: "impresso-req-1", action_id: "act-a"},
+               %{evidence_id: "turn-404", action_id: nil}
+             ]
+    end
+
+    test "rejects a missing answers list when it was requested" do
+      error = {:invalid_response, :missing_answers}
+
+      assert {:error, ^error} =
+               decide(
+                 request([enumerating_question()]),
+                 reply_with([decision("crit-1", %{actions: performed_actions()})])
+               )
+
+      assert JevDecision.technical_failure?(error)
+    end
+
+    test "an adapter that does not enumerate fails the batch" do
+      assert {:error, {:invalid_response, :missing_answers}} =
+               decide(
+                 request([question("crit-1"), enumerating_question() |> put_id("crit-2")]),
+                 nil
+               )
+    end
+
+    test "rejects answers that are not a list of maps" do
+      for answers <- ["turn-1", %{evidence_id: "turn-1"}] do
+        assert {:error, {:malformed_output, :expected_answers_list}} = decide_answers(answers)
+      end
+
+      assert {:error, {:malformed_output, :expected_answer_map}} = decide_answers(["turn-1"])
+    end
+
+    test "rejects an answer without a binary evidence ID" do
+      for entry <- [%{action_id: "act-a"}, answer_entry(1, "act-a"), answer_entry(nil, nil)] do
+        assert {:error, {:invalid_response, :invalid_answer_evidence_id}} =
+                 decide_answers([entry])
+      end
+    end
+
+    test "rejects an answer whose action ID is unknown or not a binary" do
+      assert {:error, {:invalid_response, :unknown_answer_action_id}} =
+               decide_answers([answer_entry("turn-1", "act-a"), answer_entry("turn-1", "act-z")])
+
+      assert {:error, {:invalid_response, :invalid_answer_action_id}} =
+               decide_answers([answer_entry("turn-1", :"act-a")])
+    end
+
+    test "rejects an action ID that appears in two answers" do
+      error = {:invalid_response, :duplicate_answer_action_id}
+
+      assert {:error, ^error} =
+               decide_answers([
+                 answer_entry("turn-1", "act-a"),
+                 answer_entry("turn-1", nil),
+                 answer_entry("impresso-req-1", "act-a")
+               ])
+
+      assert JevDecision.technical_failure?(error)
+    end
+
+    test "accepts several answers that match no authored action" do
+      answers = [answer_entry("turn-1", nil), answer_entry("turn-1", nil)]
+
+      assert {:ok, [%{answers: ^answers}]} = decide_answers(answers)
+    end
+
+    test "rejects answers for a question that did not request them" do
+      for answers <- [[answer_entry("turn-1", nil)], "turn-1"] do
+        reply = reply_with([decision("crit-1", %{answers: answers})])
+
+        assert {:error, {:invalid_response, :unexpected_answers}} =
+                 decide(request([question("crit-1")]), reply)
+      end
+    end
+
+    test "accepts an empty answers list for a question that did not request them" do
+      reply = reply_with([decision("crit-1", %{answers: []})])
+
+      assert {:ok, [decision]} = decide(request([question("crit-1")]), reply)
+      refute Map.has_key?(decision, :answers)
+    end
+
+    defp put_id(question, id), do: put_in(question, [:criterion, :id], id)
+  end
+
+  # ============================================================================
   # Technical failures
   # ============================================================================
 

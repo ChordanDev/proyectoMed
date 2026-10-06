@@ -7,6 +7,13 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
   them. This module is pure: `Backend.Stations.JevDecision.decide_rubric_batch/2`
   owns adapter resolution, the deadline and error sanitization.
 
+  A question may also request the enumeration of the learner's answers
+  (`enumerate_answers: true`). Its decision must then carry `answers`: the
+  ordered list of the distinct answers the learner gave to that criterion, each
+  with the evidence item that holds it and the authored action it matches, or
+  `nil` when it matches none. The caller uses it for rules that depend on the
+  order of what was said, such as scoring only the first N answers.
+
   Structural problems are reported as typed errors that never embed adapter or
   learner text: `{:invalid_request, reason}` before the adapter is called, and
   `{:invalid_response, reason}` or `{:malformed_output, reason}` afterwards.
@@ -33,11 +40,16 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
   @typedoc "An identified item with its authored description (criterion or action)."
   @type described :: %{id: String.t(), description: String.t()}
 
-  @typedoc "One independent rubric question, minimized for the decision provider."
+  @typedoc """
+  One independent rubric question, minimized for the decision provider.
+  `:enumerate_answers` is present, and `true`, only when the enumeration of the
+  learner's answers is requested.
+  """
   @type question :: %{
-          criterion: described(),
-          allowed_classes: [String.t(), ...],
-          actions: [described()]
+          required(:criterion) => described(),
+          required(:allowed_classes) => [String.t(), ...],
+          required(:actions) => [described()],
+          optional(:enumerate_answers) => true
         }
 
   @typedoc "One minimized evidence pool item."
@@ -61,13 +73,23 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
           evidence_ids: [String.t()]
         }
 
-  @typedoc "The normalized decision for one question."
+  @typedoc """
+  One answer the learner gave to a question: the evidence item that holds it
+  and the authored action it matches, or `nil` when it matches none.
+  """
+  @type answer :: %{evidence_id: String.t(), action_id: String.t() | nil}
+
+  @typedoc """
+  The normalized decision for one question. `:answers` is present only when the
+  question requested the enumeration, in the order the provider listed them.
+  """
   @type decision :: %{
-          criterion_id: String.t(),
-          classification: String.t(),
-          evidence_ids: [String.t()],
-          rationale: String.t() | nil,
-          actions: [action_decision()]
+          required(:criterion_id) => String.t(),
+          required(:classification) => String.t(),
+          required(:evidence_ids) => [String.t()],
+          required(:rationale) => String.t() | nil,
+          required(:actions) => [action_decision()],
+          optional(:answers) => [answer()]
         }
 
   @type request_error :: {:invalid_request, atom()}
@@ -84,14 +106,15 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
 
   Atom and string keys are both accepted. Criteria and actions are reduced to
   `id` and `description`, pool items to `id`, `role` and `text`; every other
-  field is dropped. The evidence pool is kept once for the whole batch and may
-  be empty (or absent).
+  field is dropped, except `enumerate_answers`, which is kept on a question
+  only when it is `true`. The evidence pool is kept once for the whole batch
+  and may be empty (or absent).
 
   Returns `{:error, {:invalid_request, reason}}` with one of `:expected_map`,
   `:invalid_questions`, `:empty_questions`, `:invalid_question`,
   `:invalid_criterion`, `:duplicate_criterion_ids`, `:invalid_allowed_classes`,
-  `:invalid_actions`, `:duplicate_action_ids`, `:invalid_evidence_pool` or
-  `:duplicate_evidence_ids`.
+  `:invalid_actions`, `:duplicate_action_ids`, `:invalid_enumerate_answers`,
+  `:invalid_evidence_pool` or `:duplicate_evidence_ids`.
   """
   @spec build_payload(term()) :: {:ok, payload()} | {:error, request_error()}
   def build_payload(request) when is_map(request) do
@@ -111,8 +134,16 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
   action. Evidence identifiers only have to be lists of binaries: identifiers
   absent from the pool are returned verbatim for the caller to validate.
 
+  A question that requested the enumeration must be answered with an `answers`
+  list. Each entry carries a binary `evidence_id`, returned verbatim like every
+  other evidence identifier, and an `action_id` that is `nil` (or absent) or one
+  of that question's authored actions; an action may be named by one entry
+  only. Any other question must carry no answers (an empty list is tolerated
+  and dropped).
+
   Decisions are returned in question order with atom keys; `actions` follows the
-  authored action order and `rationale` is `nil` when absent.
+  authored action order, `rationale` is `nil` when absent, and `answers` keeps
+  the order of the response.
 
   Returns `{:error, {:invalid_response, reason}}` with one of
   `:invalid_criterion_id`, `:unknown_criterion_id`, `:duplicate_criterion_id`,
@@ -120,10 +151,13 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
   `:invalid_classification_type`, `:disallowed_classification`,
   `:invalid_evidence_ids`, `:invalid_rationale`, `:unexpected_action_decisions`,
   `:invalid_action_id`, `:unknown_action_id`, `:duplicate_action_id`,
-  `:missing_action_decision`, `:disallowed_action_classification` or
-  `:invalid_action_evidence_ids`; or `{:error, {:malformed_output, reason}}`
-  with one of `:expected_map`, `:expected_decisions_list`,
-  `:expected_decision_map`, `:expected_actions_list` or `:expected_action_map`.
+  `:missing_action_decision`, `:disallowed_action_classification`,
+  `:invalid_action_evidence_ids`, `:missing_answers`, `:unexpected_answers`,
+  `:invalid_answer_evidence_id`, `:invalid_answer_action_id`,
+  `:unknown_answer_action_id` or `:duplicate_answer_action_id`; or
+  `{:error, {:malformed_output, reason}}` with one of `:expected_map`,
+  `:expected_decisions_list`, `:expected_decision_map`, `:expected_actions_list`,
+  `:expected_action_map`, `:expected_answers_list` or `:expected_answer_map`.
   """
   @spec validate_response(term(), [question()]) ::
           {:ok, [decision()]} | {:error, response_error()}
@@ -157,12 +191,20 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
   defp build_question(question) when is_map(question) do
     with {:ok, criterion} <- build_described(field(question, :criterion), :invalid_criterion),
          {:ok, classes} <- build_allowed_classes(field(question, :allowed_classes)),
-         {:ok, actions} <- build_actions(field(question, :actions)) do
-      {:ok, %{criterion: criterion, allowed_classes: classes, actions: actions}}
+         {:ok, actions} <- build_actions(field(question, :actions)),
+         {:ok, enumeration} <- build_enumeration(field(question, :enumerate_answers)) do
+      {:ok,
+       Map.merge(%{criterion: criterion, allowed_classes: classes, actions: actions}, enumeration)}
     end
   end
 
   defp build_question(_question), do: invalid_request(:invalid_question)
+
+  # The flag travels only when set, so a question that requests nothing keeps
+  # the shape it always had.
+  defp build_enumeration(true), do: {:ok, %{enumerate_answers: true}}
+  defp build_enumeration(off) when off in [nil, false], do: {:ok, %{}}
+  defp build_enumeration(_other), do: invalid_request(:invalid_enumerate_answers)
 
   defp build_allowed_classes([_ | _] = classes) do
     if Enum.all?(classes, &non_blank?/1) do
@@ -243,15 +285,19 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
     with :ok <- check_classification(classification, question.allowed_classes),
          {:ok, evidence_ids} <- evidence_ids(field(raw, :evidence_ids), :invalid_evidence_ids),
          {:ok, rationale} <- rationale(field(raw, :rationale)),
-         {:ok, actions} <- action_decisions(field(raw, :actions), question.actions) do
+         {:ok, actions} <- action_decisions(field(raw, :actions), question.actions),
+         {:ok, answers} <- answers(field(raw, :answers), question) do
       {:ok,
-       %{
-         criterion_id: question.criterion.id,
-         classification: classification,
-         evidence_ids: evidence_ids,
-         rationale: rationale,
-         actions: actions
-       }}
+       Map.merge(
+         %{
+           criterion_id: question.criterion.id,
+           classification: classification,
+           evidence_ids: evidence_ids,
+           rationale: rationale,
+           actions: actions
+         },
+         answers
+       )}
     end
   end
 
@@ -306,6 +352,48 @@ defmodule Backend.Stations.JevDecision.RubricBatch do
       false -> invalid_response(:disallowed_action_classification)
       {:error, _reason} = error -> error
     end
+  end
+
+  # Returns the fields to add to the decision: `answers` when the question
+  # requested the enumeration, and nothing otherwise.
+  defp answers(raw_answers, %{enumerate_answers: true} = question) do
+    case raw_answers do
+      nil -> invalid_response(:missing_answers)
+      list when is_list(list) -> enumerated_answers(list, Enum.map(question.actions, & &1.id))
+      _other -> malformed(:expected_answers_list)
+    end
+  end
+
+  defp answers(absent, _question) when absent in [nil, []], do: {:ok, %{}}
+  defp answers(_raw_answers, _question), do: invalid_response(:unexpected_answers)
+
+  defp enumerated_answers(raw_answers, action_ids) do
+    with {:ok, answers} <- map_ok(raw_answers, &build_answer(&1, action_ids)),
+         :ok <- distinct_answer_actions(answers) do
+      {:ok, %{answers: answers}}
+    end
+  end
+
+  defp build_answer(raw, action_ids) when is_map(raw) do
+    evidence_id = field(raw, :evidence_id)
+    action_id = field(raw, :action_id)
+
+    cond do
+      not is_binary(evidence_id) -> invalid_response(:invalid_answer_evidence_id)
+      is_nil(action_id) -> {:ok, %{evidence_id: evidence_id, action_id: nil}}
+      not is_binary(action_id) -> invalid_response(:invalid_answer_action_id)
+      action_id not in action_ids -> invalid_response(:unknown_answer_action_id)
+      true -> {:ok, %{evidence_id: evidence_id, action_id: action_id}}
+    end
+  end
+
+  defp build_answer(_raw, _action_ids), do: malformed(:expected_answer_map)
+
+  # Several answers may match no authored action; an action is one answer.
+  defp distinct_answer_actions(answers) do
+    matched = for %{action_id: action_id} <- answers, action_id != nil, do: action_id
+
+    if Enum.uniq(matched) == matched, do: :ok, else: invalid_response(:duplicate_answer_action_id)
   end
 
   # Indexes raw decision maps by identifier, rejecting malformed, unknown and

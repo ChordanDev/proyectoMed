@@ -132,13 +132,18 @@ defmodule Backend.Stations.JevDecision do
   The request is `%{questions: [question], evidence_pool: [item]}` plus the same
   optional deadline fields `decide_rubric/2` accepts. A question is
   `%{criterion: %{id, description}, allowed_classes: [String.t()], actions: [%{id, description}]}`
-  (`actions` defaults to `[]`) and a pool item is `%{id, role, text}`. Atom and
-  string keys are both accepted, and the request is minimized before it reaches
-  the adapter (see `Backend.Stations.JevDecision.RubricBatch.build_payload/1`).
+  (`actions` defaults to `[]`) and a pool item is `%{id, role, text}`. A question
+  may add `enumerate_answers: true` to request the ordered list of the learner's
+  answers to that criterion. Atom and string keys are both accepted, and the
+  request is minimized before it reaches the adapter (see
+  `Backend.Stations.JevDecision.RubricBatch.build_payload/1`).
 
   Returns `{:ok, decisions}` in question order, each decision being
   `%{criterion_id, classification, evidence_ids, rationale, actions}` as described
-  in `Backend.Stations.JevDecision.RubricBatch.validate_response/2`.
+  in `Backend.Stations.JevDecision.RubricBatch.validate_response/2`, plus
+  `answers` (`[%{evidence_id, action_id}]`) on the questions that requested the
+  enumeration. A response that omits a requested enumeration is rejected like
+  any other missing output.
 
   Returns `{:error, reason}` on an invalid request, on technical failure, or when
   the response does not carry exactly one well-formed decision per question. No

@@ -12,7 +12,8 @@ defmodule Backend.Stations.StationPackage do
   strings and booleans are load errors (issue #147).
 
   The authored rubric rule fields are optional (issue #128): `levels[].min_actions`,
-  `actions[].role` and a criterion `rule`. Their cross-field consistency is
+  `actions[].role` and a criterion `rule`. Their cross-field consistency, and
+  the reachability of the thresholds under `count_cap` and `first_n`, are
   checked here, because the JSON schema cannot express all of it.
   """
 
@@ -217,6 +218,7 @@ defmodule Backend.Stations.StationPackage do
     |> validate_evidence_questions(criterion)
     |> validate_levels(criterion)
     |> validate_level_thresholds(criterion)
+    |> validate_first_n_thresholds(criterion)
     |> validate_criterion_actions(criterion)
     |> validate_nullable_integer_fields(criterion)
     |> validate_positive_integer_fields(criterion)
@@ -365,8 +367,9 @@ defmodule Backend.Stations.StationPackage do
   end
 
   # The highest threshold has to be earnable: the assessment counts performed
-  # actions that are not forbidden and caps that count at count_cap. A top
-  # level out of reach would still count in the station maximum.
+  # actions that are not forbidden, only among the first first_n answers, and
+  # caps that count at count_cap. A top level out of reach would still count
+  # in the station maximum.
   defp validate_threshold_reachability(errors, levels, %{"actions" => actions} = criterion)
        when is_list(actions) do
     highest = levels |> Enum.map(& &1["min_actions"]) |> Enum.max()
@@ -375,6 +378,7 @@ defmodule Backend.Stations.StationPackage do
     errors
     |> validate_threshold_within_actions(highest, countable)
     |> validate_threshold_within_count_cap(highest, criterion["count_cap"])
+    |> validate_threshold_within_first_n(highest, criterion["first_n"])
   end
 
   defp validate_threshold_reachability(errors, _levels, _criterion), do: errors
@@ -399,6 +403,28 @@ defmodule Backend.Stations.StationPackage do
        do: ["rubric level min_actions must not exceed count_cap" | errors]
 
   defp validate_threshold_within_count_cap(errors, _highest, _count_cap), do: errors
+
+  defp validate_threshold_within_first_n(errors, highest, first_n)
+       when is_integer(first_n) and first_n >= 1 and highest > first_n,
+       do: ["rubric level min_actions must not exceed first_n" | errors]
+
+  defp validate_threshold_within_first_n(errors, _highest, _first_n), do: errors
+
+  # first_n limits the count of eligible actions. Without thresholds the level
+  # would be the classifier's reading of the whole transcript, which no code
+  # can limit to the first N answers. Without actions first_n has no effect.
+  defp validate_first_n_thresholds(errors, %{"first_n" => first_n} = criterion)
+       when is_integer(first_n) and first_n >= 1 do
+    levels = criterion |> Map.get("levels") |> maps()
+
+    add_error_if(
+      errors,
+      maps(criterion["actions"]) != [] and not Enum.any?(levels, &Map.has_key?(&1, "min_actions")),
+      "rubric criteria with first_n and actions must author thresholds"
+    )
+  end
+
+  defp validate_first_n_thresholds(errors, _criterion), do: errors
 
   defp validate_level_description(errors, %{"description" => description}) do
     if non_empty_string?(description) do
@@ -550,9 +576,10 @@ defmodule Backend.Stations.StationPackage do
   end
 
   # An order needs steps to compare: at least two other criteria with a rank.
+  # An excluded criterion is never assessed, so it is not a step.
   defp validate_task_order_rubric(errors, criteria) do
     {order_criteria, others} = Enum.split_with(criteria, &(&1["rule"] == "task_order"))
-    ranked = Enum.count(others, &is_integer(&1["order"]))
+    ranked = Enum.count(others, &(is_integer(&1["order"]) and &1["exclusion"] != true))
 
     errors
     |> add_error_if(
