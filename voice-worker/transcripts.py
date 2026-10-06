@@ -458,6 +458,8 @@ class TurnManager:
             return result
         except VoiceFailure as failure:
             if failure.kind == "stale_generation":
+                # Turn-only cancel's 409 still establishes an admission fence:
+                # no matching active work, and delayed POST/retry cannot begin.
                 self._unresolved_cancel_turns.discard(turn_id)
                 self._capacity_changed.set()
             if failure.kind in ("stale_generation", "timeout", "disconnected"):
@@ -553,12 +555,21 @@ class TurnManager:
             if self._main_task and not self._main_task.done():
                 self._main_task.cancel()
 
-    async def wait_pending(self) -> None:
+    async def wait_pending(self, timeout: float = 15.0) -> None:
+        # One EOF budget for all work, including admission waiting on ownership.
+        # The default allows two five-second HTTP attempts plus drain headroom.
+        # asyncio.wait does not cancel dispatches on expiry: only cleanup may
+        # abort local tasks, and expiry never releases ambiguous remote ownership.
+        deadline = asyncio.get_running_loop().time() + timeout
         while self._all_tasks:
             tasks = [t for t in self._all_tasks if not t.done()]
             if not tasks:
                 break
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _, pending = await asyncio.wait(
+                tasks, timeout=max(0, deadline - asyncio.get_running_loop().time())
+            )
+            if pending:
+                raise VoiceFailure("timeout")
         self.check_errors()
 
     async def cleanup(self, on_close=None) -> VoiceFailure | None:
@@ -626,6 +637,7 @@ async def process_speech_stream(
     on_reply=None,
     on_close=None,
     cleanup_timeout: float = 1.0,
+    eof_timeout: float = 15.0,
 ) -> None:
     turn_manager = TurnManager(
         tracker=tracker,
@@ -646,7 +658,7 @@ async def process_speech_stream(
                 res = on_publish(event)
                 if asyncio.iscoroutine(res):
                     await res
-        await turn_manager.wait_pending()
+        await turn_manager.wait_pending(timeout=eof_timeout)
         turn_manager.check_errors()
     except asyncio.CancelledError:
         if turn_manager.has_unhandled_error():

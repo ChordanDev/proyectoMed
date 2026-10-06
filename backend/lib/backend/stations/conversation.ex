@@ -15,6 +15,7 @@ defmodule Backend.Stations.Conversation do
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
           optional(:last_voice_turn_id) => pos_integer(),
+          optional(:cancelled_voice_turn_id) => non_neg_integer(),
           optional(:active_generation_id) => pos_integer() | nil,
           optional(:active_voice_turn_id) => pos_integer() | nil,
           optional(:next_generation_id) => pos_integer(),
@@ -81,7 +82,7 @@ defmodule Backend.Stations.Conversation do
   """
   @spec commit_voice_turn(String.t(), pos_integer(), String.t()) ::
           {:ok, :committed | :duplicate}
-          | {:error, :not_found | :expired | :completed}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
   def commit_voice_turn(session_id, turn_id, text) do
     GenServer.call(__MODULE__, {:commit_voice_turn, session_id, turn_id, text})
   end
@@ -97,7 +98,7 @@ defmodule Backend.Stations.Conversation do
   @spec begin_voice_turn(String.t(), pos_integer(), String.t()) ::
           {:ok, :committed, pos_integer()}
           | {:ok, :duplicate}
-          | {:error, :not_found | :expired | :completed}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
   def begin_voice_turn(session_id, turn_id, text) do
     GenServer.call(__MODULE__, {:begin_voice_turn, session_id, turn_id, text})
   end
@@ -127,7 +128,11 @@ defmodule Backend.Stations.Conversation do
 
   @doc """
   Explicitly cancels a pending voice turn by expected turn_id (#119).
-  Cancels only if `turn_id` matches the currently active voice turn.
+  Cancels active work only if `turn_id` matches. Turn-only criteria also fence
+  future admission through that monotonic turn ID, even when no active work
+  matches (the existing `:stale_generation` response is preserved). A supplied
+  generation must match before a fence is installed. Already admitted duplicates
+  retain their idempotent return shape; a fence never removes transcript messages.
   """
   @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
           {:ok, :cancelled}
@@ -201,6 +206,7 @@ defmodule Backend.Stations.Conversation do
       messages: [],
       status: :active,
       last_voice_turn_id: 0,
+      cancelled_voice_turn_id: 0,
       active_generation_id: nil,
       active_voice_turn_id: nil,
       next_generation_id: 1
@@ -368,6 +374,25 @@ defmodule Backend.Stations.Conversation do
             true -> false
           end
 
+        # Turn IDs order a session's stream. One high-water mark fences delayed
+        # POSTs/retries without an unbounded identity set or touching newer active
+        # work. A mismatched generation-qualified request has no side effects.
+        session =
+          if is_integer(expected_turn) and expected_turn > 0 and
+               (is_nil(expected_gen) or not stale?) do
+            fenced =
+              Map.put(
+                session,
+                :cancelled_voice_turn_id,
+                max(Map.get(session, :cancelled_voice_turn_id, 0), expected_turn)
+              )
+
+            true = :ets.insert(__MODULE__, {session_id, fenced})
+            fenced
+          else
+            session
+          end
+
         if stale? do
           {:reply, {:error, :stale_generation}, state}
         else
@@ -430,22 +455,27 @@ defmodule Backend.Stations.Conversation do
   end
 
   defp commit_voice_turn(session_id, session, turn_id, text, return_mode) do
-    if turn_id <= Map.get(session, :last_voice_turn_id, 0) do
-      {:ok, :duplicate}
-    else
-      gen_id = Map.get(session, :next_generation_id, 1)
-      message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
+    cond do
+      turn_id <= Map.get(session, :last_voice_turn_id, 0) ->
+        {:ok, :duplicate}
 
-      session =
-        session
-        |> Map.put(:messages, session.messages ++ [message])
-        |> Map.put(:last_voice_turn_id, turn_id)
-        |> Map.put(:active_generation_id, gen_id)
-        |> Map.put(:active_voice_turn_id, turn_id)
-        |> Map.put(:next_generation_id, gen_id + 1)
+      turn_id <= Map.get(session, :cancelled_voice_turn_id, 0) ->
+        {:error, :stale_generation}
 
-      true = :ets.insert(__MODULE__, {session_id, session})
-      voice_turn_reply(return_mode, gen_id)
+      true ->
+        gen_id = Map.get(session, :next_generation_id, 1)
+        message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
+
+        session =
+          session
+          |> Map.put(:messages, session.messages ++ [message])
+          |> Map.put(:last_voice_turn_id, turn_id)
+          |> Map.put(:active_generation_id, gen_id)
+          |> Map.put(:active_voice_turn_id, turn_id)
+          |> Map.put(:next_generation_id, gen_id + 1)
+
+        true = :ets.insert(__MODULE__, {session_id, session})
+        voice_turn_reply(return_mode, gen_id)
     end
   end
 

@@ -530,6 +530,194 @@ class MockSTT:
 
 
 class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_first_fences_held_http_admission_and_transport_retry(self):
+        # Offline protocol model, paired with real GenServer/controller tests.
+        # The POST reaches the transport but is held BEFORE server admission.
+        posted = asyncio.Event()
+        release_post = asyncio.Event()
+        cancelled_through = 0
+        active_turn = None
+        attempts = []
+        learner_appends = []
+        patient_appends = []
+        replies = []
+        tasks_before = asyncio.all_tasks()
+
+        async def handler(request):
+            nonlocal cancelled_through, active_turn
+            turn_id = json.loads(request.content)["turn_id"]
+            if request.url.path.endswith("/cancel"):
+                cancelled_through = max(cancelled_through, turn_id)
+                if active_turn != turn_id:
+                    return httpx.Response(409, json={"error": "stale_generation"})
+                active_turn = None
+                return httpx.Response(200, json={"status": "cancelled"})
+            attempts.append(turn_id)
+            if turn_id == 1:
+                posted.set()
+                await release_post.wait()
+            if turn_id <= cancelled_through:
+                if attempts == [1]:
+                    # The rejected POST's response is lost; PhoenixClient retries.
+                    raise httpx.ReadTimeout("Lost rejection", request=request)
+                return httpx.Response(409, json={"error": "stale_generation"})
+            learner_appends.append(turn_id)
+            active_turn = turn_id
+            patient_appends.append(turn_id)
+            active_turn = None
+            return httpx.Response(
+                201,
+                json={
+                    "turn_id": turn_id,
+                    "generation_id": turn_id,
+                    "status": "committed",
+                    "reply_text": "Patient reply",
+                },
+            )
+
+        async with phoenix(handler) as client:
+            manager = TurnManager(TurnTracker("s1", 0), client, on_reply=replies.append)
+            try:
+                async with asyncio.timeout(1):
+                    old = manager.commit_turn(1, "Cancelled question")
+                    await posted.wait()
+                    await manager.on_speech_event(event(SpeechEventType.START_OF_SPEECH))
+                    self.assertEqual(cancelled_through, 1)
+                    self.assertEqual(manager._unresolved_cancel_turns, set())
+                    release_post.set()
+                    self.assertIsNone(await old)
+                    self.assertEqual(attempts, [1, 1])
+                    self.assertEqual(learner_appends, [])
+                    self.assertEqual(patient_appends, [])
+                    self.assertEqual(
+                        (await manager.commit_turn(2, "Later question")).turn_id, 2
+                    )
+                    await manager.wait_pending()
+                    self.assertEqual(learner_appends, [2])
+                    self.assertEqual(patient_appends, [2])
+                    self.assertEqual([reply.turn_id for reply in replies], [2])
+            finally:
+                release_post.set()
+                await asyncio.wait_for(manager.cleanup(), 1)
+        self.assertEqual(asyncio.all_tasks(), tasks_before)
+
+    async def test_eof_with_full_ambiguous_ownership_reaches_close_and_cleanup(self):
+        tasks_before = asyncio.all_tasks()
+        closed = False
+        cleanup_calls = []
+
+        async with ControllablePhoenixClient() as client:
+            for turn_id in range(1, 17):
+                client.replies[turn_id] = VoiceTurnReply(turn_id, "duplicate")
+                client.commit_events[turn_id] = asyncio.Event()
+                client.cancel_errors[turn_id] = VoiceFailure("timeout")
+            client.cancel_events[16] = asyncio.Event()
+
+            async def stream():
+                for turn_id in range(1, 18):
+                    yield event(FINAL, "Question")
+                    yield event(END)
+                    if turn_id <= 16:
+                        await client.commit_events[turn_id].wait()
+                    else:
+                        await client.cancel_events[16].wait()
+                # All failed cancel attempts have finished; capacity has no producer.
+                await asyncio.sleep(0)
+
+            async def close():
+                nonlocal closed
+                closed = True
+                cleanup_calls.append(len(client.cancel_calls))
+
+            task = asyncio.create_task(
+                process_speech_stream(
+                    stream(),
+                    TurnTracker("s1", 0),
+                    client,
+                    on_close=close,
+                    eof_timeout=0.03,
+                    cleanup_timeout=0.03,
+                )
+            )
+            try:
+                done, _ = await asyncio.wait({task}, timeout=1)
+                self.assertEqual(
+                    done, {task}, "EOF must terminate without external cancellation"
+                )
+                with self.assertRaises(VoiceFailure) as ctx:
+                    await task
+                self.assertEqual(ctx.exception.kind, "timeout")
+                self.assertTrue(closed)
+                self.assertEqual(
+                    [turn for turn, _ in client.commit_calls], list(range(1, 17))
+                )
+                self.assertEqual(
+                    [call["turn_id"] for call in client.cancel_calls[cleanup_calls[0] :]],
+                    list(range(1, 18)),
+                )
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 1)
+        self.assertEqual(asyncio.all_tasks(), tasks_before)
+
+    async def test_recoverable_eof_delivers_latest_eligible_final_within_budget(self):
+        replies = []
+        closed = asyncio.Event()
+        async with ControllablePhoenixClient() as client:
+            client.commit_events[1] = asyncio.Event()
+            client.commit_delays[1] = asyncio.Event()
+
+            async def stream():
+                yield event(FINAL, "Old question")
+                yield event(END)
+                await client.commit_events[1].wait()
+                yield event(FINAL, "Latest question")
+                yield event(END)
+                client.commit_delays[1].set()
+
+            async def close():
+                closed.set()
+
+            await asyncio.wait_for(
+                process_speech_stream(
+                    stream(),
+                    TurnTracker("s1", 0),
+                    client,
+                    on_reply=replies.append,
+                    on_close=close,
+                    eof_timeout=0.3,
+                ),
+                1,
+            )
+            self.assertEqual([reply.turn_id for reply in replies], [2])
+            self.assertTrue(closed.is_set())
+
+    async def test_eof_budget_expiry_never_releases_ambiguous_ownership(self):
+        tasks_before = asyncio.all_tasks()
+        async with ControllablePhoenixClient() as client:
+            manager = TurnManager(TurnTracker("s1", 0), client, cleanup_timeout=0.03)
+            try:
+                async with asyncio.timeout(1):
+                    for turn_id in range(1, 17):
+                        client.replies[turn_id] = VoiceTurnReply(turn_id, "duplicate")
+                        client.cancel_errors[turn_id] = VoiceFailure("timeout")
+                        await manager.commit_turn(turn_id, "Ambiguous question")
+                        await manager.on_speech_event(event(INTERIM, "Next question"))
+                    queued = manager.commit_turn(17, "Latest question")
+                    with self.assertRaises(VoiceFailure) as ctx:
+                        await manager.wait_pending(timeout=0.01)
+                    self.assertEqual(ctx.exception.kind, "timeout")
+                    self.assertEqual(manager._unresolved_cancel_turns, set(range(1, 17)))
+                    self.assertFalse(queued.done())
+                    self.assertEqual(len(client.commit_calls), 16)
+                    await manager.cleanup()
+                    self.assertTrue(queued.cancelled())
+                    self.assertEqual(manager._unresolved_cancel_turns, set(range(1, 17)))
+            finally:
+                await asyncio.wait_for(manager.cleanup(), 1)
+        self.assertEqual(asyncio.all_tasks(), tasks_before)
+
     async def test_ambiguous_ownership_capacity_blocks_dispatch_without_blocking_barge_in(
         self,
     ):
