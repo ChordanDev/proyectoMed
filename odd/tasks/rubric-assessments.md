@@ -131,7 +131,7 @@ Per task: focused `mix test <file>`, then `mix format --check-formatted`, `mix c
 
 ## Delivery
 
-Forecast: about 1,500 authored changed lines, over the 400-line budget. Commits are linear work units, so they can be sliced into stacked PRs against `feat/125-jev-evaluation` without rework. Chain strategy to be confirmed with the user before the first PR. RDD is off for this clone (`clone_local`); each commit is assessed with `gentle-ai review assess` and verified under ordinary policy.
+Forecast: about 1,500 authored changed lines, over the 400-line budget. Commits are linear work units, so they can be sliced into stacked PRs against `feat/125-jev-evaluation` without rework. The branch ended at about 8,000 changed lines (2,600 under `backend/lib` and `backend/priv`). RDD is off for this clone (`clone_local`); each commit is assessed with `gentle-ai review assess` and verified under ordinary policy.
 
 ## Progress
 
@@ -151,11 +151,23 @@ Forecast: about 1,500 authored changed lines, over the 400-line budget. Commits 
 | T6 | delegated (same writer) | this commit (`docs(stations): describe the implemented rubric assessment contract`) | passive documentation; structural readback | No runnable RED: documentation only. Every statement was checked against the code before it was written. `docs/design/jev-prototype.md`: the Evaluation contract section now describes the implemented contract and its limits, and the PEP citation names the INEP URL (the two PDF files under `docs/` hold Unicode replacement characters in place of binary content). `CONTEXT.md`: the rubric terms are marked "implemented internally, not exposed", with new terms for the assessment, the evidence pool and the authored rules. `bash scripts/test.sh`: web 131 passed, backend 742 passed. `SPEC_MVP.md` was not edited. |
 | T5d/T5a/T5b correction | delegated (bounded writer; corrections from independent verification of `dcd39a4..e81ac8c`) | `fix(stations): fail closed on first-N answers that cannot be verified`, then `docs(stations): record the first-N corrections and their limits` | not assessed by the writer | RED 14 failed / 187 passed of 201 in `station_package_test.exs`, `rubric_assessment_test.exs` and `authored_rules_test.exs` (the gap tests for a criterion-level `uncertain`, a rank positioned by action evidence, an Impressos-event answer and `first_n` without actions already passed) -> GREEN 201/201; `mix test` 757 passed; format, compile `--force --warnings-as-errors`, Credo strict and Dialyzer clean; `bash scripts/test.sh`: web 131 passed, backend 757 passed. `AuthoredRules` gains `certain_zero?/2` and `unresolved/2`, and `decide_level/3` returns the forbidden actions that vetoed. Tests from `5e242ba`, `3ab99f2` and `a8c5e8b` were updated (the veto evidence, the schema shape, the `first_n`-without-thresholds acceptance case, the `first_one` helper now authors thresholds). No test that predates `cbbfc1d` changed, no fixture changed and no `jev_decision*` file changed. |
 
+Published on 2026-10-06 as a feature-branch chain of seven stacked PRs, strategy and size exceptions accepted by the owner. Each PR targets the previous slice's branch; the first targets `chore/125-sync-develop` (#167). The parent PR #142 closes #128 when it reaches `develop`.
+
+| PR | Branch | Commits | Slice |
+|----|--------|---------|-------|
+| #168 | `feat/128-rubric-points` | `43bce67` | T1 exact points and estimates |
+| #169 | `feat/128-rubric-evidence` | `97f59b0` | T2 evidence pool |
+| #170 | `feat/128-jev-rubric-batch` | `8506231` | T3 batched decisions |
+| #171 | `feat/128-rubric-assessment-core` | `9ad867e..cbbfc1d` | T4 orchestration and entry point |
+| #172 | `feat/128-authored-rules` | `3a4f47a..56f831d` | T5a, T5b and their corrections |
+| #173 | `feat/128-task-order` | `3ab99f2..c2e9700` | T5c and the reachable-outcome rule |
+| #174 | `feat/128-rubric-assessments` | `a8c5e8b` onward | T5d, T6 and the first-N corrections |
+
 ## Next step
 
-All tasks of #128 are done on `feat/128-rubric-assessments`; nothing is pushed.
+All tasks of #128 are done and published as #168-#174; nothing is merged.
 
-1. **Delivery strategy for the branch.** The branch holds linear work-unit commits on top of `fb1285f`, each above the 400-line budget because of test matrices. Confirm the chain strategy (`stacked-to-main` or `feature-branch-chain`) and the slice boundaries with the owner before the first PR.
+1. **Review of the chain.** Merge in order, starting with #167. A change requested on a lower slice is merged forward into every slice above it, with a PR comment per the review feedback loop.
 2. **Engram mirror `odd/rubric-assessments/tasks`: pending.** The last successful save predates T1; the update after T4 was refused because several runtime sessions were active on this project. Resynchronize from this file.
 3. **Owner review of the notes marked "open to being overruled"** under decisions 12 and 13, including the wider full-list condition and the `assess/3` guard for `first_n` without thresholds.
 4. **Follow-ups outside #128:** the rule shapes of decision 14; whether the real decision model can enumerate answers (#130); `SPEC_MVP.md` still describes the whole Jev and estimate architecture as not implemented.
