@@ -15,6 +15,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.Evaluator
   alias Backend.Stations.Impressos
   alias Backend.Stations.JevDecision
+  alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
@@ -311,6 +312,40 @@ defmodule Backend.Stations do
           {:ok, map()}
           | {:error, :session_not_finished | :not_found | :expired}
   def evaluate_session(session_id), do: get_session_result(session_id)
+
+  @doc """
+  Assesses a completed station session against the active package rubric with
+  grounded evidence and exact point estimates (issue #128).
+
+  Uses the same session lookup and completed-session requirement as
+  `get_session_result/1`. `opts` are passed to
+  `Backend.Stations.RubricAssessment.assess/3`.
+
+  Returns `{:error, {:invalid_attempt, reason}}`, with no partial criteria,
+  when the decision provider fails technically or the rubric cannot be
+  assessed exactly. This function is not exposed over HTTP: the result
+  endpoint keeps the legacy shape of `get_session_result/1`.
+  """
+  @spec assess_session(String.t(), keyword()) ::
+          {:ok, RubricAssessment.t()}
+          | {:error,
+             :session_not_finished
+             | :not_found
+             | :expired
+             | {:invalid_attempt, RubricAssessment.attempt_error()}}
+  def assess_session(session_id, opts \\ []) do
+    with {:ok, session} <- fetch_completed_session(session_id) do
+      RubricAssessment.assess(get_active_package(), session, opts)
+    end
+  end
+
+  defp fetch_completed_session(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, %{status: :completed} = session} -> {:ok, session}
+      {:ok, %{status: :active}} -> {:error, :session_not_finished}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   # ============================================================================
   # Audio & Speech Operations
