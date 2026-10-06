@@ -18,6 +18,13 @@ defmodule Backend.Stations.Conversation do
           optional(:active_generation_id) => pos_integer() | nil,
           optional(:active_voice_turn_id) => pos_integer() | nil,
           optional(:next_generation_id) => pos_integer(),
+          optional(:failed_voice_turn) =>
+            %{
+              turn_id: pos_integer(),
+              generation_id: pos_integer(),
+              reason: :station_ai_unavailable
+            }
+            | nil,
           session_id: String.t(),
           station_id: String.t(),
           station_version: String.t(),
@@ -92,14 +99,28 @@ defmodule Backend.Stations.Conversation do
 
   Invalidates any previously pending generation on an accepted final turn.
   Returns `{:ok, :committed, generation_id}` on accepted turns, or `{:ok, :duplicate}`
-  if turn_id is not greater than the last committed voice turn.
+  if turn_id is not greater than the last committed voice turn. The latest failed
+  generation returns its canonical technical failure on retry instead of duplicate.
   """
   @spec begin_voice_turn(String.t(), pos_integer(), String.t()) ::
           {:ok, :committed, pos_integer()}
           | {:ok, :duplicate}
-          | {:error, :not_found | :expired | :completed}
+          | {:error, :not_found | :expired | :completed | :station_ai_unavailable}
   def begin_voice_turn(session_id, turn_id, text) do
     GenServer.call(__MODULE__, {:begin_voice_turn, session_id, turn_id, text})
+  end
+
+  @doc """
+  Records a canonical technical failure only for the still-active generation.
+  Keeps one turn-scoped outcome until a newer turn or session completion, never
+  provider payloads or reply text. Cancellation and supersession remain stale.
+  """
+  @spec fail_generation(String.t(), pos_integer(), :station_ai_unavailable) ::
+          {:ok, :failed}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def fail_generation(session_id, generation_id, :station_ai_unavailable)
+      when is_integer(generation_id) and generation_id > 0 do
+    GenServer.call(__MODULE__, {:fail_generation, session_id, generation_id})
   end
 
   @doc """
@@ -203,7 +224,8 @@ defmodule Backend.Stations.Conversation do
       last_voice_turn_id: 0,
       active_generation_id: nil,
       active_voice_turn_id: nil,
-      next_generation_id: 1
+      next_generation_id: 1,
+      failed_voice_turn: nil
     }
 
     true = :ets.insert(__MODULE__, {session.session_id, session})
@@ -240,7 +262,8 @@ defmodule Backend.Stations.Conversation do
                 completed_at: DateTime.utc_now(),
                 completion_reason: reason,
                 active_generation_id: nil,
-                active_voice_turn_id: nil
+                active_voice_turn_id: nil,
+                failed_voice_turn: nil
               })
 
             true = :ets.insert(__MODULE__, {session_id, session})
@@ -311,6 +334,36 @@ defmodule Backend.Stations.Conversation do
 
             true = :ets.insert(__MODULE__, {session_id, session})
             {:reply, {:ok, session}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:fail_generation, session_id, generation_id}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        if session.active_generation_id == generation_id do
+          failure = %{
+            turn_id: session.active_voice_turn_id,
+            generation_id: generation_id,
+            reason: :station_ai_unavailable
+          }
+
+          session =
+            session
+            |> Map.put(:failed_voice_turn, failure)
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :failed}, state}
+        else
+          {:reply, {:error, :stale_generation}, state}
         end
 
       {:error, reason} ->
@@ -431,7 +484,13 @@ defmodule Backend.Stations.Conversation do
 
   defp commit_voice_turn(session_id, session, turn_id, text, return_mode) do
     if turn_id <= Map.get(session, :last_voice_turn_id, 0) do
-      {:ok, :duplicate}
+      case {return_mode, Map.get(session, :failed_voice_turn)} do
+        {:with_generation, %{turn_id: ^turn_id, reason: :station_ai_unavailable}} ->
+          {:error, :station_ai_unavailable}
+
+        _ ->
+          {:ok, :duplicate}
+      end
     else
       gen_id = Map.get(session, :next_generation_id, 1)
       message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
@@ -443,6 +502,7 @@ defmodule Backend.Stations.Conversation do
         |> Map.put(:active_generation_id, gen_id)
         |> Map.put(:active_voice_turn_id, turn_id)
         |> Map.put(:next_generation_id, gen_id + 1)
+        |> Map.put(:failed_voice_turn, nil)
 
       true = :ets.insert(__MODULE__, {session_id, session})
       voice_turn_reply(return_mode, gen_id)
