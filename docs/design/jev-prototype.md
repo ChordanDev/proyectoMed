@@ -166,9 +166,9 @@ TypeSafe Choice/Noul-style primitives may return only constrained classification
 | Decision | `evidence_ids` | Identifiers from the pool that support the classification. |
 | Decision | `rationale` | Optional text. It is accepted and not carried into the result. |
 | Decision | `actions` | Exactly one entry per authored action: `performed`, `not_performed`, or `uncertain`, with its own `evidence_ids`. |
-| Decision | `answers` | Required when the enumeration was requested, rejected otherwise: the ordered list of the distinct answers the learner gave to that criterion, each `{evidence_id, action_id}`, where `action_id` is the authored action it matches or `null`. |
+| Decision | `answers` | Required when the enumeration was requested; on any other question it must be absent or an empty list, which is dropped. The ordered list of the distinct answers the learner gave to that criterion, each `{evidence_id, action_id}`, where `action_id` is the authored action it matches or `null`. |
 
-**Structural problems invalidate the attempt.** A missing, duplicated, or unknown criterion or action decision, a class outside the allowed set, a missing or malformed `answers` list, an answer naming an unknown action or an action already named, or `answers` on a question that did not request it, is treated like any other technical failure. The enumeration added no adapter callback: an adapter that does not enumerate fails as it would for any missing output.
+**Structural problems invalidate the attempt.** A missing, duplicated, or unknown criterion or action decision, a class outside the allowed set, a missing or malformed `answers` list, an answer naming an unknown action or an action already named, or a non-empty `answers` on a question that did not request it, is treated like any other technical failure. The enumeration added no adapter callback: an adapter that does not enumerate fails as it would for any missing output.
 
 **Bad evidence fails one criterion closed.** Every cited identifier is looked up in the pool. The criterion becomes `uncertain` with a machine-readable reason, and nothing is repaired, dropped, substituted, or aligned by text:
 
@@ -190,7 +190,7 @@ After classification, code—not Jev—decides the status, the level, and the po
 | Status | When | Asked to Jev | In the maxima |
 |---|---|---|---|
 | `assessed` | A level was decided and, when it is above zero, grounded in validated learner evidence. | Yes, except the task-order criterion | Scored and eligible |
-| `uncertain` | Jev answered `uncertain` and no authored rule could decide; or cited evidence failed validation; or an unresolved action could still change the level; or a positive level had no evidence; or, for the task-order criterion, a ranked criterion is unresolved. | Yes, except the task-order criterion | Eligible only |
+| `uncertain` | Jev answered `uncertain` and no authored rule could decide; or cited evidence failed validation; or an unresolved action could still change the level; or the enumerated answers of a `first_n` criterion could not be verified; or a positive level had no evidence; or, for the task-order criterion, a ranked criterion is unresolved. | Yes, except the task-order criterion | Eligible only |
 | `not_observable` | The criterion's `modality_requirement` names a modality the station cannot provide: an Impressos requirement with no matching authored impresso, or an unknown modality. | No | Eligible only |
 | `not_applicable` | The criterion authors `exclusion: true`. | No | Neither |
 
@@ -204,7 +204,7 @@ A modality the station does provide but the learner never used is a genuine omis
 | `levels[].min_actions` | Count thresholds, set on every level of a criterion or on none. The level is the highest one whose threshold is at most the number of performed, non-forbidden actions. The count decides; Jev's criterion-level class does not. |
 | `actions[].role` | `counted` (default), `mandatory`, or `forbidden`. A `mandatory` action that was not performed, or a `forbidden` action that was performed with evidence, scores the criterion at its zero-point level. |
 | `count_cap` | Caps the count of performed actions before thresholds are applied. |
-| `first_n` | Only the learner's first N answers to the criterion are eligible, including answers that match no authored action. It has no effect on a criterion without actions. |
+| `first_n` | Only the learner's first N enumerated answers to the criterion are eligible, including answers that match no authored action. A criterion that authors it and at least one action must author thresholds, because a level Jev chooses as a whole cannot be limited to the first N answers. It has no effect on a criterion without actions. |
 | `veto` | Must be `true` on a criterion with a `forbidden` action. The role, not this flag, applies the veto, which is local to the criterion. |
 | `order` and `rule: "task_order"` | `order` ranks a criterion as a step. The single `task_order` criterion is assessed in code from those ranks and is never sent to Jev. |
 | `exclusion` | Author cancellation: the criterion is `not_applicable`. |
@@ -213,11 +213,11 @@ A modality the station does provide but the learner never used is a genuine omis
 **Order of application, per criterion Jev answered:**
 
 1. **Validate evidence** cited by the criterion and by each action.
-2. **Apply `first_n`.** The enumerated answers must cite valid evidence, must not go backwards in pool order (one turn may hold several answers), and must agree with the action classes: every `performed` action is listed and every listed action is `performed`. Otherwise the criterion is `uncertain`. A `counted` or `mandatory` action listed beyond the first N is then treated as not performed, with certainty. A `forbidden` action keeps its effect wherever it appears: a harmful conduct is not excused by position.
+2. **Apply `first_n`.** The enumerated answers must cite valid evidence, must not go backwards in pool order (one turn may hold several answers), and must agree with the action classes: every `performed` action is listed and every listed action is `performed`. An answer that names an action must cite one of that action's own validated evidence items (`answer_evidence_mismatch`), unless the action has none. Otherwise the criterion is `uncertain`. A `counted` or `mandatory` action listed beyond the first N is then treated as not performed, with certainty. A `forbidden` action keeps its effect wherever it appears: a harmful conduct is not excused by position. Finally, an action classified `uncertain` has no listed position, so if it was performed it could push a listed answer beyond the first N. When an action is unresolved and the list is full—it has at least N answers, or its answers plus the actions classified `uncertain` exceed N—the criterion is `uncertain`, unless step 3 already gives a certain zero.
 3. **Apply the certain zeros:** a performed `forbidden` action, or a `mandatory` action not performed.
 4. **Decide by reachable outcomes.** An action is unresolved when it is classified `uncertain`, or `performed` without validated evidence. The criterion is `uncertain` only when resolving its unresolved actions could change the level; if every resolution ends at the same level, it is assessed at that level.
 5. **Take the level** from the thresholds when they are authored, otherwise from Jev's class.
-6. **Ground the credit.** A level above zero with no validated learner evidence is `uncertain` (`unsupported_credit`). A level earned by count is grounded by the evidence of the actions that earned it.
+6. **Ground the credit.** A level above zero with no validated learner evidence is `uncertain` (`unsupported_credit`). A level earned by count is grounded by the evidence of the actions that earned it, and a zero caused by a performed `forbidden` action carries that action's evidence.
 
 A Jev answer of `uncertain` for the criterion as a whole does not skip these steps when thresholds or a `mandatory` or `forbidden` action can decide without it. When none can, the criterion is `uncertain` at once (`classifier_uncertain`), without validating what the answer cites.
 
@@ -284,7 +284,7 @@ A technical evaluation timeout, malformed response, transport error, or provider
 - **Not exposed.** The assessment is not served over HTTP and the web client does not read it. The versioned result contract, the decimal wire format, and the pt-BR disclaimer belong to #129. Until then an explicit, tested projection maps an assessment to the legacy shape: assessed at zero is `omitted`, assessed above zero is `met`, `uncertain` and `not_observable` are `uncertain`, and `not_applicable` criteria are dropped.
 - **Clinical accuracy is unmeasured.** Tests cover the deterministic code with scripted classifications. Calibration, acceptance thresholds, and the rubric content of the real station belong to #130.
 - **Architecture rules not implemented:** time windows; pairwise "only what was said before X counts" gates (PEP 2023/1, PDF pp. 10 and 20); and verbalization requirements (p. 20). They need their own authoring fields and are recorded as follow-ups.
-- **Known gaps in the implemented rules:** a ranked step scored zero by a rule is skipped by task order even though the learner attempted it; an action classified `uncertain` has no enumerated position, so `first_n` leaves it to the reachable-outcome rule.
+- **Known gaps in the implemented rules:** a ranked step scored zero by a rule is skipped by task order even though the learner attempted it; code cannot detect an unmatched answer that Jev leaves out of `answers`, which would free a slot among the first N unnoticed; and it cannot verify the order of several answers inside a single turn, because they share one position in the pool. Both rest on the classifier and belong to #130's evaluation.
 
 ## Result contract and learner claim
 
