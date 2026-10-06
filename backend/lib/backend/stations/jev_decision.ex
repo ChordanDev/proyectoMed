@@ -5,6 +5,8 @@ defmodule Backend.Stations.JevDecision do
   Provides:
     1. Patient candidate response verification (`decide_patient/2`).
     2. Closed-set rubric criterion classification (`decide_rubric/2`).
+    3. Batched classification of independent rubric questions over one shared
+       evidence pool (`decide_rubric_batch/2`).
 
   ## Safety & Reliability Invariants
 
@@ -25,13 +27,16 @@ defmodule Backend.Stations.JevDecision do
       and invalid outputs return sanitized typed atoms/tuples without leaking
       candidate text, learner speech, or raw exception bodies.
     * **No nonexistent evidence IDs**: Closed-set rubric classification strictly rejects
-      any returned evidence IDs that do not belong to `allowed_evidence_ids`.
+      any returned evidence IDs that do not belong to `allowed_evidence_ids`. The
+      batched call returns cited IDs verbatim instead, and its caller fails the
+      affected criterion closed.
     * **Privacy-safe logging**: No learner statements or patient text are ever logged.
   """
 
   require Logger
 
   alias Backend.Stations.JevDecision.DisabledAdapter
+  alias Backend.Stations.JevDecision.RubricBatch
 
   @default_deadline_ms 3_000
   @default_max_context_turns 10
@@ -63,6 +68,9 @@ defmodule Backend.Stations.JevDecision do
           | {:technical_failure, atom()}
           | {:invalid_response, atom()}
           | {:invalid_request, atom()}
+
+  @typedoc "Every error `decide_rubric_batch/2` can return."
+  @type rubric_batch_error :: technical_failure() | {:malformed_output, atom()}
 
   # ============================================================================
   # Public API
@@ -114,6 +122,55 @@ defmodule Backend.Stations.JevDecision do
         validated_request.allowed_classes,
         validated_request.allowed_evidence_ids
       )
+    end
+  end
+
+  @doc """
+  Classifies several independent rubric questions over one shared evidence pool
+  with a single adapter call and a single deadline for the whole batch.
+
+  The request is `%{questions: [question], evidence_pool: [item]}` plus the same
+  optional deadline fields `decide_rubric/2` accepts. A question is
+  `%{criterion: %{id, description}, allowed_classes: [String.t()], actions: [%{id, description}]}`
+  (`actions` defaults to `[]`) and a pool item is `%{id, role, text}`. A question
+  may add `enumerate_answers: true` to request the ordered list of the learner's
+  answers to that criterion. Atom and string keys are both accepted, and the
+  request is minimized before it reaches the adapter (see
+  `Backend.Stations.JevDecision.RubricBatch.build_payload/1`).
+
+  Returns `{:ok, decisions}` in question order, each decision being
+  `%{criterion_id, classification, evidence_ids, rationale, actions}` as described
+  in `Backend.Stations.JevDecision.RubricBatch.validate_response/2`, plus
+  `answers` (`[%{evidence_id, action_id}]`) on the questions that requested the
+  enumeration. A response that omits a requested enumeration is rejected like
+  any other missing output.
+
+  Returns `{:error, reason}` on an invalid request, on technical failure, or when
+  the response does not carry exactly one well-formed decision per question. No
+  partial result is ever returned, and an adapter that does not implement the
+  batch callback yields `{:technical_failure, :rubric_batch_unsupported}` rather
+  than a series of single calls.
+
+  ## Difference from `decide_rubric/2`
+
+  `decide_rubric/2` rejects the whole response when an evidence ID is outside
+  `allowed_evidence_ids`. This function does **not** check evidence IDs against
+  the pool: it only requires lists of binaries and returns them verbatim. The
+  caller must validate existence, role, channel and provenance and fail the
+  affected criterion closed, so one bad citation does not discard the batch.
+  """
+  @spec decide_rubric_batch(map(), keyword()) ::
+          {:ok, [RubricBatch.decision()]} | {:error, rubric_batch_error()}
+  def decide_rubric_batch(request, opts \\ []) when is_list(opts) do
+    with {:ok, payload} <- RubricBatch.build_payload(request),
+         {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
+      adapter_request =
+        Map.merge(payload, %{deadline_ms: deadline_ms, deadline_at_monotonic_ms: deadline_at})
+
+      opts
+      |> resolve_adapter()
+      |> execute_batch_adapter(adapter_request, opts)
+      |> validate_batch_output(payload.questions)
     end
   end
 
@@ -573,6 +630,26 @@ defmodule Backend.Stations.JevDecision do
         {:error, {:technical_failure, :task_exit}}
     end
   end
+
+  # The batch callback is optional, so an adapter that predates it is reported as
+  # a typed failure; it is never replaced by serial single-criterion calls.
+  defp execute_batch_adapter(adapter, request, opts) do
+    if Code.ensure_loaded?(adapter) and
+         (function_exported?(adapter, :decide_rubric_batch, 1) or
+            function_exported?(adapter, :decide_rubric_batch, 2)) do
+      run_with_deadline(adapter, :decide_rubric_batch, request, request.deadline_ms, opts)
+    else
+      {:error, {:technical_failure, :rubric_batch_unsupported}}
+    end
+  end
+
+  defp validate_batch_output({:ok, response}, questions) do
+    RubricBatch.validate_response(response, questions)
+  end
+
+  defp validate_batch_output({:error, reason}, _questions), do: normalize_error(reason)
+
+  defp validate_batch_output(_other, _questions), do: {:error, {:malformed_output, :expected_map}}
 
   # ============================================================================
   # Strict Output Validation: Patient Decision

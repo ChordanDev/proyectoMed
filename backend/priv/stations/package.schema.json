@@ -91,10 +91,37 @@
       }
     },
     "rubric": {
+      "description": "A rubric has at most one task_order criterion, and one that has it needs at least two other criteria with a non-null order that are not excluded (exclusion is not true). The task_order criterion is assessed in code from those ranks and is never sent to the classifier.",
       "type": "array",
-      "items": {"$ref": "#/$defs/rubricCriterion"}
+      "items": {"$ref": "#/$defs/rubricCriterion"},
+      "if": {
+        "contains": {
+          "required": ["rule"],
+          "properties": {"rule": {"const": "task_order"}}
+        }
+      },
+      "then": {
+        "contains": {
+          "required": ["rule"],
+          "properties": {"rule": {"const": "task_order"}}
+        },
+        "maxContains": 1,
+        "allOf": [
+          {
+            "contains": {
+              "required": ["order"],
+              "properties": {
+                "order": {"type": "integer"},
+                "exclusion": {"const": false}
+              }
+            },
+            "minContains": 2
+          }
+        ]
+      }
     },
     "rubricCriterion": {
+      "description": "Cross-field rules enforced by the loader: action ids are unique within a criterion; thresholds (levels[].min_actions) do not decrease as points increase; the highest threshold is reachable, so it is at most the number of actions whose role is not forbidden, at most count_cap when count_cap is set and at most first_n when first_n is set; first_n limits scoring to the learner's first N answers to the criterion, including answers that match no authored action, and has no effect on a criterion without actions; a criterion that authors first_n and at least one action must author thresholds, because a level the classifier chooses as a whole cannot be limited to the first N answers; a criterion with thresholds, a mandatory action or a forbidden action has a zero-point level. A task_order criterion authors no actions and no thresholds, sets order, count_cap, first_n and modality_requirement to null and veto to false, and has a zero-point level; the loader reports each violation with its own message.",
       "type": "object",
       "required": [
         "id",
@@ -121,15 +148,20 @@
         "levels": {
           "type": "array",
           "minItems": 1,
-          "items": {"$ref": "#/$defs/rubricLevel"}
+          "items": {"$ref": "#/$defs/rubricLevel"},
+          "description": "Thresholds are all-or-none: every level sets min_actions or no level does.",
+          "anyOf": [
+            {"items": {"required": ["min_actions"]}},
+            {"items": {"not": {"required": ["min_actions"]}}}
+          ]
         },
         "actions": {
           "type": "array",
           "items": {"$ref": "#/$defs/rubricAction"}
         },
         "order": {"type": ["integer", "null"]},
-        "count_cap": {"type": ["integer", "null"]},
-        "first_n": {"type": ["integer", "null"]},
+        "count_cap": {"type": ["integer", "null"], "minimum": 1},
+        "first_n": {"type": ["integer", "null"], "minimum": 1},
         "veto": {"type": "boolean", "default": false},
         "exclusion": {"type": "boolean", "default": false},
         "modality_requirement": {
@@ -137,8 +169,59 @@
             {"type": "null"},
             {"type": "string", "minLength": 1}
           ]
+        },
+        "rule": {"enum": [null, "task_order"], "default": null}
+      },
+      "if": {
+        "required": ["actions"],
+        "properties": {
+          "actions": {
+            "contains": {
+              "required": ["role"],
+              "properties": {"role": {"const": "forbidden"}}
+            }
+          }
         }
-      }
+      },
+      "then": {
+        "properties": {"veto": {"const": true}}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["rule"],
+            "properties": {"rule": {"const": "task_order"}}
+          },
+          "then": {
+            "properties": {
+              "levels": {
+                "contains": {"properties": {"points": {"const": 0}}},
+                "items": {"not": {"required": ["min_actions"]}}
+              },
+              "actions": {"maxItems": 0},
+              "order": {"type": "null"},
+              "count_cap": {"type": "null"},
+              "first_n": {"type": "null"},
+              "veto": {"const": false},
+              "modality_requirement": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["first_n", "actions"],
+            "properties": {
+              "first_n": {"type": "integer"},
+              "actions": {"minItems": 1}
+            }
+          },
+          "then": {
+            "properties": {
+              "levels": {"items": {"required": ["min_actions"]}}
+            }
+          }
+        }
+      ]
     },
     "rubricLevel": {
       "type": "object",
@@ -148,15 +231,37 @@
           "enum": ["inadequado", "parcialmente_adequado", "adequado"]
         },
         "points": {"type": "number", "multipleOf": 0.125},
+        "min_actions": {"type": "integer", "minimum": 0},
         "description": {"type": "string", "minLength": 1}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["points", "min_actions"],
+            "properties": {"points": {"const": 0}}
+          },
+          "then": {
+            "properties": {"min_actions": {"const": 0}}
+          }
+        },
+        {
+          "if": {
+            "required": ["points", "min_actions"],
+            "properties": {"points": {"exclusiveMinimum": 0}}
+          },
+          "then": {
+            "properties": {"min_actions": {"minimum": 1}}
+          }
+        }
+      ]
     },
     "rubricAction": {
       "type": "object",
       "required": ["id", "description"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "description": {"type": "string", "minLength": 1}
+        "description": {"type": "string", "minLength": 1},
+        "role": {"enum": ["counted", "mandatory", "forbidden"], "default": "counted"}
       }
     },
     "approvedTemplate": {

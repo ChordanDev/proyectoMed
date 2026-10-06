@@ -593,6 +593,440 @@ defmodule Backend.StationPackageTest do
     assert total == nil
   end
 
+  describe "authored rule fields" do
+    @history 0
+    @treatment 1
+    @exams 2
+    @order 3
+
+    defp authored_rules, do: fixture("valid-package-v2-authored-rules.json")
+
+    defp put_criterion(package, index, path, value) do
+      put_in(package, ["rubric", Access.at(index) | path], value)
+    end
+
+    defp delete_min_actions(package, index, level_index) do
+      update_in(
+        package,
+        ["rubric", Access.at(index), "levels", Access.at(level_index)],
+        fn level ->
+          Map.delete(level, "min_actions")
+        end
+      )
+    end
+
+    test "validates a fixture that exercises every authored rule field" do
+      package = authored_rules()
+      rubric = package["rubric"]
+      levels = Enum.flat_map(rubric, & &1["levels"])
+      actions = Enum.flat_map(rubric, & &1["actions"])
+
+      assert Enum.any?(levels, &is_integer(&1["min_actions"]))
+      assert Enum.any?(levels, &(not Map.has_key?(&1, "min_actions")))
+
+      for role <- ["counted", "mandatory", "forbidden"] do
+        assert Enum.any?(actions, &(&1["role"] == role))
+      end
+
+      assert Enum.any?(actions, &(not Map.has_key?(&1, "role")))
+      assert Enum.any?(rubric, &(&1["rule"] == "task_order"))
+      assert Enum.any?(rubric, &(Map.has_key?(&1, "rule") and is_nil(&1["rule"])))
+      assert Enum.any?(rubric, &(not Map.has_key?(&1, "rule")))
+      assert Enum.any?(rubric, &is_integer(&1["count_cap"]))
+      assert Enum.any?(rubric, &is_integer(&1["first_n"]))
+      assert Enum.any?(rubric, & &1["veto"])
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "JSON schema declares the optional authored rule fields" do
+      schema = json_file(@schema_path)
+      criterion = schema["$defs"]["rubricCriterion"]
+      level = schema["$defs"]["rubricLevel"]
+      action = schema["$defs"]["rubricAction"]
+
+      assert level["properties"]["min_actions"] == %{"type" => "integer", "minimum" => 0}
+      refute "min_actions" in level["required"]
+
+      assert action["properties"]["role"] == %{
+               "enum" => ["counted", "mandatory", "forbidden"],
+               "default" => "counted"
+             }
+
+      refute "role" in action["required"]
+
+      assert criterion["properties"]["rule"] == %{"enum" => [nil, "task_order"], "default" => nil}
+      refute "rule" in criterion["required"]
+
+      assert criterion["properties"]["count_cap"] == %{
+               "type" => ["integer", "null"],
+               "minimum" => 1
+             }
+
+      assert criterion["properties"]["first_n"] == %{
+               "type" => ["integer", "null"],
+               "minimum" => 1
+             }
+    end
+
+    test "accepts thresholds of equal value on increasing points" do
+      package =
+        put_criterion(authored_rules(), @history, ["levels", Access.at(2), "min_actions"], 2)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "rejects every authored rule violation with its own error" do
+      base = authored_rules()
+
+      cases = [
+        {put_criterion(base, @history, ["levels", Access.at(1), "min_actions"], -1),
+         "rubric levels min_actions must be a non-negative integer"},
+        {put_criterion(base, @history, ["levels", Access.at(1), "min_actions"], "2"),
+         "rubric levels min_actions must be a non-negative integer"},
+        {put_criterion(base, @history, ["levels", Access.at(1), "min_actions"], nil),
+         "rubric levels min_actions must be a non-negative integer"},
+        {put_criterion(base, @history, ["actions", Access.at(1), "role"], "optional"),
+         "rubric actions role must be one of: counted, mandatory, forbidden"},
+        {put_criterion(base, @history, ["actions", Access.at(1), "role"], nil),
+         "rubric actions role must be one of: counted, mandatory, forbidden"},
+        {put_criterion(base, @history, ["rule"], "pairwise_gate"),
+         "rubric criteria rule must be task_order or null"},
+        {put_criterion(base, @history, ["rule"], true),
+         "rubric criteria rule must be task_order or null"},
+        {put_criterion(base, @history, ["count_cap"], 0),
+         "rubric criteria count_cap must be at least 1 when set"},
+        {put_criterion(base, @exams, ["first_n"], 0),
+         "rubric criteria first_n must be at least 1 when set"},
+        {put_criterion(base, @exams, ["first_n"], -3),
+         "rubric criteria first_n must be at least 1 when set"},
+        {put_criterion(base, @history, ["actions", Access.at(1), "id"], "ask-onset"),
+         "rubric action ids must be unique within a criterion"},
+        {delete_min_actions(base, @history, 1),
+         "rubric criteria must set min_actions on every level or on none"},
+        {put_criterion(base, @history, ["levels", Access.at(0), "min_actions"], 1),
+         "rubric zero-point levels must set min_actions to 0"},
+        {put_criterion(base, @history, ["levels", Access.at(2), "min_actions"], 1),
+         "rubric level min_actions must not decrease as points increase"},
+        {put_criterion(base, @treatment, ["veto"], false),
+         "rubric criteria with a forbidden action must set veto to true"},
+        {put_criterion(base, @exams, ["levels", Access.at(0), "points"], 0.125),
+         "rubric criteria with thresholds, mandatory or forbidden actions require a zero-point level"},
+        {put_criterion(base, @treatment, ["levels", Access.at(0), "points"], 0.5),
+         "rubric criteria with thresholds, mandatory or forbidden actions require a zero-point level"}
+      ]
+
+      Enum.each(cases, fn {package, expected_error} ->
+        assert {:error, errors} = StationPackage.validate(package)
+
+        assert expected_error in errors,
+               "expected #{inspect(expected_error)} in #{inspect(errors)}"
+      end)
+    end
+
+    test "each threshold violation reports only its own threshold error" do
+      threshold_errors = [
+        "rubric criteria must set min_actions on every level or on none",
+        "rubric zero-point levels must set min_actions to 0",
+        "rubric level min_actions must not decrease as points increase"
+      ]
+
+      cases = [
+        {delete_min_actions(authored_rules(), @history, 1), Enum.at(threshold_errors, 0)},
+        {put_criterion(authored_rules(), @history, ["levels", Access.at(2), "min_actions"], 1),
+         Enum.at(threshold_errors, 2)}
+      ]
+
+      Enum.each(cases, fn {package, expected_error} ->
+        assert {:error, errors} = StationPackage.validate(package)
+        assert Enum.filter(errors, &(&1 in threshold_errors)) == [expected_error]
+      end)
+    end
+
+    test "rejects thresholds that grade wrongly, each with only its own error" do
+      base = authored_rules()
+
+      threshold_errors = [
+        "rubric criteria must set min_actions on every level or on none",
+        "rubric zero-point levels must set min_actions to 0",
+        "rubric level min_actions must not decrease as points increase",
+        "rubric levels with points above zero must set min_actions to at least 1",
+        "rubric level min_actions must not exceed the number of actions that are not forbidden",
+        "rubric level min_actions must not exceed count_cap",
+        "rubric criteria with thresholds require at least one action that is not forbidden"
+      ]
+
+      uncapped = put_criterion(base, @history, ["count_cap"], nil)
+
+      two_countable_actions =
+        uncapped
+        |> put_criterion(@history, ["veto"], true)
+        |> put_criterion(@history, ["actions", Access.at(2), "role"], "forbidden")
+        |> put_criterion(@history, ["actions", Access.at(3), "role"], "forbidden")
+
+      cases = [
+        {put_criterion(base, @history, ["levels", Access.at(1), "min_actions"], 0),
+         Enum.at(threshold_errors, 3)},
+        {base
+         |> put_criterion(@history, ["levels", Access.at(1), "min_actions"], 0)
+         |> put_criterion(@history, ["levels", Access.at(2), "min_actions"], 0),
+         Enum.at(threshold_errors, 3)},
+        {put_criterion(uncapped, @history, ["levels", Access.at(2), "min_actions"], 9),
+         Enum.at(threshold_errors, 4)},
+        {two_countable_actions, Enum.at(threshold_errors, 4)},
+        {put_criterion(base, @history, ["count_cap"], 2), Enum.at(threshold_errors, 5)},
+        {put_criterion(base, @exams, ["actions"], []), Enum.at(threshold_errors, 6)}
+      ]
+
+      Enum.each(cases, fn {package, expected_error} ->
+        assert {:error, errors} = StationPackage.validate(package)
+
+        assert Enum.filter(errors, &(&1 in threshold_errors)) == [expected_error],
+               "expected only #{inspect(expected_error)} in #{inspect(errors)}"
+      end)
+    end
+
+    test "accepts a top threshold equal to the number of countable actions" do
+      package =
+        authored_rules()
+        |> put_criterion(@history, ["count_cap"], nil)
+        |> put_criterion(@history, ["levels", Access.at(2), "min_actions"], 4)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "rejects a top threshold that the first N answers cannot reach" do
+      first_n_error = "rubric level min_actions must not exceed first_n"
+      uncapped = put_criterion(authored_rules(), @history, ["count_cap"], nil)
+
+      # history-taking authors thresholds 0/2/3 over four countable actions.
+      assert {:error, errors} =
+               StationPackage.validate(put_criterion(uncapped, @history, ["first_n"], 2))
+
+      assert errors == [first_n_error]
+
+      # Both caps out of reach are two defects, each with its own message.
+      assert {:error, errors} =
+               authored_rules()
+               |> put_criterion(@history, ["count_cap"], 2)
+               |> put_criterion(@history, ["first_n"], 2)
+               |> StationPackage.validate()
+
+      assert Enum.sort(errors) ==
+               ["rubric level min_actions must not exceed count_cap", first_n_error]
+    end
+
+    test "accepts first_n at or above the top threshold" do
+      for first_n <- [3, 4] do
+        package = put_criterion(authored_rules(), @history, ["first_n"], first_n)
+
+        assert {:ok, ^package} = StationPackage.validate(package)
+      end
+    end
+
+    test "rejects first_n on a criterion with actions and no thresholds" do
+      # treatment-plan authors actions and no thresholds.
+      package = put_criterion(authored_rules(), @treatment, ["first_n"], 1)
+
+      assert StationPackage.validate(package) ==
+               {:error, ["rubric criteria with first_n and actions must author thresholds"]}
+    end
+
+    test "accepts first_n on a criterion without actions, where it has no effect" do
+      package =
+        authored_rules()
+        |> put_criterion(@treatment, ["first_n"], 1)
+        |> put_criterion(@treatment, ["actions"], [])
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+
+      # The base v2 fixture relies on it.
+      assert {:ok, %{"rubric" => rubric}} =
+               StationPackage.validate(fixture("valid-package-v2.json"))
+
+      assert Enum.any?(rubric, &(is_integer(&1["first_n"]) and &1["actions"] == []))
+    end
+
+    test "JSON schema requires thresholds where first_n and actions are both authored" do
+      criterion = json_file(@schema_path)["$defs"]["rubricCriterion"]
+
+      assert %{
+               "if" => %{
+                 "required" => ["first_n", "actions"],
+                 "properties" => %{
+                   "first_n" => %{"type" => "integer"},
+                   "actions" => %{"minItems" => 1}
+                 }
+               },
+               "then" => %{
+                 "properties" => %{"levels" => %{"items" => %{"required" => ["min_actions"]}}}
+               }
+             } in criterion["allOf"]
+
+      assert criterion["description"] =~ "first_n and at least one action must author thresholds"
+    end
+
+    test "JSON schema documents the first_n reachability rule" do
+      description = json_file(@schema_path)["$defs"]["rubricCriterion"]["description"]
+
+      assert description =~ "at most first_n when first_n is set"
+    end
+
+    test "JSON schema requires a positive threshold on levels with points above zero" do
+      level = json_file(@schema_path)["$defs"]["rubricLevel"]
+
+      assert %{
+               "if" => %{
+                 "required" => ["points", "min_actions"],
+                 "properties" => %{"points" => %{"exclusiveMinimum" => 0}}
+               },
+               "then" => %{"properties" => %{"min_actions" => %{"minimum" => 1}}}
+             } in level["allOf"]
+    end
+
+    test "rejects every task_order violation with only its own error" do
+      base = authored_rules()
+      [_history, _treatment, _exams, order] = base["rubric"]
+
+      task_order_errors = [
+        "rubric must have at most one task_order criterion",
+        "rubric task_order criteria must not author actions",
+        "rubric task_order criteria must not set min_actions",
+        "rubric task_order criteria must set order to null",
+        "rubric task_order criteria must set count_cap to null",
+        "rubric task_order criteria must set first_n to null",
+        "rubric task_order criteria must set veto to false",
+        "rubric task_order criteria require a zero-point level",
+        "rubric with a task_order criterion requires at least two other criteria with an order",
+        "rubric task_order criteria must set modality_requirement to null"
+      ]
+
+      second = Map.put(order, "id", "task-order-b")
+      action = %{"id" => "follow-order", "description" => "Follow the order."}
+
+      with_thresholds =
+        base
+        |> put_criterion(@order, ["levels", Access.at(0), "min_actions"], 0)
+        |> put_criterion(@order, ["levels", Access.at(1), "min_actions"], 1)
+
+      cases = [
+        {Map.update!(base, "rubric", &(&1 ++ [second])), Enum.at(task_order_errors, 0)},
+        {put_criterion(base, @order, ["actions"], [action]), Enum.at(task_order_errors, 1)},
+        {with_thresholds, Enum.at(task_order_errors, 2)},
+        {put_criterion(base, @order, ["order"], 4), Enum.at(task_order_errors, 3)},
+        {put_criterion(base, @order, ["count_cap"], 1), Enum.at(task_order_errors, 4)},
+        {put_criterion(base, @order, ["first_n"], 2), Enum.at(task_order_errors, 5)},
+        {put_criterion(base, @order, ["veto"], true), Enum.at(task_order_errors, 6)},
+        {put_criterion(base, @order, ["levels", Access.at(0), "points"], 0.125),
+         Enum.at(task_order_errors, 7)},
+        {base
+         |> put_criterion(@treatment, ["order"], nil)
+         |> put_criterion(@exams, ["order"], nil), Enum.at(task_order_errors, 8)},
+        {put_criterion(base, @order, ["modality_requirement"], "verbal"),
+         Enum.at(task_order_errors, 9)}
+      ]
+
+      Enum.each(cases, fn {package, expected_error} ->
+        assert {:error, errors} = StationPackage.validate(package)
+
+        assert Enum.filter(errors, &(&1 in task_order_errors)) == [expected_error],
+               "expected only #{inspect(expected_error)} in #{inspect(errors)}"
+      end)
+    end
+
+    test "an excluded criterion is not a ranked step of the task order" do
+      # Only history-taking is left as a ranked criterion the order pass reads.
+      package =
+        authored_rules()
+        |> put_criterion(@treatment, ["order"], nil)
+        |> put_criterion(@exams, ["exclusion"], true)
+
+      assert StationPackage.validate(package) ==
+               {:error,
+                [
+                  "rubric with a task_order criterion requires at least two other criteria with an order"
+                ]}
+
+      # Two ranked criteria that are not excluded are enough.
+      package = put_criterion(authored_rules(), @exams, ["exclusion"], true)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "a task_order criterion needs only two ranked criteria, and equal ranks are valid" do
+      package =
+        authored_rules()
+        |> put_criterion(@history, ["order"], nil)
+        |> put_criterion(@exams, ["order"], 2)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "the task_order constraints do not apply to other criteria" do
+      package = put_criterion(authored_rules(), @order, ["rule"], nil)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "JSON schema constrains a task_order criterion and the rubric that has one" do
+      schema = json_file(@schema_path)
+      criterion = schema["$defs"]["rubricCriterion"]
+      rubric = schema["$defs"]["rubric"]
+
+      task_order = %{
+        "required" => ["rule"],
+        "properties" => %{"rule" => %{"const" => "task_order"}}
+      }
+
+      assert [%{"if" => ^task_order, "then" => %{"properties" => constrained}}, _first_n] =
+               criterion["allOf"]
+
+      assert constrained["actions"] == %{"maxItems" => 0}
+      assert constrained["order"] == %{"type" => "null"}
+      assert constrained["count_cap"] == %{"type" => "null"}
+      assert constrained["first_n"] == %{"type" => "null"}
+      assert constrained["veto"] == %{"const" => false}
+      assert constrained["modality_requirement"] == %{"type" => "null"}
+
+      assert constrained["levels"] == %{
+               "contains" => %{"properties" => %{"points" => %{"const" => 0}}},
+               "items" => %{"not" => %{"required" => ["min_actions"]}}
+             }
+
+      assert rubric["if"] == %{"contains" => task_order}
+
+      assert rubric["then"] == %{
+               "contains" => task_order,
+               "maxContains" => 1,
+               "allOf" => [
+                 %{
+                   "contains" => %{
+                     "required" => ["order"],
+                     "properties" => %{
+                       "order" => %{"type" => "integer"},
+                       "exclusion" => %{"const" => false}
+                     }
+                   },
+                   "minContains" => 2
+                 }
+               ]
+             }
+    end
+
+    test "the same action id may be reused by different criteria" do
+      package =
+        put_criterion(authored_rules(), @exams, ["actions", Access.at(0), "id"], "ask-onset")
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+
+    test "veto without a forbidden action stays valid" do
+      package = put_criterion(authored_rules(), @history, ["veto"], true)
+
+      assert {:ok, ^package} = StationPackage.validate(package)
+    end
+  end
+
   defp fixture(name) do
     @fixtures_path
     |> Path.join(name)

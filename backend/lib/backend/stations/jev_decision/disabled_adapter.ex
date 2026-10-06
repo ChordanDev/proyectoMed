@@ -21,4 +21,9 @@ defmodule Backend.Stations.JevDecision.DisabledAdapter do
   def decide_rubric(_request) do
     {:error, {:adapter_disabled, @disabled_message}}
   end
+
+  @impl true
+  def decide_rubric_batch(_request) do
+    {:error, {:adapter_disabled, @disabled_message}}
+  end
 end
