@@ -100,6 +100,7 @@ class TurnTracker:
         self.last_accepted_turn_id: int = last_turn_id
         self.cancelled_generations: set[int] = set()
         self.cancelled_turns: set[int] = set()
+        self._stale_turn_floor = last_turn_id
 
     def handle(self, event: SpeechEvent) -> dict | None:
         if event.type == SpeechEventType.INTERIM_TRANSCRIPT:
@@ -129,11 +130,23 @@ class TurnTracker:
             self.active_generation_id = None
 
     def mark_turn_stale(self, turn_id: int) -> None:
-        """Marks a turn locally stale before or during generation."""
-        self.cancelled_turns.add(turn_id)
+        """Fence an interrupted monotonic stream prefix, including delayed work.
+
+        Explicit cancel(turn_id=...) remains specific, including future IDs;
+        stream barge-in supersedes all earlier turns, not an arbitrary future ID.
+        """
+        self._stale_turn_floor = max(self._stale_turn_floor, turn_id)
+        self.cancelled_turns.difference_update(
+            turn
+            for turn in tuple(self.cancelled_turns)
+            if turn <= self._stale_turn_floor
+        )
 
     def is_turn_stale(self, turn_id: int) -> bool:
-        return turn_id in self.cancelled_turns
+        return (
+            turn_id <= max(self._stale_turn_floor, self.last_accepted_turn_id)
+            or turn_id in self.cancelled_turns
+        )
 
     def is_valid_reply(self, reply: VoiceTurnReply) -> bool:
         """Validates that a reply is generation-bound, not duplicate, and not superseded/cancelled."""
@@ -141,7 +154,7 @@ class TurnTracker:
             return False
         if not reply.is_committed_receipt():
             return False
-        if reply.turn_id in self.cancelled_turns:
+        if self.is_turn_stale(reply.turn_id):
             return False
         if (
             reply.generation_id is None
@@ -166,6 +179,11 @@ class TurnTracker:
                 self.active_generation_id or 0, reply.generation_id
             )
         self.last_accepted_turn_id = max(self.last_accepted_turn_id, reply.turn_id)
+        self.cancelled_turns.difference_update(
+            turn
+            for turn in tuple(self.cancelled_turns)
+            if turn <= self.last_accepted_turn_id
+        )
         return reply
 
     def _event(self, final: bool, interim: str = "") -> dict:
@@ -268,6 +286,10 @@ class PhoenixClient:
 class TurnManager:
     """Manages bounded asynchronous pending turn tasks and turn-scoped cancellation (#119)."""
 
+    # One queued final and one cancellation runner, in addition to these slots.
+    # Ambiguous dispatches occupy ownership slots even after their HTTP task ends.
+    MAX_DISPATCHED_TURNS = 16
+
     def __init__(
         self,
         tracker: TurnTracker,
@@ -284,6 +306,12 @@ class TurnManager:
         # Cancellation ownership survives a newer queued turn and local task aborts.
         self._unresolved_cancel_turns: set[int] = set()
         self._all_tasks: set[asyncio.Task] = set()
+        self._active_commit_tasks: set[asyncio.Task] = set()
+        self._queued_commit: tuple[int, str] | None = None
+        self._queued_task: asyncio.Task | None = None
+        self._cancel_requested_turns: set[int] = set()
+        self._local_cancel_turn: int | None = None
+        self._capacity_changed = asyncio.Event()
         self._unhandled_error: BaseException | None = None
         self._main_task: asyncio.Task | None = None
         self._cleaning_up = False
@@ -321,34 +349,117 @@ class TurnManager:
         ):
             turn_to_cancel = self.pending_turn_id
             self.tracker.mark_turn_stale(turn_to_cancel)
-            self._unresolved_cancel_turns.add(turn_to_cancel)
-            self.pending_cancel_task = asyncio.create_task(
-                self._do_cancel(turn_to_cancel)
+            if self._queued_commit and self._queued_commit[0] == turn_to_cancel:
+                # Only explicit barge-in allows queued text to be superseded.
+                self._queued_commit = None
+            self._cancel_requested_turns.update(
+                turn
+                for turn in self._unresolved_cancel_turns
+                if self.tracker.is_turn_stale(turn)
             )
-            self._track_task(self.pending_cancel_task)
+            if turn_to_cancel not in self._unresolved_cancel_turns:
+                # Preserve scoped best-effort cancellation without treating a
+                # locally queued turn as evidence of a dispatched remote request.
+                self._local_cancel_turn = turn_to_cancel
+            self._capacity_changed.set()
+            if self.pending_cancel_task is None or self.pending_cancel_task.done():
+                self.pending_cancel_task = asyncio.create_task(self._drain_cancels())
+                self._track_task(self.pending_cancel_task)
             return self.pending_cancel_task
         return None
 
     def commit_turn(self, turn_id: int, text: str) -> asyncio.Task:
-        self.check_errors()
-        cancel_task = self.pending_cancel_task
-        self.pending_cancel_task = None
-        self.pending_turn_id = turn_id
+        """Queue a normalized final without blocking the speech reader.
 
-        task = asyncio.create_task(self._do_commit(turn_id, text, cancel_task))
+        Superseded queued finals share one admission task; its result identifies
+        the latest dispatched turn, not a separate future for every stream event.
+        """
+        self.check_errors()
+        if self._queued_commit is not None:
+            queued_turn, _ = self._queued_commit
+            if not self.tracker.is_turn_stale(queued_turn):
+                # The stream calls this once per normalized END, after barge-in.
+                # Never silently replace a nonsuperseded final from a bad caller.
+                raise VoiceFailure("malformed")
+        self.pending_turn_id = turn_id
+        self._queued_commit = (turn_id, text)
+        if len(self._unresolved_cancel_turns) >= self.MAX_DISPATCHED_TURNS:
+            self._cancel_requested_turns.update(
+                turn
+                for turn in self._unresolved_cancel_turns
+                if self.tracker.is_turn_stale(turn)
+            )
+            if self.pending_cancel_task is None or self.pending_cancel_task.done():
+                self.pending_cancel_task = asyncio.create_task(self._drain_cancels())
+                self._track_task(self.pending_cancel_task)
+        self._capacity_changed.set()
+        if self._queued_task is None or self._queued_task.done():
+            self._queued_task = asyncio.create_task(self._admit_commit())
+            self._track_task(self._queued_task)
+        task = self._queued_task
         self.pending_commit_task = task
-        self._track_task(task)
         return task
+
+    async def _admit_commit(self) -> VoiceTurnReply | None:
+        try:
+            while self._queued_commit is not None:
+                turn_id = self._queued_commit[0]
+                if self.tracker.is_turn_stale(turn_id):
+                    self._queued_commit = None
+                    return None
+                cancel_task = self.pending_cancel_task
+                if cancel_task is not None and not cancel_task.done():
+                    await cancel_task
+                    continue
+                if (
+                    len(self._unresolved_cancel_turns) >= self.MAX_DISPATCHED_TURNS
+                    or len(self._active_commit_tasks) >= self.MAX_DISPATCHED_TURNS
+                ):
+                    # No new dispatch while ownership is full. A timeout or local
+                    # task abort cannot free it; keep only the latest queued final
+                    # and leave the STT reader free to barge in or disconnect.
+                    self._capacity_changed.clear()
+                    await self._capacity_changed.wait()
+                    continue
+                turn_id, text = self._queued_commit
+                self._queued_commit = None
+                self._queued_task = None
+                task = asyncio.current_task()
+                self._active_commit_tasks.add(task)
+                try:
+                    return await self._do_commit(turn_id, text, None)
+                finally:
+                    self._active_commit_tasks.discard(task)
+                    self._capacity_changed.set()
+            return None
+        finally:
+            if self._queued_task is asyncio.current_task():
+                self._queued_task = None
+
+    async def _drain_cancels(self) -> dict | None:
+        result = None
+        while self._cancel_requested_turns or self._local_cancel_turn is not None:
+            if self._cancel_requested_turns:
+                turn_id = min(self._cancel_requested_turns)
+                self._cancel_requested_turns.discard(turn_id)
+            else:
+                turn_id = self._local_cancel_turn
+                self._local_cancel_turn = None
+            result = await self._do_cancel(turn_id)
+            self._capacity_changed.set()
+        return result
 
     async def _do_cancel(self, turn_id: int) -> dict | None:
         self.tracker.mark_turn_stale(turn_id)
         try:
             result = await self.phoenix.cancel(turn_id=turn_id)
             self._unresolved_cancel_turns.discard(turn_id)
+            self._capacity_changed.set()
             return result
         except VoiceFailure as failure:
             if failure.kind == "stale_generation":
                 self._unresolved_cancel_turns.discard(turn_id)
+                self._capacity_changed.set()
             if failure.kind in ("stale_generation", "timeout", "disconnected"):
                 logger.debug(
                     "cancel turn %d best-effort fallback: %s", turn_id, failure.kind
@@ -370,6 +481,9 @@ class TurnManager:
                 await cancel_task
             if self.tracker.is_turn_stale(turn_id):
                 return None
+            # Dispatch can outlive the HTTP await (including an idempotent retry
+            # reporting duplicate). Only correlated server evidence releases it.
+            self._unresolved_cancel_turns.add(turn_id)
             reply = await self.phoenix.commit(turn_id, text)
             if (
                 isinstance(reply, VoiceTurnReply)
@@ -381,8 +495,11 @@ class TurnManager:
                 # server receipt (not a queued POST or local stale flag) proves
                 # that older cancellation obligations are obsolete.
                 self._unresolved_cancel_turns.difference_update(
-                    old for old in tuple(self._unresolved_cancel_turns) if old < turn_id
+                    old
+                    for old in tuple(self._unresolved_cancel_turns)
+                    if old <= turn_id
                 )
+                self._capacity_changed.set()
             if reply.turn_id == turn_id and not self.tracker.is_turn_stale(turn_id):
                 accepted = self.tracker.accept_reply(reply)
                 if accepted is not None and self.on_reply is not None:
@@ -400,6 +517,7 @@ class TurnManager:
             raise
         except VoiceFailure as failure:
             if failure.kind == "stale_generation":
+                self._unresolved_cancel_turns.discard(turn_id)
                 self.tracker.mark_turn_stale(turn_id)
                 return None
             self._record_error(failure)
@@ -408,10 +526,14 @@ class TurnManager:
             self._record_error(exc)
             raise
         finally:
-            if self.pending_turn_id == turn_id:
+            if (
+                self.pending_turn_id == turn_id
+                and turn_id not in self._unresolved_cancel_turns
+            ):
                 self.pending_turn_id = None
 
     def _track_task(self, task: asyncio.Task) -> None:
+        self._all_tasks.difference_update(t for t in tuple(self._all_tasks) if t.done())
         self._all_tasks.add(task)
 
         def _done(t: asyncio.Task) -> None:
@@ -446,9 +568,10 @@ class TurnManager:
         ownership remains only in this manager; it is not durable after its death.
         """
         self._cleaning_up = True
-        if self.pending_turn_id is not None:
-            self._unresolved_cancel_turns.add(self.pending_turn_id)
         turns_to_cancel = self._unresolved_cancel_turns.copy()
+        if self.pending_turn_id is not None:
+            # A queued ID is a best-effort cleanup target, never ownership proof.
+            turns_to_cancel.add(self.pending_turn_id)
         tasks = [t for t in self._all_tasks if not t.done()]
         for task in tasks:
             task.cancel()
@@ -458,6 +581,11 @@ class TurnManager:
         self.pending_commit_task = None
         self.pending_cancel_task = None
         self.pending_turn_id = None
+        self._queued_commit = None
+        self._queued_task = None
+        self._active_commit_tasks.clear()
+        self._cancel_requested_turns.clear()
+        self._local_cancel_turn = None
 
         for turn_to_cancel in turns_to_cancel:
             self.tracker.mark_turn_stale(turn_to_cancel)

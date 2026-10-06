@@ -530,6 +530,296 @@ class MockSTT:
 
 
 class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_ambiguous_ownership_capacity_blocks_dispatch_without_blocking_barge_in(
+        self,
+    ):
+        tracker = TurnTracker("s1", 0)
+        async with ControllablePhoenixClient() as client:
+            manager = TurnManager(tracker, client)
+            latest = None
+            peak = 0
+            try:
+                async with asyncio.timeout(3):
+                    for turn_id in range(1, manager.MAX_DISPATCHED_TURNS + 1):
+                        client.replies[turn_id] = VoiceTurnReply(turn_id, "duplicate")
+                        client.cancel_errors[turn_id] = VoiceFailure("timeout")
+                        self.assertIsNone(
+                            await manager.commit_turn(turn_id, "Ambiguous question")
+                        )
+                        await manager.on_speech_event(
+                            event(SpeechEventType.START_OF_SPEECH)
+                        )
+                    owned = set(range(1, manager.MAX_DISPATCHED_TURNS + 1))
+                    self.assertEqual(manager._unresolved_cancel_turns, owned)
+                    hold = asyncio.Event()
+                    client.cancel_errors.clear()
+                    for turn_id in owned:
+                        client.cancel_delays[turn_id] = hold
+                    for turn_id in range(manager.MAX_DISPATCHED_TURNS + 1, 129):
+                        manager.on_speech_event(event(FINAL, "Latest question"))
+                        latest = manager.commit_turn(turn_id, "Latest question")
+                        await asyncio.sleep(0)
+                        peak = max(peak, len(manager._all_tasks))
+                        self.assertEqual(manager._unresolved_cancel_turns, owned)
+                        self.assertEqual(
+                            len(client.commit_calls), manager.MAX_DISPATCHED_TURNS
+                        )
+                        self.assertEqual(
+                            manager._queued_commit, (turn_id, "Latest question")
+                        )
+                    self.assertEqual(peak, 2)
+                    hold.set()
+                    self.assertEqual((await latest).turn_id, 128)
+                    await manager.wait_pending()
+                    self.assertEqual(manager._unresolved_cancel_turns, set())
+                    self.assertEqual(client.commit_calls[-1], (128, "Latest question"))
+            finally:
+                for delayed in client.cancel_delays.values():
+                    delayed.set()
+                await manager.cleanup()
+
+    async def test_running_http_capacity_keeps_a_single_latest_queued_final(self):
+        tracker = TurnTracker("s1", 0)
+        async with ControllablePhoenixClient() as client:
+            manager = TurnManager(tracker, client)
+            old_tasks = []
+            latest = None
+            try:
+                async with asyncio.timeout(3):
+                    for turn_id in range(1, manager.MAX_DISPATCHED_TURNS + 1):
+                        client.commit_events[turn_id] = asyncio.Event()
+                        client.commit_delays[turn_id] = asyncio.Event()
+                        old_tasks.append(manager.commit_turn(turn_id, "Held question"))
+                        await client.commit_events[turn_id].wait()
+                        await manager.on_speech_event(event(INTERIM, "Next question"))
+                    for turn_id in range(manager.MAX_DISPATCHED_TURNS + 1, 129):
+                        manager.on_speech_event(event(FINAL, "Latest question"))
+                        latest = manager.commit_turn(turn_id, "Latest question")
+                        await asyncio.sleep(0)
+                        self.assertLessEqual(
+                            len(manager._all_tasks), manager.MAX_DISPATCHED_TURNS + 2
+                        )
+                        self.assertEqual(
+                            len(client.commit_calls), manager.MAX_DISPATCHED_TURNS
+                        )
+                        self.assertEqual(
+                            manager._queued_commit, (turn_id, "Latest question")
+                        )
+                    for delayed in client.commit_delays.values():
+                        delayed.set()
+                    self.assertEqual(
+                        await asyncio.gather(*old_tasks),
+                        [None] * manager.MAX_DISPATCHED_TURNS,
+                    )
+                    self.assertEqual((await latest).turn_id, 128)
+                    await manager.wait_pending()
+                    self.assertEqual(manager._unresolved_cancel_turns, set())
+            finally:
+                for delayed in client.commit_delays.values():
+                    delayed.set()
+                await manager.cleanup()
+
+    async def test_held_http_bursts_bound_tasks_and_preserve_latest_aggregated_turn(
+        self,
+    ):
+        tracker = TurnTracker("s1", 0)
+        replies = []
+        tasks_before = asyncio.all_tasks()
+        async with ControllablePhoenixClient() as client:
+            client.commit_events[1] = asyncio.Event()
+            client.commit_delays[1] = asyncio.Event()
+            client.cancel_events[1] = asyncio.Event()
+            client.cancel_delays[1] = asyncio.Event()
+            manager = TurnManager(tracker, client, on_reply=replies.append)
+            peak = 0
+            latest = None
+            try:
+                async with asyncio.timeout(3):
+                    first = manager.commit_turn(1, "First question")
+                    await client.commit_events[1].wait()
+                    tracker.turn_id = 2
+                    for turn_id in range(2, 514):
+                        client.cancel_delays[turn_id] = client.cancel_delays[1]
+                        for speech_event in (
+                            event(FINAL, "Latest"),
+                            event(FINAL, "question"),
+                            event(END),
+                        ):
+                            manager.on_speech_event(speech_event)
+                            transcript = tracker.handle(speech_event)
+                            if transcript and transcript["final"]:
+                                latest = manager.commit_turn(
+                                    transcript["turn_id"], transcript["text"]
+                                )
+                        await asyncio.sleep(0)
+                        peak = max(peak, len(manager._all_tasks))
+                        self.assertLessEqual(len(asyncio.all_tasks() - tasks_before), 3)
+                        self.assertEqual(
+                            manager._queued_commit, (turn_id, "Latest question")
+                        )
+                    self.assertEqual(peak, 3)
+                    self.assertEqual(manager._unresolved_cancel_turns, {1})
+                    self.assertEqual(client.commit_calls, [(1, "First question")])
+                    client.cancel_delays[1].set()
+                    reply = await latest
+                    self.assertEqual(reply.turn_id, 513)
+                    self.assertEqual(
+                        client.commit_calls,
+                        [(1, "First question"), (513, "Latest question")],
+                    )
+                    client.commit_delays[1].set()
+                    self.assertIsNone(await first)
+                    await manager.wait_pending()
+                    self.assertEqual([reply.turn_id for reply in replies], [513])
+                    self.assertEqual(manager._unresolved_cancel_turns, set())
+                    self.assertTrue(tracker.is_turn_stale(2))
+                    self.assertLessEqual(len(tracker.cancelled_turns), 1)
+            finally:
+                client.cancel_delays[1].set()
+                client.commit_delays[1].set()
+                await manager.cleanup()
+
+    async def test_interruption_history_is_bounded_and_old_work_stays_stale(self):
+        tracker = TurnTracker("s1", 0)
+        tracker.cancel(turn_id=10000)
+        tracker.cancel(generation_id=10000)
+        async with ControllablePhoenixClient() as client:
+            manager = TurnManager(tracker, client)
+            try:
+                async with asyncio.timeout(3):
+                    for turn_id in range(1, 257, 2):
+                        client.commit_events[turn_id] = asyncio.Event()
+                        client.commit_delays[turn_id] = asyncio.Event()
+                        tracker.handle(event(FINAL, "Old question"))
+                        old_final = tracker.handle(event(END))
+                        self.assertEqual(old_final["turn_id"], turn_id)
+                        old = manager.commit_turn(
+                            old_final["turn_id"], old_final["text"]
+                        )
+                        await client.commit_events[turn_id].wait()
+                        await manager.on_speech_event(event(INTERIM, "New question"))
+                        tracker.handle(event(FINAL, "New question"))
+                        new_final = tracker.handle(event(END))
+                        await manager.commit_turn(
+                            new_final["turn_id"], new_final["text"]
+                        )
+                        client.commit_delays[turn_id].set()
+                        self.assertIsNone(await old)
+                    self.assertLessEqual(len(tracker.cancelled_turns), 1)
+                    self.assertLessEqual(len(tracker.cancelled_generations), 1)
+                    self.assertTrue(tracker.is_turn_stale(1))
+                    self.assertIsNone(
+                        tracker.accept_reply(VoiceTurnReply(1, "committed", 1, "Late"))
+                    )
+                    calls = list(client.commit_calls)
+                    self.assertIsNone(
+                        await manager.commit_turn(1, "Old queued question")
+                    )
+                    self.assertEqual(client.commit_calls, calls)
+                    await manager.cleanup()
+                    # Reconnect keeps the same tracker and does not reuse old IDs.
+                    self.assertEqual(tracker.turn_id, 257)
+                    queue = asyncio.Queue()
+                    queue.put_nowait(event(FINAL, "Reconnect question"))
+                    queue.put_nowait(event(END))
+                    queue.put_nowait(None)
+                    await process_speech_stream(MockStream(queue), tracker, client)
+                    self.assertEqual(tracker.last_accepted_turn_id, 257)
+                    self.assertEqual(tracker.turn_id, 258)
+                    self.assertTrue(tracker.is_turn_stale(10000))
+                    self.assertIsNone(
+                        tracker.accept_reply(
+                            VoiceTurnReply(
+                                10000, "committed", 10000, "Future cancelled"
+                            )
+                        )
+                    )
+            finally:
+                await manager.cleanup()
+
+    async def test_ambiguous_dispatch_survives_http_completion_until_scoped_fence(
+        self,
+    ):
+        for exhausted in (False, True):
+            for independent_active, teardown in (
+                (False, False), (True, False), (False, True), (True, True)
+            ):
+                with self.subTest(
+                    exhausted=exhausted,
+                    independent_active=independent_active,
+                    teardown=teardown,
+                ):
+                    active = None
+                    highwater = 0
+                    attempts = 0
+                    cancelled = []
+                    appends = []
+                    release = asyncio.Event()
+                    generations = []
+
+                    async def generate(turn_id):
+                        await release.wait()
+                        if active == turn_id:
+                            appends.append(turn_id)
+
+                    async def handler(request):
+                        nonlocal active, highwater, attempts
+                        body = json.loads(request.content)
+                        turn_id = body["turn_id"]
+                        if request.url.path.endswith("/cancel"):
+                            cancelled.append(turn_id)
+                            if active != turn_id:
+                                return httpx.Response(409, json={})
+                            active = None
+                            return httpx.Response(200, json={"status": "cancelled"})
+                        attempts += 1
+                        if turn_id > highwater:
+                            highwater = turn_id
+                            active = turn_id
+                            generations.append(asyncio.create_task(generate(turn_id)))
+                            raise httpx.ReadTimeout("private timeout detail")
+                        if exhausted:
+                            raise httpx.ReadTimeout("private retry detail")
+                        return httpx.Response(
+                            200, json={"turn_id": turn_id, "status": "duplicate"}
+                        )
+
+                    async with phoenix(handler) as client:
+                        manager = TurnManager(TurnTracker("s1", 0), client)
+                        try:
+                            async with asyncio.timeout(1):
+                                task = manager.commit_turn(1, "Question")
+                                if exhausted:
+                                    with self.assertRaises(VoiceFailure):
+                                        await task
+                                    with self.assertRaises(VoiceFailure):
+                                        manager.check_errors()
+                                else:
+                                    self.assertIsNone(await task)
+                                self.assertEqual(attempts, 2)
+                                self.assertEqual(active, 1)
+                                if independent_active:
+                                    active = 3
+                                if teardown:
+                                    await manager.cleanup()
+                                else:
+                                    cancel = manager.on_speech_event(
+                                        event(SpeechEventType.START_OF_SPEECH)
+                                    )
+                                    self.assertIsNotNone(cancel)
+                                    await cancel
+                                release.set()
+                                await asyncio.gather(*generations)
+                                self.assertEqual(cancelled, [1])
+                                self.assertEqual(appends, [])
+                                self.assertEqual(
+                                    active, 3 if independent_active else None
+                                )
+                        finally:
+                            release.set()
+                            await manager.cleanup()
+                            await asyncio.gather(*generations)
+
     async def _assert_safe_close_failure(self, primary=None):
         sentinel = "private closure sentinel"
 
@@ -688,7 +978,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                         except (VoiceFailure, TypeError):
                             pass
                         await manager.cleanup()
-                        self.assertEqual(cancelled, [1, 1, 1])
+                        # Both dispatched identities remain ambiguous: invalid
+                        # turn 2 metadata cannot release turn 1 OR turn 2 ownership.
+                        self.assertEqual(cancelled, [1, 1, 1, 2])
 
     async def _assert_non_speech_preserves_pending_turn(self, held_commit=False):
         async with ControllablePhoenixClient() as client:
