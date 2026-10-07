@@ -121,6 +121,8 @@ no-eligible results were not rendered. Provider/privacy/ZDR, legal and clinical
 qualification/activation remain outside this change; no external provider is
 enabled.
 
+The pending review of complete and no-eligible results, and of how readers understand incomplete evidence, is recorded in [`docs/content/acute-appendicitis/result-comprehension-review.md`](content/acute-appendicitis/result-comprehension-review.md) (issue #130; not yet completed).
+
 ## Verification locators
 
 - `backend/test/backend_web/controllers/educational_result_test.exs`: public HTTP
