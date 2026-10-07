@@ -14,6 +14,19 @@ defmodule Backend.Stations.Conversation do
   @type session :: %{
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
+          optional(:last_voice_turn_id) => pos_integer(),
+          optional(:cancelled_voice_turn_id) => non_neg_integer(),
+          optional(:active_generation_id) => pos_integer() | nil,
+          optional(:active_voice_turn_id) => pos_integer() | nil,
+          optional(:active_generation_message_index) => non_neg_integer() | nil,
+          optional(:next_generation_id) => pos_integer(),
+          optional(:failed_voice_turn) =>
+            %{
+              turn_id: pos_integer(),
+              generation_id: pos_integer(),
+              reason: :station_ai_unavailable
+            }
+            | nil,
           session_id: String.t(),
           station_id: String.t(),
           station_version: String.t(),
@@ -71,11 +84,104 @@ defmodule Backend.Stations.Conversation do
   Atomically appends a learner voice turn unless `turn_id` is not greater than
   the last committed voice turn, which makes reconnects, retries and
   reordered provider finals idempotent.
+
+  Preserves the base #118 return shape `{:ok, :committed | :duplicate}` for existing
+  callers such as Backend.Stations.commit_voice_transcript and VoiceWorkerController.
   """
   @spec commit_voice_turn(String.t(), pos_integer(), String.t()) ::
-          {:ok, :committed | :duplicate} | {:error, :not_found | :expired | :completed}
+          {:ok, :committed | :duplicate}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
   def commit_voice_turn(session_id, turn_id, text) do
     GenServer.call(__MODULE__, {:commit_voice_turn, session_id, turn_id, text})
+  end
+
+  @doc """
+  Atomically commits an accepted learner voice turn and assigns a session-scoped
+  monotonic generation identity for bounded real-time turns (#119).
+
+  Invalidates any previously pending generation on an accepted final turn.
+  Returns `{:ok, :committed, generation_id}` on accepted turns, or `{:ok, :duplicate}`
+  if turn_id is not greater than the last committed voice turn. The latest failed
+  generation returns its canonical technical failure on retry instead of duplicate.
+  """
+  @spec begin_voice_turn(String.t(), pos_integer(), String.t()) ::
+          {:ok, :committed, pos_integer()}
+          | {:ok, :duplicate}
+          | {:error,
+             :not_found | :expired | :completed | :stale_generation | :station_ai_unavailable}
+  def begin_voice_turn(session_id, turn_id, text) do
+    GenServer.call(__MODULE__, {:begin_voice_turn, session_id, turn_id, text})
+  end
+
+  @doc """
+  Records a canonical technical failure only for the still-active generation.
+  Keeps one turn-scoped outcome until a newer turn or session completion, never
+  provider payloads or reply text. Cancellation and supersession remain stale.
+  """
+  @spec fail_generation(String.t(), pos_integer(), :station_ai_unavailable) ::
+          {:ok, :failed}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def fail_generation(session_id, generation_id, :station_ai_unavailable)
+      when is_integer(generation_id) and generation_id > 0 do
+    GenServer.call(__MODULE__, {:fail_generation, session_id, generation_id})
+  end
+
+  @doc """
+  Atomically resolves a verified patient reply against the active generation identity.
+  Refuses invalid replies (non-binary or empty text), stale generations,
+  completed sessions, expired sessions, and missing/discarded sessions.
+  """
+  @spec resolve_patient_reply(String.t(), pos_integer(), String.t()) ::
+          {:ok, session()}
+          | {:error, :not_found | :expired | :completed | :stale_generation | :invalid_reply}
+  def resolve_patient_reply(session_id, generation_id, reply_text) do
+    GenServer.call(__MODULE__, {:resolve_patient_reply, session_id, generation_id, reply_text})
+  end
+
+  @doc """
+  Explicitly cancels a pending generation. When `generation_id` is provided,
+  cancels only if that generation is still active, protecting against races with newer turns.
+  """
+  @spec cancel_generation(String.t(), pos_integer() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_generation(session_id, generation_id \\ nil) do
+    GenServer.call(__MODULE__, {:cancel_generation, session_id, generation_id})
+  end
+
+  @doc """
+  Explicitly cancels a pending voice turn by expected turn_id (#119).
+  Cancels active work only if `turn_id` matches. Turn-only criteria also fence
+  future admission through that monotonic turn ID, even when no active work
+  matches (the existing `:stale_generation` response is preserved). A supplied
+  generation must match before a fence is installed. Already admitted duplicates
+  retain their idempotent return shape; a fence never removes transcript messages.
+  """
+  @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_voice_turn(session_id, criteria \\ nil)
+
+  def cancel_voice_turn(session_id, turn_id) when is_integer(turn_id) and turn_id > 0 do
+    GenServer.call(__MODULE__, {:cancel_voice_turn, session_id, turn_id})
+  end
+
+  def cancel_voice_turn(session_id, criteria) when is_list(criteria) or is_map(criteria) do
+    GenServer.call(__MODULE__, {:cancel_by_criteria, session_id, criteria})
+  end
+
+  def cancel_voice_turn(session_id, nil) do
+    cancel_generation(session_id, nil)
+  end
+
+  @doc """
+  Returns the current active generation identity for the session, or nil if none is pending.
+  """
+  @spec active_generation(String.t()) ::
+          {:ok, pos_integer() | nil}
+          | {:error, :not_found | :expired | :completed}
+  def active_generation(session_id) do
+    GenServer.call(__MODULE__, {:active_generation, session_id})
   end
 
   @doc """
@@ -121,7 +227,14 @@ defmodule Backend.Stations.Conversation do
       started_at: now,
       expires_at: DateTime.add(now, timeout_ms(), :millisecond),
       messages: [],
-      status: :active
+      status: :active,
+      last_voice_turn_id: 0,
+      cancelled_voice_turn_id: 0,
+      active_generation_id: nil,
+      active_voice_turn_id: nil,
+      active_generation_message_index: nil,
+      next_generation_id: 1,
+      failed_voice_turn: nil
     }
 
     true = :ets.insert(__MODULE__, {session.session_id, session})
@@ -156,7 +269,11 @@ defmodule Backend.Stations.Conversation do
               Map.merge(session, %{
                 status: :completed,
                 completed_at: DateTime.utc_now(),
-                completion_reason: reason
+                completion_reason: reason,
+                active_generation_id: nil,
+                active_voice_turn_id: nil,
+                active_generation_message_index: nil,
+                failed_voice_turn: nil
               })
 
             true = :ets.insert(__MODULE__, {session_id, session})
@@ -189,24 +306,178 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_call({:commit_voice_turn, session_id, turn_id, text}, _from, state) do
+    do_voice_turn(session_id, turn_id, text, :legacy, state)
+  end
+
+  def handle_call({:begin_voice_turn, session_id, turn_id, text}, _from, state) do
+    do_voice_turn(session_id, turn_id, text, :with_generation, state)
+  end
+
+  def handle_call({:resolve_patient_reply, session_id, generation_id, reply_text}, _from, state) do
     case active_session(session_id) do
       {:ok, %{status: :completed}} ->
         {:reply, {:error, :completed}, state}
 
       {:ok, session} ->
-        if turn_id <= Map.get(session, :last_voice_turn_id, 0) do
-          {:reply, {:ok, :duplicate}, state}
-        else
-          message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
+        active_gen = Map.get(session, :active_generation_id)
+
+        cond do
+          not valid_reply_text?(reply_text) ->
+            {:reply, {:error, :invalid_reply}, state}
+
+          is_nil(active_gen) or active_gen != generation_id ->
+            {:reply, {:error, :stale_generation}, state}
+
+          true ->
+            patient_msg = %{
+              role: :patient,
+              modality: :voice,
+              text: reply_text,
+              at: DateTime.utc_now()
+            }
+
+            session =
+              session
+              |> Map.put(:messages, session.messages ++ [patient_msg])
+              |> Map.put(:active_generation_id, nil)
+              |> Map.put(:active_voice_turn_id, nil)
+              |> Map.put(:active_generation_message_index, nil)
+
+            true = :ets.insert(__MODULE__, {session_id, session})
+            {:reply, {:ok, session}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:fail_generation, session_id, generation_id}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        if session.active_generation_id == generation_id do
+          failure = %{
+            turn_id: session.active_voice_turn_id,
+            generation_id: generation_id,
+            reason: :station_ai_unavailable
+          }
 
           session =
             session
-            |> Map.put(:messages, session.messages ++ [message])
-            |> Map.put(:last_voice_turn_id, turn_id)
+            |> Map.put(:failed_voice_turn, failure)
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+            |> Map.put(:active_generation_message_index, nil)
 
           true = :ets.insert(__MODULE__, {session_id, session})
-          {:reply, {:ok, :committed}, state}
+          {:reply, {:ok, :failed}, state}
+        else
+          {:reply, {:error, :stale_generation}, state}
         end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:cancel_generation, session_id, generation_id}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        active_gen = Map.get(session, :active_generation_id)
+
+        if generation_id != nil and active_gen != generation_id do
+          {:reply, {:error, :stale_generation}, state}
+        else
+          session =
+            session
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+            |> Map.put(:active_generation_message_index, nil)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :cancelled}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:cancel_voice_turn, session_id, expected_turn_id}, from, state) do
+    handle_call({:cancel_by_criteria, session_id, [turn_id: expected_turn_id]}, from, state)
+  end
+
+  def handle_call({:cancel_by_criteria, session_id, criteria}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        active_turn = Map.get(session, :active_voice_turn_id)
+        active_gen = Map.get(session, :active_generation_id)
+
+        expected_turn =
+          get_criterion(criteria, :turn_id) || get_criterion(criteria, :expected_turn_id)
+
+        expected_gen = get_criterion(criteria, :generation_id)
+
+        stale? =
+          cond do
+            expected_turn != nil and (active_turn != expected_turn or is_nil(active_gen)) -> true
+            expected_gen != nil and active_gen != expected_gen -> true
+            true -> false
+          end
+
+        # Turn IDs order a session's stream. One high-water mark fences delayed
+        # POSTs/retries without an unbounded identity set or touching newer active
+        # work. A mismatched generation-qualified request has no side effects.
+        session =
+          if is_integer(expected_turn) and expected_turn > 0 and
+               (is_nil(expected_gen) or not stale?) do
+            fenced =
+              Map.put(
+                session,
+                :cancelled_voice_turn_id,
+                max(Map.get(session, :cancelled_voice_turn_id, 0), expected_turn)
+              )
+
+            true = :ets.insert(__MODULE__, {session_id, fenced})
+            fenced
+          else
+            session
+          end
+
+        if stale? do
+          {:reply, {:error, :stale_generation}, state}
+        else
+          session =
+            session
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+            |> Map.put(:active_generation_message_index, nil)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :cancelled}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:active_generation, session_id}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        {:reply, {:ok, Map.get(session, :active_generation_id)}, state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -229,6 +500,66 @@ defmodule Backend.Stations.Conversation do
     schedule_purge()
     {:noreply, state}
   end
+
+  defp do_voice_turn(session_id, turn_id, text, return_mode, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        reply = commit_voice_turn(session_id, session, turn_id, text, return_mode)
+        {:reply, reply, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp commit_voice_turn(session_id, session, turn_id, text, return_mode) do
+    cond do
+      turn_id <= Map.get(session, :last_voice_turn_id, 0) ->
+        case {return_mode, Map.get(session, :failed_voice_turn)} do
+          {:with_generation, %{turn_id: ^turn_id, reason: :station_ai_unavailable}} ->
+            {:error, :station_ai_unavailable}
+
+          _ ->
+            {:ok, :duplicate}
+        end
+
+      turn_id <= Map.get(session, :cancelled_voice_turn_id, 0) ->
+        {:error, :stale_generation}
+
+      true ->
+        gen_id = Map.get(session, :next_generation_id, 1)
+        message = %{role: :learner, modality: :voice, text: text, at: DateTime.utc_now()}
+
+        session =
+          session
+          |> Map.put(:messages, session.messages ++ [message])
+          |> Map.put(:last_voice_turn_id, turn_id)
+          |> Map.put(:active_generation_id, gen_id)
+          |> Map.put(:active_voice_turn_id, turn_id)
+          |> Map.put(:active_generation_message_index, length(session.messages))
+          |> Map.put(:next_generation_id, gen_id + 1)
+          |> Map.put(:failed_voice_turn, nil)
+
+        true = :ets.insert(__MODULE__, {session_id, session})
+        voice_turn_reply(return_mode, gen_id)
+    end
+  end
+
+  defp voice_turn_reply(:legacy, _gen_id), do: {:ok, :committed}
+  defp voice_turn_reply(:with_generation, gen_id), do: {:ok, :committed, gen_id}
+
+  defp get_criterion(criteria, key) when is_list(criteria) do
+    Keyword.get(criteria, key)
+  end
+
+  defp get_criterion(criteria, key) when is_map(criteria) do
+    Map.get(criteria, key) || Map.get(criteria, to_string(key))
+  end
+
+  defp get_criterion(_criteria, _key), do: nil
 
   defp active_session(session_id) do
     case fetch_session(session_id) do
@@ -259,6 +590,12 @@ defmodule Backend.Stations.Conversation do
   defp schedule_purge do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
   end
+
+  defp valid_reply_text?(text) when is_binary(text) do
+    String.trim(text) != ""
+  end
+
+  defp valid_reply_text?(_), do: false
 
   defp default_station_id do
     loader =
@@ -311,6 +648,18 @@ defmodule Backend.Stations.Conversation do
   defp pop_if_matching(session, last_msg, expected_message) do
     if matches_expected?(last_msg, expected_message) do
       updated_messages = :lists.droplast(session.messages)
+
+      # Append/tail-pop keeps the origin's position stable even for identical messages.
+      session =
+        if Map.get(session, :active_generation_message_index) == length(updated_messages) do
+          session
+          |> Map.put(:active_generation_id, nil)
+          |> Map.put(:active_voice_turn_id, nil)
+          |> Map.put(:active_generation_message_index, nil)
+        else
+          session
+        end
+
       session = %{session | messages: updated_messages}
       true = :ets.insert(__MODULE__, {session.session_id, session})
       {:ok, session}

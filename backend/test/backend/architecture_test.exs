@@ -58,7 +58,8 @@ defmodule Backend.ArchitectureTest do
       "lib/backend_web/controllers/station_controller.ex",
       "lib/backend_web/controllers/transcription_controller.ex",
       "lib/backend_web/controllers/tts_controller.ex",
-      "lib/backend_web/controllers/voice_session_controller.ex"
+      "lib/backend_web/controllers/voice_session_controller.ex",
+      "lib/backend_web/controllers/voice_worker_controller.ex"
     ]
 
     for rel_path <- station_controllers do
