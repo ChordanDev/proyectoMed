@@ -86,14 +86,14 @@ and no scores. The web retains explicitly named `LegacySessionResult`,
 the educational main path. The internal `to_legacy/1` projection is not used by
 this legacy route.
 
-## Disclosure, lifecycle, and pending human review
+## Disclosure, lifecycle, and human review
 
 Before starting (voice or text) and on results (including technical recovery),
 the interface displays exactly:
 
 > Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.
 
-Authored placeholder results visibly say **exemplo — dados fictícios**. Status
+Authored placeholder results visibly say **Exemplo — dados fictícios**. Status
 explanations use semantic text, not color alone, with wrapping layout for mobile.
 Descriptions, level descriptions and recommendations remain the authored values;
 current English clinical content needs content-partner translation/re-authoring
@@ -108,11 +108,14 @@ page cannot show the deleted session. Late finish/resume result responses cannot
 restore evidence after successful reset/discard. Keepalive delivery itself remains
 best effort, not a deletion guarantee.
 
-**Pending, not approved:** human desktop/mobile UX and disclaimer review must
-confirm prominence, comprehension of unresolved coverage, keyboard/screen-reader
-usability, and fictional labels. Issue #129 must not be closed on automated
-evidence alone. Provider/privacy/ZDR, legal and clinical qualification/activation
-remain outside this change; no external provider is enabled.
+**Human review:** on 2026-10-07 the PR author reviewed the rendered notice,
+result, loading and recovery screens at desktop and mobile widths, with keyboard
+navigation and VoiceOver, covering disclaimer prominence, comprehension of
+unresolved coverage and the fictional label. The review used a local preview fed
+by the fictional partial-coverage fixture, not a live assessment; complete and
+no-eligible results were not rendered. Provider/privacy/ZDR, legal and clinical
+qualification/activation remain outside this change; no external provider is
+enabled.
 
 ## Verification locators
 
