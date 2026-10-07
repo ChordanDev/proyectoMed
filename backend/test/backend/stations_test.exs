@@ -4,6 +4,21 @@ defmodule Backend.StationsTest do
   alias Backend.Stations
   alias Backend.Stations.Conversation
 
+  test "voice worker allocation floor separates cancelled IDs from committed learner history" do
+    session = Stations.create_session(%{audio_consent: true})
+    id = session.session_id
+
+    assert {:ok, :committed} = Stations.commit_voice_transcript(id, 2, "Committed question")
+    assert {:error, :stale_generation} = Stations.cancel_voice_turn(id, turn_id: 7)
+    assert {:ok, %{last_turn_id: 2, turn_id_floor: 7}} = Stations.voice_worker_context(id)
+    assert {:ok, %{messages: [%{text: "Committed question"}]}} = Stations.get_session(id)
+
+    assert {:ok, :committed} = Stations.commit_voice_transcript(id, 9, "New question")
+    assert {:ok, %{last_turn_id: 9, turn_id_floor: 9}} = Stations.voice_worker_context(id)
+    assert {:error, :stale_generation} = Stations.cancel_voice_turn(id, 999)
+    assert {:ok, %{last_turn_id: 9, turn_id_floor: 9}} = Stations.voice_worker_context(id)
+  end
+
   defmodule TestSuccessAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true

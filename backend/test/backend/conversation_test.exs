@@ -466,22 +466,43 @@ defmodule Backend.ConversationTest do
                Conversation.resolve_patient_reply(session.session_id, 2, "Resposta do Turno 2")
     end
 
-    test "cancel_voice_turn returns :stale_generation when turn has already resolved or session is idle" do
+    test "idle turn cancellation fences admission and retries while later turns remain eligible" do
       session = Conversation.start()
 
-      # Idle session: cancel by turn_id returns stale_generation
+      # No matching active generation still returns stale, but fences admission.
       assert {:error, :stale_generation} =
                Conversation.cancel_voice_turn(session.session_id, 1)
 
+      for _attempt <- 1..2 do
+        assert {:error, :stale_generation} =
+                 Conversation.begin_voice_turn(session.session_id, 1, "Cancelled question")
+
+        assert {:error, :stale_generation} =
+                 Conversation.commit_voice_turn(
+                   session.session_id,
+                   1,
+                   "Cancelled legacy question"
+                 )
+      end
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Late reply")
+
+      assert {:ok, %{messages: [], last_voice_turn_id: 0}} =
+               Conversation.fetch(session.session_id)
+
       {:ok, :committed, 1} =
-        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+        Conversation.begin_voice_turn(session.session_id, 2, "Later question")
 
       {:ok, _} =
         Conversation.resolve_patient_reply(session.session_id, 1, "Resposta 1")
 
       # Already resolved: late cancel returns stale_generation
       assert {:error, :stale_generation} =
-               Conversation.cancel_voice_turn(session.session_id, 1)
+               Conversation.cancel_voice_turn(session.session_id, 2)
+
+      assert {:ok, :duplicate} =
+               Conversation.begin_voice_turn(session.session_id, 2, "Repeated admitted question")
     end
 
     test "cancel_voice_turn supports criteria keywords and maps" do
@@ -495,6 +516,34 @@ defmodule Backend.ConversationTest do
                Conversation.cancel_voice_turn(session.session_id, turn_id: 1, generation_id: 1)
 
       assert {:ok, nil} = Conversation.active_generation(session.session_id)
+    end
+
+    test "admission fences protect independent newer work and generation mismatch has no side effects" do
+      session = Conversation.start()
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(session.session_id, 3, "Independent question")
+
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, turn_id: 1)
+
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, turn_id: 4, generation_id: 999)
+
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, _} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Independent reply")
+
+      assert {:ok, :committed, 2} =
+               Conversation.begin_voice_turn(session.session_id, 4, "Next independent question")
+
+      idle = Conversation.start()
+      assert {:error, :stale_generation} = Conversation.cancel_generation(idle.session_id, 999)
+      assert {:ok, :cancelled} = Conversation.cancel_generation(idle.session_id)
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(idle.session_id, 1, "Generation-only compatibility")
     end
 
     test "duplicate turn_id does not disrupt active voice turn or generation identity" do
