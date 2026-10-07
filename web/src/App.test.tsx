@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import strings from "./features/station/i18n/pt-BR.json";
 import type { SessionResult } from "./features/station/api/client";
+import { partialResult } from "./features/station/result/educational-result.fixture";
 
 const mockStart = vi.fn();
 const mockSend = vi.fn();
@@ -224,18 +225,7 @@ describe("App", () => {
   it("renders ResultScreen with results when station status is finished", async () => {
     const user = userEvent.setup();
     mockStationState.status = "finished";
-    mockStationState.result = {
-      session_id: "s-1",
-      status: "completed",
-      criteria: [
-        {
-          id: "c-1",
-          status: "met",
-          evidence: ["Boa tarde"],
-          recommendation: "Excelente abordagem",
-        },
-      ],
-    };
+    mockStationState.result = partialResult;
 
     render(<App />);
 

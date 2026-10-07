@@ -1,489 +1,187 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionResult } from "../api/client";
 import strings from "../i18n/pt-BR.json";
+import { partialResult } from "./educational-result.fixture";
 import { ResultScreen, ResultScreenState } from "./ResultScreen";
 
-describe("ResultScreen (Slice 2)", () => {
-  const sampleResult: SessionResult = {
-    session_id: "session-123",
-    status: "completed",
-    criteria: [
-      {
-        id: "crit-history-onset",
-        status: "met",
-        evidence: [],
-        recommendation: "Mantenha a abordagem sistemática.",
+const disclaimer = "Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.";
+
+describe("educational result presentation", () => {
+  it("renders a complete exact total independently from the eligible maximum", () => {
+    const complete = {
+      ...partialResult,
+      criteria: [{ ...partialResult.criteria[0], points: "1.125", max_points: "1.5" }],
+      coverage: { assessed: 1, uncertain: 0, not_observable: 0, not_applicable: 0 },
+      estimates: {
+        total: "1.125",
+        scored_subtotal: "1.125",
+        scored_max: "1.5",
+        eligible_max: "1.5",
+        unresolved: [],
       },
-      {
-        id: "crit-family-history",
-        status: "omitted",
-        evidence: [],
-        recommendation: "Investigue antecedentes familiares na anamnese.",
-      },
-      {
-        id: "crit-duration",
-        status: "uncertain",
-        evidence: [],
-        recommendation: "Esclareça o tempo de evolução dos sintomas.",
-      },
-    ],
-  };
-
-  it("renders ordered report with 3 criteria statuses, visible ordinals, and recommendations", () => {
-    render(
-      <ResultScreen
-        status="finished"
-        result={sampleResult}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    const reportHeading = screen.getByRole("heading", {
-      level: 1,
-      name: strings.resultReportTitle,
-    });
-    expect(reportHeading).toBeInTheDocument();
-
-    const reportList = screen.getByRole("list");
-    expect(reportList).toBeInTheDocument();
-
-    const items = screen.getAllByRole("listitem");
-    expect(items).toHaveLength(3);
-
-    expect(
-      screen.getByRole("heading", {
-        level: 2,
-        name: `${strings.resultOrdinalPrefix} 1`,
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", {
-        level: 2,
-        name: `${strings.resultOrdinalPrefix} 2`,
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", {
-        level: 2,
-        name: `${strings.resultOrdinalPrefix} 3`,
-      }),
-    ).toBeInTheDocument();
-
-    expect(screen.getByText(strings.criterionMet)).toBeInTheDocument();
-    expect(screen.getByText(strings.criterionOmitted)).toBeInTheDocument();
-    expect(screen.getByText(strings.criterionUncertain)).toBeInTheDocument();
-
-    const recHeadings = screen.getAllByText(
-      strings.resultRecommendationHeading,
-    );
-    expect(recHeadings).toHaveLength(3);
-
-    expect(
-      screen.getByText("Mantenha a abordagem sistemática."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Investigue antecedentes familiares na anamnese."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Esclareça o tempo de evolução dos sintomas."),
-    ).toBeInTheDocument();
-  });
-
-  it("renders evidence heading and blockquote excerpts with mark highlight when evidence is non-empty", () => {
-    const resultWithEvidence: SessionResult = {
-      session_id: "session-with-evidence",
-      status: "completed",
-      criteria: [
-        {
-          id: "crit-history-onset",
-          status: "met",
-          evidence: [
-            "Quando começou a dor no peito?",
-            "A dor irradia para algum lugar?",
-          ],
-          recommendation: "Mantenha a abordagem sistemática.",
-        },
-      ],
     };
-
-    render(
-      <ResultScreen
-        status="finished"
-        result={resultWithEvidence}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", {
-        level: 3,
-        name: strings.resultEvidenceHeading,
-      }),
-    ).toBeInTheDocument();
-
-    const excerpts = screen.getAllByRole("blockquote");
-    expect(excerpts).toHaveLength(2);
-
-    const firstMark = excerpts[0].querySelector("mark");
-    expect(firstMark).not.toBeNull();
-    expect(firstMark).toHaveTextContent("Quando começou a dor no peito?");
-
-    const secondMark = excerpts[1].querySelector("mark");
-    expect(secondMark).not.toBeNull();
-    expect(secondMark).toHaveTextContent("A dor irradia para algum lugar?");
+    render(<ResultScreen status="finished" result={complete} onRestart={vi.fn()} />);
+    expect(screen.getByText("Total educacional: 1,125")).toBeInTheDocument();
+    expect(screen.getByText("Pontos obtidos nos critérios avaliados: 1,125 de 1,5")).toBeInTheDocument();
+    expect(screen.getByText("Máximo da estação (todos os critérios elegíveis): 1,5")).toBeInTheDocument();
+    expect(screen.queryByText(/Total indisponível/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Critérios não resolvidos")).not.toBeInTheDocument();
+  });
+  it("shows the disclaimer, fictional label, exact partial estimates and scoped authored evidence", () => {
+    render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    expect(screen.getByText(disclaimer)).toBeInTheDocument();
+    expect(screen.getByText("Exemplo — dados fictícios")).toBeInTheDocument();
+    expect(screen.getByText("Pontos obtidos nos critérios avaliados: 0,25 de 0,25")).toBeInTheDocument();
+    expect(screen.getByText("Máximo da estação (todos os critérios elegíveis): 1,25")).toBeInTheDocument();
+    expect(screen.getByText("Total indisponível — há critérios não resolvidos. Os pontos acima contam apenas os critérios avaliados e não representam a estação inteira.")).toBeInTheDocument();
+    expect(screen.queryByText(/reescalado/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Avaliados: 1/)).toBeInTheDocument();
+    const first = screen.getByText(partialResult.criteria[0].description).closest("li")!;
+    expect(within(first).getByText("Nível autoral: Criterion A is partially adequate.")).toBeInTheDocument();
+    expect(within(first).getByRole("blockquote")).toHaveTextContent("Exemplo da sessão");
+    expect(within(first).getByText(/Pontos: 0,25/)).toBeInTheDocument();
+    const unresolved = screen.getByText(partialResult.criteria[1].description).closest("li")!;
+    expect(within(unresolved).getByText(/Incerto — sem pontos atribuídos/)).toBeInTheDocument();
+    expect(within(unresolved).queryByText(/Pontos:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("criterion-a")).not.toBeInTheDocument();
   });
 
-  it("renders multiple criteria preserving evidence scoping per criterion", () => {
-    const mixedResult: SessionResult = {
-      session_id: "mixed-evidence-session",
-      status: "completed",
-      criteria: [
-        {
-          id: "crit-onset",
-          status: "met",
-          evidence: ["Início súbito da dor."],
-          recommendation: "Rec 1",
-        },
-        {
-          id: "crit-risk-factors",
-          status: "omitted",
-          evidence: [],
-          recommendation: "Rec 2",
-        },
-        {
-          id: "crit-history",
-          status: "uncertain",
-          evidence: ["Histórico incerto.", "Dúvida relatada."],
-          recommendation: "Rec 3",
-        },
-      ],
-    };
-
-    render(
-      <ResultScreen
-        status="finished"
-        result={mixedResult}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    const evidenceHeadings = screen.getAllByRole("heading", {
-      level: 3,
-      name: strings.resultEvidenceHeading,
-    });
-    expect(evidenceHeadings).toHaveLength(2);
-
-    const excerpts = screen.getAllByRole("blockquote");
-    expect(excerpts).toHaveLength(3);
-    expect(excerpts[0]).toHaveTextContent("Início súbito da dor.");
-    expect(excerpts[1]).toHaveTextContent("Histórico incerto.");
-    expect(excerpts[2]).toHaveTextContent("Dúvida relatada.");
+  it("lists each status count and each unresolved criterion as separate items", () => {
+    render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    const coverage = screen.getByRole("region", { name: strings.resultCoverage });
+    const [counts, unresolved] = within(coverage).getAllByRole("list");
+    expect(within(counts).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Avaliados: 1",
+      "Incertos: 1",
+      "Não observáveis: 0",
+      "Excluídos: 0",
+    ]);
+    expect(within(unresolved).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Critério 2: Incerto — sem pontos atribuídos",
+    ]);
   });
 
-  it("omits the evidence section entirely when evidence array is empty", () => {
-    render(
-      <ResultScreen
-        status="finished"
-        result={sampleResult}
-        onRestart={vi.fn()}
-      />,
-    );
+  it("distinguishes genuine zero, not observable and excluded without color, and labels only placeholders", () => {
+    const zero = { ...partialResult.criteria[0], status: "assessed" as const, reason: null, level: "inadequado", level_description: "No observed action.", points: "0", evidence: [], evidence_ids: [] };
+    const unobservable = { ...partialResult.criteria[1], id: "physical", status: "not_observable" as const, reason: "required_modality_unavailable" };
+    const excluded = { ...partialResult.criteria[1], id: "excluded", status: "not_applicable" as const, reason: "authored_exclusion" };
+    render(<ResultScreen status="finished" result={{ ...partialResult, placeholder: false, criteria: [zero, unobservable, excluded] }} onRestart={vi.fn()} />);
+    expect(screen.queryByText("Exemplo — dados fictícios")).not.toBeInTheDocument();
+    expect(screen.getByText(/Pontos: 0 de/)).toBeInTheDocument();
+    expect(screen.getByText(/Não observável — modalidade indisponível/)).toBeInTheDocument();
+    expect(screen.getByText(/Excluído pelo autor — fora dos máximos/)).toBeInTheDocument();
+  });
 
-    expect(
-      screen.queryByRole("heading", {
-        level: 3,
-        name: strings.resultEvidenceHeading,
-      }),
-    ).not.toBeInTheDocument();
+  it("shows empty and all-excluded rubrics as no estimate, not fabricated zero totals", () => {
+    const { rerender } = render(<ResultScreen status="finished" result={{ ...partialResult, criteria: [], coverage: { assessed: 0, uncertain: 0, not_observable: 0, not_applicable: 0 }, estimates: { total: null, scored_subtotal: "0", scored_max: "0", eligible_max: "0", unresolved: [] } }} onRestart={vi.fn()} />);
+    expect(screen.getByText(/Nenhum critério elegível/)).toBeInTheDocument();
+    expect(screen.queryByText(/Total indisponível/)).not.toBeInTheDocument();
+    rerender(<ResultScreen status="finished" result={{ ...partialResult, criteria: [{ ...partialResult.criteria[1], status: "not_applicable", reason: "authored_exclusion" }], coverage: { assessed: 0, uncertain: 0, not_observable: 0, not_applicable: 1 }, estimates: { total: null, scored_subtotal: "0", scored_max: "0", eligible_max: "0", unresolved: [] } }} onRestart={vi.fn()} />);
+    expect(screen.getByText(/Nenhum critério elegível/)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the authored level description once and never the raw level identifier", () => {
+    const { container } = render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    expect(container).not.toHaveTextContent("parcialmente_adequado");
+    expect(screen.getAllByText(/Criterion A is partially adequate\./)).toHaveLength(1);
+  });
+
+  it("omits the level line when the authored level description is blank", () => {
+    const blank = { ...partialResult.criteria[0], level_description: " " };
+    render(<ResultScreen status="finished" result={{ ...partialResult, criteria: [blank, partialResult.criteria[1]] }} onRestart={vi.fn()} />);
+    expect(screen.queryByText(/Nível autoral/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Pontos: 0,25/)).toBeInTheDocument();
+  });
+
+  it("exposes the disclaimer as a note on the finished report", () => {
+    render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    expect(screen.getByRole("note")).toHaveTextContent(disclaimer);
+  });
+
+  it("keeps the session-only sentence out of the coverage summary and next to restart", () => {
+    render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    const coverage = screen.getByRole("region", { name: strings.resultCoverage });
+    expect(within(coverage).queryByText(strings.resultSessionOnly)).not.toBeInTheDocument();
+    const sessionOnly = screen.getByText(strings.resultSessionOnly);
+    expect(sessionOnly.parentElement).toBe(screen.getByRole("button").parentElement);
+  });
+
+  it.each([
+    ["finishing", "status"],
+    ["failed", "alert"],
+  ] as const)("stacks the disclaimer note and the %s state in one column container", (status, role) => {
+    const { container } = render(<ResultScreen status={status} result={null} onRestart={vi.fn()} />);
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent(disclaimer);
+    const column = screen.getByRole(role).parentElement!;
+    expect(column).not.toBe(container);
+    expect(column).toHaveClass("result-screen");
+    expect(note.parentElement).toBe(column);
+    expect(note.compareDocumentPosition(screen.getByRole(role)) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
+  it("does not add affirmative official, pass/fail, readiness or percentage claims", () => {
+    const { container } = render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    const text = container.textContent!.replace(disclaimer, "").toLowerCase();
+    for (const word of ["nota oficial", "aprovação", "reprovação", "prontidão", "certificação", "%", "readiness", "pass/fail"]) expect(text).not.toContain(word);
+  });
+
+  it("keeps restart acknowledgment, disabled behavior and discard error visible", async () => {
+    const restart = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(<ResultScreen status="finished" result={partialResult} onRestart={restart} disabled errorMessage="Falha ao encerrar" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Falha ao encerrar");
+    await user.click(screen.getByRole("button"));
+    expect(restart).not.toHaveBeenCalled();
+    rerender(<ResultScreen status="finished" result={partialResult} onRestart={restart} />);
+    await user.click(screen.getByRole("button"));
+    expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps technical failure separate from educational uncertainty", () => {
+    const { rerender } = render(<ResultScreen status="finishing" result={null} onRestart={vi.fn()} />);
+    const loading = screen.getByRole("status");
+    expect(loading).toHaveAttribute("aria-live", "polite");
+    rerender(<ResultScreen status="failed" result={partialResult} errorMessage="Tentativa inválida" onRestart={vi.fn()} />);
+    expect(screen.getByRole("alert")).not.toBe(loading);
+    expect(screen.getByRole("alert")).toHaveTextContent("Tentativa inválida");
     expect(screen.queryByRole("blockquote")).not.toBeInTheDocument();
+    expect(screen.getByText(disclaimer)).toBeInTheDocument();
+    rerender(<ResultScreen status="finished" result={null} onRestart={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(strings.resultUnavailable);
   });
 
-  it("hides technical criteria IDs from visible text without coupling to metadata attributes", () => {
-    render(
-      <ResultScreen
-        status="finished"
-        result={sampleResult}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByText("crit-history-onset")).not.toBeInTheDocument();
-    expect(screen.queryByText("crit-family-history")).not.toBeInTheDocument();
-    expect(screen.queryByText("crit-duration")).not.toBeInTheDocument();
-    expect(screen.queryByText(/crit-/i)).not.toBeInTheDocument();
-  });
-
-  it("delegates recovery when status is finishing, failed, or result is null/empty", () => {
-    const handleRestart = vi.fn();
-
-    const { unmount: unmountFinishing } = render(
-      <ResultScreen
-        status="finishing"
-        result={null}
-        onRestart={handleRestart}
-      />,
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(strings.loadingResult);
-    unmountFinishing();
-
-    const { unmount: unmountFailed } = render(
-      <ResultScreen status="failed" result={null} onRestart={handleRestart} />,
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      strings.resultUnavailable,
-    );
-    unmountFailed();
-
-    const { unmount: unmountFailedCustom } = render(
-      <ResultScreen
-        status="failed"
-        result={null}
-        errorMessage="Servidor indisponível"
-        onRestart={handleRestart}
-      />,
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent("Servidor indisponível");
-    unmountFailedCustom();
-
-    const { unmount: unmountNullResult } = render(
-      <ResultScreen
-        status="finished"
-        result={null}
-        onRestart={handleRestart}
-      />,
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      strings.resultUnavailable,
-    );
-    unmountNullResult();
-
-    const { unmount: unmountEmptyResult } = render(
-      <ResultScreen
-        status="finished"
-        result={{ session_id: "s1", status: "completed", criteria: [] }}
-        onRestart={handleRestart}
-      />,
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      strings.resultUnavailable,
-    );
-    unmountEmptyResult();
-  });
-
-  it("triggers onRestart from report action button", async () => {
-    const user = userEvent.setup();
-    const handleRestart = vi.fn();
-
-    render(
-      <ResultScreen
-        status="finished"
-        result={sampleResult}
-        onRestart={handleRestart}
-      />,
-    );
-
-    const restartButton = screen.getByRole("button", {
-      name: strings.resultRestartButton,
-    });
-    expect(restartButton).toBeInTheDocument();
-
-    await user.click(restartButton);
-    expect(handleRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("disables footer and delegated restart button, suppressing onRestart clicks when disabled (TR-04)", async () => {
-    const user = userEvent.setup();
-    const handleRestart = vi.fn();
-
-    const { rerender } = render(
-      <ResultScreen
-        status="finished"
-        result={sampleResult}
-        onRestart={handleRestart}
-        disabled={true}
-      />,
-    );
-
-    const footerButton = screen.getByRole("button", {
-      name: strings.resultRestartButton,
-    });
-    expect(footerButton).toBeDisabled();
-    await user.click(footerButton);
-    expect(handleRestart).not.toHaveBeenCalled();
-
-    rerender(
-      <ResultScreen
-        status="failed"
-        result={null}
-        onRestart={handleRestart}
-        disabled={true}
-      />,
-    );
-
-    const delegatedButton = screen.getByRole("button", {
-      name: strings.resultRestartButton,
-    });
-    expect(delegatedButton).toBeDisabled();
-    await user.click(delegatedButton);
-    expect(handleRestart).not.toHaveBeenCalled();
-  });
-
-  it("does not contain forbidden judgmental, grading, or score language", () => {
-    const { container } = render(
-      <ResultScreen
-        status="finished"
-        result={sampleResult}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    const fullText = (container.textContent || "").toLowerCase();
-    const forbiddenPatterns = [
-      "nota",
-      "score",
-      "pontuação",
-      "pontuacao",
-      "porcentagem",
-      "porcento",
-      "%",
-      "aprovad",
-      "reprovad",
-      "pass",
-      "fail",
-      "grade",
-      "prontidão",
-      "prontidao",
-      "readiness",
-    ];
-
-    for (const pattern of forbiddenPatterns) {
-      expect(fullText).not.toContain(pattern);
-    }
+  it("warns that restarting discards the attempt in recovery, with or without a server message", () => {
+    const warning = "Ao reiniciar, esta tentativa é descartada e não poderá ser recuperada.";
+    const { rerender } = render(<ResultScreen status="finishing" result={null} onRestart={vi.fn()} />);
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    rerender(<ResultScreen status="failed" result={null} errorMessage="Tentativa inválida" onRestart={vi.fn()} />);
+    expect(within(screen.getByRole("alert")).getByText("Tentativa inválida")).toBeInTheDocument();
+    expect(within(screen.getByRole("alert")).getByText(warning)).toBeInTheDocument();
+    rerender(<ResultScreen status="failed" result={null} onRestart={vi.fn()} />);
+    expect(within(screen.getByRole("alert")).getByText(strings.resultUnavailable)).toBeInTheDocument();
+    expect(within(screen.getByRole("alert")).getByText(warning)).toBeInTheDocument();
+    rerender(<ResultScreen status="finished" result={null} onRestart={vi.fn()} />);
+    expect(within(screen.getByRole("alert")).getByText(warning)).toBeInTheDocument();
   });
 });
 
-describe("ResultScreenState (Slice 1)", () => {
-  it("renders polite loading status section when status is finishing", () => {
-    render(
-      <ResultScreenState
-        status="finishing"
-        hasUsableFeedback={false}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    const statusSection = screen.getByRole("status");
-    expect(statusSection).toBeInTheDocument();
-    expect(statusSection).toHaveAttribute("aria-live", "polite");
-    expect(statusSection).toHaveTextContent(strings.loadingResult);
-  });
-
-  it("renders recovery section with alert and restart button when status is failed", async () => {
-    const user = userEvent.setup();
-    const handleRestart = vi.fn();
-
-    render(
-      <ResultScreenState
-        status="failed"
-        hasUsableFeedback={false}
-        onRestart={handleRestart}
-      />,
-    );
-
-    const alertSection = screen.getByRole("alert");
-    expect(alertSection).toBeInTheDocument();
-    expect(alertSection).toHaveTextContent(strings.resultUnavailable);
-
-    const restartButton = screen.getByRole("button", {
-      name: strings.resultRestartButton,
-    });
-    expect(restartButton).toBeInTheDocument();
-
-    await user.click(restartButton);
-    expect(handleRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("renders recovery section with alert and restart button when finished without usable feedback", async () => {
-    const user = userEvent.setup();
-    const handleRestart = vi.fn();
-
-    render(
-      <ResultScreenState
-        status="finished"
-        hasUsableFeedback={false}
-        onRestart={handleRestart}
-      />,
-    );
-
-    const alertSection = screen.getByRole("alert");
-    expect(alertSection).toBeInTheDocument();
-    expect(alertSection).toHaveTextContent(strings.resultUnavailable);
-
-    const restartButton = screen.getByRole("button", {
-      name: strings.resultRestartButton,
-    });
-    expect(restartButton).toBeInTheDocument();
-
-    await user.click(restartButton);
-    expect(handleRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns null when finished with usable feedback (leaving report presentation to slice 2)", () => {
-    const { container } = render(
-      <ResultScreenState
-        status="finished"
-        hasUsableFeedback={true}
-        onRestart={vi.fn()}
-      />,
-    );
-
+describe("ResultScreenState", () => {
+  it("leaves valid results to the report", () => {
+    const { container } = render(<ResultScreenState status="finished" hasUsableFeedback onRestart={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
   });
-
-  it("remounts DOM node when transitioning from finishing to failed recovery (TR-03)", () => {
-    const { rerender } = render(
-      <ResultScreenState
-        status="finishing"
-        hasUsableFeedback={false}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    const finishingNode = screen.getByRole("status");
-
-    rerender(
-      <ResultScreenState
-        status="failed"
-        hasUsableFeedback={false}
-        onRestart={vi.fn()}
-      />,
-    );
-
-    const recoveryNode = screen.getByRole("alert");
-    expect(recoveryNode).not.toBe(finishingNode);
-  });
-
-  it("binds disabled prop to restart button and prevents click when disabled (TR-01)", async () => {
+  it("announces failure and honors disabled recovery", async () => {
+    const restart = vi.fn();
     const user = userEvent.setup();
-    const handleRestart = vi.fn();
-
-    render(
-      <ResultScreenState
-        status="failed"
-        hasUsableFeedback={false}
-        onRestart={handleRestart}
-        disabled={true}
-      />,
-    );
-
-    const restartButton = screen.getByRole("button", {
-      name: strings.resultRestartButton,
-    });
-    expect(restartButton).toBeDisabled();
-
-    await user.click(restartButton);
-    expect(handleRestart).not.toHaveBeenCalled();
+    const { rerender } = render(<ResultScreenState status="failed" hasUsableFeedback={false} onRestart={restart} disabled />);
+    expect(screen.getByRole("alert")).toHaveAttribute("aria-live", "assertive");
+    await user.click(screen.getByRole("button"));
+    expect(restart).not.toHaveBeenCalled();
+    rerender(<ResultScreenState status="failed" hasUsableFeedback={false} onRestart={restart} />);
+    await user.click(screen.getByRole("button"));
+    expect(restart).toHaveBeenCalledOnce();
   });
 });

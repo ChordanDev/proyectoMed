@@ -22,10 +22,14 @@ export interface ResultScreenProps {
 }
 
 const STATUS_TEXT_MAP: Record<CriterionStatus, string> = {
-  met: strings.criterionMet,
-  omitted: strings.criterionOmitted,
-  uncertain: strings.criterionUncertain,
+  assessed: strings.criterionAssessed,
+  uncertain: strings.criterionUnresolved,
+  not_observable: strings.criterionNotObservable,
+  not_applicable: strings.criterionExcluded,
 };
+
+// Localize punctuation only: do not parse, round or rescale exact wire points.
+const displayPoints = (points: string) => points.replace(".", ",");
 
 export function ResultScreenState({
   status,
@@ -59,6 +63,7 @@ export function ResultScreenState({
         <p className="result-screen-state__text">
           {errorMessage || strings.resultUnavailable}
         </p>
+        <p className="result-screen-state__note">{strings.resultRestartDiscards}</p>
         <button
           type="button"
           className="result-screen-state__button"
@@ -84,17 +89,22 @@ export function ResultScreen({
   errorMessage,
 }: ResultScreenProps): React.JSX.Element | null {
   const criteria = result?.criteria;
-  const hasUsableFeedback = Boolean(criteria && criteria.length > 0);
+  const hasUsableFeedback = result !== null;
 
-  if (status !== "finished" || !criteria || criteria.length === 0) {
+  if (status !== "finished" || !criteria || !result) {
     return (
-      <ResultScreenState
-        status={status}
-        hasUsableFeedback={hasUsableFeedback}
-        onRestart={onRestart}
-        disabled={disabled}
-        errorMessage={errorMessage}
-      />
+      <div className="result-screen result-screen--state">
+        <p className="educational-disclaimer" role="note">
+          {strings.educationalDisclaimer}
+        </p>
+        <ResultScreenState
+          status={status}
+          hasUsableFeedback={hasUsableFeedback}
+          onRestart={onRestart}
+          disabled={disabled}
+          errorMessage={errorMessage}
+        />
+      </div>
     );
   }
 
@@ -105,6 +115,38 @@ export function ResultScreen({
           {strings.resultReportTitle}
         </h1>
       </header>
+
+      <p className="educational-disclaimer" role="note">
+        {strings.educationalDisclaimer}
+      </p>
+      {result.placeholder && <p className="result-screen__fictional">{strings.fictionalResult}</p>}
+      <section aria-labelledby="result-estimates-title" className="result-screen__summary">
+        <h2 id="result-estimates-title">{strings.resultCoverage}</h2>
+        <ul className="result-screen__counts">
+          <li>{strings.coverageAssessed}: {result.coverage.assessed}</li>
+          <li>{strings.coverageUncertain}: {result.coverage.uncertain}</li>
+          <li>{strings.coverageNotObservable}: {result.coverage.not_observable}</li>
+          <li>{strings.coverageExcluded}: {result.coverage.not_applicable}</li>
+        </ul>
+        <p>{strings.resultScoredPoints}: {displayPoints(result.estimates.scored_subtotal)} {strings.resultOf} {displayPoints(result.estimates.scored_max)}</p>
+        <p>{strings.resultEligibleMax}: {displayPoints(result.estimates.eligible_max)}</p>
+        {result.estimates.total !== null ? (
+          <p>{strings.resultTotal}: {displayPoints(result.estimates.total)}</p>
+        ) : <p>{criteria.every((criterion) => criterion.status === "not_applicable") ? strings.resultNoEligible : strings.resultOpenTotal}</p>}
+        {result.estimates.unresolved.length > 0 && <>
+          <h3>{strings.resultUnresolvedHeading}</h3>
+          <ul className="result-screen__unresolved">
+            {result.estimates.unresolved.map((item) => {
+              const ordinal = criteria.findIndex((criterion) => criterion.id === item.id) + 1;
+              return (
+                <li key={item.id}>
+                  {`${strings.resultOrdinalPrefix} ${ordinal}: ${STATUS_TEXT_MAP[item.status]}`}
+                </li>
+              );
+            })}
+          </ul>
+        </>}
+      </section>
 
       <ol className="result-screen__list">
         {criteria.map((criterion, index) => {
@@ -130,20 +172,28 @@ export function ResultScreen({
                 </span>
               </header>
 
+              <p>{criterion.description}</p>
+              {criterion.status === "assessed" && <>
+                {criterion.level_description.trim() !== "" && (
+                  <p>{strings.resultLevel}: {criterion.level_description}</p>
+                )}
+                <p>{strings.resultPoints}: {displayPoints(criterion.points)} {strings.resultOf} {displayPoints(criterion.max_points)}</p>
+              </>}
+
               {hasEvidence ? (
                 <section className="result-screen__evidence">
                   <h3 className="result-screen__evidence-heading">
                     {strings.resultEvidenceHeading}
                   </h3>
                   <ul className="result-screen__evidence-list">
-                    {criterion.evidence.map((excerpt, excerptIndex) => (
+                    {criterion.evidence.map((excerpt) => (
                       <li
-                        key={excerptIndex}
+                        key={excerpt.id}
                         className="result-screen__evidence-item"
                       >
                         <blockquote className="result-screen__evidence-quote">
                           <mark className="result-screen__evidence-highlight">
-                            {excerpt}
+                            {excerpt.text}
                           </mark>
                         </blockquote>
                       </li>
@@ -176,6 +226,7 @@ export function ResultScreen({
       )}
 
       <footer className="result-screen__footer">
+        <p className="result-screen__session-note">{strings.resultSessionOnly}</p>
         <button
           type="button"
           className="result-screen-state__button"

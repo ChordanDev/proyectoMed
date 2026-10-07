@@ -84,7 +84,7 @@ describe("station API client", () => {
     await expect(client.finishSession("session-1", "timer")).resolves.toEqual(
       completed,
     );
-    await expect(client.fetchResult("session-1")).resolves.toEqual(result);
+    await expect(client.fetchLegacyResult("session-1")).resolves.toEqual(result);
 
     const calls = fetchMock.mock.calls;
 

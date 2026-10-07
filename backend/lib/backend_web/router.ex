@@ -36,4 +36,9 @@ defmodule BackendWeb.Router do
          TTSController,
          :create
   end
+
+  scope "/api/v2/stations", BackendWeb do
+    pipe_through :api
+    get "/active/sessions/:id/result", StationController, :show_educational_result
+  end
 end
