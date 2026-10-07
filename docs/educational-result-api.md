@@ -30,9 +30,13 @@ raw internal reasons, tagged tuples, provider detail, call diagnostics, and
 sub-action classifications. Sub-actions are not presented as credited actions.
 
 Every point value is a shortest exact **decimal string**, not a JSON number:
-`"0"`, `"0.125"`, `"0.25"`, `"1.125"`, etc. The backend uses integer eighths; the
-web decoder validates and reconciles totals with integer arithmetic. Rendering
-only replaces the decimal separator with a comma, without rounding or rescaling.
+`"0"`, `"0.025"`, `"0.125"`, `"0.4"`, `"1.125"`, etc. A value has at most three
+fraction digits, no trailing zero, and is a multiple of 0.025. The backend uses
+integer fortieths; the web decoder validates and reconciles totals with integer
+arithmetic. Rendering only replaces the decimal separator with a comma, without
+rounding or rescaling.
+
+Amended 2026-10-07 (issue #130, amending ADR-012, #124): the granularity was widened from multiples of 0.125 to multiples of 0.025 to follow the tenths used by PEP 2025/2; strings already emitted for values in eighths are unchanged.
 
 ## Coverage and totals
 

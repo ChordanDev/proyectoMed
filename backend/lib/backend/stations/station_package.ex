@@ -17,6 +17,7 @@ defmodule Backend.Stations.StationPackage do
   checked here, because the JSON schema cannot express all of it.
   """
 
+  alias Backend.Stations.RubricAssessment.Points
   alias Backend.Stations.TemplateApplicability
 
   @version "2.0.0"
@@ -280,13 +281,12 @@ defmodule Backend.Stations.StationPackage do
   defp validate_level_label(errors, %{"label" => label}) when label in @level_labels, do: errors
   defp validate_level_label(errors, _level), do: ["rubric levels require a valid label" | errors]
 
+  # The sign is not this rule's concern; exactness is decided by the same
+  # conversion the assessment uses, so load and assessment cannot disagree.
   defp validate_level_points(errors, %{"points" => points}) when is_number(points) do
-    quotient = points / 0.125
-
-    if abs(quotient - round(quotient)) < 1.0e-9 do
-      errors
-    else
-      ["rubric level points must be a multiple of 0.125" | errors]
+    case Points.from_authored(abs(points)) do
+      {:ok, _points} -> errors
+      {:error, _reason} -> ["rubric level points must be a multiple of 0.025" | errors]
     end
   end
 

@@ -2,5 +2,5 @@
   "station_id": "invalid-points", "version": "2.0.0", "language": "pt-BR", "display_title": "Invalid fixture", "placeholder": true,
   "patient_profile": {"persona": "Synthetic patient", "age": 30, "presenting_context": "Synthetic context", "tone": "Neutral"},
   "revealable_facts": [], "response_rules": [], "expected_actions": [],
-  "rubric": [{"id": "criterion", "description": "Criterion", "evidence_questions": [], "practice_recommendation": "Practice", "levels": [{"label": "adequado", "points": 0.3, "description": "Adequate"}], "actions": [], "order": null, "count_cap": null, "first_n": null, "veto": false, "exclusion": false, "modality_requirement": null}]
+  "rubric": [{"id": "criterion", "description": "Criterion", "evidence_questions": [], "practice_recommendation": "Practice", "levels": [{"label": "adequado", "points": 0.33, "description": "Adequate"}], "actions": [], "order": null, "count_cap": null, "first_n": null, "veto": false, "exclusion": false, "modality_requirement": null}]
 }

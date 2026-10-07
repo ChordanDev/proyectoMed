@@ -28,7 +28,7 @@ defmodule Backend.Stations.RubricAssessment do
   returned.
 
   Only `:assessed` criteria carry `:level` and `:points`. Points are exact
-  integer eighths (`Backend.Stations.RubricAssessment.Points`); no probability
+  integer fortieths (`Backend.Stations.RubricAssessment.Points`); no probability
   or confidence ever multiplies or adjusts them.
 
   The authored rule fields change the level only through

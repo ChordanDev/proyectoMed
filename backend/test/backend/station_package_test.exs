@@ -369,7 +369,7 @@ defmodule Backend.StationPackageTest do
 
     assert "levels" in criterion["required"]
     refute "weight" in criterion["required"]
-    assert level["properties"]["points"]["multipleOf"] == 0.125
+    assert level["properties"]["points"]["multipleOf"] == 0.025
 
     applicability = schema["$defs"]["approvedTemplate"]["properties"]["applicability"]
     predicate = schema["$defs"]["applicabilityPredicate"]
@@ -396,7 +396,7 @@ defmodule Backend.StationPackageTest do
   test "rejects every invalid v2 fixture with its contract error" do
     cases = [
       {"invalid-package-v2-duplicate-fact-ids.json", "revealable_facts ids must be unique"},
-      {"invalid-package-v2-bad-points.json", "rubric level points must be a multiple of 0.125"},
+      {"invalid-package-v2-bad-points.json", "rubric level points must be a multiple of 0.025"},
       {"invalid-package-v2-duplicate-levels.json", "rubric level labels must be unique"},
       {"invalid-package-v2-missing-placeholder.json", "placeholder must be a boolean"},
       {"invalid-package-v2-bad-disclosure.json",
@@ -515,15 +515,34 @@ defmodule Backend.StationPackageTest do
     assert "rubric criteria require at least one level" in errors
   end
 
-  test "accepts points at 0.125 granularity" do
-    package =
-      put_in(
-        fixture("valid-package.json"),
-        ["rubric", Access.at(0), "levels", Access.at(0), "points"],
-        0.125
-      )
+  test "accepts points at 0.025 granularity, including tenths and eighths" do
+    for points <- [0.025, 0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 1.2, 1.4, 0.125, 0.375, 0.625] do
+      package =
+        put_in(
+          fixture("valid-package.json"),
+          ["rubric", Access.at(0), "levels", Access.at(0), "points"],
+          points
+        )
 
-    assert {:ok, ^package} = StationPackage.validate(package)
+      assert {:ok, ^package} = StationPackage.validate(package),
+             "expected #{inspect(points)} to be accepted"
+    end
+  end
+
+  test "rejects points that are not an exact multiple of 0.025" do
+    for points <- [0.01, 0.33, 0.0125, 0.0625, 0.20000000000000004] do
+      package =
+        put_in(
+          fixture("valid-package.json"),
+          ["rubric", Access.at(0), "levels", Access.at(0), "points"],
+          points
+        )
+
+      assert {:error, errors} = StationPackage.validate(package)
+
+      assert "rubric level points must be a multiple of 0.025" in errors,
+             "expected #{inspect(points)} to be rejected"
+    end
   end
 
   test "rejects duplicate revealable fact ids" do

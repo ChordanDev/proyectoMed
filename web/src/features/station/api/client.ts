@@ -324,13 +324,14 @@ const decodeLegacySessionResult = (value: unknown): LegacySessionResult => {
 const assessmentStatuses: readonly CriterionStatus[] = ["assessed", "uncertain", "not_observable", "not_applicable"];
 const decimalValue = (body: JsonObject, key: string): string => {
   const value = stringValue(body, key, "educational result");
-  // The shortest exact representation of non-negative integer eighths.
-  return /^(0|[1-9]\d*)(\.(125|25|375|5|625|75|875))?$/.test(value) ? value : invalid("educational result");
+  // The shortest exact representation of non-negative integer fortieths (multiples of 0.025).
+  return /^(0|[1-9]\d*)(\.\d{0,2}[1-9])?$/.test(value) && thousandths(value) % 25n === 0n ? value : invalid("educational result");
 };
-const eighths = (value: string): bigint => {
+const thousandths = (value: string): bigint => {
   const [whole, fraction = ""] = value.split(".");
-  return BigInt(whole) * 8n + BigInt(fraction.padEnd(3, "0")) / 125n;
+  return BigInt(whole) * 1000n + BigInt(fraction.padEnd(3, "0"));
 };
+const fortieths = (value: string): bigint => thousandths(value) / 25n;
 const decodeEducationalCriterion = (value: unknown): ResultCriterion => {
   const body = objectValue(value, "educational criterion");
   const status = literalValue(body, "status", assessmentStatuses, "educational criterion");
@@ -350,7 +351,7 @@ const decodeEducationalCriterion = (value: unknown): ResultCriterion => {
   if (status === "assessed") {
     if (body.reason !== null) invalid("educational criterion");
     const points = decimalValue(body, "points");
-    if (eighths(points) > eighths(base.max_points)) invalid("educational criterion");
+    if (fortieths(points) > fortieths(base.max_points)) invalid("educational criterion");
     return { ...base, status, reason: null, level: stringValue(body, "level", "educational criterion"), level_description: stringValue(body, "level_description", "educational criterion"), points };
   }
   if ("points" in body || "level" in body || "level_description" in body || evidence.length > 0) invalid("educational criterion");
@@ -385,8 +386,8 @@ const decodeSessionResult = (value: unknown): SessionResult => {
   };
   const assessed = criteria.filter((item) => item.status === "assessed");
   const eligible = criteria.filter((item) => item.status !== "not_applicable");
-  const sum = (values: string[]) => values.reduce((total, item) => total + eighths(item), 0n);
-  if (eighths(estimates.scored_subtotal) !== sum(assessed.map((item) => item.points)) || eighths(estimates.scored_max) !== sum(assessed.map((item) => item.max_points)) || eighths(estimates.eligible_max) !== sum(eligible.map((item) => item.max_points))) invalid("estimates");
+  const sum = (values: string[]) => values.reduce((total, item) => total + fortieths(item), 0n);
+  if (fortieths(estimates.scored_subtotal) !== sum(assessed.map((item) => item.points)) || fortieths(estimates.scored_max) !== sum(assessed.map((item) => item.max_points)) || fortieths(estimates.eligible_max) !== sum(eligible.map((item) => item.max_points))) invalid("estimates");
   const complete = eligible.length > 0 && unresolved.length === 0;
   if (complete ? estimates.total !== estimates.scored_subtotal : estimates.total !== null) invalid("estimates");
   return {

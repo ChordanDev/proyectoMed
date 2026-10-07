@@ -75,7 +75,7 @@ defmodule Backend.Stations.RubricAssessment.Estimates do
 
   Returns `{:error, :no_levels}` when the criterion authors no level, and the
   `Backend.Stations.RubricAssessment.Points` reason when a level's `"points"`
-  is not an exact, non-negative multiple of 0.125. Never raises.
+  is not an exact, non-negative multiple of 0.025. Never raises.
   """
   @spec max_points(term()) :: {:ok, Points.t()} | {:error, max_points_error()}
   def max_points(%{"levels" => [_ | _] = levels}) do

@@ -32,7 +32,7 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
 
   The module is pure. Sub-action evidence arrives already validated against
   the evidence pool, so an empty `evidence_ids` list is the only way a
-  performed action can lack evidence. Points are integer eighths
+  performed action can lack evidence. Points are integer fortieths
   (`Backend.Stations.RubricAssessment.Points`). `first_n` runs before this
   module (`Backend.Stations.RubricAssessment.FirstN`), which hands over the
   decisions with every action beyond the first N answers already not
