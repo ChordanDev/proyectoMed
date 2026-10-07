@@ -1450,5 +1450,205 @@ describe("useStation", () => {
       // Timer completion must still fire despite prior failed reset
       expect(api.finishSession).toHaveBeenCalledWith("session-1", "timer");
     });
+
+    it("applies the resumed active session when a reset started mid-resume fails to discard", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const resumedDetail: SessionDetail = {
+        ...session,
+        status: "active",
+        completion_reason: null,
+        messages: [],
+      };
+      const pendingDetail = deferred<SessionDetail>();
+      const pendingDiscard = deferred<void>();
+      const api = apiMock({
+        getSession: vi.fn(() => pendingDetail.promise),
+        discardSession: vi.fn(() => pendingDiscard.promise),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      // Resume of session-1 is still pending
+      expect(api.getSession).toHaveBeenCalledWith("session-1");
+      expect(result.current.status).toBe("loading");
+
+      // Learner restarts while the resume is in flight
+      let resetPromise!: Promise<void>;
+      act(() => {
+        resetPromise = result.current.reset();
+      });
+      expect(api.discardSession).toHaveBeenCalledWith("session-1");
+
+      // The resume resolves before the discard is acknowledged
+      await act(async () => {
+        pendingDetail.resolve(resumedDetail);
+      });
+
+      // The discard fails: the session still exists on the server
+      await act(async () => {
+        pendingDiscard.reject(
+          new ApiError(500, "internal_error", "Erro ao descartar sessão."),
+        );
+        await resetPromise;
+      });
+
+      expect(result.current.status).toBe("active");
+      expect(result.current.isResetting).toBe(false);
+      expect(result.current.error).toBe("Erro ao descartar sessão.");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-1");
+
+      // The resumed session is usable: station calls target it
+      await act(async () => {
+        await result.current.requestImpresso("Solicito radiografia");
+      });
+      expect(api.requestImpresso).toHaveBeenCalledWith("session-1", {
+        text: "Solicito radiografia",
+      });
+    });
+
+    it("shows the resumed completed result when a reset started mid-resume fails to discard", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const completedDetail: SessionDetail = {
+        ...session,
+        status: "completed",
+        completion_reason: "user",
+        messages: [],
+      };
+      const pendingDetail = deferred<SessionDetail>();
+      const pendingResult = deferred<SessionResult>();
+      const pendingDiscard = deferred<void>();
+      const api = apiMock({
+        getSession: vi.fn(() => pendingDetail.promise),
+        fetchResult: vi.fn(() => pendingResult.promise),
+        discardSession: vi.fn(() => pendingDiscard.promise),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+      expect(result.current.status).toBe("loading");
+
+      // Learner restarts while the resume is in flight
+      let resetPromise!: Promise<void>;
+      act(() => {
+        resetPromise = result.current.reset();
+      });
+
+      // The resume and its result resolve before the discard is acknowledged
+      await act(async () => {
+        pendingDetail.resolve(completedDetail);
+      });
+      await act(async () => {
+        pendingResult.resolve(stationResult);
+      });
+
+      // The discard fails: the session still exists on the server
+      await act(async () => {
+        pendingDiscard.reject(
+          new ApiError(500, "internal_error", "Erro ao descartar sessão."),
+        );
+        await resetPromise;
+      });
+
+      expect(result.current.status).toBe("finished");
+      expect(result.current.result).toEqual(stationResult);
+      expect(result.current.isResetting).toBe(false);
+      expect(result.current.error).toBe("Erro ao descartar sessão.");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-1");
+    });
+
+    it("fails the station when the resumed result rejects during a reset that fails to discard", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const completedDetail: SessionDetail = {
+        ...session,
+        status: "completed",
+        completion_reason: "user",
+        messages: [],
+      };
+      const pendingResult = deferred<SessionResult>();
+      const pendingDiscard = deferred<void>();
+      const api = apiMock({
+        getSession: vi.fn().mockResolvedValue(completedDetail),
+        fetchResult: vi.fn(() => pendingResult.promise),
+        discardSession: vi.fn(() => pendingDiscard.promise),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+      await waitFor(() => expect(api.fetchResult).toHaveBeenCalledOnce());
+      expect(result.current.status).toBe("finishing");
+
+      // Learner restarts while the result is in flight
+      let resetPromise!: Promise<void>;
+      act(() => {
+        resetPromise = result.current.reset();
+      });
+
+      await act(async () => {
+        pendingResult.reject(
+          new ApiError(500, "internal_error", "Erro ao carregar resultado."),
+        );
+      });
+      await act(async () => {
+        pendingDiscard.reject(
+          new ApiError(500, "internal_error", "Erro ao descartar sessão."),
+        );
+        await resetPromise;
+      });
+
+      // Not stuck in finishing: the learner can restart from the failed state
+      expect(result.current.status).toBe("failed");
+      expect(result.current.isResetting).toBe(false);
+      expect(result.current.error).toBe("Erro ao descartar sessão.");
+    });
+
+    it("clears the station when a reset started mid-resume is acknowledged after the resume resolves", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const resumedDetail: SessionDetail = {
+        ...session,
+        status: "active",
+        completion_reason: null,
+        messages: [],
+      };
+      const pendingDetail = deferred<SessionDetail>();
+      const pendingDiscard = deferred<void>();
+      const api = apiMock({
+        getSession: vi.fn(() => pendingDetail.promise),
+        getImpressos: vi.fn().mockResolvedValue(impressosListResponse),
+        discardSession: vi.fn(() => pendingDiscard.promise),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+      expect(result.current.status).toBe("loading");
+
+      // Learner restarts while the resume is in flight
+      let resetPromise!: Promise<void>;
+      act(() => {
+        resetPromise = result.current.reset();
+      });
+
+      // The resume resolves before the discard is acknowledged
+      await act(async () => {
+        pendingDetail.resolve(resumedDetail);
+      });
+
+      // The server acknowledges the discard
+      await act(async () => {
+        pendingDiscard.resolve();
+        await resetPromise;
+      });
+
+      expect(result.current.status).toBe("idle");
+      expect(result.current.isResetting).toBe(false);
+      expect(result.current.error).toBeNull();
+      expect(result.current.result).toBeNull();
+      expect(result.current.initialMessages).toEqual([]);
+      expect(result.current.impressos).toEqual([]);
+      expect(result.current.remainingMs).toBeNull();
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBeNull();
+
+      // No session survives: station calls have nothing to target
+      await act(async () => {
+        await result.current.requestImpresso("Solicito radiografia");
+      });
+      expect(api.requestImpresso).not.toHaveBeenCalled();
+    });
   });
 });

@@ -485,7 +485,10 @@ export const useStation = (api: StationApi = defaultApi) => {
     void (async () => {
       try {
         const detail = await api.getSession(savedSessionId);
-        if (cancelled || isResettingRef.current || readPersistedSessionId() !== savedSessionId) return;
+        // A reset still awaiting its discard acknowledgement must not drop the
+        // resume: if that discard fails, the resumed session owns the station.
+        // An acknowledged discard clears the persisted id and the session ref.
+        if (cancelled || readPersistedSessionId() !== savedSessionId) return;
 
         sessionRef.current = detail;
         setAudioConsent(detail.audio_consent);
@@ -496,11 +499,11 @@ export const useStation = (api: StationApi = defaultApi) => {
           updateStatus("finishing");
           try {
             const stationResult = await api.fetchResult(detail.session_id);
-            if (cancelled || sessionRef.current !== detail || isResettingRef.current) return;
+            if (cancelled || sessionRef.current !== detail) return;
             setResult(stationResult);
             updateStatus("finished");
           } catch (cause) {
-            if (!cancelled && sessionRef.current === detail && !isResettingRef.current) fail(cause);
+            if (!cancelled && sessionRef.current === detail) fail(cause);
           }
           return;
         }
