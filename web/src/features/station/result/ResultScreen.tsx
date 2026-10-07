@@ -63,6 +63,7 @@ export function ResultScreenState({
         <p className="result-screen-state__text">
           {errorMessage || strings.resultUnavailable}
         </p>
+        <p className="result-screen-state__note">{strings.resultRestartDiscards}</p>
         <button
           type="button"
           className="result-screen-state__button"
@@ -121,19 +122,29 @@ export function ResultScreen({
       {result.placeholder && <p className="result-screen__fictional">{strings.fictionalResult}</p>}
       <section aria-labelledby="result-estimates-title" className="result-screen__summary">
         <h2 id="result-estimates-title">{strings.resultCoverage}</h2>
-        <p>{strings.coverageAssessed}: {result.coverage.assessed}; {strings.coverageUncertain}: {result.coverage.uncertain}; {strings.coverageNotObservable}: {result.coverage.not_observable}; {strings.coverageExcluded}: {result.coverage.not_applicable}</p>
-        <p>{strings.resultSubtotal}: {displayPoints(result.estimates.scored_subtotal)}</p>
-        <p>{strings.resultScoredMax}: {displayPoints(result.estimates.scored_max)}</p>
+        <ul className="result-screen__counts">
+          <li>{strings.coverageAssessed}: {result.coverage.assessed}</li>
+          <li>{strings.coverageUncertain}: {result.coverage.uncertain}</li>
+          <li>{strings.coverageNotObservable}: {result.coverage.not_observable}</li>
+          <li>{strings.coverageExcluded}: {result.coverage.not_applicable}</li>
+        </ul>
+        <p>{strings.resultScoredPoints}: {displayPoints(result.estimates.scored_subtotal)} {strings.resultOf} {displayPoints(result.estimates.scored_max)}</p>
         <p>{strings.resultEligibleMax}: {displayPoints(result.estimates.eligible_max)}</p>
         {result.estimates.total !== null ? (
           <p>{strings.resultTotal}: {displayPoints(result.estimates.total)}</p>
         ) : <p>{criteria.every((criterion) => criterion.status === "not_applicable") ? strings.resultNoEligible : strings.resultOpenTotal}</p>}
         {result.estimates.unresolved.length > 0 && <>
           <h3>{strings.resultUnresolvedHeading}</h3>
-          <p>{result.estimates.unresolved.map((item) => {
-            const ordinal = criteria.findIndex((criterion) => criterion.id === item.id) + 1;
-            return `${strings.resultOrdinalPrefix} ${ordinal}: ${STATUS_TEXT_MAP[item.status]}`;
-          }).join("; ")}</p>
+          <ul className="result-screen__unresolved">
+            {result.estimates.unresolved.map((item) => {
+              const ordinal = criteria.findIndex((criterion) => criterion.id === item.id) + 1;
+              return (
+                <li key={item.id}>
+                  {`${strings.resultOrdinalPrefix} ${ordinal}: ${STATUS_TEXT_MAP[item.status]}`}
+                </li>
+              );
+            })}
+          </ul>
         </>}
       </section>
 

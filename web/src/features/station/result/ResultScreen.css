@@ -27,6 +27,12 @@
   color: #374151;
 }
 
+.result-screen-state__note {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #4b5563;
+}
+
 .result-screen-state__button {
   background: #2563eb;
   color: #ffffff;
@@ -77,6 +83,27 @@
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-screen__counts,
+.result-screen__unresolved {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+}
+
+.result-screen__counts {
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.result-screen__unresolved {
+  flex-direction: column;
+  gap: 4px;
 }
 
 .result-screen > .educational-disclaimer {
@@ -131,6 +158,16 @@
 
 .result-screen__item:first-child {
   padding-top: 0;
+}
+
+/* The global reset zeroes margins, so the lines of a criterion are spaced here. */
+.result-screen__item > p {
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.result-screen__item > section {
+  margin-top: 16px;
 }
 
 .result-screen__item-header {

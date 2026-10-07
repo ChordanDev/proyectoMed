@@ -23,7 +23,8 @@ describe("educational result presentation", () => {
     };
     render(<ResultScreen status="finished" result={complete} onRestart={vi.fn()} />);
     expect(screen.getByText("Total educacional: 1,125")).toBeInTheDocument();
-    expect(screen.getByText("Máximo elegível: 1,5")).toBeInTheDocument();
+    expect(screen.getByText("Pontos obtidos nos critérios avaliados: 1,125 de 1,5")).toBeInTheDocument();
+    expect(screen.getByText("Máximo da estação (todos os critérios elegíveis): 1,5")).toBeInTheDocument();
     expect(screen.queryByText(/Total indisponível/)).not.toBeInTheDocument();
     expect(screen.queryByText("Critérios não resolvidos")).not.toBeInTheDocument();
   });
@@ -31,10 +32,10 @@ describe("educational result presentation", () => {
     render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
     expect(screen.getByText(disclaimer)).toBeInTheDocument();
     expect(screen.getByText("Exemplo — dados fictícios")).toBeInTheDocument();
-    expect(screen.getByText("Subtotal avaliado: 0,25")).toBeInTheDocument();
-    expect(screen.getByText("Máximo avaliado: 0,25")).toBeInTheDocument();
-    expect(screen.getByText("Máximo elegível: 1,25")).toBeInTheDocument();
-    expect(screen.getByText(/Total indisponível/)).toBeInTheDocument();
+    expect(screen.getByText("Pontos obtidos nos critérios avaliados: 0,25 de 0,25")).toBeInTheDocument();
+    expect(screen.getByText("Máximo da estação (todos os critérios elegíveis): 1,25")).toBeInTheDocument();
+    expect(screen.getByText("Total indisponível — há critérios não resolvidos. Os pontos acima contam apenas os critérios avaliados e não representam a estação inteira.")).toBeInTheDocument();
+    expect(screen.queryByText(/reescalado/)).not.toBeInTheDocument();
     expect(screen.getByText(/Avaliados: 1/)).toBeInTheDocument();
     const first = screen.getByText(partialResult.criteria[0].description).closest("li")!;
     expect(within(first).getByText("Nível autoral: Criterion A is partially adequate.")).toBeInTheDocument();
@@ -44,6 +45,21 @@ describe("educational result presentation", () => {
     expect(within(unresolved).getByText(/Incerto — sem pontos atribuídos/)).toBeInTheDocument();
     expect(within(unresolved).queryByText(/Pontos:/)).not.toBeInTheDocument();
     expect(screen.queryByText("criterion-a")).not.toBeInTheDocument();
+  });
+
+  it("lists each status count and each unresolved criterion as separate items", () => {
+    render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    const coverage = screen.getByRole("region", { name: strings.resultCoverage });
+    const [counts, unresolved] = within(coverage).getAllByRole("list");
+    expect(within(counts).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Avaliados: 1",
+      "Incertos: 1",
+      "Não observáveis: 0",
+      "Excluídos: 0",
+    ]);
+    expect(within(unresolved).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Critério 2: Incerto — sem pontos atribuídos",
+    ]);
   });
 
   it("distinguishes genuine zero, not observable and excluded without color, and labels only placeholders", () => {
@@ -60,6 +76,7 @@ describe("educational result presentation", () => {
   it("shows empty and all-excluded rubrics as no estimate, not fabricated zero totals", () => {
     const { rerender } = render(<ResultScreen status="finished" result={{ ...partialResult, criteria: [], coverage: { assessed: 0, uncertain: 0, not_observable: 0, not_applicable: 0 }, estimates: { total: null, scored_subtotal: "0", scored_max: "0", eligible_max: "0", unresolved: [] } }} onRestart={vi.fn()} />);
     expect(screen.getByText(/Nenhum critério elegível/)).toBeInTheDocument();
+    expect(screen.queryByText(/Total indisponível/)).not.toBeInTheDocument();
     rerender(<ResultScreen status="finished" result={{ ...partialResult, criteria: [{ ...partialResult.criteria[1], status: "not_applicable", reason: "authored_exclusion" }], coverage: { assessed: 0, uncertain: 0, not_observable: 0, not_applicable: 1 }, estimates: { total: null, scored_subtotal: "0", scored_max: "0", eligible_max: "0", unresolved: [] } }} onRestart={vi.fn()} />);
     expect(screen.getByText(/Nenhum critério elegível/)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -134,6 +151,20 @@ describe("educational result presentation", () => {
     expect(screen.getByText(disclaimer)).toBeInTheDocument();
     rerender(<ResultScreen status="finished" result={null} onRestart={vi.fn()} />);
     expect(screen.getByRole("alert")).toHaveTextContent(strings.resultUnavailable);
+  });
+
+  it("warns that restarting discards the attempt in recovery, with or without a server message", () => {
+    const warning = "Ao reiniciar, esta tentativa é descartada e não poderá ser recuperada.";
+    const { rerender } = render(<ResultScreen status="finishing" result={null} onRestart={vi.fn()} />);
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    rerender(<ResultScreen status="failed" result={null} errorMessage="Tentativa inválida" onRestart={vi.fn()} />);
+    expect(within(screen.getByRole("alert")).getByText("Tentativa inválida")).toBeInTheDocument();
+    expect(within(screen.getByRole("alert")).getByText(warning)).toBeInTheDocument();
+    rerender(<ResultScreen status="failed" result={null} onRestart={vi.fn()} />);
+    expect(within(screen.getByRole("alert")).getByText(strings.resultUnavailable)).toBeInTheDocument();
+    expect(within(screen.getByRole("alert")).getByText(warning)).toBeInTheDocument();
+    rerender(<ResultScreen status="finished" result={null} onRestart={vi.fn()} />);
+    expect(within(screen.getByRole("alert")).getByText(warning)).toBeInTheDocument();
   });
 });
 
