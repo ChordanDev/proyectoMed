@@ -359,6 +359,8 @@ defmodule Backend.Stations do
   speech-to-text provider (#118). Only consented, active sessions qualify.
   Keyterms come from the station package's optional `stt_keyterms`, so they
   stay server-side.
+  `last_turn_id` is the committed learner cursor. `turn_id_floor` also covers
+  cancelled turn IDs; a fresh worker must allocate strictly above this floor.
   """
   @spec voice_worker_context(String.t()) ::
           {:ok,
@@ -366,7 +368,8 @@ defmodule Backend.Stations do
              session_id: String.t(),
              language: String.t(),
              keyterms: [String.t()],
-             last_turn_id: non_neg_integer()
+             last_turn_id: non_neg_integer(),
+             turn_id_floor: non_neg_integer()
            }}
           | {:error, :not_found | :expired | :completed | :no_consent}
   def voice_worker_context(session_id) do
@@ -380,7 +383,12 @@ defmodule Backend.Stations do
          session_id: session_id,
          language: package["language"] || "pt-BR",
          keyterms: Enum.filter(List.wrap(package["stt_keyterms"]), &is_binary/1),
-         last_turn_id: Map.get(session, :last_voice_turn_id, 0)
+         last_turn_id: Map.get(session, :last_voice_turn_id, 0),
+         turn_id_floor:
+           max(
+             Map.get(session, :last_voice_turn_id, 0),
+             Map.get(session, :cancelled_voice_turn_id, 0)
+           )
        }}
     end
   end
@@ -392,13 +400,106 @@ defmodule Backend.Stations do
   """
   @spec commit_voice_transcript(String.t(), pos_integer(), String.t()) ::
           {:ok, :committed | :duplicate}
-          | {:error, :not_found | :expired | :completed | :no_consent}
+          | {:error, :not_found | :expired | :completed | :no_consent | :stale_generation}
   def commit_voice_transcript(session_id, turn_id, text) do
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_active(session),
          :ok <- ensure_audio_consent(session) do
       Conversation.commit_voice_turn(session_id, turn_id, text)
     end
+  end
+
+  @doc """
+  Processes a real-time learner voice turn (#119).
+
+  Encapsulates:
+    1. Validating active session state, deadline, and audio consent.
+    2. Atomically committing the learner turn via `Conversation.begin_voice_turn/3`
+       which assigns a session-scoped monotonic generation identity.
+       Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn,
+       except retries of the latest failed generation preserve its technical failure.
+    3. Formatting role-labelled context from the active package and session messages.
+    4. Generating the next bounded patient reply via `StationAI.next_reply/2`.
+    5. Passing through the `verify_patient_reply/3` seam.
+    6. Failing closed: admitting only canonical refusal or exact package-authorized
+       fact content, otherwise substituting canonical refusal before resolution.
+    7. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
+    8. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
+       solely on success. Stale, cancelled, completed, or expired generations never return text.
+  """
+  @spec process_voice_turn(String.t(), pos_integer(), String.t()) ::
+          {:ok,
+           %{
+             reply_text: String.t(),
+             turn_id: pos_integer(),
+             generation_id: pos_integer(),
+             used_facts: StationAI.revealable_facts()
+           }}
+          | {:ok, :duplicate}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :no_consent
+             | :stale_generation
+             | :invalid_transcript
+             | :station_ai_unavailable
+             | term()}
+  def process_voice_turn(session_id, turn_id, text)
+      when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
+    case String.trim(text) do
+      "" ->
+        {:error, :invalid_transcript}
+
+      trimmed_text ->
+        with {:ok, session} <- Conversation.fetch(session_id),
+             :ok <- ensure_active(session),
+             :ok <- ensure_audio_consent(session),
+             {:ok, :committed, generation_id} <-
+               Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
+          process_voice_reply(session_id, turn_id, generation_id)
+        else
+          {:ok, :duplicate} ->
+            {:ok, :duplicate}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
+
+  @doc """
+  Explicitly cancels a pending voice turn generation (#119).
+
+  Supports:
+    * `cancel_voice_turn(session_id)` — cancels active generation unconditionally.
+    * `cancel_voice_turn(session_id, generation_id)` when integer — cancels if generation matches (keeps generation cancel behavior for existing tests).
+    * `cancel_voice_turn(session_id, criteria)` when keyword list or map — cancels by expected `turn_id` and/or `generation_id`, e.g. `[turn_id: 1]`, `%{turn_id: 1}`, `%{expected_turn_id: 1}`.
+
+  Turn-only criteria atomically fence future admission through the monotonic turn
+  ID, including delayed POSTs and retries. `:stale_generation` still means there
+  was no matching active generation, but the admission fence is established.
+  Newer independent active turns are untouched. Generation-qualified criteria
+  install a fence only on a match; integer generation-only behavior is unchanged.
+  """
+  @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_voice_turn(session_id, criteria \\ nil)
+
+  def cancel_voice_turn(session_id, nil) do
+    Conversation.cancel_generation(session_id, nil)
+  end
+
+  def cancel_voice_turn(session_id, generation_id)
+      when is_integer(generation_id) and generation_id > 0 do
+    Conversation.cancel_generation(session_id, generation_id)
+  end
+
+  def cancel_voice_turn(session_id, criteria) when is_list(criteria) or is_map(criteria) do
+    Conversation.cancel_voice_turn(session_id, criteria)
   end
 
   @doc """
@@ -444,6 +545,87 @@ defmodule Backend.Stations do
 
   defp ensure_audio_consent(%{audio_consent: true}), do: :ok
   defp ensure_audio_consent(_session), do: {:error, :no_consent}
+
+  defp process_voice_reply(session_id, turn_id, generation_id) do
+    package = get_active_package()
+
+    with {:ok, current_session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(current_session),
+         context = format_context(current_session, package),
+         {:ok, ai_reply} <- generate_patient_reply(package, context),
+         {:ok, verified_reply} <- verify_patient_reply(package, ai_reply),
+         raw_text = Map.get(verified_reply, :text) || Map.get(verified_reply, "text"),
+         {:ok, safe_text, used_facts} = admit_voice_reply(raw_text, package),
+         {:ok, _session} <-
+           Conversation.resolve_patient_reply(session_id, generation_id, safe_text) do
+      {:ok,
+       %{
+         reply_text: safe_text,
+         turn_id: turn_id,
+         generation_id: generation_id,
+         used_facts: used_facts
+       }}
+    else
+      {:error, :stale_generation} ->
+        {:error, :stale_generation}
+
+      {:error, :completed} ->
+        {:error, :completed}
+
+      {:error, :expired} ->
+        {:error, :expired}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _reason} ->
+        case Conversation.fail_generation(session_id, generation_id, :station_ai_unavailable) do
+          {:ok, :failed} -> {:error, :station_ai_unavailable}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp admit_voice_reply(raw_text, package) do
+    refusal = StationAI.refusal_text()
+    trimmed_refusal = String.trim(refusal)
+    trimmed_text = if is_binary(raw_text), do: String.trim(raw_text), else: ""
+
+    revealable_facts = package["revealable_facts"] || []
+
+    matching_fact =
+      Enum.find(revealable_facts, fn fact ->
+        content = Map.get(fact, "content") || Map.get(fact, :content)
+
+        is_binary(content) and
+          (String.trim(content) == trimmed_text or
+             normalize_fact_text(content) == normalize_fact_text(trimmed_text))
+      end)
+
+    cond do
+      trimmed_text == trimmed_refusal ->
+        {:ok, refusal, []}
+
+      matching_fact != nil ->
+        fact_content = Map.get(matching_fact, "content") || Map.get(matching_fact, :content)
+        bounded_text = StationAI.BoundedReply.bound(fact_content, package)
+
+        if bounded_text == refusal do
+          {:ok, refusal, []}
+        else
+          {:ok, bounded_text, [matching_fact]}
+        end
+
+      true ->
+        {:ok, refusal, []}
+    end
+  end
+
+  defp normalize_fact_text(text) when is_binary(text) do
+    text
+    |> String.trim()
+    |> String.trim_trailing(".")
+  end
 
   defp generate_patient_reply(package, context) do
     StationAI.next_reply(package, context)
