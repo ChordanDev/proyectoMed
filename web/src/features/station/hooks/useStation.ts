@@ -513,12 +513,12 @@ export const useStation = (api: StationApi = defaultApi) => {
         // they remain visible; a failure here does not block resume.
         try {
           const impressosResponse = await api.getImpressos(detail.session_id);
-          if (!cancelled) setImpressos(impressosResponse.released_impressos);
+          if (!cancelled && sessionRef.current === detail) setImpressos(impressosResponse.released_impressos);
         } catch {
           // Ignore: the impressos drawer will simply start out empty.
         }
       } catch (cause) {
-        if (cancelled) return;
+        if (cancelled || readPersistedSessionId() !== savedSessionId) return;
         // An unknown/expired/not-found session cannot be resumed: clear the
         // stale pointer and fall back to a fresh idle start.
         clearPersistedSessionId();

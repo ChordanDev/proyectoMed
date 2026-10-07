@@ -1181,6 +1181,116 @@ describe("useStation", () => {
       expect(result.current.error).toBeNull();
     });
 
+    it("ignores late resumed impressos of a pagehide-discarded session once a new session owns the station", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const resumedDetail: SessionDetail = {
+        ...session,
+        status: "active",
+        completion_reason: null,
+        messages: [],
+      };
+      const nextSession: Session = { ...session, session_id: "session-2" };
+      const ecg: Impresso = {
+        id: "ecg",
+        title: "Eletrocardiograma",
+        category: "Exame complementar",
+        content: "Ritmo sinusal.",
+      };
+      const pendingImpressos = deferred<ListImpressosResponse>();
+      const api = apiMock({
+        startSession: vi.fn().mockResolvedValue(nextSession),
+        getSession: vi.fn().mockResolvedValue(resumedDetail),
+        getImpressos: vi.fn(() => pendingImpressos.promise),
+        requestImpresso: vi.fn().mockResolvedValue({
+          ...impressoResponse,
+          released_impressos: [ecg],
+          newly_released: [ecg],
+        }),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      // Resume of session-1 is active, with its impressos restore still pending
+      await waitFor(() => {
+        expect(api.getImpressos).toHaveBeenCalledWith("session-1");
+      });
+      expect(result.current.status).toBe("active");
+
+      // Learner leaves; the server acknowledges the keepalive discard
+      await act(async () => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+      expect(result.current.status).toBe("idle");
+
+      // A new session owns the station and releases its own document
+      await act(async () => {
+        await result.current.start(true);
+      });
+      await act(async () => {
+        await result.current.requestImpresso("Solicito eletrocardiograma");
+      });
+      expect(result.current.impressos).toEqual([ecg]);
+
+      // Late response for the discarded session
+      await act(async () => {
+        pendingImpressos.resolve(impressosListResponse);
+      });
+
+      expect(result.current.impressos).toEqual([ecg]);
+      expect(result.current.status).toBe("active");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-2");
+    });
+
+    it("keeps the new session alive when the resume of a pagehide-discarded session rejects late", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const nextSession: Session = { ...session, session_id: "session-2" };
+      const pendingDetail = deferred<SessionDetail>();
+      const api = apiMock({
+        startSession: vi.fn().mockResolvedValue(nextSession),
+        getSession: vi.fn(() => pendingDetail.promise),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      // Resume of session-1 is still pending
+      expect(api.getSession).toHaveBeenCalledWith("session-1");
+      expect(result.current.status).toBe("loading");
+
+      // Learner leaves; the server acknowledges the keepalive discard
+      await act(async () => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+      expect(api.discardSession).toHaveBeenCalledWith("session-1", {
+        keepalive: true,
+      });
+      expect(result.current.status).toBe("idle");
+
+      // A new session owns the station
+      await act(async () => {
+        await result.current.start(true);
+      });
+      expect(result.current.status).toBe("active");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-2");
+
+      // Late rejection for the discarded session
+      await act(async () => {
+        pendingDetail.reject(
+          new ApiError(404, "session_not_found", "Sessão não encontrada."),
+        );
+      });
+
+      expect(result.current.status).toBe("active");
+      expect(sessionStorage.getItem(sessionIdStorageKey)).toBe("session-2");
+
+      // The live session reference survives: station calls still target it
+      await act(async () => {
+        await result.current.requestImpresso("Solicito radiografia");
+      });
+      expect(api.requestImpresso).toHaveBeenCalledWith("session-2", {
+        text: "Solicito radiografia",
+      });
+    });
+
     it("does not poll the server or extend TTL while viewing completed results", async () => {
       vi.useFakeTimers({
         toFake: [
