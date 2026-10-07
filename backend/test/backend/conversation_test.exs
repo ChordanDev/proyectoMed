@@ -270,6 +270,137 @@ defmodule Backend.ConversationTest do
     end
   end
 
+  describe "voice generation authority after message rollback" do
+    for entrypoint <- [:commit_voice_turn, :begin_voice_turn] do
+      test "#{entrypoint} origin removal invalidates its pending generation" do
+        session = Conversation.start()
+        result = apply(Conversation, unquote(entrypoint), [session.session_id, 1, "probe"])
+        assert result in [{:ok, :committed}, {:ok, :committed, 1}]
+        assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+        assert {:ok, popped} =
+                 Conversation.pop_last_message(session.session_id, %{
+                   role: :learner,
+                   text: "probe"
+                 })
+
+        assert popped.messages == []
+        assert popped.active_generation_id == nil
+        assert popped.active_voice_turn_id == nil
+        assert popped.active_generation_message_index == nil
+
+        assert {:error, :stale_generation} =
+                 Conversation.resolve_patient_reply(session.session_id, 1, "orphan")
+
+        assert {:ok, ^popped} = Conversation.fetch(session.session_id)
+        assert {:ok, nil} = Conversation.active_generation(session.session_id)
+        assert popped.last_voice_turn_id == 1
+        assert popped.next_generation_id == 2
+        assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 1, "retry")
+        assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 2, "next")
+      end
+    end
+  end
+
+  describe "rollback preserves unrelated generation authority" do
+    for modality <- [:text, :voice] do
+      test "popping an unrelated same-text #{modality} message preserves the pending voice turn" do
+        session = Conversation.start()
+
+        assert {:ok, :committed, 1} =
+                 Conversation.begin_voice_turn(session.session_id, 1, "probe")
+
+        assert {:ok, pending} = Conversation.fetch(session.session_id)
+
+        assert {:ok, _} =
+                 Conversation.append_message(session.session_id, %{
+                   role: :learner,
+                   modality: unquote(modality),
+                   text: "probe"
+                 })
+
+        assert {:ok, ^pending} =
+                 Conversation.pop_last_message(session.session_id, %{
+                   role: :learner,
+                   text: "probe"
+                 })
+
+        assert {:ok, 1} = Conversation.active_generation(session.session_id)
+        assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 1, "reply")
+      end
+    end
+
+    test "failed pops leave the full empty or pending session unchanged" do
+      session = Conversation.start()
+      assert {:error, :no_match} = Conversation.pop_last_message(session.session_id)
+      assert {:ok, ^session} = Conversation.fetch(session.session_id)
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+      assert {:ok, pending} = Conversation.fetch(session.session_id)
+
+      for expected <- [%{role: :patient, text: "probe"}, %{role: :learner, text: "other"}] do
+        assert {:error, :no_match} = Conversation.pop_last_message(session.session_id, expected)
+        assert {:ok, ^pending} = Conversation.fetch(session.session_id)
+      end
+
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 1, "reply")
+    end
+
+    test "same-text text rollback removing a newer voice origin leaves no reply authority" do
+      session = Conversation.start()
+      text_message = %{role: :learner, modality: :text, text: "probe"}
+      assert {:ok, text_only} = Conversation.append_message(session.session_id, text_message)
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+
+      # The existing rollback matcher intentionally remains role/text based.
+      assert {:ok, popped} = Conversation.pop_last_message(session.session_id, text_message)
+      assert popped.messages == text_only.messages
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "orphan")
+
+      assert {:ok, ^popped} = Conversation.fetch(session.session_id)
+    end
+
+    test "replacement does not restore superseded authority when voice origins are popped" do
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 2, "probe")
+      assert {:ok, replacement} = Conversation.fetch(session.session_id)
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "old reply")
+
+      assert {:ok, ^replacement} = Conversation.fetch(session.session_id)
+      assert {:ok, _} = Conversation.pop_last_message(session.session_id)
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+      assert {:ok, empty} = Conversation.pop_last_message(session.session_id)
+      assert empty.messages == []
+
+      for generation_id <- [1, 2] do
+        assert {:error, :stale_generation} =
+                 Conversation.resolve_patient_reply(session.session_id, generation_id, "orphan")
+
+        assert {:ok, ^empty} = Conversation.fetch(session.session_id)
+      end
+
+      assert {:ok, :committed, 3} = Conversation.begin_voice_turn(session.session_id, 3, "probe")
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 3, "new reply")
+    end
+
+    test "popping a superseded message copied after replacement cannot cancel the new generation" do
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+      assert {:ok, old} = Conversation.fetch(session.session_id)
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 2, "probe")
+      assert {:ok, replacement} = Conversation.fetch(session.session_id)
+      assert {:ok, _} = Conversation.append_message(session.session_id, hd(old.messages))
+      assert {:ok, ^replacement} = Conversation.pop_last_message(session.session_id)
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 2, "new reply")
+    end
+  end
+
   describe "resolve_patient_reply" do
     test "resolves verified reply for the active generation and clears active generation" do
       session = Conversation.start()
