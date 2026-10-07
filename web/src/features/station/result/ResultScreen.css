@@ -67,6 +67,21 @@
   max-width: 680px;
   margin: 0 auto;
   padding: 32px 16px;
+  overflow-wrap: anywhere;
+}
+
+.result-screen__summary {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.result-screen__fictional {
+  font-weight: 700;
+  color: #374151;
 }
 
 .result-screen__title-header {
@@ -121,21 +136,22 @@ h2.result-screen__ordinal {
 .result-screen__status {
   font-size: 13px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.5;
   padding: 4px 8px;
   border-radius: 4px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.result-screen__status--met {
+.result-screen__status--assessed {
   color: #065f46;
   background-color: #ecfdf5;
 }
 
-.result-screen__status--omitted {
-  color: #991b1b;
-  background-color: #fef2f2;
+.result-screen__status--not_observable,
+.result-screen__status--not_applicable {
+  color: #374151;
+  background-color: #f3f4f6;
 }
 
 .result-screen__status--uncertain {

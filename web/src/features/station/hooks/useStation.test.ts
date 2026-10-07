@@ -13,6 +13,7 @@ import {
   type SessionResult,
 } from "../api/client";
 import { sessionIdStorageKey, useStation, type StationApi } from "./useStation";
+import { partialResult } from "../result/educational-result.fixture";
 
 afterEach(() => {
   sessionStorage.clear();
@@ -35,18 +36,7 @@ const completed: CompletedSession = {
   completed_at: "2026-01-01T10:10:00Z",
 };
 
-const stationResult: SessionResult = {
-  session_id: "session-1",
-  status: "completed",
-  criteria: [
-    {
-      id: "onset",
-      status: "met",
-      evidence: ["Quando começou a dor?"],
-      recommendation: "",
-    },
-  ],
-};
+const stationResult: SessionResult = partialResult;
 
 const reply: MessageReply = {
   reply_text: "A dor começou há duas horas.",
@@ -112,6 +102,36 @@ const apiMock = (overrides: Partial<StationApi> = {}): StationApi => ({
 });
 
 describe("useStation", () => {
+  it("clears session evidence after pagehide discard acknowledgement, including a late result", async () => {
+    const pendingResult = deferred<SessionResult>();
+    const pendingDiscard = deferred<void>();
+    const api = apiMock({ fetchResult: vi.fn(() => pendingResult.promise), discardSession: vi.fn(() => pendingDiscard.promise) });
+    const { result } = renderHook(() => useStation(api));
+    await act(async () => { await result.current.start(false); });
+    let finishPromise!: Promise<void>;
+    await act(async () => { finishPromise = result.current.finish(); });
+    await act(async () => { window.dispatchEvent(new Event("pagehide")); });
+    await act(async () => { pendingDiscard.resolve(); });
+    await act(async () => { pendingResult.resolve(stationResult); await finishPromise; });
+    expect(result.current.result).toBeNull();
+    expect(result.current.status).toBe("idle");
+    expect(sessionStorage.getItem(sessionIdStorageKey)).toBeNull();
+  });
+  it("does not restore a late completed-resume result after acknowledged reset", async () => {
+    sessionStorage.setItem(sessionIdStorageKey, session.session_id);
+    const pendingResult = deferred<SessionResult>();
+    const api = apiMock({
+      getSession: vi.fn().mockResolvedValue({ ...session, status: "completed", completion_reason: "user", messages: [] }),
+      fetchResult: vi.fn(() => pendingResult.promise),
+    });
+    const { result } = renderHook(() => useStation(api));
+    await waitFor(() => expect(api.fetchResult).toHaveBeenCalledOnce());
+    await act(async () => { await result.current.reset(); });
+    await act(async () => { pendingResult.resolve(stationResult); });
+    expect(result.current.status).toBe("idle");
+    expect(result.current.result).toBeNull();
+    expect(sessionStorage.getItem(sessionIdStorageKey)).toBeNull();
+  });
   it("owns one complete station session from loading through its result", async () => {
     const pendingStart = deferred<Session>();
     const pendingFinish = deferred<CompletedSession>();
@@ -1120,7 +1140,7 @@ describe("useStation", () => {
       sessionStorage.setItem(sessionIdStorageKey, "session-1");
 
       // First pagehide event
-      act(() => {
+      await act(async () => {
         window.dispatchEvent(new Event("pagehide"));
       });
       expect(api.discardSession).toHaveBeenCalledTimes(1);
@@ -1129,7 +1149,7 @@ describe("useStation", () => {
       });
 
       // Repeated pagehide event does not duplicate the attempt
-      act(() => {
+      await act(async () => {
         window.dispatchEvent(new Event("pagehide"));
       });
       expect(api.discardSession).toHaveBeenCalledTimes(1);

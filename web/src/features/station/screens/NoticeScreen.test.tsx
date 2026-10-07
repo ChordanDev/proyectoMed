@@ -3,6 +3,12 @@ import { NoticeScreen } from "./NoticeScreen";
 import strings from "../i18n/pt-BR.json";
 
 describe("NoticeScreen", () => {
+  it.each([true, false])("shows the exact educational disclaimer before starting, voice=%s", (voiceSupport) => {
+    const { getByText, getByRole } = render(<NoticeScreen onStart={vi.fn()} voiceSupport={voiceSupport} />);
+    const notice = getByText("Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.");
+    expect(notice).toBeVisible();
+    expect(notice.compareDocumentPosition(getByRole("button")) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
   describe("shared: renders educational notice and primary button", () => {
     it("shows the notice title and body text", async () => {
       const onStart = vi.fn();

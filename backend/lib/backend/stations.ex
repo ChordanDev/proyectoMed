@@ -323,8 +323,8 @@ defmodule Backend.Stations do
 
   Returns `{:error, {:invalid_attempt, reason}}`, with no partial criteria,
   when the decision provider fails technically or the rubric cannot be
-  assessed exactly. This function is not exposed over HTTP: the result
-  endpoint keeps the legacy shape of `get_session_result/1`.
+  assessed exactly. The legacy endpoint keeps `get_session_result/1`;
+  the versioned educational endpoint uses `get_educational_result/1`.
   """
   @spec assess_session(String.t(), keyword()) ::
           {:ok, RubricAssessment.t()}
@@ -336,6 +336,15 @@ defmodule Backend.Stations do
   def assess_session(session_id, opts \\ []) do
     with {:ok, session} <- fetch_completed_session(session_id) do
       RubricAssessment.assess(get_active_package(), session, opts)
+    end
+  end
+
+  @doc "Returns the explicit v2 educational result, without provider diagnostics or persistence."
+  @spec get_educational_result(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def get_educational_result(session_id, opts \\ []) do
+    with {:ok, assessment} <- assess_session(session_id, opts) do
+      {:ok,
+       Backend.Stations.EducationalResult.serialize(session_id, assessment, get_active_package())}
     end
   end
 

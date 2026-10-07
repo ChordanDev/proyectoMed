@@ -273,6 +273,39 @@ defmodule BackendWeb.StationController do
     end
   end
 
+  def show_educational_result(conn, %{"id" => session_id}) do
+    conn = put_resp_header(conn, "cache-control", "no-store")
+
+    case Stations.get_educational_result(session_id) do
+      {:ok, result} ->
+        json(conn, result)
+
+      {:error, :session_not_finished} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "session_not_finished", message: "A sessão ainda não foi finalizada."})
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "session_not_found", message: "Sessão não encontrada."})
+
+      {:error, :expired} ->
+        conn
+        |> put_status(:gone)
+        |> json(%{error: "session_expired", message: "A sessão expirou."})
+
+      {:error, {:invalid_attempt, _reason}} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "invalid_attempt",
+          message:
+            "Não foi possível avaliar esta tentativa. Nenhuma estimativa foi gerada. Reinicie a estação."
+        })
+    end
+  end
+
   def request_impresso(conn, %{"id" => session_id} = params) do
     request_params = %{"text" => params["text"], "request_id" => params["request_id"]}
 

@@ -28,6 +28,7 @@ export function NoticeScreen({
       {/* Educational notice */}
       <h1 className="notice-title">{strings.noticeTitle}</h1>
       <p className="notice-body">{strings.noticeBody}</p>
+      <p className="notice-body">{strings.educationalDisclaimer}</p>
 
       {/* Audio disclosure + consent (voice only) */}
       {voiceSupport && (

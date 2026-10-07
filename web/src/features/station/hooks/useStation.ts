@@ -485,7 +485,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     void (async () => {
       try {
         const detail = await api.getSession(savedSessionId);
-        if (cancelled) return;
+        if (cancelled || isResettingRef.current || readPersistedSessionId() !== savedSessionId) return;
 
         sessionRef.current = detail;
         setAudioConsent(detail.audio_consent);
@@ -496,11 +496,11 @@ export const useStation = (api: StationApi = defaultApi) => {
           updateStatus("finishing");
           try {
             const stationResult = await api.fetchResult(detail.session_id);
-            if (cancelled) return;
+            if (cancelled || sessionRef.current !== detail || isResettingRef.current) return;
             setResult(stationResult);
             updateStatus("finished");
           } catch (cause) {
-            if (!cancelled) fail(cause);
+            if (!cancelled && sessionRef.current === detail && !isResettingRef.current) fail(cause);
           }
           return;
         }
@@ -578,6 +578,29 @@ export const useStation = (api: StationApi = defaultApi) => {
       pageHideAttemptedRef.current = sessionId;
       void api
         .discardSession(sessionId, { keepalive: true })
+        .then(() => {
+          // A BFCache-restored page must not retain evidence from a session
+          // already discarded by the server or accept its late result response.
+          if (sessionRef.current?.session_id !== sessionId && readPersistedSessionId() !== sessionId) return;
+          sessionRef.current = null;
+          hasStartedRef.current = false;
+          isFinishingRef.current = false;
+          pendingSendRef.current = null;
+          pendingSendTokenRef.current = null;
+          clockAnchorRef.current = null;
+          timerFinishTriggeredRef.current = false;
+          pageHideAttemptedRef.current = null;
+          clearPersistedSessionId();
+          setResult(null);
+          setInitialMessages([]);
+          setImpressos([]);
+          setImpressoError(null);
+          setDeadlineAtMs(null);
+          setRemainingMs(null);
+          setError(null);
+          setAudioConsent(false);
+          updateStatus("idle");
+        })
         .catch(() => {
           // Best effort keepalive POST: no guarantee, no error-induced reset.
         });
@@ -587,7 +610,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     return () => {
       window.removeEventListener("pagehide", onPageHide);
     };
-  }, [api]);
+  }, [api, updateStatus]);
 
   return {
     start,
