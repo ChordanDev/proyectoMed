@@ -1,0 +1,208 @@
+{
+  "station_id": "acute-appendicitis",
+  "category": "modality_gap",
+  "fictional": true,
+  "cases": [
+    {
+      "id": "modality-gap-01",
+      "category": "modality_gap",
+      "surface": "rubric_assessment",
+      "probes": [
+        "G11",
+        "G14"
+      ],
+      "input": {
+        "criterion_id": "item-05",
+        "action_id": "criterio-3",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "voice",
+            "text": "Vou pesquisar o sinal de Blumberg."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:uncertain",
+          "action:not_performed"
+        ],
+        "note": "The station has no physical examination: the learner can only announce the manoeuvre, and no item authors a modality requirement (gaps G11, G14). The action text asks to perform and interpret. Proposed: an announcement alone is not credited as performed."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "modality-gap-02",
+      "category": "modality_gap",
+      "surface": "rubric_assessment",
+      "probes": [
+        "G8",
+        "G14"
+      ],
+      "input": {
+        "criterion_id": "item-05",
+        "action_id": "criterio-2",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Vou examinar o abdome do senhor."
+          },
+          {
+            "role": "learner",
+            "modality": "impressos",
+            "text": "Vou examinar o abdome do senhor."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:not_performed",
+          "action:uncertain"
+        ],
+        "note": "The Impressos request uses a wording outside the authored keyword, so the physical exam handout is not released (gap G8) and the learner has no finding to verbalise. Proposed: the action is not credited as performed."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "modality-gap-03",
+      "category": "modality_gap",
+      "surface": "dialogue_gate",
+      "probes": [
+        "G11"
+      ],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Vou palpar a sua barriga agora, tudo bem?"
+          }
+        ],
+        "candidate_reply": "Tudo bem, doutor. Dói mais quando aperta aqui embaixo, do lado direito."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "delivered"
+        ],
+        "note": "The response rule comportamento-durante-o-exame describes behaviour during a physical exam that a text or voice station cannot stage (gap G11). The candidate reply follows the rule in words. Proposed: delivered."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "modality-gap-04",
+      "category": "modality_gap",
+      "surface": "dialogue_gate",
+      "probes": [
+        "G11"
+      ],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Vou palpar a sua barriga agora."
+          }
+        ],
+        "candidate_reply": "*contrai a musculatura e faz uma careta de dor*"
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "denied",
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The candidate reply is a stage direction for nonverbal acting, which neither modality can render (gap G11). Proposed: the reply is denied or refused, never delivered."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "modality-gap-05",
+      "category": "modality_gap",
+      "surface": "rubric_assessment",
+      "probes": [
+        "G5"
+      ],
+      "input": {
+        "criterion_id": "item-07",
+        "action_id": "criterio-4",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "impressos",
+            "text": "Solicito função renal, sódio e potássio."
+          },
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Considero a função renal e os eletrólitos preservados."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:uncertain",
+          "action:not_performed"
+        ],
+        "note": "The Impressos request uses wordings left out of the authored keywords, so no laboratory handout is released (gap G5). The learner then states an interpretation without a released result. Proposed: the action is not credited as performed."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "modality-gap-06",
+      "category": "modality_gap",
+      "surface": "rubric_assessment",
+      "probes": [
+        "G6"
+      ],
+      "input": {
+        "criterion_id": "item-08",
+        "action_id": "criterio-1",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "impressos",
+            "text": "Solicito uma TC de abdome."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:performed"
+        ],
+        "note": "The imaging request uses a wording outside the authored keywords, so the handout is not released (gap G6). The request itself was made. Proposed: the request action is credited from the request event even though nothing was released. The adjudicator decides."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    }
+  ]
+}

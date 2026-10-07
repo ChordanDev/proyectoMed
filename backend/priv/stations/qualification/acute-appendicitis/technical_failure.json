@@ -1,0 +1,94 @@
+{
+  "station_id": "acute-appendicitis",
+  "category": "technical_failure",
+  "fictional": true,
+  "cases": [
+    {
+      "id": "technical-failure-01",
+      "category": "technical_failure",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Onde dói?"
+          }
+        ],
+        "candidate_reply": "Dói na parte inferior direita do abdome.",
+        "deadline": "expired"
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "technical_failure"
+        ],
+        "note": "The verification deadline has already expired. Proposed: a typed technical failure, with no reply delivered and no fallback text."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "technical-failure-02",
+      "category": "technical_failure",
+      "surface": "rubric_assessment",
+      "probes": [],
+      "input": {
+        "criterion_id": "item-01",
+        "action_id": null,
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Bom dia, sou o médico de plantão. O senhor é o Rafael?"
+          }
+        ],
+        "deadline": "expired"
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "technical_failure"
+        ],
+        "note": "The evaluation deadline has already expired. Proposed: the attempt is invalid as a whole, with no partial criteria and no criterion-level uncertainty."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "technical-failure-03",
+      "category": "technical_failure",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Onde dói?"
+          }
+        ],
+        "candidate_reply": "   "
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "denied"
+        ],
+        "note": "The candidate reply is blank, as after a failed generation. Proposed: denied by the deterministic check, before any decision call."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    }
+  ]
+}
