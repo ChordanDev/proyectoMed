@@ -22,6 +22,15 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
+  defmodule TestFailureAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      send(Application.fetch_env!(:backend, :voice_turn_test_pid), :failed_adapter_called)
+      {:error, :service_unavailable}
+    end
+  end
+
   defmodule TestFabricatedClinicalAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true
@@ -191,6 +200,29 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
   end
 
   describe "POST transcripts" do
+    test "failed final and identical retry both return 503 without a second generation",
+         %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = Stations.create_session(%{audio_consent: true})
+      payload = %{turn_id: 1, text: "Onde dói?"}
+
+      first = conn |> post(transcripts_path(session.session_id), payload) |> json_response(503)
+      assert first == %{"error" => "station_ai_unavailable"}
+      assert_receive :failed_adapter_called
+
+      retry = conn |> post(transcripts_path(session.session_id), payload) |> json_response(503)
+      assert retry == first
+      refute Map.has_key?(retry, "reply_text")
+      refute_receive :failed_adapter_called
+
+      assert {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, modality: :voice, text: "Onde dói?"}] = stored.messages
+      assert stored.last_voice_turn_id == 1
+      assert stored.active_generation_id == nil
+      assert stored.active_voice_turn_id == nil
+    end
+
     test "commits a final transcript, returns verified reply_text, turn_id and generation_id",
          %{conn: conn} do
       session = Stations.create_session(%{audio_consent: true})

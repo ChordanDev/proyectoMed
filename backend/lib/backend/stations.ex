@@ -416,7 +416,8 @@ defmodule Backend.Stations do
     1. Validating active session state, deadline, and audio consent.
     2. Atomically committing the learner turn via `Conversation.begin_voice_turn/3`
        which assigns a session-scoped monotonic generation identity.
-       Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn.
+       Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn,
+       except retries of the latest failed generation preserve its technical failure.
     3. Formatting role-labelled context from the active package and session messages.
     4. Generating the next bounded patient reply via `StationAI.next_reply/2`.
     5. Passing through the `verify_patient_reply/3` seam.
@@ -578,8 +579,10 @@ defmodule Backend.Stations do
         {:error, :not_found}
 
       {:error, _reason} ->
-        _ = Conversation.cancel_generation(session_id, generation_id)
-        {:error, :station_ai_unavailable}
+        case Conversation.fail_generation(session_id, generation_id, :station_ai_unavailable) do
+          {:ok, :failed} -> {:error, :station_ai_unavailable}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 

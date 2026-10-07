@@ -130,6 +130,74 @@ defmodule Backend.ConversationTest do
   end
 
   describe "voice turns and generation identity" do
+    test "failed outcome is bounded to the latest accepted turn and preserves legacy duplicates" do
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 4, "First")
+
+      assert {:ok, :failed} =
+               Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+      assert {:error, :station_ai_unavailable} =
+               Conversation.begin_voice_turn(session.session_id, 4, "First")
+
+      assert {:ok, :duplicate} = Conversation.commit_voice_turn(session.session_id, 4, "First")
+      assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 3, "Older")
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 5, "Newer")
+      assert {:ok, stored} = Conversation.fetch(session.session_id)
+      assert stored.failed_voice_turn == nil
+
+      assert {:error, :stale_generation} =
+               Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+      assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 4, "First")
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 2, "Patient reply")
+      assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 5, "Newer")
+    end
+
+    test "completion clears failure outcome and expiry or discard removes the session" do
+      for boundary <- [:completed, :expired, :discarded] do
+        session = Conversation.start()
+
+        assert {:ok, :committed, 1} =
+                 Conversation.begin_voice_turn(session.session_id, 1, "Question")
+
+        assert {:ok, :failed} =
+                 Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+        case boundary do
+          :completed ->
+            assert {:ok, completed} = Conversation.complete(session.session_id, :user)
+            assert completed.failed_voice_turn == nil
+
+            assert {:error, :completed} =
+                     Conversation.begin_voice_turn(session.session_id, 1, "Question")
+
+            assert {:error, :completed} =
+                     Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+          :expired ->
+            {:ok, stored} = Conversation.fetch(session.session_id)
+
+            :ets.insert(
+              Conversation,
+              {session.session_id, %{stored | expires_at: session.started_at}}
+            )
+
+            assert {:error, :expired} =
+                     Conversation.begin_voice_turn(session.session_id, 1, "Question")
+
+            assert {:error, :not_found} = Conversation.fetch(session.session_id)
+
+          :discarded ->
+            assert :ok = Conversation.discard(session.session_id)
+
+            assert {:error, :not_found} =
+                     Conversation.begin_voice_turn(session.session_id, 1, "Question")
+        end
+      end
+    end
+
     test "commit_voice_turn preserves base #118 return shape and advances state atomically" do
       session = Conversation.start()
 
