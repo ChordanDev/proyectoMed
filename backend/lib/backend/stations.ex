@@ -359,6 +359,8 @@ defmodule Backend.Stations do
   speech-to-text provider (#118). Only consented, active sessions qualify.
   Keyterms come from the station package's optional `stt_keyterms`, so they
   stay server-side.
+  `last_turn_id` is the committed learner cursor. `turn_id_floor` also covers
+  cancelled turn IDs; a fresh worker must allocate strictly above this floor.
   """
   @spec voice_worker_context(String.t()) ::
           {:ok,
@@ -366,7 +368,8 @@ defmodule Backend.Stations do
              session_id: String.t(),
              language: String.t(),
              keyterms: [String.t()],
-             last_turn_id: non_neg_integer()
+             last_turn_id: non_neg_integer(),
+             turn_id_floor: non_neg_integer()
            }}
           | {:error, :not_found | :expired | :completed | :no_consent}
   def voice_worker_context(session_id) do
@@ -380,7 +383,12 @@ defmodule Backend.Stations do
          session_id: session_id,
          language: package["language"] || "pt-BR",
          keyterms: Enum.filter(List.wrap(package["stt_keyterms"]), &is_binary/1),
-         last_turn_id: Map.get(session, :last_voice_turn_id, 0)
+         last_turn_id: Map.get(session, :last_voice_turn_id, 0),
+         turn_id_floor:
+           max(
+             Map.get(session, :last_voice_turn_id, 0),
+             Map.get(session, :cancelled_voice_turn_id, 0)
+           )
        }}
     end
   end
@@ -392,7 +400,7 @@ defmodule Backend.Stations do
   """
   @spec commit_voice_transcript(String.t(), pos_integer(), String.t()) ::
           {:ok, :committed | :duplicate}
-          | {:error, :not_found | :expired | :completed | :no_consent}
+          | {:error, :not_found | :expired | :completed | :no_consent | :stale_generation}
   def commit_voice_transcript(session_id, turn_id, text) do
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_active(session),
@@ -408,7 +416,8 @@ defmodule Backend.Stations do
     1. Validating active session state, deadline, and audio consent.
     2. Atomically committing the learner turn via `Conversation.begin_voice_turn/3`
        which assigns a session-scoped monotonic generation identity.
-       Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn.
+       Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn,
+       except retries of the latest failed generation preserve its technical failure.
     3. Formatting role-labelled context from the active package and session messages.
     4. Generating the next bounded patient reply via `StationAI.next_reply/2`.
     5. Passing through the `verify_patient_reply/3` seam.
@@ -463,12 +472,34 @@ defmodule Backend.Stations do
 
   @doc """
   Explicitly cancels a pending voice turn generation (#119).
+
+  Supports:
+    * `cancel_voice_turn(session_id)` — cancels active generation unconditionally.
+    * `cancel_voice_turn(session_id, generation_id)` when integer — cancels if generation matches (keeps generation cancel behavior for existing tests).
+    * `cancel_voice_turn(session_id, criteria)` when keyword list or map — cancels by expected `turn_id` and/or `generation_id`, e.g. `[turn_id: 1]`, `%{turn_id: 1}`, `%{expected_turn_id: 1}`.
+
+  Turn-only criteria atomically fence future admission through the monotonic turn
+  ID, including delayed POSTs and retries. `:stale_generation` still means there
+  was no matching active generation, but the admission fence is established.
+  Newer independent active turns are untouched. Generation-qualified criteria
+  install a fence only on a match; integer generation-only behavior is unchanged.
   """
-  @spec cancel_voice_turn(String.t(), pos_integer() | nil) ::
+  @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
           {:ok, :cancelled}
           | {:error, :not_found | :expired | :completed | :stale_generation}
-  def cancel_voice_turn(session_id, generation_id \\ nil) do
+  def cancel_voice_turn(session_id, criteria \\ nil)
+
+  def cancel_voice_turn(session_id, nil) do
+    Conversation.cancel_generation(session_id, nil)
+  end
+
+  def cancel_voice_turn(session_id, generation_id)
+      when is_integer(generation_id) and generation_id > 0 do
     Conversation.cancel_generation(session_id, generation_id)
+  end
+
+  def cancel_voice_turn(session_id, criteria) when is_list(criteria) or is_map(criteria) do
+    Conversation.cancel_voice_turn(session_id, criteria)
   end
 
   @doc """
@@ -548,8 +579,10 @@ defmodule Backend.Stations do
         {:error, :not_found}
 
       {:error, _reason} ->
-        _ = Conversation.cancel_generation(session_id, generation_id)
-        {:error, :station_ai_unavailable}
+        case Conversation.fail_generation(session_id, generation_id, :station_ai_unavailable) do
+          {:ok, :failed} -> {:error, :station_ai_unavailable}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
