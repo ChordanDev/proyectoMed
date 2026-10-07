@@ -81,6 +81,14 @@ defmodule Backend.StationsTest do
     end
   end
 
+  defmodule TestFactWithoutPeriodAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok, %{text: "A dor começou durante uma caminhada"}}
+    end
+  end
+
   defmodule TestSlowBarrierAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true
@@ -679,6 +687,56 @@ defmodule Backend.StationsTest do
         else
           assert {:error, :not_found} = Stations.get_session(session.session_id)
         end
+      end
+    end
+
+    for rule_id <- ["length-cap", "max-length"] do
+      test "process_voice_turn/3 refuses final fact text exceeding #{rule_id} without claiming emitted facts" do
+        original_package = Stations.get_active_package()
+
+        package =
+          Path.expand("../../priv/stations/fixtures/valid-package.json", __DIR__)
+          |> File.read!()
+          |> Jason.decode!()
+          |> Map.put("response_rules", [
+            %{
+              "id" => unquote(rule_id),
+              "instruction" => "Keep replies within 35 characters.",
+              "max_length" => 35
+            }
+          ])
+
+        assert {:ok, package} = Backend.Stations.StationPackage.validate(package)
+        :sys.replace_state(Backend.Stations.StationLoader, fn _ -> package end)
+
+        on_exit(fn ->
+          :sys.replace_state(Backend.Stations.StationLoader, fn _ -> original_package end)
+        end)
+
+        Application.put_env(:backend, :station_ai_adapter, TestFactWithoutPeriodAdapter)
+        session = Stations.create_session(%{audio_consent: true})
+
+        assert {:ok, result} =
+                 Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
+
+        assert result.reply_text == "Não tenho essa informação"
+        assert String.length(result.reply_text) <= 35
+        assert result.used_facts == []
+        assert result.turn_id == 1
+        assert result.generation_id == 1
+
+        assert {:ok, updated_session} = Stations.get_session(session.session_id)
+        assert [learner, patient] = updated_session.messages
+        assert learner.text == "Quando começou a dor?"
+        assert patient.role == :patient
+        assert patient.text == "Não tenho essa informação"
+        assert String.length(patient.text) <= 35
+
+        assert {:ok, :duplicate} =
+                 Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
+
+        assert {:ok, unchanged_session} = Stations.get_session(session.session_id)
+        assert unchanged_session.messages == updated_session.messages
       end
     end
 

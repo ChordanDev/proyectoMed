@@ -608,7 +608,13 @@ defmodule Backend.Stations do
 
       matching_fact != nil ->
         fact_content = Map.get(matching_fact, "content") || Map.get(matching_fact, :content)
-        {:ok, fact_content, [matching_fact]}
+        bounded_text = StationAI.BoundedReply.bound(fact_content, package)
+
+        if bounded_text == refusal do
+          {:ok, refusal, []}
+        else
+          {:ok, bounded_text, [matching_fact]}
+        end
 
       true ->
         {:ok, refusal, []}
