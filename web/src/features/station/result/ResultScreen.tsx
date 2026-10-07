@@ -92,16 +92,18 @@ export function ResultScreen({
 
   if (status !== "finished" || !criteria || !result) {
     return (
-      <>
-      <p className="notice-body">{strings.educationalDisclaimer}</p>
-      <ResultScreenState
-        status={status}
-        hasUsableFeedback={hasUsableFeedback}
-        onRestart={onRestart}
-        disabled={disabled}
-        errorMessage={errorMessage}
-      />
-      </>
+      <div className="result-screen result-screen--state">
+        <p className="educational-disclaimer" role="note">
+          {strings.educationalDisclaimer}
+        </p>
+        <ResultScreenState
+          status={status}
+          hasUsableFeedback={hasUsableFeedback}
+          onRestart={onRestart}
+          disabled={disabled}
+          errorMessage={errorMessage}
+        />
+      </div>
     );
   }
 
@@ -113,7 +115,9 @@ export function ResultScreen({
         </h1>
       </header>
 
-      <p className="notice-body">{strings.educationalDisclaimer}</p>
+      <p className="educational-disclaimer" role="note">
+        {strings.educationalDisclaimer}
+      </p>
       {result.placeholder && <p className="result-screen__fictional">{strings.fictionalResult}</p>}
       <section aria-labelledby="result-estimates-title" className="result-screen__summary">
         <h2 id="result-estimates-title">{strings.resultCoverage}</h2>
@@ -131,7 +135,6 @@ export function ResultScreen({
             return `${strings.resultOrdinalPrefix} ${ordinal}: ${STATUS_TEXT_MAP[item.status]}`;
           }).join("; ")}</p>
         </>}
-        <p>{strings.resultSessionOnly}</p>
       </section>
 
       <ol className="result-screen__list">
@@ -160,8 +163,9 @@ export function ResultScreen({
 
               <p>{criterion.description}</p>
               {criterion.status === "assessed" && <>
-                <p>{strings.resultLevel}: {criterion.level}</p>
-                <p>{criterion.level_description}</p>
+                {criterion.level_description.trim() !== "" && (
+                  <p>{strings.resultLevel}: {criterion.level_description}</p>
+                )}
                 <p>{strings.resultPoints}: {displayPoints(criterion.points)} {strings.resultOf} {displayPoints(criterion.max_points)}</p>
               </>}
 
@@ -211,6 +215,7 @@ export function ResultScreen({
       )}
 
       <footer className="result-screen__footer">
+        <p className="result-screen__session-note">{strings.resultSessionOnly}</p>
         <button
           type="button"
           className="result-screen-state__button"

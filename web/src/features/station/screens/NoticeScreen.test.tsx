@@ -7,6 +7,7 @@ describe("NoticeScreen", () => {
     const { getByText, getByRole } = render(<NoticeScreen onStart={vi.fn()} voiceSupport={voiceSupport} />);
     const notice = getByText("Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.");
     expect(notice).toBeVisible();
+    expect(getByRole("note")).toBe(notice);
     expect(notice.compareDocumentPosition(getByRole("button")) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
   describe("shared: renders educational notice and primary button", () => {
