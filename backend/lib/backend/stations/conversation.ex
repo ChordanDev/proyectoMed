@@ -16,6 +16,7 @@ defmodule Backend.Stations.Conversation do
           optional(:completion_reason) => term(),
           optional(:last_voice_turn_id) => pos_integer(),
           optional(:active_generation_id) => pos_integer() | nil,
+          optional(:active_generation_message_index) => non_neg_integer() | nil,
           optional(:next_generation_id) => pos_integer(),
           session_id: String.t(),
           station_id: String.t(),
@@ -180,6 +181,7 @@ defmodule Backend.Stations.Conversation do
       status: :active,
       last_voice_turn_id: 0,
       active_generation_id: nil,
+      active_generation_message_index: nil,
       next_generation_id: 1
     }
 
@@ -216,7 +218,8 @@ defmodule Backend.Stations.Conversation do
                 status: :completed,
                 completed_at: DateTime.utc_now(),
                 completion_reason: reason,
-                active_generation_id: nil
+                active_generation_id: nil,
+                active_generation_message_index: nil
               })
 
             true = :ets.insert(__MODULE__, {session_id, session})
@@ -283,6 +286,7 @@ defmodule Backend.Stations.Conversation do
               session
               |> Map.put(:messages, session.messages ++ [patient_msg])
               |> Map.put(:active_generation_id, nil)
+              |> Map.put(:active_generation_message_index, nil)
 
             true = :ets.insert(__MODULE__, {session_id, session})
             {:reply, {:ok, session}, state}
@@ -304,7 +308,11 @@ defmodule Backend.Stations.Conversation do
         if generation_id != nil and active_gen != generation_id do
           {:reply, {:error, :stale_generation}, state}
         else
-          session = Map.put(session, :active_generation_id, nil)
+          session =
+            session
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_generation_message_index, nil)
+
           true = :ets.insert(__MODULE__, {session_id, session})
           {:reply, {:ok, :cancelled}, state}
         end
@@ -370,6 +378,7 @@ defmodule Backend.Stations.Conversation do
         |> Map.put(:messages, session.messages ++ [message])
         |> Map.put(:last_voice_turn_id, turn_id)
         |> Map.put(:active_generation_id, gen_id)
+        |> Map.put(:active_generation_message_index, length(session.messages))
         |> Map.put(:next_generation_id, gen_id + 1)
 
       true = :ets.insert(__MODULE__, {session_id, session})
@@ -467,6 +476,17 @@ defmodule Backend.Stations.Conversation do
   defp pop_if_matching(session, last_msg, expected_message) do
     if matches_expected?(last_msg, expected_message) do
       updated_messages = :lists.droplast(session.messages)
+
+      # Append/tail-pop keeps the origin's position stable even for identical messages.
+      session =
+        if Map.get(session, :active_generation_message_index) == length(updated_messages) do
+          session
+          |> Map.put(:active_generation_id, nil)
+          |> Map.put(:active_generation_message_index, nil)
+        else
+          session
+        end
+
       session = %{session | messages: updated_messages}
       true = :ets.insert(__MODULE__, {session.session_id, session})
       {:ok, session}
