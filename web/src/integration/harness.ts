@@ -23,6 +23,11 @@ export interface E2EHarnessInstance {
   stop: () => Promise<void>;
 }
 
+// A child killed by a signal reports exitCode null and only sets signalCode.
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function getAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -243,7 +248,7 @@ export async function startE2EHarness(
     if (spawnFailedError) {
       break;
     }
-    if (phxProcess.exitCode !== null) {
+    if (hasExited(phxProcess)) {
       break;
     }
 
@@ -287,7 +292,7 @@ export async function startE2EHarness(
 
   const stop = async () => {
     await new Promise<void>((resolve) => {
-      if (phxProcess.exitCode !== null) {
+      if (hasExited(phxProcess)) {
         resolve();
         return;
       }
@@ -307,7 +312,7 @@ export async function startE2EHarness(
 
       // Force kill after 5s if still alive
       killTimer = setTimeout(() => {
-        if (phxProcess.exitCode === null) {
+        if (!hasExited(phxProcess)) {
           phxProcess.kill("SIGKILL");
         }
       }, 5000);

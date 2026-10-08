@@ -170,6 +170,11 @@ describe("Station E2E Technical Failure", () => {
   });
 });
 
+// The session TTL is fixed at creation and never renewed, so it must outlast the
+// requests a scenario makes before its deliberate wait, even on a loaded runner.
+const SESSION_TTL_MS = 2_000;
+const SESSION_EXPIRY_WAIT_MS = SESSION_TTL_MS + 300;
+
 describe("Station E2E Session Expiry", () => {
   let harness: E2EHarnessInstance;
   let client: ReturnType<typeof createApiClient>;
@@ -179,7 +184,7 @@ describe("Station E2E Session Expiry", () => {
       mockOpenAIReplies: [
         "A dor começou durante uma caminhada.",
       ],
-      conversationTimeoutMs: 500,
+      conversationTimeoutMs: SESSION_TTL_MS,
       startupTimeoutMs: 25_000,
     });
     client = createApiClient({
@@ -198,8 +203,8 @@ describe("Station E2E Session Expiry", () => {
     const expiredSession = await client.startSession({ audio_consent: true });
     expect(expiredSession.session_id).toBeTruthy();
 
-    // Wait for session to expire (timeout is 500ms)
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    // Wait for session to expire
+    await new Promise((resolve) => setTimeout(resolve, SESSION_EXPIRY_WAIT_MS));
 
     // Attempting to send a message on an expired session returns documented 410 session_expired
     try {
@@ -268,7 +273,7 @@ describe("Station E2E Session Expiry", () => {
     expect(freshResult.criteria.length).toBeGreaterThan(0);
 
     // Wait for the session to expire
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, SESSION_EXPIRY_WAIT_MS));
 
     // After expiry, fetching result fails (no stale result served)
     try {
@@ -293,5 +298,5 @@ describe("Station E2E Session Expiry", () => {
       text: "Quando começou a dor no peito?",
     });
     expect(reply.reply_text).toBe("A dor começou durante uma caminhada.");
-  });
+  }, SESSION_EXPIRY_WAIT_MS * 2 + 10_000);
 });
