@@ -38,7 +38,7 @@ describe("Station E2E Happy Path", () => {
     const activeStation = await client.getActiveStation();
     expect(activeStation).toMatchObject({
       station_id: "chest-pain-initial-assessment",
-      version: "1.0.0",
+      version: "2.0.0",
       display_title: "Avaliação inicial de dor torácica",
       language: "pt-BR",
     });
@@ -47,7 +47,7 @@ describe("Station E2E Happy Path", () => {
     const session = await client.startSession({ audio_consent: true });
     expect(session.session_id).toBeTruthy();
     expect(session.station_id).toBe("chest-pain-initial-assessment");
-    expect(session.station_version).toBe("1.0.0");
+    expect(session.station_version).toBe("2.0.0");
     expect(session.audio_consent).toBe(true);
     expect(new Date(session.started_at).getTime()).toBeLessThanOrEqual(
       new Date(session.expires_at).getTime(),
@@ -69,23 +69,51 @@ describe("Station E2E Happy Path", () => {
     expect(finished.status).toBe("completed");
     expect(finished.completed_at).toBeTruthy();
 
-    // 5. Retrieve criterion-level rubric results
+    // 5. Retrieve criterion-level rubric results (v2 educational result).
+    // The level and points come from the E2E-only approving Jev adapter, which
+    // awards the top authored level whenever a learner turn can ground it.
     const result = await client.fetchResult(session.session_id);
+    expect(result.schema_version).toBe("2");
     expect(result.session_id).toBe(session.session_id);
     expect(result.status).toBe("completed");
-    expect(Array.isArray(result.criteria)).toBe(true);
-    expect(result.criteria.length).toBeGreaterThan(0);
+    expect(result.criteria).toHaveLength(1);
 
     const onsetCriterion = result.criteria.find(
       (c) => c.id === "onset-assessment",
     );
-    expect(onsetCriterion).toBeDefined();
-    expect(onsetCriterion?.status).toBe("met");
-    expect(Array.isArray(onsetCriterion?.evidence)).toBe(true);
-    expect(onsetCriterion?.evidence.length).toBeGreaterThan(0);
-    expect(onsetCriterion?.recommendation).toBe(
-      "Practice opening chest pain assessments with onset questions.",
-    );
+    expect(onsetCriterion).toEqual({
+      id: "onset-assessment",
+      description: "Assesses the onset of chest pain.",
+      status: "assessed",
+      reason: null,
+      level: "adequado",
+      level_description: "Assesses onset.",
+      points: "2",
+      max_points: "2",
+      evidence_ids: ["turn-1"],
+      evidence: [
+        {
+          id: "turn-1",
+          role: "learner",
+          text: "Quando começou a dor no peito?",
+        },
+      ],
+      recommendation:
+        "Practice opening chest pain assessments with onset questions.",
+    });
+    expect(result.coverage).toEqual({
+      assessed: 1,
+      uncertain: 0,
+      not_observable: 0,
+      not_applicable: 0,
+    });
+    expect(result.estimates).toEqual({
+      total: "2",
+      scored_subtotal: "2",
+      scored_max: "2",
+      eligible_max: "2",
+      unresolved: [],
+    });
   });
 
   it("fails with actionable diagnostics when contract boundaries are violated", async () => {
