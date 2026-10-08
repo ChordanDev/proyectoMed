@@ -230,7 +230,7 @@
         "label": {
           "enum": ["inadequado", "parcialmente_adequado", "adequado"]
         },
-        "points": {"type": "number", "multipleOf": 0.025},
+        "points": {"type": "number", "minimum": 0, "multipleOf": 0.025},
         "min_actions": {"type": "integer", "minimum": 0},
         "description": {"type": "string", "minLength": 1}
       },

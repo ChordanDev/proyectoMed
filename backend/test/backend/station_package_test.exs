@@ -56,6 +56,11 @@ defmodule Backend.StationPackageTest do
 
     assert criterion["levels"] == [
              %{
+               "label" => "inadequado",
+               "points" => 0,
+               "description" => "Inadequate performance."
+             },
+             %{
                "label" => "adequado",
                "points" => 2,
                "description" => "Assesses the onset of chest pain."
@@ -351,6 +356,24 @@ defmodule Backend.StationPackageTest do
     assert hd(migrated["revealable_facts"])["disclosure_condition"] == "unconditional"
   end
 
+  test "migration gives facts that share a v1 topic distinct ids" do
+    package =
+      fixture("valid-package-v1.json")
+      |> Map.put("revealable_facts", [
+        %{"topic" => "HDA", "content" => "A dor começou ontem."},
+        %{"topic" => "HDA", "content" => "A dor piora ao caminhar."},
+        %{"id" => "hda-3", "topic" => "Antecedentes", "content" => "Nega cirurgias."},
+        %{"topic" => "HDA", "content" => "Nega febre."}
+      ])
+
+    migrated = StationPackage.migrate(package)
+
+    assert Enum.map(migrated["revealable_facts"], & &1["id"]) ==
+             ["hda", "hda-2", "hda-3", "hda-4"]
+
+    assert {:ok, ^migrated} = StationPackage.validate(migrated)
+  end
+
   test "JSON schema declares the v2 contract" do
     schema = json_file(@schema_path)
     criterion = schema["$defs"]["rubricCriterion"]
@@ -543,6 +566,28 @@ defmodule Backend.StationPackageTest do
       assert "rubric level points must be a multiple of 0.025" in errors,
              "expected #{inspect(points)} to be rejected"
     end
+  end
+
+  test "rejects negative points at load, as the assessment does" do
+    for points <- [-1, -0.5, -0.025] do
+      package =
+        put_in(
+          fixture("valid-package.json"),
+          ["rubric", Access.at(0), "levels", Access.at(0), "points"],
+          points
+        )
+
+      assert {:error, errors} = StationPackage.validate(package)
+
+      assert "rubric level points must not be negative" in errors,
+             "expected #{inspect(points)} to be rejected"
+    end
+  end
+
+  test "JSON schema forbids negative rubric level points" do
+    schema = @schema_path |> File.read!() |> Jason.decode!()
+
+    assert get_in(schema, ["$defs", "rubricLevel", "properties", "points", "minimum"]) == 0
   end
 
   test "rejects duplicate revealable fact ids" do

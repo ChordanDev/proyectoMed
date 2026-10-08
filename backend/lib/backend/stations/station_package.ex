@@ -42,7 +42,7 @@ defmodule Backend.Stations.StationPackage do
     package
     |> Map.put("version", @version)
     |> Map.put_new("placeholder", true)
-    |> Map.update("revealable_facts", [], &Enum.map(&1, fn fact -> migrate_fact(fact) end))
+    |> Map.update("revealable_facts", [], &migrate_facts/1)
     |> Map.update("rubric", [], &Enum.map(&1, fn criterion -> migrate_criterion(criterion) end))
   end
 
@@ -72,19 +72,56 @@ defmodule Backend.Stations.StationPackage do
 
   def validate(_), do: {:error, ["package must be an object"]}
 
-  defp migrate_fact(fact) when is_map(fact) do
-    fact
-    |> Map.put_new("id", slug(fact["topic"]))
-    |> Map.put_new("disclosure_condition", "on_request")
+  # A v1 topic is a heading that several facts may share, so the ids derived
+  # from it are disambiguated against every id already present or generated.
+  defp migrate_facts(facts) when is_list(facts) do
+    taken = for %{"id" => id} <- facts, into: MapSet.new(), do: id
+    {migrated, _taken} = Enum.map_reduce(facts, taken, &migrate_fact/2)
+    migrated
   end
 
-  defp migrate_fact(fact), do: fact
+  defp migrate_facts(facts), do: facts
+
+  defp migrate_fact(%{"id" => _id} = fact, taken),
+    do: {Map.put_new(fact, "disclosure_condition", "on_request"), taken}
+
+  defp migrate_fact(fact, taken) when is_map(fact) do
+    id = unique_id(slug(fact["topic"]), taken)
+
+    migrated =
+      fact
+      |> Map.put("id", id)
+      |> Map.put_new("disclosure_condition", "on_request")
+
+    {migrated, MapSet.put(taken, id)}
+  end
+
+  defp migrate_fact(fact, taken), do: {fact, taken}
+
+  defp unique_id(base, taken) do
+    if MapSet.member?(taken, base), do: unique_id(base, taken, 2), else: base
+  end
+
+  defp unique_id(base, taken, suffix) do
+    candidate = "#{base}-#{suffix}"
+
+    if MapSet.member?(taken, candidate),
+      do: unique_id(base, taken, suffix + 1),
+      else: candidate
+  end
 
   defp migrate_criterion(criterion) when is_map(criterion) do
     {weight, criterion} = Map.pop(criterion, "weight")
 
+    # A v1 criterion was binary: its weight when met, nothing otherwise. Without
+    # the zero level an omission could only ever be classified as uncertain.
     criterion
     |> Map.put_new("levels", [
+      %{
+        "label" => "inadequado",
+        "points" => 0,
+        "description" => "Inadequate performance."
+      },
       %{
         "label" => "adequado",
         "points" => weight,
@@ -281,11 +318,12 @@ defmodule Backend.Stations.StationPackage do
   defp validate_level_label(errors, %{"label" => label}) when label in @level_labels, do: errors
   defp validate_level_label(errors, _level), do: ["rubric levels require a valid label" | errors]
 
-  # The sign is not this rule's concern; exactness is decided by the same
-  # conversion the assessment uses, so load and assessment cannot disagree.
+  # Sign and exactness are both decided by the same conversion the assessment
+  # uses, so load and assessment cannot disagree.
   defp validate_level_points(errors, %{"points" => points}) when is_number(points) do
-    case Points.from_authored(abs(points)) do
+    case Points.from_authored(points) do
       {:ok, _points} -> errors
+      {:error, :negative} -> ["rubric level points must not be negative" | errors]
       {:error, _reason} -> ["rubric level points must be a multiple of 0.025" | errors]
     end
   end
