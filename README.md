@@ -95,6 +95,40 @@ at `http://localhost:4000`, avoiding a separate CORS dependency. Set
 `VITE_API_URL` only when the API is hosted at a different origin; production
 may instead serve the SPA and API from the same origin.
 
+### Impressos (manual test)
+
+Learners request Impressos (physical exam / labs / imaging / reports) by
+free text during an active session. The backend matches the text against the
+active package's authored impressos (normalized keyword substring match) and
+releases every matched Impresso in authored order.
+
+```sh
+BASE=http://localhost:4000/api/stations/active
+
+# Start a session.
+SESSION_ID=$(curl -s -X POST "$BASE/sessions" \
+  -H 'content-type: application/json' -d '{"audio_consent": false}' \
+  | jq -r .session_id)
+
+# Request an Impresso — decision "released", releases the matching exam.
+curl -s -X POST "$BASE/sessions/$SESSION_ID/impressos/request" \
+  -H 'content-type: application/json' \
+  -d '{"text": "quero ver os sinais vitais"}' | jq
+
+# Repeat the same request — decision "already_released", nothing new.
+curl -s -X POST "$BASE/sessions/$SESSION_ID/impressos/request" \
+  -H 'content-type: application/json' \
+  -d '{"text": "quero ver os sinais vitais"}' | jq
+
+# Ask for an exam the station does not carry — decision "unavailable".
+curl -s -X POST "$BASE/sessions/$SESSION_ID/impressos/request" \
+  -H 'content-type: application/json' \
+  -d '{"text": "tomografia de crânio"}' | jq
+
+# List everything released so far, in release order.
+curl -s "$BASE/sessions/$SESSION_ID/impressos" | jq
+```
+
 ---
 
 ## Test

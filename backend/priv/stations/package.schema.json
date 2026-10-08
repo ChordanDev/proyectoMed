@@ -33,7 +33,13 @@
     "revealable_facts": {"$ref": "#/$defs/revealableFacts"},
     "response_rules": {"$ref": "#/$defs/responseRules"},
     "expected_actions": {"$ref": "#/$defs/expectedActions"},
-    "rubric": {"$ref": "#/$defs/rubric"}
+    "rubric": {"$ref": "#/$defs/rubric"},
+    "impressos": {
+      "oneOf": [
+        {"$ref": "#/$defs/impressos"},
+        {"type": "null"}
+      ]
+    }
   },
   "$defs": {
     "revealableFacts": {
@@ -88,6 +94,32 @@
         },
         "practice_recommendation": {"type": "string", "minLength": 1},
         "weight": {"type": "number"}
+      }
+    },
+    "impressos": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/impresso"}
+    },
+    "impresso": {
+      "type": "object",
+      "required": ["id", "title", "category", "keywords", "content"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "category": {
+          "type": "string",
+          "enum": ["physical_exam", "laboratory", "imaging", "report"]
+        },
+        "keywords": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "content": {
+          "oneOf": [
+            {"type": "string", "minLength": 1},
+            {"type": "object", "minProperties": 1}
+          ]
+        }
       }
     }
   }

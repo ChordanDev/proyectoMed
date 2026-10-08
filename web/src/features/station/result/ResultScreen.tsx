@@ -165,6 +165,16 @@ export function ResultScreen({
         })}
       </ol>
 
+      {errorMessage && (
+        <p
+          className="result-screen-state__text"
+          role="alert"
+          data-testid="result-error"
+        >
+          {errorMessage}
+        </p>
+      )}
+
       <footer className="result-screen__footer">
         <button
           type="button"

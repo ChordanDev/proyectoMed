@@ -254,4 +254,51 @@ defmodule Backend.StationAI.OpenAIAdapterTest do
       assert reply.used_facts == []
     end
   end
+
+  describe "configuration merging and legacy fallback" do
+    setup do
+      prev_legacy = Application.get_env(:backend, Backend.StationAI.OpenAIAdapter)
+      prev_new = Application.get_env(:backend, Backend.Stations.StationAI.OpenAIAdapter)
+
+      on_exit(fn ->
+        if is_nil(prev_legacy),
+          do: Application.delete_env(:backend, Backend.StationAI.OpenAIAdapter),
+          else: Application.put_env(:backend, Backend.StationAI.OpenAIAdapter, prev_legacy)
+
+        if is_nil(prev_new),
+          do: Application.delete_env(:backend, Backend.Stations.StationAI.OpenAIAdapter),
+          else: Application.put_env(:backend, Backend.Stations.StationAI.OpenAIAdapter, prev_new)
+      end)
+
+      :ok
+    end
+
+    test "merges legacy and new module configurations without shadowing missing keys" do
+      test_pid = self()
+
+      Req.Test.stub(ConfigMergeStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+        send(
+          test_pid,
+          {:merged_req, Jason.decode!(body)["model"],
+           Plug.Conn.get_req_header(conn, "authorization")}
+        )
+
+        Req.Test.json(conn, %{"choices" => [%{"message" => %{"content" => "ok"}}]})
+      end)
+
+      Application.put_env(:backend, Backend.StationAI.OpenAIAdapter, api_key: "legacy-sk-key")
+
+      Application.put_env(:backend, Backend.Stations.StationAI.OpenAIAdapter,
+        model: "gpt-4.1-mini",
+        req_options: [plug: {Req.Test, ConfigMergeStub}]
+      )
+
+      assert {:ok, %{text: "ok"}} =
+               Backend.Stations.StationAI.OpenAIAdapter.next_reply(@package, %{conversation: []})
+
+      assert_receive {:merged_req, "gpt-4.1-mini", ["Bearer legacy-sk-key"]}
+    end
+  end
 end

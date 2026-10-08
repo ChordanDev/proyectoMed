@@ -1,4 +1,4 @@
-defmodule Backend.StationAI.BoundedReply do
+defmodule Backend.Stations.StationAI.BoundedReply do
   @moduledoc """
   Enforces the bounded reply policy for every StationAI adapter output.
 
@@ -83,7 +83,7 @@ defmodule Backend.StationAI.BoundedReply do
   """
   @spec bound(String.t() | term(), map()) :: String.t()
   def bound(text, package) do
-    refusal = Backend.StationAI.refusal_text()
+    refusal = Backend.Stations.StationAI.refusal_text()
 
     cond do
       # The canonical refusal is always allowed through verbatim, so it
@@ -154,4 +154,9 @@ defmodule Backend.StationAI.BoundedReply do
   end
 
   defp rule_violates?(_rule, _text), do: false
+end
+
+defmodule Backend.StationAI.BoundedReply do
+  @moduledoc false
+  defdelegate bound(text, package), to: Backend.Stations.StationAI.BoundedReply
 end

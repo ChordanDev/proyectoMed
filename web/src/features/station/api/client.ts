@@ -16,7 +16,21 @@ export interface Session {
   audio_consent: boolean;
   started_at: string;
   expires_at: string;
+  deadline_at: string;
   server_now: string;
+}
+
+export type SessionStatus = "active" | "completed";
+
+export interface SessionMessage {
+  role: "learner" | "patient";
+  text: string;
+}
+
+export interface SessionDetail extends Session {
+  status: SessionStatus;
+  completion_reason: string | null;
+  messages: SessionMessage[];
 }
 
 export interface SendMessageRequest {
@@ -48,10 +62,46 @@ export interface ResultCriterion {
   recommendation: string;
 }
 
+export interface TranscriptionResult {
+  text: string;
+  duration_seconds?: number | null;
+  transcribed_at: string;
+}
+
 export interface SessionResult {
   session_id: string;
   status: "completed";
   criteria: ResultCriterion[];
+}
+
+export interface Impresso {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+}
+
+export interface RequestImpressoRequest {
+  text: string;
+  request_id?: string;
+}
+
+export type ImpressoDecision = "released" | "already_released" | "unavailable";
+
+export interface RequestImpressoResponse {
+  request_id: string;
+  decision: ImpressoDecision;
+  released_impressos: Impresso[];
+  newly_released: Impresso[];
+  feedback_message: string;
+}
+
+export interface ListImpressosResponse {
+  released_impressos: Impresso[];
+}
+
+export interface DiscardSessionOptions {
+  keepalive?: boolean;
 }
 
 export class ApiError extends Error {
@@ -120,7 +170,41 @@ const decodeSession = (value: unknown): Session => {
     audio_consent: booleanValue(body, "audio_consent", "session"),
     started_at: stringValue(body, "started_at", "session"),
     expires_at: stringValue(body, "expires_at", "session"),
+    deadline_at: stringValue(body, "deadline_at", "session"),
     server_now: stringValue(body, "server_now", "session"),
+  };
+};
+
+const sessionStatuses: readonly SessionStatus[] = ["active", "completed"];
+
+const decodeSessionMessage = (value: unknown): SessionMessage => {
+  const body = objectValue(value, "session message");
+  return {
+    role: literalValue(
+      body,
+      "role",
+      ["learner", "patient"],
+      "session message",
+    ),
+    text: stringValue(body, "text", "session message"),
+  };
+};
+
+const decodeSessionDetail = (value: unknown): SessionDetail => {
+  const body = objectValue(value, "session detail");
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : invalid("session detail");
+  const completionReason = body.completion_reason;
+  if (completionReason !== null && typeof completionReason !== "string") {
+    invalid("session detail");
+  }
+
+  return {
+    ...decodeSession(value),
+    status: literalValue(body, "status", sessionStatuses, "session detail"),
+    completion_reason: completionReason as string | null,
+    messages: messages.map(decodeSessionMessage),
   };
 };
 
@@ -158,6 +242,32 @@ const criterionStatuses: readonly CriterionStatus[] = [
   "uncertain",
 ];
 
+const decodeAudio = (value: unknown): Blob => {
+  if (!(value instanceof Blob) || value.size === 0) throw new Error("audio");
+  return value;
+};
+
+const decodeTranscriptionResult = (value: unknown): TranscriptionResult => {
+  const body = objectValue(value, "transcription");
+  const duration = body.duration_seconds;
+  if (
+    duration !== undefined &&
+    duration !== null &&
+    typeof duration !== "number"
+  ) {
+    invalid("transcription");
+  }
+
+  const result: TranscriptionResult = {
+    text: stringValue(body, "text", "transcription"),
+    transcribed_at: stringValue(body, "transcribed_at", "transcription"),
+  };
+  if (duration !== undefined) {
+    result.duration_seconds = duration as number | null;
+  }
+  return result;
+};
+
 const decodeCriterion = (value: unknown): ResultCriterion => {
   const body = objectValue(value, "result criterion");
   return {
@@ -178,6 +288,64 @@ const decodeSessionResult = (value: unknown): SessionResult => {
     session_id: stringValue(body, "session_id", "session result"),
     status: literalValue(body, "status", ["completed"], "session result"),
     criteria: criteria.map(decodeCriterion),
+  };
+};
+
+const impressoDecisions: readonly ImpressoDecision[] = [
+  "released",
+  "already_released",
+  "unavailable",
+];
+
+const decodeImpresso = (value: unknown): Impresso => {
+  const body = objectValue(value, "impresso");
+  return {
+    id: stringValue(body, "id", "impresso"),
+    title: stringValue(body, "title", "impresso"),
+    category: stringValue(body, "category", "impresso"),
+    content: stringValue(body, "content", "impresso"),
+  };
+};
+
+const impressoList = (body: JsonObject, key: string, label: string): Impresso[] => {
+  const value = body[key];
+  return Array.isArray(value) ? value.map(decodeImpresso) : invalid(label);
+};
+
+const decodeRequestImpressoResponse = (
+  value: unknown,
+): RequestImpressoResponse => {
+  const body = objectValue(value, "impresso request");
+  return {
+    request_id: stringValue(body, "request_id", "impresso request"),
+    decision: literalValue(
+      body,
+      "decision",
+      impressoDecisions,
+      "impresso request",
+    ),
+    released_impressos: impressoList(
+      body,
+      "released_impressos",
+      "impresso request",
+    ),
+    newly_released: impressoList(body, "newly_released", "impresso request"),
+    feedback_message: stringValue(
+      body,
+      "feedback_message",
+      "impresso request",
+    ),
+  };
+};
+
+const decodeListImpressosResponse = (value: unknown): ListImpressosResponse => {
+  const body = objectValue(value, "impresso list");
+  return {
+    released_impressos: impressoList(
+      body,
+      "released_impressos",
+      "impresso list",
+    ),
   };
 };
 
@@ -206,6 +374,8 @@ export const createApiClient = ({
     path: string,
     init: RequestInit,
     decode: (value: unknown) => T,
+    readBody: (response: Response) => Promise<unknown> = (response) =>
+      response.status === 204 ? Promise.resolve(null) : response.json(),
   ): Promise<T> => {
     const controller = new AbortController();
     let timedOut = false;
@@ -240,7 +410,7 @@ export const createApiClient = ({
 
       let body: unknown;
       try {
-        body = await response.json();
+        body = await (response.ok ? readBody(response) : response.json());
       } catch {
         if (timedOut) throw timeoutError();
 
@@ -280,6 +450,8 @@ export const createApiClient = ({
       request("/api/stations/active", { method: "GET" }, decodeActiveStation),
     startSession: (body: StartSessionRequest) =>
       request("/api/stations/active/sessions", jsonPost(body), decodeSession),
+    getSession: (sessionId: string) =>
+      request(sessionPath(sessionId), { method: "GET" }, decodeSessionDetail),
     sendMessage: (sessionId: string, body: SendMessageRequest) =>
       request(
         `${sessionPath(sessionId)}/messages`,
@@ -292,12 +464,62 @@ export const createApiClient = ({
         jsonPost({ reason }),
         decodeCompletedSession,
       ),
+    transcribeAudio: (
+      sessionId: string,
+      audioBlob: Blob,
+      filename = "audio.webm",
+    ) => {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, filename);
+      return request(
+        `${sessionPath(sessionId)}/transcribe`,
+        {
+          method: "POST",
+          body: formData,
+        },
+        decodeTranscriptionResult,
+      );
+    },
+    synthesizeSpeech: (sessionId: string, text: string, voice?: string) =>
+      request(
+        `${sessionPath(sessionId)}/synthesize`,
+        jsonPost(voice === undefined ? { text } : { text, voice }),
+        decodeAudio,
+        (response) => response.blob(),
+      ),
     fetchResult: (sessionId: string) =>
       request(
         `${sessionPath(sessionId)}/result`,
         { method: "GET" },
         decodeSessionResult,
       ),
+    requestImpresso: (sessionId: string, body: RequestImpressoRequest) =>
+      request(
+        `${sessionPath(sessionId)}/impressos/request`,
+        jsonPost(body),
+        decodeRequestImpressoResponse,
+      ),
+    getImpressos: (sessionId: string) =>
+      request(
+        `${sessionPath(sessionId)}/impressos`,
+        { method: "GET" },
+        decodeListImpressosResponse,
+      ),
+    discardSession: (
+      sessionId: string,
+      options?: DiscardSessionOptions,
+    ): Promise<void> => {
+      const init: RequestInit = { method: "POST" };
+      if (options?.keepalive) {
+        init.keepalive = true;
+      }
+      return request(
+        `${sessionPath(sessionId)}/discard`,
+        init,
+        () => undefined,
+        async () => undefined,
+      );
+    },
   };
 };
 
@@ -309,7 +531,13 @@ const defaultClient = createApiClient({
 export const {
   getActiveStation,
   startSession,
+  getSession,
   sendMessage,
   finishSession,
+  transcribeAudio,
+  synthesizeSpeech,
   fetchResult,
+  requestImpresso,
+  getImpressos,
+  discardSession,
 } = defaultClient;

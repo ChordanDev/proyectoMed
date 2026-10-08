@@ -19,11 +19,14 @@ export default function App(): React.JSX.Element {
     [station],
   );
 
-  const handleSend = useCallback(
-    async (text: string): Promise<string | null> => {
+  const sendMessage = useCallback(
+    async (
+      text: string,
+      modality: "text" | "voice",
+    ): Promise<string | null> => {
       const reply = await station.send({
         role: "learner",
-        modality: "text",
+        modality,
         text,
       });
       return reply?.reply_text ?? null;
@@ -31,12 +34,22 @@ export default function App(): React.JSX.Element {
     [station],
   );
 
+  const handleSend = useCallback(
+    (text: string) => sendMessage(text, "text"),
+    [sendMessage],
+  );
+
+  const handleSendVoice = useCallback(
+    (text: string) => sendMessage(text, "voice"),
+    [sendMessage],
+  );
+
   const handleFinish = useCallback(() => {
     void station.finish("user");
   }, [station]);
 
-  const handleRestart = useCallback(() => {
-    station.reset();
+  const handleRestart = useCallback(async () => {
+    await station.reset();
   }, [station]);
 
   // Flow: notice → station → result
@@ -46,7 +59,7 @@ export default function App(): React.JSX.Element {
         {station.status === "loading" ? (
           <p role="status">{strings.loadingStation}</p>
         ) : (
-          <NoticeScreen onStart={handleStart} voiceSupport={false} />
+          <NoticeScreen onStart={handleStart} voiceSupport />
         )}
       </main>
     );
@@ -61,6 +74,8 @@ export default function App(): React.JSX.Element {
           status={resultStatus}
           result={station.result}
           onRestart={handleRestart}
+          disabled={station.isResetting}
+          errorMessage={station.error ?? undefined}
         />
       </main>
     );
@@ -74,18 +89,30 @@ export default function App(): React.JSX.Element {
           result={null}
           errorMessage={station.error ?? undefined}
           onRestart={handleRestart}
+          disabled={station.isResetting}
         />
       </main>
     );
   }
 
   // station.status === "active"
+  const timeElapsed = station.remainingMs !== null && station.remainingMs <= 0;
   return (
     <main className="app-root">
       <StationScreen
         onSend={handleSend}
         onFinish={handleFinish}
+        audioConsent={station.audioConsent}
+        onTranscribe={station.transcribe}
+        onSendVoice={handleSendVoice}
+        onSynthesize={station.synthesize}
         error={station.error}
+        disabled={timeElapsed}
+        remainingMs={station.remainingMs}
+        initialMessages={station.initialMessages}
+        onRequestImpresso={station.requestImpresso}
+        impressos={station.impressos}
+        impressoError={station.impressoError}
       />
     </main>
   );

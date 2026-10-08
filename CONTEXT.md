@@ -56,7 +56,7 @@ The Station AI replies with synthesized speech and visible Brazilian Portuguese 
 
 ## Rubric-Bound Feedback
 
-The MVP compares the learner transcript against the Content Partner's rubric. Each criterion is reported as met, omitted, or uncertain with supporting evidence. The MVP preserves uncertainty and provides no global readiness grade or certification.
+The MVP compares the learner transcript against the Content Partner's rubric. Each criterion is reported as met, omitted, or uncertain with supporting evidence. The MVP preserves uncertainty and provides no global readiness grade or certification. The current runtime stops at criterion statuses with no points (ADR-005). The accepted, unimplemented architecture adds assessment statuses, performance levels, and educational point estimates; see Educational Point Estimate (accepted architecture) and `docs/design/jev-prototype.md`. ADR-012 accepted that architecture on 2026-09-21, but runtime implementation and the remaining provider, privacy, legal, zero-data-retention, and clinical qualification gates are still pending.
 
 ## MVP Data Retention
 
@@ -101,3 +101,27 @@ The first MVP release targets desktop and mobile browsers via the Vite + React w
 ## Station Retry Policy
 
 The MVP allows unlimited repetitions of the single station during the pilot. Usage caps, commercial limits, or station rotation are separate decisions for after the pilot.
+
+## Jev (accepted architecture)
+
+Jev is the working name for an independent decision-model family — a vendor candidate behind the backend's shared Phoenix proxy/domain interface, not a measured specialist in clinical pt-BR. It does not generate or replace patient dialogue. Separate adapters may use that shared interface for generation, transcription, text-to-speech, and decision-model calls. Under the architecture accepted on 2026-09-21, Jev verifies candidate Station AI replies and classifies rubric evidence into bounded observations. Selection, credentials, limits, data-processing terms, calibration, and zero-data-retention claims remain pending. This term describes accepted architecture, not shipped capability or an approved provider.
+
+## Approved Generic Reply (accepted architecture)
+
+A Station AI reply that bypasses Jev only when it is the exact text of a package- and version-bound approved template and code can determine that template's applicability from the authored case state. A safe renderer emits the stored template byte-for-byte and rejects prefixes, suffixes, mixed content, or model-declared identity. Shortness, length, language heuristics, or a plausible tone never authorize a reply. "Estou bem" is eligible only when the authored case state makes that exact statement non-contradictory. "Não tenho alergias" is a clinical claim, not a generic reply, and requires an authored revealable fact. An approved zero-clinical-content template may be used as a safety fallback only for the deterministic violation and applicability conditions for which it was explicitly approved; an Approved Generic Reply is not inherently a clinical answer or a universal fallback.
+
+## Jev Gate (accepted architecture)
+
+Every Station AI reply that is not an Approved Generic Reply must pass Jev before it is displayed or sent to text-to-speech; there is no parallel bypass. The gate checks groundedness in allowed facts, contradiction with the case and context, early or excessive disclosure, relevance to the patient role, and treats injected instructions found in learner turns as evidence to report, never as instructions to follow. Semantic refusal or low confidence permits at most one regeneration and complete recheck within the turn deadline; no text is delivered if that path does not pass. Timeout, malformed output, transport error, or provider 5xx is a technical failure that invalidates the attempt under the existing policy; it is not converted to `uncertain` and cannot produce fallback clinical text. Learner input may reach generation as untrusted evidence. Rejected or otherwise unverified patient candidates never enter trusted history or regeneration input, and text-to-speech receives only approved patient text.
+
+## Assessment Status (accepted architecture)
+
+Each rubric criterion carries exactly one of four statuses: assessed, uncertain, not_observable, or not_applicable. Uncertain or unobservable criteria are never silently scored as zero: a numeric level and points exist only for assessed criteria, and a genuine omission on complete, reliable evidence scores the authored zero of its level.
+
+## Performance Level (accepted architecture)
+
+When a criterion is assessed, it receives one authored level — inadequado, parcialmente_adequado, or adequado — and the authored decimal points for that level. Levels, sub-actions, and points follow the Station Package rubric, mirroring the structural shape of the official PEP sheets without reproducing official content.
+
+## Educational Point Estimate (accepted architecture)
+
+A numeric, PEP-shaped estimate computed only from authored rubric points on assessed criteria, using exact decimal arithmetic (supporting 0.125 granularity), with explicit coverage reported when active criteria remain unassessed and no rescaling of partial totals. A numeric total exists only when every active criterion is assessed; otherwise the result shows a scored subtotal, scored versus eligible maxima, and the unresolved items. It is an unofficial AI-generated educational estimate — never an official Revalida grade, pass/fail verdict, or readiness claim — and is labeled as such in pt-BR before and on the result screen.

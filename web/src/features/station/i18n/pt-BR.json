@@ -7,6 +7,9 @@
   "errorNotice": "A estação não pôde ser concluída. Você pode reiniciar.",
   "restartButton": "Reiniciar estação",
   "voiceFallbackNotice": "Voz indisponível — usando texto.",
+  "startVoiceInput": "Usar voz",
+  "stopVoiceInput": "Parar gravação",
+  "transcribingVoice": "Transcrevendo áudio...",
   "finishStation": "Finalizar estação",
   "criterionMet": "Cumprido",
   "criterionOmitted": "Omitido",
@@ -26,5 +29,17 @@
   "sendButton": "Enviar",
   "sendingMessage": "Enviando...",
   "loadingStation": "Carregando estação...",
-  "stationError": "Erro na estação. Tente novamente."
+  "stationError": "Erro na estação. Tente novamente.",
+  "timeRemainingLabel": "Tempo restante para finalizar a estação",
+  "playAudio": "Ouvir resposta",
+  "stopAudio": "Parar áudio",
+  "loadingAudio": "Carregando áudio...",
+  "impressoRequestButton": "Exame Físico / Exames",
+  "impressoModalTitle": "Solicitar Exame Físico ou Exame Complementar",
+  "impressoModalLabel": "Descreva a manobra de exame físico ou o exame complementar solicitado",
+  "impressoModalSubmit": "Solicitar",
+  "impressoModalCancel": "Cancelar",
+  "impressoDrawerToggle": "Documentos liberados",
+  "impressoDrawerEmpty": "Nenhum documento liberado ainda.",
+  "discardError": "Não foi possível encerrar a sessão no servidor. Tente novamente."
 }
