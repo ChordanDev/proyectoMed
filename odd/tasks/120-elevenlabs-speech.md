@@ -63,11 +63,11 @@ Strict test-first. Runner: `cd voice-worker && uv run python -m unittest`
 room are doubles.
 
 ## Tasks
-- [ ] T1 Speech player (`speech.py` + `test_speech.py`): streaming, generation fencing,
+- [x] T1 Speech player (`speech.py` + `test_speech.py`): streaming, generation fencing,
   idempotent cancel, stale/late chunks, provider failure and disconnect mapping to
   `synthesis_failed`, cleanup. Route: delegated (writer trigger: 2+ non-trivial files
   across T1/T2, preparation reading of the worker).
-- [ ] T2 Worker wiring + config + docs: `on_reply` consumer, text event before
+- [x] T2 Worker wiring + config + docs: `on_reply` consumer, text event before
   synthesis, cancel on supersede/barge-in/disconnect/cleanup, failure event, text
   fallback, ElevenLabs dependency, `.env.example`, README. Route: delegated (same writer).
 
@@ -88,6 +88,36 @@ See issue #120.
 
 ## Progress / evidence
 - Worktree `../proyectoMed-120`, baseline worker tests 73 passed.
+- T1 `efe114b`: RED `ModuleNotFoundError: No module named 'speech'` (74 run, 1 error) →
+  GREEN `uv run python -m unittest` 93 passed. 758 changed lines (tests 452, this
+  document 93).
+- T2 `acdbf33`: RED 4 errors (3 `process_speech_stream() got an unexpected keyword
+  argument 'on_cancel'`, 1 `ImportError: cannot import name 'PatientVoice'`) → GREEN 111
+  passed, three consecutive runs. The playout-tail test was added mid-task; its RED was
+  a hang on the missing `wait_for_playout` call. 776 changed lines (tests 505, README 78,
+  lockfile 16). `bash scripts/test.sh`: web 52 passed, backend 311 passed.
+- Dependency: `livekit-plugins-elevenlabs` 1.8.3, the same release as the locked
+  `livekit-agents` 1.8.3; `uv lock` added only that package. The non-streaming-input
+  `synthesize()` path is used (HTTP `/text-to-speech/{voice}/stream`, `pcm_24000`,
+  `eleven_flash_v2_5`, one attempt per generation).
+- Room events (topic `transcript`): patient text
+  `{session_id, turn_id, generation_id, role: "patient", text}`; non-fatal failure
+  `{session_id, turn_id, generation_id, failure: "synthesis_failed"}`.
+- Route: delegated writer, both tasks. RDD off; ordinary checks only.
+- Not verified (no credentials or LiveKit server in this run): real ElevenLabs audio,
+  whether the agent job token may publish an audio track, audible latency.
+
+## Known follow-ups
+- Learner speech over a reply that is already playing does not stop it until the next
+  reply is accepted: `TurnManager` only detects barge-in on a turn still pending in
+  Phoenix. Detection during playback belongs to #121.
+- ElevenLabs keeps request history by default (`enable_logging=true`); zero-retention
+  mode is enterprise-only. Decide before real patient-like content is used.
+- `livekit-agents` records the synthesized text as a span attribute; no trace exporter
+  is configured in this worker. Re-check if telemetry is enabled.
+- A lost commit response retried as `duplicate` still yields no text and no speech for
+  that turn (inherited from #119).
 
 ## Next step
-T1.
+Manual test from the README with real credentials, then push and open the T1 and T2 PRs
+against `feat/116-realtime-voice` (user decision).
