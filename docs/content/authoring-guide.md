@@ -146,3 +146,7 @@ How release works (`impressos:37`): the learner's text is lower-cased and stripp
 - [ ] Any rule you know does not fit the tables above, stated in plain words.
 
 The project then produces the package, a mapping record with derived fields and gaps, and a clinical review checklist for a qualified human to complete.
+
+## After the review: qualification
+
+A reviewed package is not yet qualified. Before any pilot use, humans also define acceptance thresholds, adjudicate the station's fictional qualification cases, and review how learners read the result. For the worked example see `docs/content/acute-appendicitis/qualification-results.md` (harness, cases, thresholds, observed results, activation gates) and `docs/content/acute-appendicitis/result-comprehension-review.md` (review template).

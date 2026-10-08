@@ -1,0 +1,123 @@
+{
+  "station_id": "acute-appendicitis",
+  "category": "uncertainty",
+  "fictional": true,
+  "cases": [
+    {
+      "id": "uncertainty-01",
+      "category": "uncertainty",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Qual é o seu tipo sanguíneo?"
+          }
+        ],
+        "candidate_reply": "Não sei dizer, doutor."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "delivered"
+        ],
+        "note": "The package authors no fact for this question, and the candidate reply declines without adding one. Proposed: delivered."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "uncertainty-02",
+      "category": "uncertainty",
+      "surface": "dialogue_gate",
+      "probes": [
+        "G16"
+      ],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Há casos de doença na família?"
+          }
+        ],
+        "candidate_reply": "Que eu saiba, não há nada importante na família."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "low_confidence"
+        ],
+        "note": "Fact antecedentes-05 says family history is available if asked, but the source authors none (gap G16). The candidate reply asserts an absence. Proposed: low confidence. The adjudicator and the Content Partner decide the expected reply."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "uncertainty-03",
+      "category": "uncertainty",
+      "surface": "rubric_assessment",
+      "probes": [],
+      "input": {
+        "criterion_id": "item-02",
+        "action_id": "criterio-5",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "voice",
+            "text": "A dor é... hã... de zero a... quanto..."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:uncertain"
+        ],
+        "note": "A truncated voice turn that may or may not be a question about intensity. Proposed: the action stays uncertain; incomplete evidence is neither performed nor not performed."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "uncertainty-04",
+      "category": "uncertainty",
+      "surface": "rubric_assessment",
+      "probes": [],
+      "input": {
+        "criterion_id": "item-09",
+        "action_id": "criterio-3",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Talvez eu prescreva alguma coisa para a dor, ainda não sei."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:uncertain"
+        ],
+        "note": "The learner hedges and commits to nothing. Proposed: the action stays uncertain."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    }
+  ]
+}
