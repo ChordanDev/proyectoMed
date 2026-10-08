@@ -9,7 +9,9 @@ defmodule Mix.Tasks.Stations.Qualify do
       mix stations.qualify acute-appendicitis --out run.txt
 
   The report holds case identifiers, categories and outcome labels only. It is
-  printed, and written to a file only when `--out` names one.
+  printed, and written to a file only when `--out` names one. Missing parent
+  directories of that file are created; the report is printed first, so a
+  failed write does not lose it.
 
   The report is not a clinical accuracy claim and carries no verdict. With the
   default disabled adapter every case that needs a Jev decision is reported as
@@ -34,11 +36,21 @@ defmodule Mix.Tasks.Stations.Qualify do
     case Stations.run_qualification(station_id) do
       {:ok, summary} ->
         report = Stations.render_qualification(summary)
-        if out, do: File.write!(out, report)
         Mix.shell().info(report)
+        if out, do: write_report(out, report)
 
       {:error, reason} ->
         Mix.raise("Qualification of #{station_id} did not run: #{inspect(reason)}")
+    end
+  end
+
+  defp write_report(out, report) do
+    with :ok <- File.mkdir_p(Path.dirname(out)),
+         :ok <- File.write(out, report) do
+      :ok
+    else
+      {:error, reason} ->
+        Mix.raise("Could not write the report to #{out}: #{:file.format_error(reason)}")
     end
   end
 end
