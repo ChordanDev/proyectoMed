@@ -68,6 +68,8 @@ defmodule Backend.Stations.StationLoader do
         {:error, "Falha ao carregar o pacote ativo da estação: JSON inválido."}
 
       {:error, errors} when is_list(errors) ->
+        Logger.error("Falha ao validar o pacote da estação: #{Enum.join(errors, "; ")}")
+
         {:error,
          "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."}
 

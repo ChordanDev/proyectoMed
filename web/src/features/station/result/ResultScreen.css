@@ -27,6 +27,12 @@
   color: #374151;
 }
 
+.result-screen-state__note {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #4b5563;
+}
+
 .result-screen-state__button {
   background: #2563eb;
   color: #ffffff;
@@ -67,6 +73,62 @@
   max-width: 680px;
   margin: 0 auto;
   padding: 32px 16px;
+  overflow-wrap: anywhere;
+}
+
+.result-screen__summary {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-screen__counts,
+.result-screen__unresolved {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+}
+
+.result-screen__counts {
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.result-screen__unresolved {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result-screen > .educational-disclaimer {
+  margin-bottom: 20px;
+}
+
+/* Loading and failure states: disclaimer stacked above the state card. */
+.result-screen--state .result-screen-state {
+  max-width: none;
+}
+
+.result-screen__fictional {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 20px;
+  padding: 4px 10px;
+  background: #f3f4f6;
+  border: 1px dashed #374151;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #374151;
 }
 
 .result-screen__title-header {
@@ -98,6 +160,16 @@
   padding-top: 0;
 }
 
+/* The global reset zeroes margins, so the lines of a criterion are spaced here. */
+.result-screen__item > p {
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.result-screen__item > section {
+  margin-top: 16px;
+}
+
 .result-screen__item-header {
   display: flex;
   justify-content: space-between;
@@ -121,21 +193,22 @@ h2.result-screen__ordinal {
 .result-screen__status {
   font-size: 13px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.5;
   padding: 4px 8px;
   border-radius: 4px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.result-screen__status--met {
+.result-screen__status--assessed {
   color: #065f46;
   background-color: #ecfdf5;
 }
 
-.result-screen__status--omitted {
-  color: #991b1b;
-  background-color: #fef2f2;
+.result-screen__status--not_observable,
+.result-screen__status--not_applicable {
+  color: #374151;
+  background-color: #f3f4f6;
 }
 
 .result-screen__status--uncertain {
@@ -217,5 +290,14 @@ h2.result-screen__ordinal {
 .result-screen__footer {
   padding-top: 32px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.result-screen__session-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #4b5563;
+  text-align: center;
 }

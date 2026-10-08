@@ -90,6 +90,46 @@ defmodule BackendWeb.StationController do
           message: "A sessão já foi concluída."
         })
 
+      {:error, :timeout} ->
+        conn
+        |> put_status(:gateway_timeout)
+        |> json(%{
+          error: "timeout",
+          message: "A verificação da resposta do paciente excedeu o tempo limite."
+        })
+
+      {:error, {tag, _detail}} when tag in [:denied, :refused] ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "reply_verification_failed",
+          message: "A verificação de segurança da resposta do paciente falhou."
+        })
+
+      {:error, tag} when tag in [:denied, :refused] ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "reply_verification_failed",
+          message: "A verificação de segurança da resposta do paciente falhou."
+        })
+
+      {:error, {:adapter_disabled, _detail}} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "station_ai_unavailable",
+          message: "O serviço da estação de IA está temporariamente indisponível."
+        })
+
+      {:error, :station_ai_unavailable} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "station_ai_unavailable",
+          message: "O serviço da estação de IA está temporariamente indisponível."
+        })
+
       {:error, :station_time_elapsed} ->
         conn
         |> put_status(:conflict)
@@ -229,6 +269,39 @@ defmodule BackendWeb.StationController do
         |> json(%{
           error: "session_expired",
           message: "A sessão expirou."
+        })
+    end
+  end
+
+  def show_educational_result(conn, %{"id" => session_id}) do
+    conn = put_resp_header(conn, "cache-control", "no-store")
+
+    case Stations.get_educational_result(session_id) do
+      {:ok, result} ->
+        json(conn, result)
+
+      {:error, :session_not_finished} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "session_not_finished", message: "A sessão ainda não foi finalizada."})
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "session_not_found", message: "Sessão não encontrada."})
+
+      {:error, :expired} ->
+        conn
+        |> put_status(:gone)
+        |> json(%{error: "session_expired", message: "A sessão expirou."})
+
+      {:error, {:invalid_attempt, _reason}} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "invalid_attempt",
+          message:
+            "Não foi possível avaliar esta tentativa. Nenhuma estimativa foi gerada. Reinicie a estação."
         })
     end
   end

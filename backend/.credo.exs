@@ -23,6 +23,7 @@
         #
         included: [
           "lib/",
+          "e2e_support/",
           "src/",
           "test/",
           "web/",

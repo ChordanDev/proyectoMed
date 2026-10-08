@@ -9,7 +9,7 @@ defmodule Backend.ConversationTest do
 
     assert is_binary(session.session_id)
     assert session.station_id == "chest-pain-initial-assessment"
-    assert session.station_version == "1.0.0"
+    assert session.station_version == "2.0.0"
     assert session.audio_consent == false
     assert %DateTime{} = session.started_at
     assert %DateTime{} = session.expires_at

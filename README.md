@@ -170,6 +170,27 @@ provider mock. It covers these scenarios and expected outcomes:
   session_expired` (or `404 session_not_found` after purge), serves no stale
   result, and permits a fresh recovery session.
 
+### E2E-only Jev adapter
+
+Jev has no live provider yet, and its default adapter
+(`Backend.Stations.JevDecision.DisabledAdapter`) fails closed: every patient
+reply and every rubric decision is refused. The E2E harness therefore starts
+Phoenix with `JEV_E2E_APPROVING_ADAPTER=true`, which selects
+`Backend.E2ESupport.ApprovingJevAdapter` (`backend/e2e_support/`).
+
+**This adapter bypasses Jev verification and is test-only.** It reads no text
+and calls no provider: it verifies every patient reply, and it awards a
+criterion its last authored level only when a learner evidence item exists to
+cite, staying `uncertain` otherwise. The level and points in the E2E result
+prove the result contract, not the quality of any assessment.
+
+- It is compiled only for `dev` and `test` (`elixirc_paths` in
+  `backend/mix.exs`) and is not compiled into `prod`.
+- `backend/config/runtime.exs` honors the variable only in `dev`, where the
+  harness runs; in `test` and `prod` it is ignored and the default adapter stays
+  in place.
+- Do not set the variable outside the E2E suite.
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.

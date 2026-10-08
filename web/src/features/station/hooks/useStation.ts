@@ -485,7 +485,10 @@ export const useStation = (api: StationApi = defaultApi) => {
     void (async () => {
       try {
         const detail = await api.getSession(savedSessionId);
-        if (cancelled) return;
+        // A reset still awaiting its discard acknowledgement must not drop the
+        // resume: if that discard fails, the resumed session owns the station.
+        // An acknowledged discard clears the persisted id and the session ref.
+        if (cancelled || readPersistedSessionId() !== savedSessionId) return;
 
         sessionRef.current = detail;
         setAudioConsent(detail.audio_consent);
@@ -496,11 +499,11 @@ export const useStation = (api: StationApi = defaultApi) => {
           updateStatus("finishing");
           try {
             const stationResult = await api.fetchResult(detail.session_id);
-            if (cancelled) return;
+            if (cancelled || sessionRef.current !== detail) return;
             setResult(stationResult);
             updateStatus("finished");
           } catch (cause) {
-            if (!cancelled) fail(cause);
+            if (!cancelled && sessionRef.current === detail) fail(cause);
           }
           return;
         }
@@ -513,12 +516,12 @@ export const useStation = (api: StationApi = defaultApi) => {
         // they remain visible; a failure here does not block resume.
         try {
           const impressosResponse = await api.getImpressos(detail.session_id);
-          if (!cancelled) setImpressos(impressosResponse.released_impressos);
+          if (!cancelled && sessionRef.current === detail) setImpressos(impressosResponse.released_impressos);
         } catch {
           // Ignore: the impressos drawer will simply start out empty.
         }
       } catch (cause) {
-        if (cancelled) return;
+        if (cancelled || readPersistedSessionId() !== savedSessionId) return;
         // An unknown/expired/not-found session cannot be resumed: clear the
         // stale pointer and fall back to a fresh idle start.
         clearPersistedSessionId();
@@ -578,6 +581,29 @@ export const useStation = (api: StationApi = defaultApi) => {
       pageHideAttemptedRef.current = sessionId;
       void api
         .discardSession(sessionId, { keepalive: true })
+        .then(() => {
+          // A BFCache-restored page must not retain evidence from a session
+          // already discarded by the server or accept its late result response.
+          if (sessionRef.current?.session_id !== sessionId && readPersistedSessionId() !== sessionId) return;
+          sessionRef.current = null;
+          hasStartedRef.current = false;
+          isFinishingRef.current = false;
+          pendingSendRef.current = null;
+          pendingSendTokenRef.current = null;
+          clockAnchorRef.current = null;
+          timerFinishTriggeredRef.current = false;
+          pageHideAttemptedRef.current = null;
+          clearPersistedSessionId();
+          setResult(null);
+          setInitialMessages([]);
+          setImpressos([]);
+          setImpressoError(null);
+          setDeadlineAtMs(null);
+          setRemainingMs(null);
+          setError(null);
+          setAudioConsent(false);
+          updateStatus("idle");
+        })
         .catch(() => {
           // Best effort keepalive POST: no guarantee, no error-induced reset.
         });
@@ -587,7 +613,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     return () => {
       window.removeEventListener("pagehide", onPageHide);
     };
-  }, [api]);
+  }, [api, updateStatus]);
 
   return {
     start,

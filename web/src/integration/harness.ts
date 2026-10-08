@@ -204,6 +204,9 @@ export async function startE2EHarness(
     OPENAI_API_KEY: "e2e-stub-key",
     OPENAI_BASE_URL: `http://127.0.0.1:${mockPort}`,
     MIX_ENV: "dev",
+    // Jev has no live provider yet and its default adapter fails closed. This
+    // selects the E2E-only approving adapter, which exists only in dev/test.
+    JEV_E2E_APPROVING_ADAPTER: "true",
   };
   if (conversationTimeoutMs !== undefined) {
     phxEnv.CONVERSATION_TIMEOUT_MS = String(conversationTimeoutMs);

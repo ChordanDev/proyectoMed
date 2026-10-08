@@ -66,6 +66,13 @@ with purge_interval when is_binary(purge_interval) <-
   config :backend, :conversation_purge_interval_ms, purge_interval_ms
 end
 
+# E2E-only: bypasses Jev verification with a deterministic approving adapter.
+# The harness boots Phoenix under `:dev`, so the variable is honored only there:
+# `:test` keeps its injected adapters and `:prod` never compiles this module.
+if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true" do
+  config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

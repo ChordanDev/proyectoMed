@@ -52,6 +52,20 @@ body {
   color: #374151;
 }
 
+/* Shared by the notice and result screens: border and weight carry the
+   emphasis so the callout does not rely on color alone. */
+.educational-disclaimer {
+  padding: 16px;
+  background: #eff6ff;
+  border: 1px solid #1d4ed8;
+  border-left-width: 6px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: #111827;
+}
+
 .disclosure-block {
   background: #fef9c3;
   border-radius: 8px;
