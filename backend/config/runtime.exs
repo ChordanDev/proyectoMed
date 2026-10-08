@@ -67,8 +67,9 @@ with purge_interval when is_binary(purge_interval) <-
 end
 
 # E2E-only: bypasses Jev verification with a deterministic approving adapter.
-# The adapter is not compiled into `:prod`, where this variable is ignored.
-if config_env() in [:dev, :test] and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true" do
+# The harness boots Phoenix under `:dev`, so the variable is honored only there:
+# `:test` keeps its injected adapters and `:prod` never compiles this module.
+if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true" do
   config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
 end
 

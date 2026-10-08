@@ -186,8 +186,9 @@ prove the result contract, not the quality of any assessment.
 
 - It is compiled only for `dev` and `test` (`elixirc_paths` in
   `backend/mix.exs`) and is not compiled into `prod`.
-- `backend/config/runtime.exs` honors the variable only in `dev` and `test`; in
-  `prod` it is ignored and the default adapter stays in place.
+- `backend/config/runtime.exs` honors the variable only in `dev`, where the
+  harness runs; in `test` and `prod` it is ignored and the default adapter stays
+  in place.
 - Do not set the variable outside the E2E suite.
 
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero

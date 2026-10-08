@@ -74,14 +74,18 @@ action `performed` on that citation; without learner evidence everything is
   (present under `_build/dev` and `_build/test`). With the variable set, `prod`
   still resolves `DisabledAdapter`; `dev` resolves the approving adapter.
 
-## Known limitation
+## Follow-up after parent readback
 
-`backend/.formatter.exs` and `backend/.credo.exs` do not include
-`e2e_support/`, so the repository-wide format and Credo checks do not cover the
-adapter file. Both pass when run on the file explicitly. Extending those globs
-was outside the authorized edit surface of T1.
+- The environment switch is honored only under `:dev` (it was `:dev` and `:test`),
+  so exporting the variable during `mix test` cannot replace the injected adapters.
+  Observed: with the variable set, `:test` resolves `DisabledAdapter` and `:dev`
+  resolves the approving adapter.
+- `e2e_support/` was added to the formatter and Credo inputs, so the repository-wide
+  checks now cover the adapter. Route: inline, mechanical edits.
+- Re-verified: `bash scripts/test.sh` exit 0 (167 web unit, 835 ExUnit, 4 E2E);
+  typecheck, lint, `mix format --check-formatted`, `mix compile
+  --warnings-as-errors`, `mix credo --strict`, and `tests/scripts/test_red.sh` pass.
 
 ## Next step
 
-None for T1. Decide whether to add `e2e_support/` to the formatter and Credo
-inputs.
+Push `feat/125-jev-evaluation` and let CI run on PR #142 (user decision).

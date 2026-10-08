@@ -9,7 +9,7 @@ defmodule Backend.E2ESupport.ApprovingJevAdapter do
 
   It lives outside `lib/`, is compiled only for `:dev` and `:test`
   (`elixirc_paths/1` in `mix.exs`), and is selected only by
-  `JEV_E2E_APPROVING_ADAPTER=true` in those environments
+  `JEV_E2E_APPROVING_ADAPTER=true` under `:dev`, where the harness runs
   (`config/runtime.exs`). The default adapter stays
   `Backend.Stations.JevDecision.DisabledAdapter`.
 
