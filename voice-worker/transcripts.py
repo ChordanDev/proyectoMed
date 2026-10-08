@@ -16,7 +16,8 @@ logger = logging.getLogger("voice-worker.transcripts")
 
 
 class VoiceFailure(Exception):
-    """Typed failure. `kind` is one of: auth, timeout, disconnected, malformed, session_inactive, stale_generation.
+    """Typed failure. `kind` is one of: auth, timeout, disconnected, malformed, session_inactive, stale_generation,
+    synthesis_failed (patient speech only; never stops the worker job).
 
     The message is only the kind, so provider errors (which may echo credentials) never leak.
     """
