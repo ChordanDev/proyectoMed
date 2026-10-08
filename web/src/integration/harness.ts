@@ -40,6 +40,58 @@ async function getAvailablePort(): Promise<number> {
   });
 }
 
+// The harness boots Phoenix under MIX_ENV=dev, which `mix test` never compiles.
+// Compiling here keeps a cold build out of the startup timeout, so that timeout
+// measures server boot only.
+export const BACKEND_COMPILE_TIMEOUT_MS = 240_000;
+
+export async function compileBackend(
+  timeoutMs: number = BACKEND_COMPILE_TIMEOUT_MS,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const compileProcess = spawn("mix", ["compile"], {
+      cwd: BACKEND_DIR,
+      env: { ...process.env, MIX_ENV: "dev" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let compileOutput = "";
+    const appendLog = (data: Buffer) => {
+      compileOutput += data.toString();
+      if (compileOutput.length > MAX_PROCESS_LOG_BYTES) {
+        compileOutput = compileOutput.slice(-MAX_PROCESS_LOG_BYTES);
+      }
+    };
+    compileProcess.stdout?.on("data", appendLog);
+    compileProcess.stderr?.on("data", appendLog);
+
+    let timedOut = false;
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      compileProcess.kill("SIGKILL");
+    }, timeoutMs);
+
+    compileProcess.once("error", (err) => {
+      clearTimeout(killTimer);
+      reject(new Error(`Backend compile spawn failed: ${err.message}`));
+    });
+
+    compileProcess.once("exit", (code) => {
+      clearTimeout(killTimer);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const failureReason = timedOut
+        ? `Backend compile did not finish within ${timeoutMs}ms`
+        : `Backend compile exited with status ${code}`;
+      reject(
+        new Error(`${failureReason}.\nProcess output tail:\n${compileOutput}`),
+      );
+    });
+  });
+}
+
 export async function startE2EHarness(
   options: E2EHarnessOptions = {},
 ): Promise<E2EHarnessInstance> {

@@ -1,6 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ApiError, createApiClient } from "../features/station/api/client";
-import { startE2EHarness, type E2EHarnessInstance } from "./harness";
+import {
+  BACKEND_COMPILE_TIMEOUT_MS,
+  compileBackend,
+  startE2EHarness,
+  type E2EHarnessInstance,
+} from "./harness";
+
+beforeAll(async () => {
+  await compileBackend();
+}, BACKEND_COMPILE_TIMEOUT_MS + 10_000);
 
 describe("Station E2E Happy Path", () => {
   let harness: E2EHarnessInstance;
