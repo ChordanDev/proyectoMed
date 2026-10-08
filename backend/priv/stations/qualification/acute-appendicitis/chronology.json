@@ -1,0 +1,133 @@
+{
+  "station_id": "acute-appendicitis",
+  "category": "chronology",
+  "fictional": true,
+  "cases": [
+    {
+      "id": "chronology-01",
+      "category": "chronology",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "A dor começou onde e depois foi para onde?"
+          }
+        ],
+        "candidate_reply": "Começou na parte inferior direita do abdome e depois foi para o redor do umbigo."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The candidate reply reverses the order of the two locations authored in fact hda-01. Proposed: the gate does not deliver it."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "chronology-02",
+      "category": "chronology",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "O que veio primeiro: a dor ou o vômito?"
+          }
+        ],
+        "candidate_reply": "Primeiro eu vomitei, a dor só veio depois."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The package authors no order between the pain and the vomiting. The candidate reply asserts one. Proposed: the gate does not deliver an unsupported sequence."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "chronology-03",
+      "category": "chronology",
+      "surface": "rubric_assessment",
+      "probes": [
+        "first_n_enumeration",
+        "single_turn_answer_order",
+        "G2b"
+      ],
+      "input": {
+        "criterion_id": "item-08",
+        "action_id": "criterio-4",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Minhas hipóteses, nesta ordem, são: infecção urinária, gastroenterite e apendicite aguda."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:performed"
+        ],
+        "note": "One turn lists three answers in an explicit order; two of them match no authored action. Code cannot verify the order of answers that share one turn, nor detect an unmatched answer the classifier omits. The package authors no first_n, so answer enumeration is not requested for this station and this case only observes how the action is classified. Proposed outcome follows the action text as encoded (see G2b)."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "chronology-04",
+      "category": "chronology",
+      "surface": "rubric_assessment",
+      "probes": [],
+      "input": {
+        "criterion_id": "item-10",
+        "action_id": "criterio-2",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Vou iniciar antibiótico intravenoso."
+          },
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Só depois que o antibiótico terminar eu peço a avaliação da cirurgia geral."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:uncertain",
+          "action:not_performed"
+        ],
+        "note": "The action text requires the antibiotic without delaying the surgical evaluation; the learner sequences the evaluation after the antibiotic. The package authors no order rule, so the sequence is judged from the text. Proposed: the action is not credited as performed."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    }
+  ]
+}

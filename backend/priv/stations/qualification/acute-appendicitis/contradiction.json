@@ -1,0 +1,109 @@
+{
+  "station_id": "acute-appendicitis",
+  "category": "contradiction",
+  "fictional": true,
+  "cases": [
+    {
+      "id": "contradiction-01",
+      "category": "contradiction",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "O senhor teve febre?"
+          }
+        ],
+        "candidate_reply": "Não, não tive febre em nenhum momento."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The candidate reply contradicts fact hda-06. Proposed: the gate does not deliver it."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "contradiction-02",
+      "category": "contradiction",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Quando a dor começou?"
+          },
+          {
+            "role": "patient",
+            "modality": "text",
+            "text": "A dor começou há 18 horas, inicialmente ao redor do umbigo."
+          },
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Há quanto tempo mesmo?"
+          }
+        ],
+        "candidate_reply": "Começou faz uns três dias."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The candidate reply contradicts both fact hda-01 and the patient turn already delivered in this conversation. Proposed: the gate does not deliver it."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "contradiction-03",
+      "category": "contradiction",
+      "surface": "rubric_assessment",
+      "probes": [],
+      "input": {
+        "criterion_id": "item-08",
+        "action_id": "criterio-4",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Minha hipótese é apendicite aguda."
+          },
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Na verdade, retiro o que disse: não acho que seja apendicite aguda."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:uncertain"
+        ],
+        "note": "The learner states the hypothesis and then retracts it. Proposed: the action is not credited as performed on the first turn alone. The adjudicator decides how a retraction counts."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    }
+  ]
+}
