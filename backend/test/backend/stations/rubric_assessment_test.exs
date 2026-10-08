@@ -208,12 +208,12 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert omitted.status == :assessed
       assert omitted.level == "inadequado"
       assert omitted.points == Points.zero()
-      assert omitted.max_points == 8
+      assert omitted.max_points == 40
       assert omitted.evidence_ids == []
       assert omitted.reason == nil
 
-      assert assessment.estimates.scored_subtotal == 2
-      assert assessment.estimates.scored_max == 10
+      assert assessment.estimates.scored_subtotal == 10
+      assert assessment.estimates.scored_max == 50
     end
 
     test "classifier uncertainty leaves the criterion uncertain and the total open" do
@@ -236,7 +236,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert unobservable.status == :not_observable
       assert unobservable.reason == :no_authored_impresso
-      assert unobservable.max_points == 8
+      assert unobservable.max_points == 40
       assert_unscored(unobservable)
 
       assert %{id: @safety, status: :not_observable} in assessment.estimates.unresolved
@@ -255,12 +255,12 @@ defmodule Backend.Stations.RubricAssessmentTest do
       excluded = criterion(assessment, @note)
 
       assert excluded.status == :not_applicable
-      assert excluded.max_points == 4
+      assert excluded.max_points == 20
       assert_unscored(excluded)
 
       # onset 1 + symptom 0.25 assessed; safety-check 1 eligible; the note's 0.5 nowhere.
-      assert assessment.estimates.scored_max == 10
-      assert assessment.estimates.eligible_max == 18
+      assert assessment.estimates.scored_max == 50
+      assert assessment.estimates.eligible_max == 90
       refute Enum.any?(assessment.estimates.unresolved, &(&1.id == @note))
 
       assert_received {:batch_request, sent}
@@ -410,7 +410,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :assessed
       assert result.level == "adequado"
-      assert result.points == 8
+      assert result.points == 40
 
       assert result.sub_actions == [
                %{id: "ask-onset", classification: "not_performed", evidence_ids: []}
@@ -477,7 +477,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :assessed
       assert result.level == "adequado"
-      assert result.points == 8
+      assert result.points == 40
       assert result.evidence_ids == ["turn-1", "turn-3"]
       assert result.sub_actions == actions
     end
@@ -638,7 +638,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :assessed
       assert result.level == "parcialmente_adequado"
-      assert result.points == 4
+      assert result.points == 20
       assert result.evidence_ids == ["turn-1", "turn-3"]
 
       assert result.evidence == [
@@ -707,7 +707,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :assessed
       assert result.level == "adequado"
-      assert result.points == 8
+      assert result.points == 40
       assert result.evidence_ids == ["turn-1", "turn-3"]
       assert result.sub_actions == actions
     end
@@ -882,7 +882,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
           @exams => done(@exams, ["turn-5"])
         })
 
-      assert_order(result, "adequado", 2, ["turn-1", "turn-3", "turn-5"])
+      assert_order(result, "adequado", 10, ["turn-1", "turn-3", "turn-5"])
     end
 
     test "steps performed out of rank order score the zero-point level" do
@@ -915,7 +915,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
           @exams => done(@exams, ["turn-3"])
         })
 
-      assert_order(result, "adequado", 2, ["turn-1", "turn-3"])
+      assert_order(result, "adequado", 10, ["turn-1", "turn-3"])
     end
 
     test "equal ranks are unordered among themselves" do
@@ -928,7 +928,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
           @exams => done(@exams, ["turn-5"])
         })
 
-      assert_order(result, "adequado", 2, ["turn-1", "turn-3", "turn-5"])
+      assert_order(result, "adequado", 10, ["turn-1", "turn-3", "turn-5"])
     end
 
     test "a step assessed at its zero-point level is skipped" do
@@ -939,7 +939,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
           @exams => done(@exams, ["turn-3"])
         })
 
-      assert_order(result, "adequado", 2, ["turn-1", "turn-3"])
+      assert_order(result, "adequado", 10, ["turn-1", "turn-3"])
     end
 
     test "fewer than two performed steps score the zero-point level without evidence" do
@@ -981,7 +981,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
         })
 
       assert criterion(assessment, @exams).status == :not_observable
-      assert_order(criterion(assessment, @order), "adequado", 2, ["turn-1", "turn-3"])
+      assert_order(criterion(assessment, @order), "adequado", 10, ["turn-1", "turn-3"])
     end
 
     test "a step scored zero by a rule is skipped even though the learner attempted it" do
@@ -1005,7 +1005,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
         })
 
       assert criterion(assessment, @history).points == Points.zero()
-      assert_order(criterion(assessment, @order), "adequado", 2, ["turn-1", "turn-3"])
+      assert_order(criterion(assessment, @order), "adequado", 10, ["turn-1", "turn-3"])
     end
 
     test "a step grounded only by its actions is positioned by their evidence" do
@@ -1028,7 +1028,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
           @exams => skipped(@exams)
         })
 
-      assert_order(held, "adequado", 2, ["turn-1", "turn-3"])
+      assert_order(held, "adequado", 10, ["turn-1", "turn-3"])
 
       broken =
         order_result(%{
@@ -1054,7 +1054,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
         |> criterion(@order)
       end
 
-      assert_order(order_result.(requested.(@t3), ["turn-1"]), "adequado", 2, [
+      assert_order(order_result.(requested.(@t3), ["turn-1"]), "adequado", 10, [
         "turn-1",
         "impresso-req-lab"
       ])
@@ -1084,7 +1084,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
           @treatment => done(@treatment, ["turn-3"])
         })
 
-      assert_order(result, "adequado", 2, ["turn-1", "turn-3"])
+      assert_order(result, "adequado", 10, ["turn-1", "turn-3"])
     end
 
     test "a criterion without a rank is not part of the order" do
@@ -1097,7 +1097,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
           @exams => done(@exams, ["turn-1"])
         })
 
-      assert_order(result, "adequado", 2, ["turn-3", "turn-5"])
+      assert_order(result, "adequado", 10, ["turn-3", "turn-5"])
     end
 
     test "the classifier never receives the task-order criterion" do
@@ -1145,7 +1145,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert asked_ids(first) == [@history, @treatment]
       assert asked_ids(second) == [@exams]
-      assert_order(criterion(assessment, @order), "adequado", 2, ["turn-1", "turn-3", "turn-5"])
+      assert_order(criterion(assessment, @order), "adequado", 10, ["turn-1", "turn-3", "turn-5"])
     end
 
     test "a rubric whose only active question is the order makes no call" do
@@ -1170,10 +1170,10 @@ defmodule Backend.Stations.RubricAssessmentTest do
         })
 
       assert assessment.estimates == %{
-               total: 16,
-               scored_subtotal: 16,
-               scored_max: 20,
-               eligible_max: 20,
+               total: 80,
+               scored_subtotal: 80,
+               scored_max: 100,
+               eligible_max: 100,
                unresolved: []
              }
 
@@ -1229,14 +1229,14 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :not_applicable
       assert result.reason == :authored_exclusion
-      assert result.max_points == 2
+      assert result.max_points == 10
       assert_unscored(result)
 
       assert assessment.estimates == %{
-               total: 14,
-               scored_subtotal: 14,
-               scored_max: 18,
-               eligible_max: 18,
+               total: 70,
+               scored_subtotal: 70,
+               scored_max: 90,
+               eligible_max: 90,
                unresolved: []
              }
 
@@ -1366,7 +1366,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :assessed
       assert result.level == "adequado"
-      assert result.points == 2
+      assert result.points == 10
     end
 
     test "the N-th answer is scored" do
@@ -1387,7 +1387,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :assessed
       assert result.level == "adequado"
-      assert result.points == 8
+      assert result.points == 40
       assert result.evidence_ids == ["turn-1", "turn-3", "turn-4"]
     end
 
@@ -1427,7 +1427,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :assessed
       assert result.level == "parcialmente_adequado"
-      assert result.points == 4
+      assert result.points == 20
       assert result.evidence_ids == ["turn-1", "turn-3"]
     end
 
@@ -1481,7 +1481,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
         ])
 
       assert kept.level == "adequado"
-      assert kept.points == 8
+      assert kept.points == 40
     end
 
     test "thresholds and count_cap apply to the eligible answers only" do
@@ -1495,7 +1495,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
         ])
 
       assert one_eligible.level == "adequado"
-      assert one_eligible.points == 2
+      assert one_eligible.points == 10
       assert one_eligible.evidence_ids == ["turn-3"]
 
       none_eligible =
@@ -1516,7 +1516,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
         exams_result(both, [said("turn-3", "request-exam-a"), said("turn-4", "request-exam-b")])
 
       assert capped.level == "adequado"
-      assert capped.points == 2
+      assert capped.points == 10
       assert capped.evidence_ids == ["turn-3", "turn-4"]
     end
 
@@ -1934,7 +1934,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
   describe "assess/3 exact arithmetic" do
     # onset (0/1) plus two copies of the 0/0.125/0.25 criterion; nothing else.
-    defp eighths_package do
+    defp fractional_package do
       v2()
       |> only([@onset, @symptom])
       |> update_rubric(fn [onset, symptom] ->
@@ -1944,7 +1944,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
     test "0.125 and 0.25 levels sum without drift" do
       assessment =
-        assess!(eighths_package(), session(), %{
+        assess!(fractional_package(), session(), %{
           @symptom => answer("parcialmente_adequado", ["turn-3"]),
           "symptom-b" => answer("adequado", ["turn-3"])
         })
@@ -1954,6 +1954,34 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert Points.to_decimal_string(assessment.estimates.scored_subtotal) == "0.375"
       assert Points.to_decimal_string(assessment.estimates.scored_max) == "0.5"
       assert assessment.estimates.total == nil
+    end
+
+    test "tenth levels sum without drift" do
+      tenths = fn criterion ->
+        Map.update!(criterion, "levels", fn levels ->
+          Enum.map(levels, fn
+            %{"label" => "parcialmente_adequado"} = level -> %{level | "points" => 0.1}
+            %{"label" => "adequado"} = level -> %{level | "points" => 0.2}
+            level -> level
+          end)
+        end)
+      end
+
+      package =
+        fractional_package()
+        |> update_criterion(@symptom, tenths)
+        |> update_criterion("symptom-b", tenths)
+
+      assessment =
+        assess!(package, session(), %{
+          @symptom => answer("parcialmente_adequado", ["turn-3"]),
+          "symptom-b" => answer("adequado", ["turn-3"])
+        })
+
+      assert Points.to_decimal_string(criterion(assessment, @symptom).points) == "0.1"
+      assert Points.to_decimal_string(criterion(assessment, "symptom-b").points) == "0.2"
+      assert Points.to_decimal_string(assessment.estimates.scored_subtotal) == "0.3"
+      assert Points.to_decimal_string(assessment.estimates.scored_max) == "0.4"
     end
 
     test "the reconciliation fixture yields 0.25 / 0.25 / 1.25 and no total" do
@@ -1973,7 +2001,7 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
     test "a fully assessed rubric yields a numeric total" do
       assessment =
-        assess!(eighths_package(), session(), %{
+        assess!(fractional_package(), session(), %{
           @onset => answer("adequado", ["turn-1"]),
           @symptom => answer("parcialmente_adequado", ["turn-3"]),
           "symptom-b" => answer("inadequado", [])
@@ -1984,17 +2012,17 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert Points.to_decimal_string(assessment.estimates.eligible_max) == "1.5"
     end
 
-    test "a level that is not an exact multiple of 0.125 invalidates the attempt" do
+    test "a level that is not an exact multiple of 0.025 invalidates the attempt" do
       broken =
         update_criterion(v2(), @symptom, fn criterion ->
           Map.put(criterion, "levels", [
-            %{"label" => "adequado", "points" => 0.1, "description" => "Inexact."}
+            %{"label" => "adequado", "points" => 0.33, "description" => "Inexact."}
           ])
         end)
 
       assert_invalid_attempt(
         assess(broken, session(), %{}),
-        {:invalid_package, @symptom, :not_a_multiple_of_one_eighth}
+        {:invalid_package, @symptom, :not_a_multiple_of_one_fortieth}
       )
 
       refute_received {:batch_request, _}

@@ -200,7 +200,7 @@ A modality the station does provide but the learner never used is a genuine omis
 
 | Field | Meaning in code |
 |---|---|
-| `levels[].points` | A multiple of 0.125, converted once to integer eighths. |
+| `levels[].points` | A multiple of 0.025, converted once to integer fortieths. |
 | `levels[].min_actions` | Count thresholds, set on every level of a criterion or on none. The level is the highest one whose threshold is at most the number of performed, non-forbidden actions. The count decides; Jev's criterion-level class does not. |
 | `actions[].role` | `counted` (default), `mandatory`, or `forbidden`. A `mandatory` action that was not performed, or a `forbidden` action that was performed with evidence, scores the criterion at its zero-point level. |
 | `count_cap` | Caps the count of performed actions before thresholds are applied. |
@@ -234,7 +234,9 @@ Ranked criteria that are excluded, not observable, or assessed at zero are skipp
 
 ### Totals and illustrative fixture
 
-Points are exact. Authored values are multiples of 0.125, held as integer eighths, and summed as integers; a value that is not an exact multiple invalidates the attempt. No probability or confidence multiplies or adjusts points, and nothing is rescaled.
+Points are exact. Authored values are multiples of 0.025, held as integer fortieths, and summed as integers; a value that is not an exact multiple invalidates the attempt. No probability or confidence multiplies or adjusts points, and nothing is rescaled.
+
+> Amended 2026-10-07 (issue #130, amending ADR-012, #124): the granularity was widened from multiples of 0.125 to multiples of 0.025 to follow the tenths used by PEP 2025/2; values in eighths remain valid.
 
 | Estimate | Covers |
 |---|---|
@@ -244,7 +246,7 @@ Points are exact. Authored values are multiples of 0.125, held as integer eighth
 | `total` | Equal to `scored_subtotal` only when every active criterion is assessed; otherwise `null`. Also `null` when no criterion is active. |
 | `unresolved` | The active criteria that are `uncertain` or `not_observable`. |
 
-This is an **illustrative fixture only**. It does not infer a real station maximum or publish an expected score. It shows decimal values as a reader would see them; the internal result holds eighths (`0.25` is `2`), and the wire format belongs to #129:
+This is an **illustrative fixture only**. It does not infer a real station maximum or publish an expected score. It shows decimal values as a reader would see them; the internal result holds fortieths (`0.25` is `10`), and the wire format belongs to #129:
 
 ```json
 {
@@ -304,7 +306,7 @@ The source is the **PEP 2023/1 definitive edition** published by INEP, filename 
 
 | Rule shape | PDF pages | Implemented as |
 |---|---|---|
-| Levels and decimal granularity | pp. 4–5 | `levels[].points` in eighths |
+| Levels and decimal granularity | pp. 4–5 | `levels[].points` in fortieths (multiples of 0.025) |
 | Mandatory action | p. 4 | `actions[].role: "mandatory"` |
 | Count to level | p. 10 | `levels[].min_actions`, `count_cap` |
 | First N answers | pp. 10–11 | `first_n` |

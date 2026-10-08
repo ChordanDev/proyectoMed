@@ -6,8 +6,8 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
   @fixtures_path Path.expand("../../../../priv/stations/fixtures", __DIR__)
 
   @inadequado %{label: "inadequado", points: 0}
-  @parcial %{label: "parcialmente_adequado", points: 4}
-  @adequado %{label: "adequado", points: 8}
+  @parcial %{label: "parcialmente_adequado", points: 20}
+  @adequado %{label: "adequado", points: 40}
 
   defp criterion(fixture, id) do
     @fixtures_path
@@ -282,7 +282,7 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRulesTest do
       assert decide(reversed, @inadequado, ["ask-onset", "ask-duration"]) == {:ok, @parcial}
     end
 
-    test "points stay integer eighths" do
+    test "points stay integer fortieths" do
       assert {:ok, %{points: points}} =
                decide(history(), @adequado, ["ask-onset", "ask-duration"])
 

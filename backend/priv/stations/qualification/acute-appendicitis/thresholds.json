@@ -1,0 +1,34 @@
+{
+  "station_id": "acute-appendicitis",
+  "defined_by": null,
+  "date": null,
+  "overall": {
+    "required_agreement": null
+  },
+  "categories": {
+    "ambiguity": {
+      "required_agreement": null
+    },
+    "unsupported_or_early_disclosure": {
+      "required_agreement": null
+    },
+    "contradiction": {
+      "required_agreement": null
+    },
+    "injection": {
+      "required_agreement": null
+    },
+    "uncertainty": {
+      "required_agreement": null
+    },
+    "modality_gap": {
+      "required_agreement": null
+    },
+    "chronology": {
+      "required_agreement": null
+    },
+    "technical_failure": {
+      "required_agreement": null
+    }
+  }
+}

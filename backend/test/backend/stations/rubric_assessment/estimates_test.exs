@@ -62,9 +62,9 @@ defmodule Backend.Stations.RubricAssessment.EstimatesTest do
     end
 
     test "propagates the reason for a level with inexact points" do
-      criterion = %{"levels" => [%{"points" => 1}, %{"points" => 0.3}]}
+      criterion = %{"levels" => [%{"points" => 1}, %{"points" => 0.33}]}
 
-      assert Estimates.max_points(criterion) == {:error, :not_a_multiple_of_one_eighth}
+      assert Estimates.max_points(criterion) == {:error, :not_a_multiple_of_one_fortieth}
     end
 
     test "propagates the reason for negative or missing level points" do

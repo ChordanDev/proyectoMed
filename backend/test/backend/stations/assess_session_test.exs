@@ -113,7 +113,7 @@ defmodule Backend.Stations.AssessSessionTest do
       assert criterion.id == @criterion_id
       assert criterion.status == :assessed
       assert criterion.level == "adequado"
-      assert criterion.points == 16
+      assert criterion.points == 80
       assert criterion.evidence_ids == ["turn-1"]
       assert [%{id: "turn-1", text: @learner_text}] = criterion.evidence
 
@@ -121,7 +121,7 @@ defmodule Backend.Stations.AssessSessionTest do
                %{id: "ask-onset", classification: "performed", evidence_ids: ["turn-1"]}
              ]
 
-      assert assessment.estimates.total == 16
+      assert assessment.estimates.total == 80
       assert assessment.estimates.unresolved == []
       assert assessment.calls == [%{question_count: 1, justification: :single_batch}]
     end

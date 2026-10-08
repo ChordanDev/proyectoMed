@@ -1,0 +1,847 @@
+{
+  "station_id": "acute-appendicitis",
+  "version": "2.0.0",
+  "language": "pt-BR",
+  "display_title": "Abdome agudo inflamatório — apendicite aguda",
+  "placeholder": true,
+  "patient_profile": {
+    "persona": "Rafael está sentado na maca, um pouco curvado e com expressão de desconforto. Responde às perguntas, mas evita movimentar o tronco por causa da dor. Não está agitado nem confuso. Demonstra preocupação com a possibilidade de cirurgia e com o tempo de recuperação.",
+    "age": 27,
+    "presenting_context": "Você está atendendo Rafael Nogueira, 27 anos, auxiliar administrativo, sem acompanhante. Ele procura o pronto-socorro por dor abdominal iniciada há cerca de 18 horas. Está consciente, orientado e hemodinamicamente estável. Na chegada, apresenta pressão arterial de 126/78 mmHg, frequência cardíaca de 102 bpm, frequência respiratória de 18 irpm, temperatura axilar de 38,1 °C e saturação periférica de oxigênio de 98% em ar ambiente. Refere dor atual de intensidade 7/10.",
+    "tone": "Fala em português claro, com escolaridade compatível com ensino médio completo."
+  },
+  "revealable_facts": [
+    {
+      "id": "hda-01",
+      "topic": "HDA — respostas padronizadas",
+      "content": "A dor começou há 18 horas, inicialmente ao redor do umbigo; há cerca de 10 horas migrou para a parte inferior direita do abdome.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-02",
+      "topic": "HDA — respostas padronizadas",
+      "content": "É uma dor contínua, que foi aumentando progressivamente, atualmente 7/10.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-03",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Piora ao caminhar, tossir ou mudar de posição. Não encontrou posição ou medida que alivie significativamente.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-04",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Teve náusea e vomitou uma vez, sem sangue ou bile.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-05",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Refere falta de apetite desde o início do quadro.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-06",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Mediu a temperatura em casa e teve “febre baixa”; não tomou antitérmico.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-07",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Evacuou no dia anterior e eliminou gases hoje. Nega diarreia e constipação importante.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-08",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Nega ardor ao urinar, urgência, aumento da frequência urinária ou sangue na urina.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-09",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Nega dor testicular ou secreção uretral.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "antecedentes-01",
+      "topic": "Antecedentes, medicações e hábitos — respostas padronizadas",
+      "content": "Nega doenças crônicas, internações anteriores e cirurgias.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "antecedentes-02",
+      "topic": "Antecedentes, medicações e hábitos — respostas padronizadas",
+      "content": "Não usa medicamentos regularmente.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "antecedentes-03",
+      "topic": "Antecedentes, medicações e hábitos — respostas padronizadas",
+      "content": "Nega alergias medicamentosas conhecidas.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "antecedentes-04",
+      "topic": "Antecedentes, medicações e hábitos — respostas padronizadas",
+      "content": "Nega tabagismo e uso de drogas; refere consumo ocasional de bebida alcoólica.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "antecedentes-05",
+      "topic": "Antecedentes, medicações e hábitos — respostas padronizadas",
+      "content": "Mora com a companheira; trabalha em escritório. Não há informação adicional relevante sobre histórico familiar, a menos que perguntado.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "pergunta-explicita-01",
+      "topic": "Informações que o ator só revela se o candidato perguntar explicitamente",
+      "content": "Nega episódio semelhante anterior.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "pergunta-explicita-02",
+      "topic": "Informações que o ator só revela se o candidato perguntar explicitamente",
+      "content": "Nega uso recente de antibióticos, anti-inflamatórios ou anticoagulantes.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "pergunta-explicita-03",
+      "topic": "Informações que o ator só revela se o candidato perguntar explicitamente",
+      "content": "Nega dor lombar, icterícia, dor no peito, falta de ar ou síncope.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "pergunta-explicita-04",
+      "topic": "Informações que o ator só revela se o candidato perguntar explicitamente",
+      "content": "Nega perda de peso ou alteração intestinal persistente nas últimas semanas.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "pergunta-explicita-05",
+      "topic": "Informações que o ator só revela se o candidato perguntar explicitamente",
+      "content": "Se perguntado sobre hidratação e ingestão oral, relata que bebeu água pela última vez há duas horas, mas não conseguiu se alimentar desde a manhã.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "duvida-final-01",
+      "topic": "Dúvidas obrigatórias do ator nos minutos finais",
+      "content": "“Doutor, isso pode ser tratado só com remédio, sem cirurgia?”",
+      "disclosure_condition": "timed"
+    },
+    {
+      "id": "duvida-final-02",
+      "topic": "Dúvidas obrigatórias do ator nos minutos finais",
+      "content": "“Se eu precisar operar, quanto tempo vou ficar internado e quando posso voltar ao trabalho?”",
+      "disclosure_condition": "timed"
+    }
+  ],
+  "response_rules": [
+    {
+      "id": "comportamento-durante-o-exame",
+      "instruction": "Se o candidato explicar o que fará e pedir autorização, o paciente coopera, mas refere piora da dor à palpação no quadrante inferior direito. Se o candidato fizer palpação brusca sem explicar, o ator demonstra desconforto e contrai a musculatura."
+    }
+  ],
+  "expected_actions": [
+    {
+      "id": "tarefa-1",
+      "description": "Apresentar-se, confirmar a identificação do paciente e obter anamnese dirigida."
+    },
+    {
+      "id": "tarefa-2",
+      "description": "Solicitar e interpretar o exame físico abdominal e as manobras pertinentes."
+    },
+    {
+      "id": "tarefa-3",
+      "description": "Solicitar e interpretar exames laboratoriais e de imagem adequados ao caso."
+    },
+    {
+      "id": "tarefa-4",
+      "description": "Formular a hipótese diagnóstica principal e indicar medidas de suporte e tratamento inicial."
+    },
+    {
+      "id": "tarefa-5",
+      "description": "Explicar a necessidade de avaliação cirúrgica e tratamento definitivo, respondendo às dúvidas do paciente."
+    },
+    {
+      "id": "resposta-as-duvidas-do-paciente",
+      "description": "O candidato deve responder com empatia, explicar que o quadro e a imagem sugerem apendicite e que a equipe cirúrgica precisa avaliar prontamente a conduta definitiva. Deve esclarecer que a apendicectomia é o tratamento habitual, que antibióticos isolados não são a opção padrão para todos os casos e que duração da internação e retorno ao trabalho dependem da evolução, da técnica utilizada e de eventual complicação."
+    }
+  ],
+  "rubric": [
+    {
+      "id": "item-01",
+      "description": "ITEM 1: Apresentação e identificação (Total: 0,2 ponto)\nCritérios avaliados: (1) Identifica-se; (2) Cumprimenta o paciente e confirma seu nome.",
+      "evidence_questions": [],
+      "practice_recommendation": "Apresentação e identificação",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Não realiza nenhuma ação."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.1,
+          "min_actions": 1,
+          "description": "Realiza uma ação."
+        },
+        {
+          "label": "adequado",
+          "points": 0.2,
+          "min_actions": 2,
+          "description": "Realiza as duas ações."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Identifica-se"
+        },
+        {
+          "id": "criterio-2",
+          "description": "Cumprimenta o paciente e confirma seu nome"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-02",
+      "description": "ITEM 2: Anamnese — caracterização da dor (Total: 0,8 ponto)\nCritérios avaliados: (1) Localização inicial; (2) migração para fossa ilíaca direita; (3) caráter e progressão; (4) tempo de evolução; (5) intensidade; (6) fatores de piora ou melhora.",
+      "evidence_questions": [],
+      "practice_recommendation": "Anamnese — caracterização da dor",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Investiga duas ou menos características."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.4,
+          "min_actions": 3,
+          "description": "Investiga três ou quatro características."
+        },
+        {
+          "label": "adequado",
+          "points": 0.8,
+          "min_actions": 5,
+          "description": "Investiga cinco ou seis características."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Localização inicial"
+        },
+        {
+          "id": "criterio-2",
+          "description": "migração para fossa ilíaca direita"
+        },
+        {
+          "id": "criterio-3",
+          "description": "caráter e progressão"
+        },
+        {
+          "id": "criterio-4",
+          "description": "tempo de evolução"
+        },
+        {
+          "id": "criterio-5",
+          "description": "intensidade"
+        },
+        {
+          "id": "criterio-6",
+          "description": "fatores de piora ou melhora"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-03",
+      "description": "ITEM 3: Anamnese — sintomas associados e diagnósticos diferenciais (Total: 0,8 ponto)\nCritérios avaliados: (1) Febre; (2) náuseas ou vômitos; (3) apetite; (4) hábito intestinal e eliminação de gases; (5) sintomas urinários; (6) sintomas genitais ou outros sinais de alarme.",
+      "evidence_questions": [],
+      "practice_recommendation": "Anamnese — sintomas associados e diagnósticos diferenciais",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Investiga um grupo ou nenhum."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.4,
+          "min_actions": 2,
+          "description": "Investiga dois ou três grupos."
+        },
+        {
+          "label": "adequado",
+          "points": 0.8,
+          "min_actions": 4,
+          "description": "Investiga pelo menos quatro dos seis grupos de sintomas."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Febre"
+        },
+        {
+          "id": "criterio-2",
+          "description": "náuseas ou vômitos"
+        },
+        {
+          "id": "criterio-3",
+          "description": "apetite"
+        },
+        {
+          "id": "criterio-4",
+          "description": "hábito intestinal e eliminação de gases"
+        },
+        {
+          "id": "criterio-5",
+          "description": "sintomas urinários"
+        },
+        {
+          "id": "criterio-6",
+          "description": "sintomas genitais ou outros sinais de alarme"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-04",
+      "description": "ITEM 4: Antecedentes, medicamentos e alergias (Total: 0,6 ponto)\nCritérios avaliados: (1) Comorbidades; (2) cirurgias ou internações prévias; (3) medicamentos de uso habitual ou recente; (4) alergias medicamentosas; (5) uso de anticoagulantes ou antibióticos recentes.",
+      "evidence_questions": [],
+      "practice_recommendation": "Antecedentes, medicamentos e alergias",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Investiga um item ou nenhum."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.3,
+          "min_actions": 2,
+          "description": "Investiga dois ou três itens."
+        },
+        {
+          "label": "adequado",
+          "points": 0.6,
+          "min_actions": 4,
+          "description": "Investiga quatro ou cinco itens."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Comorbidades"
+        },
+        {
+          "id": "criterio-2",
+          "description": "cirurgias ou internações prévias"
+        },
+        {
+          "id": "criterio-3",
+          "description": "medicamentos de uso habitual ou recente"
+        },
+        {
+          "id": "criterio-4",
+          "description": "alergias medicamentosas"
+        },
+        {
+          "id": "criterio-5",
+          "description": "uso de anticoagulantes ou antibióticos recentes"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-05",
+      "description": "ITEM 5: Exame físico abdominal e manobras (Total: 1,2 ponto)\nCritérios avaliados: (1) Explica o exame e solicita autorização, com paciente em decúbito dorsal; (2) verbaliza dor à palpação profunda no ponto de McBurney/fossa ilíaca direita; (3) pesquisa e interpreta o sinal de Blumberg; (4) pesquisa ao menos uma manobra entre Rovsing, psoas e obturador.",
+      "evidence_questions": [],
+      "practice_recommendation": "Exame físico abdominal e manobras",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Realiza ou solicita uma ação ou nenhuma."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.6,
+          "min_actions": 2,
+          "description": "Realiza ou solicita corretamente duas ações."
+        },
+        {
+          "label": "adequado",
+          "points": 1.2,
+          "min_actions": 3,
+          "description": "Realiza ou solicita corretamente três ou quatro ações."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Explica o exame e solicita autorização, com paciente em decúbito dorsal"
+        },
+        {
+          "id": "criterio-2",
+          "description": "verbaliza dor à palpação profunda no ponto de McBurney/fossa ilíaca direita"
+        },
+        {
+          "id": "criterio-3",
+          "description": "pesquisa e interpreta o sinal de Blumberg"
+        },
+        {
+          "id": "criterio-4",
+          "description": "pesquisa ao menos uma manobra entre Rovsing, psoas e obturador"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-06",
+      "description": "ITEM 6: Solicitação de exames laboratoriais (Total: 0,8 ponto)\nCritérios avaliados: (1) Hemograma completo; (2) PCR; (3) urina tipo 1; (4) função renal e eletrólitos, especialmente se houver necessidade de contraste ou hidratação.",
+      "evidence_questions": [],
+      "practice_recommendation": "Solicitação de exames laboratoriais",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Solicita um grupo ou nenhum."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.4,
+          "min_actions": 2,
+          "description": "Solicita dois grupos."
+        },
+        {
+          "label": "adequado",
+          "points": 0.8,
+          "min_actions": 3,
+          "description": "Solicita três ou quatro grupos pertinentes."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Hemograma completo"
+        },
+        {
+          "id": "criterio-2",
+          "description": "PCR"
+        },
+        {
+          "id": "criterio-3",
+          "description": "urina tipo 1"
+        },
+        {
+          "id": "criterio-4",
+          "description": "função renal e eletrólitos, especialmente se houver necessidade de contraste ou hidratação"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-07",
+      "description": "ITEM 7: Interpretação laboratorial (Total: 0,8 ponto)\nCritérios avaliados: (1) Identifica leucocitose com neutrofilia e desvio à esquerda; (2) reconhece PCR elevada; (3) interpreta EAS sem evidências de infecção urinária; (4) considera função renal e eletrólitos preservados.",
+      "evidence_questions": [],
+      "practice_recommendation": "Interpretação laboratorial",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Interpreta um achado ou nenhum, ou atribui incorretamente o quadro a infecção urinária."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.4,
+          "min_actions": 2,
+          "description": "Interpreta corretamente dois achados."
+        },
+        {
+          "label": "adequado",
+          "points": 0.8,
+          "min_actions": 3,
+          "description": "Interpreta corretamente três ou quatro achados."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Identifica leucocitose com neutrofilia e desvio à esquerda"
+        },
+        {
+          "id": "criterio-2",
+          "description": "reconhece PCR elevada"
+        },
+        {
+          "id": "criterio-3",
+          "description": "interpreta EAS sem evidências de infecção urinária"
+        },
+        {
+          "id": "criterio-4",
+          "description": "considera função renal e eletrólitos preservados"
+        },
+        {
+          "id": "atribuicao-a-infeccao-urinaria",
+          "description": "atribui incorretamente o quadro a infecção urinária",
+          "role": "forbidden"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": true,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-08",
+      "description": "ITEM 8: Solicitação e interpretação de imagem e hipótese diagnóstica (Total: 1,4 ponto)\nCritérios avaliados: (1) Solicita imagem adequada, considerando TC ou ultrassonografia conforme disponibilidade e contexto; (2) identifica apêndice dilatado, espessamento parietal e inflamação periapendicular; (3) reconhece ausência de abscesso ou perfuração; (4) formula a hipótese de apendicite aguda.",
+      "evidence_questions": [],
+      "practice_recommendation": "Solicitação e interpretação de imagem e hipótese diagnóstica",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Não formula apendicite aguda como hipótese principal."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.7,
+          "min_actions": 1,
+          "description": "Formula a hipótese diagnóstica principal, mas falha em interpretar um ou mais achados da imagem."
+        },
+        {
+          "label": "adequado",
+          "points": 1.4,
+          "min_actions": 4,
+          "description": "Cumpre os quatro critérios."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Solicita imagem adequada, considerando TC ou ultrassonografia conforme disponibilidade e contexto"
+        },
+        {
+          "id": "criterio-2",
+          "description": "identifica apêndice dilatado, espessamento parietal e inflamação periapendicular"
+        },
+        {
+          "id": "criterio-3",
+          "description": "reconhece ausência de abscesso ou perfuração"
+        },
+        {
+          "id": "criterio-4",
+          "description": "formula a hipótese de apendicite aguda",
+          "role": "mandatory"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-09",
+      "description": "ITEM 9: Medidas de suporte e preparo inicial (Total: 1,2 ponto)\nCritérios avaliados: (1) Mantém jejum oral; (2) estabelece acesso venoso e indica cristaloide conforme avaliação clínica, com reavaliação; (3) prescreve analgesia apropriada; (4) prescreve antiemético se necessário; (5) monitora sinais vitais e evolução clínica.",
+      "evidence_questions": [],
+      "practice_recommendation": "Medidas de suporte e preparo inicial",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Indica uma medida ou nenhuma."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.6,
+          "min_actions": 2,
+          "description": "Indica duas ou três medidas."
+        },
+        {
+          "label": "adequado",
+          "points": 1.2,
+          "min_actions": 4,
+          "description": "Indica quatro ou cinco medidas."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Mantém jejum oral"
+        },
+        {
+          "id": "criterio-2",
+          "description": "estabelece acesso venoso e indica cristaloide conforme avaliação clínica, com reavaliação"
+        },
+        {
+          "id": "criterio-3",
+          "description": "prescreve analgesia apropriada"
+        },
+        {
+          "id": "criterio-4",
+          "description": "prescreve antiemético se necessário"
+        },
+        {
+          "id": "criterio-5",
+          "description": "monitora sinais vitais e evolução clínica"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-10",
+      "description": "ITEM 10: Antibiótico e articulação com equipe cirúrgica (Total: 1,2 ponto)\nCritérios avaliados: (1) Solicita avaliação imediata da cirurgia geral; (2) indica antibiótico intravenoso perioperatório conforme protocolo e sem retardar a avaliação cirúrgica; (3) propõe cobertura para bacilos gram-negativos e anaeróbios, como ceftriaxona associada a metronidazol.",
+      "evidence_questions": [],
+      "practice_recommendation": "Antibiótico e articulação com equipe cirúrgica",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Não solicita avaliação cirúrgica nem indica conduta antimicrobiana pertinente."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.6,
+          "min_actions": 2,
+          "description": "Cumpre dois critérios ou prescreve antibiótico sem contemplar cobertura adequada para anaeróbios."
+        },
+        {
+          "label": "adequado",
+          "points": 1.2,
+          "min_actions": 3,
+          "description": "Cumpre os três critérios."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Solicita avaliação imediata da cirurgia geral"
+        },
+        {
+          "id": "criterio-2",
+          "description": "indica antibiótico intravenoso perioperatório conforme protocolo e sem retardar a avaliação cirúrgica"
+        },
+        {
+          "id": "criterio-3",
+          "description": "propõe cobertura para bacilos gram-negativos e anaeróbios, como ceftriaxona associada a metronidazol"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    },
+    {
+      "id": "item-11",
+      "description": "ITEM 11: Conduta definitiva, consentimento e comunicação (Total: 1,0 ponto)\nCritérios avaliados: (1) Indica avaliação para apendicectomia em caráter de urgência e encaminhamento à equipe/centro cirúrgico; (2) explica o diagnóstico provável, a finalidade da cirurgia e que a conduta definitiva depende de avaliação cirúrgica; (3) responde às duas dúvidas do paciente com clareza, empatia e informação compatível com a evolução clínica; (4) menciona obtenção de consentimento livre e esclarecido pela equipe responsável antes do procedimento, quando aplicável.",
+      "evidence_questions": [],
+      "practice_recommendation": "Conduta definitiva, consentimento e comunicação",
+      "levels": [
+        {
+          "label": "inadequado",
+          "points": 0,
+          "min_actions": 0,
+          "description": "Cumpre um critério ou nenhum."
+        },
+        {
+          "label": "parcialmente_adequado",
+          "points": 0.5,
+          "min_actions": 2,
+          "description": "Cumpre dois critérios."
+        },
+        {
+          "label": "adequado",
+          "points": 1,
+          "min_actions": 3,
+          "description": "Cumpre três ou quatro critérios."
+        }
+      ],
+      "actions": [
+        {
+          "id": "criterio-1",
+          "description": "Indica avaliação para apendicectomia em caráter de urgência e encaminhamento à equipe/centro cirúrgico"
+        },
+        {
+          "id": "criterio-2",
+          "description": "explica o diagnóstico provável, a finalidade da cirurgia e que a conduta definitiva depende de avaliação cirúrgica"
+        },
+        {
+          "id": "criterio-3",
+          "description": "responde às duas dúvidas do paciente com clareza, empatia e informação compatível com a evolução clínica"
+        },
+        {
+          "id": "criterio-4",
+          "description": "menciona obtenção de consentimento livre e esclarecido pela equipe responsável antes do procedimento, quando aplicável"
+        }
+      ],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null,
+      "rule": null
+    }
+  ],
+  "approved_templates": null,
+  "impressos": [
+    {
+      "id": "impresso-1-exame-fisico",
+      "title": "IMPRESSO 1 — EXAME FÍSICO SEGMENTAR",
+      "category": "physical_exam",
+      "keywords": [
+        "exame físico"
+      ],
+      "content": "- **Estado geral:** regular, consciente, orientado, fácies de dor; hidratado, sem cianose ou icterícia.\n- **Sinais vitais no exame:** PA 126/78 mmHg; FC 102 bpm; FR 18 irpm; temperatura 38,1 °C; SpO₂ 98% em ar ambiente.\n- **Aparelho cardiovascular:** bulhas normofonéticas, ritmo regular, sem sopros.\n- **Aparelho respiratório:** murmúrio vesicular presente bilateralmente, sem ruídos adventícios.\n- **Abdome — inspeção:** plano, sem cicatrizes, distensão, equimoses ou circulação colateral; movimentação reduzida durante a respiração profunda.\n- **Ausculta:** ruídos hidroaéreos presentes, discretamente diminuídos; sem sopros.\n- **Percussão:** timpanismo predominante; sem macicez anormal.\n- **Palpação superficial:** dor localizada no quadrante inferior direito, com defesa voluntária discreta.\n- **Palpação profunda:** dor acentuada na fossa ilíaca direita, especialmente no ponto de McBurney. Descompressão brusca dolorosa na fossa ilíaca direita: sinal de Blumberg positivo.\n- **Manobras:** sinal de Rovsing positivo; sinal do psoas negativo; sinal do obturador negativo. Sem dor à punho-percussão lombar.\n- **Neurológico:** alerta, orientado em tempo, espaço e pessoa; sem déficit motor grosseiro.\n- **Geniturinário:** sem dor testicular à inspeção referida; não é necessário exame genital invasivo na ausência de indicação clínica."
+    },
+    {
+      "id": "impresso-2-hemograma",
+      "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Hemograma completo",
+      "category": "laboratory",
+      "keywords": [
+        "hemograma"
+      ],
+      "content": "**Hemograma completo:**\n\n- Hemoglobina: 14,6 g/dL. Referência adulto masculino: 13,0–17,0 g/dL.\n- Hematócrito: 43%. Referência adulto masculino: 40–52%.\n- Leucócitos: 15.800/mm³. Referência: 4.000–11.000/mm³.\n- Neutrófilos: 86%; bastonetes: 8%. Referências usuais: neutrófilos segmentados 40–75%; bastonetes 0–5%.\n- Plaquetas: 268.000/mm³. Referência: 150.000–450.000/mm³."
+    },
+    {
+      "id": "impresso-2-pcr",
+      "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — PCR",
+      "category": "laboratory",
+      "keywords": [
+        "PCR",
+        "proteína C-reativa"
+      ],
+      "content": "**Inflamação e função renal/metabólica:**\n\n- PCR: 86 mg/L. Referência: inferior a 5 mg/L."
+    },
+    {
+      "id": "impresso-2-eletrolitos",
+      "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Sódio, Potássio",
+      "category": "laboratory",
+      "keywords": [
+        "eletrólitos"
+      ],
+      "content": "**Inflamação e função renal/metabólica:**\n\n- Sódio: 138 mmol/L. Referência: 135–145 mmol/L.\n- Potássio: 4,1 mmol/L. Referência: 3,5–5,1 mmol/L."
+    },
+    {
+      "id": "impresso-2-ureia",
+      "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Ureia",
+      "category": "laboratory",
+      "keywords": [
+        "ureia"
+      ],
+      "content": "**Inflamação e função renal/metabólica:**\n\n- Ureia: 28 mg/dL. Referência: 15–45 mg/dL."
+    },
+    {
+      "id": "impresso-2-creatinina",
+      "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Creatinina",
+      "category": "laboratory",
+      "keywords": [
+        "creatinina"
+      ],
+      "content": "**Inflamação e função renal/metabólica:**\n\n- Creatinina: 0,9 mg/dL. Referência adulto masculino: 0,7–1,3 mg/dL."
+    },
+    {
+      "id": "impresso-2-glicemia",
+      "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Glicemia",
+      "category": "laboratory",
+      "keywords": [
+        "glicemia"
+      ],
+      "content": "**Inflamação e função renal/metabólica:**\n\n- Glicemia: 104 mg/dL. Referência em jejum: 70–99 mg/dL."
+    },
+    {
+      "id": "impresso-2-urina-tipo-1",
+      "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Urina tipo 1 (EAS)",
+      "category": "laboratory",
+      "keywords": [
+        "urina tipo 1"
+      ],
+      "content": "**Urina tipo 1 (EAS):**\n\n- Densidade: 1,020; pH: 6,0.\n- Nitrito negativo; esterase leucocitária negativa.\n- Leucócitos: 2/campo; hemácias: 1/campo.\n- Sem bacteriúria significativa, proteinúria ou cetonúria relevante."
+    },
+    {
+      "id": "impresso-3-exame-de-imagem",
+      "title": "IMPRESSO 3 — EXAME DE IMAGEM",
+      "category": "imaging",
+      "keywords": [
+        "ultrassonografia de abdome e pelve",
+        "tomografia computadorizada de abdome e pelve"
+      ],
+      "content": "**Tomografia computadorizada de abdome e pelve com contraste intravenoso:**\n\n- Apêndice cecal em posição habitual, com diâmetro externo máximo de 10 mm, espessamento parietal e realce mucoso.\n- Presença de densificação da gordura periapendicular e pequena quantidade de líquido adjacente.\n- Apendicolito de 5 mm no interior do apêndice.\n- Sem pneumoperitônio, abscesso organizado, coleção ou sinais de perfuração.\n- Sem dilatação de alças ou sinais de obstrução intestinal.\n- Rins sem hidronefrose; bexiga sem alteração relevante.\n\n**Conclusão:** achados compatíveis com apendicite aguda, sem evidência tomográfica de perfuração ou abscesso."
+    },
+    {
+      "id": "impresso-4-receituario",
+      "title": "IMPRESSO 4 — RECEITUÁRIO/REGISTRO DE CONDUTA INICIAL",
+      "category": "report",
+      "keywords": [],
+      "content": "Para adulto sem alergia conhecida e função renal preservada, são opções adequadas:\n\n- Jejum oral.\n- Acesso venoso periférico e cristaloide intravenoso conforme estado de hidratação e resposta clínica; por exemplo, Ringer lactato ou cloreto de sódio 0,9%, com reavaliação.\n- Dipirona 1 g intravenosa a cada 6 horas, se necessário, respeitando contraindicações e dose máxima diária.\n- Ondansetrona 4 mg intravenosa a cada 8 horas, se necessário.\n- Antibiótico intravenoso perioperatório conforme protocolo institucional e avaliação da equipe cirúrgica; opção: ceftriaxona 2 g IV associada a metronidazol 500 mg IV, com ajuste em caso de alergia, função renal alterada ou outra particularidade clínica.\n- Avaliação imediata pela cirurgia geral. Não atrasar encaminhamento para avaliação cirúrgica enquanto se aguarda resposta a tratamento sintomático."
+    }
+  ]
+}

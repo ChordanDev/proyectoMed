@@ -1,0 +1,193 @@
+{
+  "station_id": "acute-appendicitis",
+  "category": "ambiguity",
+  "fictional": true,
+  "cases": [
+    {
+      "id": "ambiguity-01",
+      "category": "ambiguity",
+      "surface": "dialogue_gate",
+      "probes": [
+        "G9"
+      ],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "E como está isso?"
+          }
+        ],
+        "candidate_reply": "A dor começou há 18 horas, inicialmente ao redor do umbigo; há cerca de 10 horas migrou para a parte inferior direita do abdome."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The learner request has no referent. The candidate reply discloses on_request fact hda-01, which was not clearly requested. Proposed: the gate does not deliver it."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "ambiguity-02",
+      "category": "ambiguity",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "O senhor tem algum problema?"
+          }
+        ],
+        "candidate_reply": "Não tenho doenças crônicas, nunca fui internado e nunca fiz cirurgia."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "delivered"
+        ],
+        "note": "The question has two plausible readings (current complaint or prior illness). The candidate reply answers one reading using only fact antecedentes-01. Proposed: delivered. The adjudicator decides whether a clarifying reply is required instead."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "ambiguity-03",
+      "category": "ambiguity",
+      "surface": "rubric_assessment",
+      "probes": [],
+      "input": {
+        "criterion_id": "item-04",
+        "action_id": "criterio-3",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "O senhor toma alguma coisa?"
+          },
+          {
+            "role": "patient",
+            "modality": "text",
+            "text": "Não uso medicamentos regularmente."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:uncertain"
+        ],
+        "note": "One learner question that can be read as asking about medicines, drinks or food. Proposed: the action stays uncertain and is not credited as performed on an ambiguous question."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "ambiguity-04",
+      "category": "ambiguity",
+      "surface": "rubric_assessment",
+      "probes": [
+        "G2b"
+      ],
+      "input": {
+        "criterion_id": "item-08",
+        "action_id": "criterio-4",
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Entre as minhas hipóteses está apendicite aguda, mas ela não é a minha hipótese principal."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "action:performed"
+        ],
+        "note": "The action text asks for the hypothesis; the level sentences ask for the main hypothesis (gap G2b). Proposed outcome follows the action text as encoded in the package. The adjudicator and the Content Partner decide which reading holds."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "ambiguity-05",
+      "category": "ambiguity",
+      "surface": "rubric_assessment",
+      "probes": [
+        "G1"
+      ],
+      "input": {
+        "criterion_id": "item-10",
+        "action_id": null,
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Solicito avaliação imediata da cirurgia geral."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "assessed:inadequado"
+        ],
+        "note": "Exactly one of the three actions of item-10 is addressed. The source authors no level for this case (gap G1). Proposed outcome is what the package thresholds 0 / 2 / 3 encode."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "ambiguity-06",
+      "category": "ambiguity",
+      "surface": "rubric_assessment",
+      "probes": [
+        "G1"
+      ],
+      "input": {
+        "criterion_id": "item-10",
+        "action_id": null,
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Vou indicar antibiótico intravenoso, mas sem cobertura para anaeróbios."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "assessed:inadequado"
+        ],
+        "note": "The source scores an antibiotic without anaerobic coverage at the middle level; the package cannot express that disjunction (gap G1) and encodes count thresholds. Proposed outcome is the package encoding, which is lower than the source."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    }
+  ]
+}

@@ -15,6 +15,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.Evaluator
   alias Backend.Stations.Impressos
   alias Backend.Stations.JevDecision
+  alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationLoader
@@ -355,6 +356,25 @@ defmodule Backend.Stations do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # ============================================================================
+  # Qualification
+  # ============================================================================
+
+  @doc """
+  Runs the fictional qualification cases of `station_id` through the Jev
+  dialogue gate and the rubric assessment (issue #130).
+
+  The summary holds identifiers and outcome labels only, and never a verdict.
+  See `Backend.Stations.Qualification`.
+  """
+  @spec run_qualification(String.t(), keyword()) ::
+          {:ok, Qualification.summary()} | {:error, Qualification.load_error()}
+  def run_qualification(station_id, opts \\ []), do: Qualification.run(station_id, opts)
+
+  @doc "Renders a qualification summary as a label-level plain-text report."
+  @spec render_qualification(Qualification.summary()) :: String.t()
+  def render_qualification(summary), do: Qualification.render(summary)
 
   # ============================================================================
   # Audio & Speech Operations
