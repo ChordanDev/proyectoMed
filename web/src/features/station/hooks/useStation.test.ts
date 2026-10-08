@@ -543,6 +543,40 @@ describe("useStation", () => {
     expect(result.current.audioConsent).toBe(false);
   });
 
+  it("transitions to failed with documented error when session expires and can recover via reset", async () => {
+    const expiredError = new ApiError(410, "session_expired", "A sessão expirou.");
+    const api = apiMock({
+      sendMessage: vi.fn().mockRejectedValue(expiredError),
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+    expect(result.current.status).toBe("active");
+
+    await act(async () => {
+      await result.current.send(message);
+    });
+    expect(result.current.status).toBe("failed");
+    expect(result.current.error).toBe("A sessão expirou.");
+    expect(result.current.result).toBeNull();
+
+    await act(async () => {
+      await result.current.reset();
+    });
+
+    expect(result.current.status).toBe("idle");
+    expect(result.current.error).toBeNull();
+    expect(result.current.result).toBeNull();
+
+    // Verify recovery starts a clean active session
+    await act(async () => {
+      await result.current.start(true);
+    });
+    expect(result.current.status).toBe("active");
+  });
+
   describe("server-authoritative station deadline", () => {
     afterEach(() => {
       vi.useRealTimers();
