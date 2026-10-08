@@ -301,10 +301,13 @@ class TurnManager:
         phoenix: PhoenixClient,
         on_reply=None,
         cleanup_timeout: float = 1.0,
+        on_cancel=None,
     ):
         self.tracker = tracker
         self.phoenix = phoenix
         self.on_reply = on_reply
+        # Synchronous consumer told which turn was cancelled or went stale (#120).
+        self.on_cancel = on_cancel
         self.pending_turn_id: int | None = None
         self.pending_commit_task: asyncio.Task | None = None
         self.pending_cancel_task: asyncio.Task | None = None
@@ -354,6 +357,7 @@ class TurnManager:
         ):
             turn_to_cancel = self.pending_turn_id
             self.tracker.mark_turn_stale(turn_to_cancel)
+            self._notify_cancel(turn_to_cancel)
             if self._queued_commit and self._queued_commit[0] == turn_to_cancel:
                 # Only explicit barge-in allows queued text to be superseded.
                 self._queued_commit = None
@@ -513,6 +517,9 @@ class TurnManager:
                     result = self.on_reply(accepted)
                     if asyncio.iscoroutine(result):
                         await result
+                if accepted is None and reply.is_committed_receipt():
+                    # A committed result the tracker refuses is a stale generation.
+                    self._notify_cancel(turn_id)
                 return accepted
             return None
         except asyncio.CancelledError as exc:
@@ -526,6 +533,7 @@ class TurnManager:
             if failure.kind == "stale_generation":
                 self._unresolved_cancel_turns.discard(turn_id)
                 self.tracker.mark_turn_stale(turn_id)
+                self._notify_cancel(turn_id)
                 return None
             self._record_error(failure)
             raise
@@ -538,6 +546,10 @@ class TurnManager:
                 and turn_id not in self._unresolved_cancel_turns
             ):
                 self.pending_turn_id = None
+
+    def _notify_cancel(self, turn_id: int) -> None:
+        if self.on_cancel is not None:
+            self.on_cancel(turn_id)
 
     def _track_task(self, task: asyncio.Task) -> None:
         self._all_tasks.difference_update(t for t in tuple(self._all_tasks) if t.done())
@@ -643,12 +655,14 @@ async def process_speech_stream(
     on_close=None,
     cleanup_timeout: float = 1.0,
     eof_timeout: float = 15.0,
+    on_cancel=None,
 ) -> None:
     turn_manager = TurnManager(
         tracker=tracker,
         phoenix=phoenix,
         on_reply=on_reply,
         cleanup_timeout=cleanup_timeout,
+        on_cancel=on_cancel,
     )
     turn_manager.set_main_task(asyncio.current_task())
     try:

@@ -168,7 +168,9 @@ active and consented, streams only the learner microphone to Deepgram (`nova-3`,
 `pt-BR`, keyterms from the station package `stt_keyterms`), publishes interim
 transcripts to the room (data topic `transcript`) and POSTs each final utterance to
 Phoenix with a monotonic `turn_id`. Phoenix commits each turn at most once. The web
-does not render transcripts yet (#121) and no patient reply is generated yet (#119).
+does not render transcripts yet (#121). The patient reply Phoenix returns for each turn
+is spoken by the same worker; see
+["Patient speech (ElevenLabs)"](#patient-speech-elevenlabs--manual-test) below.
 
 **Prerequisites:** the LiveKit setup from the previous section, `brew install uv`, and
 a Deepgram API key.
@@ -245,6 +247,77 @@ The worker log shows it registered with the LiveKit server.
 
 Worker unit tests (no credentials): `cd voice-worker && uv run python -m unittest`.
 
+## Patient speech (ElevenLabs) — manual test
+
+When Phoenix commits a learner turn it returns the approved patient reply to the worker
+(`reply_text` with its `generation_id`, #119). The worker (#120) does two things with
+it, in this order:
+
+1. Publishes the approved text to the room (data topic `transcript`), so the reply can
+   be read whatever happens to the audio.
+2. Sends that text, and nothing else, to ElevenLabs streaming TTS and publishes the
+   audio frame by frame on one patient audio track (`patient-voice`) of the
+   `voice-worker` participant.
+
+Playback is fenced by the turn's generation: a newer accepted turn, a barge-in on a
+pending turn, a stale result or the learner disconnecting stops the provider stream,
+clears the buffered audio and drops any frame that arrives late. Phoenix remains the
+only text authority; the worker never composes, edits or retries reply text. Learner
+speech over an answer that is already playing does not stop it by itself until the next
+reply is accepted; that barge-in detection belongs to #121. The web
+does not render these events yet (#121); the patient audio is already audible because
+the SPA attaches the subscribed audio track.
+
+**Worker environment** (never sent to the browser or published to the room):
+
+| Variable              | Required | Purpose                                                                 |
+| --------------------- | -------- | ----------------------------------------------------------------------- |
+| `ELEVENLABS_API_KEY`  | yes      | ElevenLabs API key.                                                     |
+| `ELEVENLABS_VOICE_ID` | yes      | Voice used for the patient.                                             |
+| `ELEVENLABS_MODEL`    | no       | TTS model. Default `eleven_flash_v2_5` (low latency, supports pt-BR).   |
+
+If the key or the voice id is missing the worker keeps transcribing and delivers every
+reply as text followed by a `synthesis_failed` event.
+
+**Room events** (all on data topic `transcript`, reliable, JSON):
+
+| Event                 | Shape                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| Learner transcript    | `{"session_id", "turn_id", "final", "text"}`                                            |
+| Patient text          | `{"session_id", "turn_id", "generation_id", "role": "patient", "text"}`                 |
+| Speech failure        | `{"session_id", "turn_id", "generation_id", "failure": "synthesis_failed"}`             |
+| Worker stopped        | `{"session_id", "error": "<kind>"}`                                                     |
+
+`failure` is not fatal: the patient text for that generation was already delivered and
+the worker keeps serving the session. It covers any provider error, provider disconnect
+or track publication error, and carries no provider message. `error` still means the
+worker job stopped. Reply text is never logged; worker logs carry the session id, turn
+id, generation id and failure kind only.
+
+**Manual test** (continues the Deepgram checklist above, same backend):
+
+1. Start the worker with the extra variables:
+
+   ```sh
+   LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
+     DEEPGRAM_API_KEY=<your-key> ELEVENLABS_API_KEY=<your-key> \
+     ELEVENLABS_VOICE_ID=<voice-id> PHOENIX_URL=http://localhost:4000 \
+     VOICE_WORKER_SECRET=dev-worker-secret uv run python worker.py dev
+   ```
+
+2. Connect voice in the SPA and ask a question the station can answer (e.g. "Onde
+   dói?"). The patient answers aloud in Portuguese shortly after you stop speaking.
+   `lk room participants list "$ROOM" ...` shows one audio track published by
+   `voice-worker`.
+3. Ask a second question while the first answer is still playing: when the new reply
+   is ready the old audio stops and only the new answer is heard.
+4. Press **Desconectar voz** mid-answer, then **Conectar voz**: the interrupted answer
+   does not resume and the next question is answered normally.
+5. Restart the worker with `ELEVENLABS_API_KEY=wrong` and ask a question: no audio, the
+   worker logs `speech stopped for session <id> turn <n> generation <n>:
+   synthesis_failed` and keeps running; the next learner turn is still committed.
+6. Scan the worker output: no reply text, API key or provider message appears.
+
 ---
 
 ## Test
@@ -316,7 +389,8 @@ the room on completion, expiry, or learner exit. When LiveKit is not
 configured on the backend, or the microphone permission is denied, the panel
 reports the failure and the text path keeps working unaffected.
 The `voice-worker/` Python process transcribes the learner microphone through
-Deepgram and commits final utterances to Phoenix (#118).
+Deepgram and commits final utterances to Phoenix (#118), then speaks each reply
+Phoenix approves through ElevenLabs on the patient audio track (#120).
 `NoticeScreen` requires explicit audio consent whenever voice support is
 enabled; callers can pass `voiceSupport={false}` for text-only mode. See
 ["Voice session (LiveKit) — manual test"](#voice-session-livekit--manual-test)

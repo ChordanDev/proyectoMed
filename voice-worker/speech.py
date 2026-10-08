@@ -192,6 +192,9 @@ class SpeechPlayer:
                     self._source.clear_queue()
                     return None
                 await self._source.capture_frame(audio.frame)
+            # Still this generation until the buffered tail is heard, so a cancel in
+            # that window clears it instead of being a finished-generation no-op.
+            await self._source.wait_for_playout()
             return None
         except Exception:
             if self._speaking is not reply:

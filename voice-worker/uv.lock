@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -921,6 +921,18 @@ wheels = [
 ]
 
 [[package]]
+name = "livekit-plugins-elevenlabs"
+version = "1.8.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/d4/47f4687634e1220c893b8cb08888e21532f04f644cc51812dfbb9ffe0571/livekit_plugins_elevenlabs-1.8.3.tar.gz", hash = "sha256:abb747f1127b29cc1624c3c4d2448c715d83957460e3a2729376ebb2f17912b1", size = 23872, upload-time = "2026-09-23T19:04:52.264Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/08/fd966a30d2bac815091509b6bb60bcaec33ae6a555e519a94f87d8baca6e/livekit_plugins_elevenlabs-1.8.3-py3-none-any.whl", hash = "sha256:e3b58c206e843449d093cbfb1f3f32b1c04b8f36960eef84d8ae8b8baaccb20a", size = 25653, upload-time = "2026-09-23T19:04:50.964Z" },
+]
+
+[[package]]
 name = "livekit-protocol"
 version = "1.1.27"
 source = { registry = "https://pypi.org/simple" }
@@ -1767,6 +1779,7 @@ dependencies = [
     { name = "httpx" },
     { name = "livekit-agents" },
     { name = "livekit-plugins-deepgram" },
+    { name = "livekit-plugins-elevenlabs" },
 ]
 
 [package.metadata]
@@ -1774,6 +1787,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "livekit-agents", specifier = ">=1.2" },
     { name = "livekit-plugins-deepgram", specifier = ">=1.2" },
+    { name = "livekit-plugins-elevenlabs", specifier = ">=1.2" },
 ]
 
 [[package]]
