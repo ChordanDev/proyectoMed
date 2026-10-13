@@ -1,6 +1,6 @@
 # Jev Prototype Design: Verified Dialogue and Educational Point Estimates
 
-Status: **Accepted architecture as of 2026-09-21 — not implemented.** [ADR-011 (#123)](https://github.com/ChordanDev/proyectoMed/issues/123) and [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124) are Accepted, and [Ticket 14 (#125)](https://github.com/ChordanDev/proyectoMed/issues/125) with children #126–#130 remains the implementation-planning graph. Acceptance authorizes architecture only. These records do not describe shipped Jev, estimate, schema, API, or UI behavior; do not activate pilot or production use; and do not select or approve a provider, accept privacy/ZDR/legal terms, establish clinical accuracy, authorize certification/pass-fail/readiness claims, or complete clinical pt-BR qualification.
+Status: **Accepted architecture as of 2026-09-21. Only the evaluation side owned by [#128](https://github.com/ChordanDev/proyectoMed/issues/128) is described here as implemented, as an internal backend capability with no live adapter and no HTTP exposure (2026-10-06); see [Evaluation contract](#evaluation-contract).** Every other section keeps the "accepted, not implemented" status it states. [ADR-011 (#123)](https://github.com/ChordanDev/proyectoMed/issues/123) and [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124) are Accepted, and [Ticket 14 (#125)](https://github.com/ChordanDev/proyectoMed/issues/125) with children #126–#130 remains the implementation-planning graph. Acceptance authorizes architecture only. These records do not describe shipped Jev, learner-visible estimate, API, or UI behavior; do not activate pilot or production use; and do not select or approve a provider, accept privacy/ZDR/legal terms, establish clinical accuracy, authorize certification/pass-fail/readiness claims, or complete clinical pt-BR qualification.
 
 ## Decision summary
 
@@ -20,11 +20,11 @@ Status: **Accepted architecture as of 2026-09-21 — not implemented.** [ADR-011
 | Area | Current evidence | Accepted, unimplemented change |
 |---|---|---|
 | Reply boundary | Closed #44 supplied the prior bounded-reply seam. Current modules remain top-level. | Add the Jev verification decision inside Phoenix while preserving #119–#121 ownership. |
-| Evaluation | Closed #27 supplied the prior evaluator seam. The runtime still follows ADR-005 (#38) and has no global score. | Add four-state assessment and educational estimates under ADR-012; the accepted architecture is not implemented. |
+| Evaluation | Closed #27 supplied the prior evaluator seam, and it still serves `GET .../result`: the learner-visible runtime follows ADR-005 (#38) and has no global score. #128 added the four-state assessment and exact estimates as an internal capability (`Backend.Stations.assess_session/2`) whose default adapter is disabled. | Expose the assessment through the versioned result contract (#129) once a qualified decision adapter and clinical qualification (#130) exist. |
 | Voice | ADR-009 (#114) is **Accepted** for prototype LiveKit/WebRTC + Deepgram + ElevenLabs. Ticket 13 (#116) owns children #117–#121. | Integrate verification at the established Phoenix safety boundary; do not create another media or orchestration path. |
 | Avatar | ADR-010 (#115) is **Proposed** and V3-only. | No dependency; excluded from this prototype. |
 | Impressos | The #105–#108 dependency graph is unchanged. | Consume Impressos events only for criteria whose evidence requires those events. |
-| Context governance | `Backend.StationAI`, `Backend.Evaluator`, and other top-level modules remain current code; no `Backend.Stations` module exists in the current source. | Migrate station operations behind the accepted `Backend.Stations` public context with internals under `backend/lib/backend/stations/`; this is an unimplemented target, not a shipped fact. |
+| Context governance | `Backend.Stations` is the public context module, with its internals under `backend/lib/backend/stations/`. | No further change from this design. |
 
 ## Dialogue safety contract
 
@@ -95,7 +95,7 @@ One shared Phoenix proxy/domain interface can host separate adapters for:
 - ElevenLabs text-to-speech; and
 - the Jev decision model.
 
-Sharing an interface boundary does not collapse those capabilities into one adapter. Jev verifies generation output; it does not author or replace it. The accepted target public entry point is `Backend.Stations`, but migration from current top-level modules remains unimplemented governance work.
+Sharing an interface boundary does not collapse those capabilities into one adapter. Jev verifies generation output; it does not author or replace it. The public entry point is `Backend.Stations`.
 
 Provider selection, credentials, API limits, zero-data-retention terms, legal terms, and clinical pt-BR calibration are unresolved qualification gates. Vendor statements are inputs to review, not repository validation.
 
@@ -125,40 +125,128 @@ flowchart LR
 
 ## Evaluation contract
 
+Status of this section: **implemented by [#128](https://github.com/ChordanDev/proyectoMed/issues/128) as an internal backend capability (2026-10-06).** Nothing in it is reachable over HTTP, no live decision adapter exists, and its clinical accuracy is unmeasured. What it does not do is listed under [Limits](#limits).
+
+| Question | Answer |
+|---|---|
+| Entry point | `Backend.Stations.assess_session/2`, which runs `Backend.Stations.RubricAssessment.assess/3` on a completed session and the active Station Package. |
+| Success | Criterion results in rubric order, the point estimates, and the list of Jev calls made with the justification of each. |
+| Failure | `{:error, {:invalid_attempt, reason}}` with no criteria at all. |
+| Default behavior | The configured decision adapter is the disabled adapter, so every assessment is an invalid attempt (`adapter_disabled`) until a qualified adapter is configured. |
+| Learner-facing result | Unchanged. `GET .../result` still serves the legacy evaluator's `met \| omitted \| uncertain` shape. |
+
 ### Shared evidence
 
-Evaluation uses the full ordered, immutable, role-labelled transcript. Rubric sections group criteria for presentation; they do not partition the transcript. A learner statement may support multiple criteria. Patient-role words never earn learner credit and may serve only as context or contradiction evidence.
+Evaluation uses one evidence pool per attempt, built from the completed, immutable session and shared by every rubric question. Rubric sections group criteria for presentation; they do not partition the pool. A learner statement may support multiple criteria. Patient-role words never earn learner credit: a cited patient turn is rejected.
 
-When a criterion depends on an exam request or displayed result, evaluation also uses the relevant event from the unchanged #105–#108 Impressos graph, including source and channel identity. Criteria that do not depend on such events have no Impressos dependency.
+Evidence identifiers are derived at evaluation time. They are not stored, and the conversation and Impressos event contracts are unchanged:
+
+| Evidence | Identifier | Channel | Provenance |
+|---|---|---|---|
+| Transcript turn | `turn-N`, where `N` is the 1-based position in the session `messages` | The turn's modality (`text` or `voice`) | `transcript` |
+| Impressos request event | `impresso-<request_id>` | `impressos` | `impressos` when the event was recorded for the package's version and every impresso it released is authored in the package; otherwise `unverified` |
+
+The pool is ordered by timestamp. On an exact tie, turns keep message order, events keep their `order`, and turns come before events. That order is what "earlier" and "later" mean for the first-N and task-order rules below.
+
+Only verified items are offered to Jev, each reduced to `id`, `role`, and `text`. Unverified events stay in the pool so that citing one is rejected with a reason instead of looking like an identifier that never existed.
 
 ### TypeSafe outputs and evidence identity
 
-TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. Code supplies and validates the allowed classes, then selects only existing transcript or event IDs.
+TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. The implemented contract therefore asks only for classes and for identifiers taken from the code-supplied pool, and code validates every identifier. No probability or confidence value is read.
 
-If the provider can return an ID from a code-supplied closed set, code verifies that the ID exists, has the expected role and provenance, and byte-matches the stored evidence. If the provider cannot return evidence IDs, deterministic span alignment is a separate algorithm and test surface. The design must not pretend that free prose or a generated identifier is aligned evidence.
+**One batched call.** Every question that needs Jev travels in one call, with the pool sent once. A second call happens only for a provider capacity limit (the `:max_questions_per_call` option), and every call is recorded as `single_batch` or `provider_capacity`. No call exists for a result dependency: the one rule that depends on other criteria, task order, is computed in code.
 
-Independent questions that inspect the same session state belong in one batched call, with the complete relevant role-labelled transcript shared across questions. A second call is allowed only for a genuine result dependency or a provider capacity limit—not to serially split topics.
+| Direction | Field | Content |
+|---|---|---|
+| Question | `criterion` | The criterion `id` and a description composed from the authored description, its evidence questions, and one line per level. |
+| Question | `allowed_classes` | The authored level labels plus `uncertain`. |
+| Question | `actions` | The authored actions (`id`, `description`); empty when none are authored. |
+| Question | `enumerate_answers` | Present, and `true`, only on a criterion that authors `first_n` and at least one action. |
+| Decision | `criterion_id`, `classification` | Exactly one decision per question, classified with one of that question's allowed classes. |
+| Decision | `evidence_ids` | Identifiers from the pool that support the classification. |
+| Decision | `rationale` | Optional text. It is accepted and not carried into the result. |
+| Decision | `actions` | Exactly one entry per authored action: `performed`, `not_performed`, or `uncertain`, with its own `evidence_ids`. |
+| Decision | `answers` | Required when the enumeration was requested; on any other question it must be absent or an empty list, which is dropped. The ordered list of the distinct answers the learner gave to that criterion, each `{evidence_id, action_id}`, where `action_id` is the authored action it matches or `null`. |
+
+**Structural problems invalidate the attempt.** A missing, duplicated, or unknown criterion or action decision, a class outside the allowed set, a missing or malformed `answers` list, an answer naming an unknown action or an action already named, or a non-empty `answers` on a question that did not request it, is treated like any other technical failure. The enumeration added no adapter callback: an adapter that does not enumerate fails as it would for any missing output.
+
+**Bad evidence fails one criterion closed.** Every cited identifier is looked up in the pool. The criterion becomes `uncertain` with a machine-readable reason, and nothing is repaired, dropped, substituted, or aligned by text:
+
+| Rejection | Meaning |
+|---|---|
+| `nonexistent_evidence_id` | Not an identifier of the pool. |
+| `wrong_role` | Not authored by the learner, such as a patient turn. |
+| `wrong_provenance` | An unverified Impressos event. |
+| `wrong_channel` | Learner evidence that does not satisfy the criterion's `modality_requirement`, or an event that released nothing. |
+
+The same validation applies to the criterion's own citations, to each action's citations, and to each enumerated answer. Because Jev returns identifiers only, there is no model-authored excerpt to byte-match: the excerpts a result reports are read from the pool. If a provider cannot return identifiers from a code-supplied set, deterministic span alignment remains a separate, unimplemented algorithm and test surface.
 
 ### Deterministic rubric application
 
-After classification, code—not Jev—applies authored rules:
+After classification, code—not Jev—decides the status, the level, and the points.
 
-- counts and thresholds;
-- mandatory sub-actions;
-- binary levels;
-- sequence and time windows;
-- first-N caps;
-- veto conditions;
-- spoken-action requirements, with Impressos evidence when relevant; and
-- explicit author cancellation/exclusion.
+**Statuses.** Status is exactly `assessed | uncertain | not_observable | not_applicable`. A level (`inadequado | parcialmente_adequado | adequado`) and points exist only for `assessed`.
 
-Status is exactly `assessed | uncertain | not_observable | not_applicable`. A level (`inadequado | parcialmente_adequado | adequado`) and points exist only for `assessed`. A genuine omission on complete evidence may receive the authored zero-point level. Low confidence or missing modality is never silently scored zero. Arithmetic uses decimal or scaled-integer values, never binary floating point or probability-weighted points.
+| Status | When | Asked to Jev | In the maxima |
+|---|---|---|---|
+| `assessed` | A level was decided and, when it is above zero, grounded in validated learner evidence. | Yes, except the task-order criterion | Scored and eligible |
+| `uncertain` | Jev answered `uncertain` and no authored rule could decide; or cited evidence failed validation; or an unresolved action could still change the level; or the enumerated answers of a `first_n` criterion could not be verified; or a positive level had no evidence; or, for the task-order criterion, a ranked criterion is unresolved. | Yes, except the task-order criterion | Eligible only |
+| `not_observable` | The criterion's `modality_requirement` names a modality the station cannot provide: an Impressos requirement with no matching authored impresso, or an unknown modality. | No | Eligible only |
+| `not_applicable` | The criterion authors `exclusion: true`. | No | Neither |
+
+A modality the station does provide but the learner never used is a genuine omission: it is assessed at the authored zero-point level when Jev classifies it so. Low confidence or missing modality is never silently scored zero.
+
+**Authored rule fields.** All are optional additions to the v2 package schema, so existing packages stay valid. The loader rejects inconsistent combinations, each with its own message.
+
+| Field | Meaning in code |
+|---|---|
+| `levels[].points` | A multiple of 0.025, converted once to integer fortieths. |
+| `levels[].min_actions` | Count thresholds, set on every level of a criterion or on none. The level is the highest one whose threshold is at most the number of performed, non-forbidden actions. The count decides; Jev's criterion-level class does not. |
+| `actions[].role` | `counted` (default), `mandatory`, or `forbidden`. A `mandatory` action that was not performed, or a `forbidden` action that was performed with evidence, scores the criterion at its zero-point level. |
+| `count_cap` | Caps the count of performed actions before thresholds are applied. |
+| `first_n` | Only the learner's first N enumerated answers to the criterion are eligible, including answers that match no authored action. A criterion that authors it and at least one action must author thresholds, because a level Jev chooses as a whole cannot be limited to the first N answers. It has no effect on a criterion without actions. |
+| `veto` | Must be `true` on a criterion with a `forbidden` action. The role, not this flag, applies the veto, which is local to the criterion. |
+| `order` and `rule: "task_order"` | `order` ranks a criterion as a step. The single `task_order` criterion is assessed in code from those ranks and is never sent to Jev. |
+| `exclusion` | Author cancellation: the criterion is `not_applicable`. |
+| `modality_requirement` | `null`, `verbal`, `impressos`, or an Impressos category; restricts which evidence is valid for the criterion. |
+
+**Order of application, per criterion Jev answered:**
+
+1. **Validate evidence** cited by the criterion and by each action.
+2. **Apply `first_n`.** The enumerated answers must cite valid evidence, must not go backwards in pool order (one turn may hold several answers), and must agree with the action classes: every `performed` action is listed and every listed action is `performed`. An answer that names an action must cite one of that action's own validated evidence items (`answer_evidence_mismatch`), unless the action has none. Otherwise the criterion is `uncertain`. A `counted` or `mandatory` action listed beyond the first N is then treated as not performed, with certainty. A `forbidden` action keeps its effect wherever it appears: a harmful conduct is not excused by position. Finally, an action classified `uncertain` has no listed position, so if it was performed it could push a listed answer beyond the first N. When an action is unresolved and the list is full—it has at least N answers, or its answers plus the actions classified `uncertain` exceed N—the criterion is `uncertain`, unless step 3 already gives a certain zero.
+3. **Apply the certain zeros:** a performed `forbidden` action, or a `mandatory` action not performed.
+4. **Decide by reachable outcomes.** An action is unresolved when it is classified `uncertain`, or `performed` without validated evidence. The criterion is `uncertain` only when resolving its unresolved actions could change the level; if every resolution ends at the same level, it is assessed at that level.
+5. **Take the level** from the thresholds when they are authored, otherwise from Jev's class.
+6. **Ground the credit.** A level above zero with no validated learner evidence is `uncertain` (`unsupported_credit`). A level earned by count is grounded by the evidence of the actions that earned it, and a zero caused by a performed `forbidden` action carries that action's evidence.
+
+A Jev answer of `uncertain` for the criterion as a whole does not skip these steps when thresholds or a `mandatory` or `forbidden` action can decide without it. When none can, the criterion is `uncertain` at once (`classifier_uncertain`), without validating what the answer cites.
+
+**Task order.** After the other criteria are decided, the `task_order` criterion compares the ranked criteria that were assessed above zero, each positioned at its earliest evidence item. The order holds when no lower-ranked step comes after a higher-ranked one; equal ranks are unordered and one turn may back several steps.
+
+| Situation | Result |
+|---|---|
+| The assessed steps already break the order | Zero-point level |
+| No violation, and a ranked criterion is `uncertain` | `uncertain` |
+| At least two steps, in order | Top level |
+| Fewer than two steps | Zero-point level, with no evidence |
+
+Ranked criteria that are excluded, not observable, or assessed at zero are skipped. The criterion's evidence is the earliest evidence item of each compared step.
 
 ### Totals and illustrative fixture
 
-A numeric `total` exists only when every active criterion is assessed. Otherwise `total` is `null`, with a scored subtotal, scored maximum, eligible maximum, and unresolved criteria. No partial result is rescaled.
+Points are exact. Authored values are multiples of 0.025, held as integer fortieths, and summed as integers; a value that is not an exact multiple invalidates the attempt. No probability or confidence multiplies or adjusts points, and nothing is rescaled.
 
-This is an **illustrative fixture only**. It does not infer a real station maximum or publish an expected score:
+> Amended 2026-10-07 (issue #130, amending ADR-012, #124): the granularity was widened from multiples of 0.125 to multiples of 0.025 to follow the tenths used by PEP 2025/2; values in eighths remain valid.
+
+| Estimate | Covers |
+|---|---|
+| `scored_subtotal` | Points of the assessed criteria. |
+| `scored_max` | Maximum points of the assessed criteria. |
+| `eligible_max` | Maximum points of every active criterion, that is, every criterion that is not `not_applicable`. |
+| `total` | Equal to `scored_subtotal` only when every active criterion is assessed; otherwise `null`. Also `null` when no criterion is active. |
+| `unresolved` | The active criteria that are `uncertain` or `not_observable`. |
+
+This is an **illustrative fixture only**. It does not infer a real station maximum or publish an expected score. It shows decimal values as a reader would see them; the internal result holds fortieths (`0.25` is `10`), and the wire format belongs to #129:
 
 ```json
 {
@@ -190,11 +278,19 @@ This is an **illustrative fixture only**. It does not infer a real station maxim
 }
 ```
 
-A technical evaluation timeout, malformed response, transport error, or provider 5xx invalidates the attempt. It is not represented as criterion-level uncertainty.
+A technical evaluation timeout, malformed response, transport error, or provider 5xx invalidates the attempt, as does a structurally invalid batch response or a rubric that cannot be assessed exactly. It is not represented as criterion-level uncertainty, and no partial criteria are returned, including when a later capacity call fails after an earlier one succeeded.
+
+### Limits
+
+- **No live adapter.** Only the disabled adapter and test doubles implement the batch contract. Whether a real decision model can classify these questions, return identifiers from the pool, or enumerate a learner's answers in order is unverified.
+- **Not exposed.** The assessment is not served over HTTP and the web client does not read it. The versioned result contract, the decimal wire format, and the pt-BR disclaimer belong to #129. Until then an explicit, tested projection maps an assessment to the legacy shape: assessed at zero is `omitted`, assessed above zero is `met`, `uncertain` and `not_observable` are `uncertain`, and `not_applicable` criteria are dropped.
+- **Clinical accuracy is unmeasured.** Tests cover the deterministic code with scripted classifications. Calibration, acceptance thresholds, and the rubric content of the real station belong to #130.
+- **Architecture rules not implemented:** time windows; pairwise "only what was said before X counts" gates (PEP 2023/1, PDF pp. 10 and 20); and verbalization requirements (p. 20). They need their own authoring fields and are recorded as follow-ups.
+- **Known gaps in the implemented rules:** a ranked step scored zero by a rule is skipped by task order even though the learner attempted it; code cannot detect an unmatched answer that Jev leaves out of `answers`, which would free a slot among the first N unnoticed; and it cannot verify the order of several answers inside a single turn, because they share one position in the pool. Both rest on the classifier and belong to #130's evaluation.
 
 ## Result contract and learner claim
 
-The current `met | omitted | uncertain` result remains authoritative until a versioned contract is implemented. The migration mechanism—a schema version or versioned endpoint—remains an implementation choice.
+The current `met | omitted | uncertain` result remains authoritative until a versioned contract is implemented (#129). The migration mechanism—a schema version or versioned endpoint—remains an implementation choice. The internal assessment already has a tested projection to that legacy shape (see [Limits](#limits)), but the result endpoint does not use it.
 
 The accepted result architecture requires this pt-BR notice before and on the result screen once implemented:
 
@@ -206,16 +302,28 @@ The UI must label fixtures as `exemplo — dados fictícios`, expose unresolved 
 
 The design uses PEP only as a structural reference. It does not reproduce an official case, item body, answer, cutoff, station total, or medical recommendation.
 
-The retained extraction notes cite the owner-supplied **PEP 2023/1 definitive edition**, filename `2023_1_PEP_publicacao.pdf` (55-page PDF): levels and decimal granularity on PDF pp. 4–5; count, order, and first-N rules on pp. 10–11; veto on p. 15; verbalization and Impressos-supported actions on p. 20; nonverbal criteria on pp. 24–25; and annulment on pp. 46–47. The filename, edition, and PDF page number must travel together in review citations.
+The source is the **PEP 2023/1 definitive edition** published by INEP, filename `2023_1_PEP_publicacao.pdf` (55-page PDF): <https://download.inep.gov.br/revalida/provas_e_gabaritos/2023_1_PEP_publicacao.pdf>. The filename, edition, and PDF page number must travel together in review citations.
 
-The repository file is [`docs/revalida 25.1 pep_definitivo.pdf`](../revalida%2025.1%20pep_definitivo.pdf), a different edition with different pagination. It must not be cited as the source of the 2023/1 page references without a fresh page-level check. Original partner-authored station content remains required.
+| Rule shape | PDF pages | Implemented as |
+|---|---|---|
+| Levels and decimal granularity | pp. 4–5 | `levels[].points` in fortieths (multiples of 0.025) |
+| Mandatory action | p. 4 | `actions[].role: "mandatory"` |
+| Count to level | p. 10 | `levels[].min_actions`, `count_cap` |
+| First N answers | pp. 10–11 | `first_n` |
+| Task order | pp. 5, 11 | `order`, `rule: "task_order"` |
+| Veto, local to the item | p. 15 | `actions[].role: "forbidden"` |
+| Annulment | pp. 46–47 | `exclusion` |
+| Verbalization and Impressos-supported actions | p. 20 | `modality_requirement` only; verbalization requirements are not implemented |
+| Nonverbal criteria | pp. 24–25 | No dedicated field; a modality the station cannot provide is `not_observable` |
+
+Cite the INEP URL, not the repository. The two PDF files committed under `docs/` (`revalida 25.1 pep_definitivo.pdf` and `25.1 prova_habilidades_clinicas.pdf`) are, by filename, 2025/1 documents rather than this edition, and their committed bytes are corrupt: binary content was replaced with Unicode replacement characters, so they cannot be read or used to check a page reference. Original partner-authored station content remains required.
 
 ## ADR impact
 
 | Artifact | Current runtime fact | Accepted architectural effect |
 |---|---|---|
 | ADR-002 (#35) | Accepted Station AI safety contract; current runtime remains unchanged. | [ADR-011 (#123)](https://github.com/ChordanDev/proyectoMed/issues/123), accepted on 2026-09-21, now architecturally extends or supersedes the relevant safety contract. Implementation remains pending. |
-| ADR-005 (#38) | Accepted no-score rule; current runtime still has no global score. | [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124), accepted on 2026-09-21, now architecturally supersedes the no-score rule only for estimates while preserving no certification, pass/fail, or readiness claim. Implementation remains pending. |
+| ADR-005 (#38) | Accepted no-score rule; the learner-visible runtime still has no global score. | [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124), accepted on 2026-09-21, now architecturally supersedes the no-score rule only for estimates while preserving no certification, pass/fail, or readiness claim. #128 computes the estimates internally; exposing them remains pending (#129). |
 | ADR-009 (#114) | **Accepted** prototype LiveKit/WebRTC + Deepgram + ElevenLabs | Reused as the voice foundation; not reopened. |
 | ADR-010 (#115) | **Proposed**, V3 only | Excluded from the Jev prototype. |
 | ADR-008 (#104), #105–#108 | Accepted channel decision and unchanged Impressos DAG | Reused only when a criterion needs event evidence. |
@@ -245,7 +353,10 @@ Architecture acceptance is not approval to implement or activate pilot/productio
 - schema-version field versus versioned endpoint;
 - provider selection, credentials, limits, and evidence for the required human terms/privacy/legal/ZDR approval;
 - clinical pt-BR calibration method and evidence for the required human qualification gate;
-- whether validated sub-action details are public API fields or UI-only grouping; and
+- whether validated sub-action details are public API fields or UI-only grouping;
+- whether an action left unscored by `first_n` is reported as such: the internal result currently reports each action as Jev classified it;
+- whether the selected decision model can enumerate a learner's answers in order, which `first_n` depends on (#130's evaluation);
+- authoring fields for the rule shapes listed as not implemented under [Limits](#limits); and
 - deterministic span-alignment design if the selected provider cannot return code-supplied evidence IDs.
 
 These choices do not reopen the accepted architecture; they belong to the named child issue gates and separately authorized runtime planning.
@@ -263,7 +374,8 @@ These are vendor claims, not repository validation. Zero-data-retention, legal t
 
 ## Repository references
 
-- `CONTEXT.md` — current runtime terms plus accepted, unimplemented architecture terms.
+- `CONTEXT.md` — current runtime terms, the internally implemented assessment terms, and accepted, unimplemented architecture terms.
+- `backend/lib/backend/stations/rubric_assessment.ex` and `backend/lib/backend/stations/rubric_assessment/` — the implemented assessment; `backend/lib/backend/stations/jev_decision/rubric_batch.ex` — the batch contract; `backend/priv/stations/package.schema.json` — the authored rule fields.
 - `SPEC_MVP.md` — current contract plus the accepted, unimplemented extension.
 - [#123 ADR-011](https://github.com/ChordanDev/proyectoMed/issues/123); [#124 ADR-012](https://github.com/ChordanDev/proyectoMed/issues/124); [#125 Ticket 14](https://github.com/ChordanDev/proyectoMed/issues/125) and children [#126](https://github.com/ChordanDev/proyectoMed/issues/126)–[#130](https://github.com/ChordanDev/proyectoMed/issues/130).
 - #114 ADR-009; #115 ADR-010; #116 Ticket 13 and children #117–#121.

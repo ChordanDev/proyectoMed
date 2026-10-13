@@ -40,7 +40,10 @@ version pin, and partial-output policy are testable and reproducible.
 
 ---
 
-## Install
+## Prerequisites and install
+
+Install the pinned Node/npm and Elixir/OTP versions listed above, then install
+both runtime dependency sets:
 
 ```sh
 # Web SPA (Vite + React + TypeScript).
@@ -49,6 +52,12 @@ npm --prefix web install
 # Backend (Phoenix / Elixir).
 ( cd backend && mix deps.get )
 ```
+
+The process-level E2E suite also requires `mix` on `PATH` and permission to
+bind ephemeral localhost ports. It starts a real Phoenix server and a local,
+deterministic OpenAI-compatible mock; it needs neither an OpenAI credential nor
+external network access. No separately running Vite or Phoenix server is
+required.
 
 The repository commits both lockfiles (`web/package-lock.json` and
 `backend/mix.lock`) so a fresh clone builds deterministically.
@@ -85,6 +94,40 @@ During local development, Vite proxies `/api` requests to the Phoenix backend
 at `http://localhost:4000`, avoiding a separate CORS dependency. Set
 `VITE_API_URL` only when the API is hosted at a different origin; production
 may instead serve the SPA and API from the same origin.
+
+### Impressos (manual test)
+
+Learners request Impressos (physical exam / labs / imaging / reports) by
+free text during an active session. The backend matches the text against the
+active package's authored impressos (normalized keyword substring match) and
+releases every matched Impresso in authored order.
+
+```sh
+BASE=http://localhost:4000/api/stations/active
+
+# Start a session.
+SESSION_ID=$(curl -s -X POST "$BASE/sessions" \
+  -H 'content-type: application/json' -d '{"audio_consent": false}' \
+  | jq -r .session_id)
+
+# Request an Impresso — decision "released", releases the matching exam.
+curl -s -X POST "$BASE/sessions/$SESSION_ID/impressos/request" \
+  -H 'content-type: application/json' \
+  -d '{"text": "quero ver os sinais vitais"}' | jq
+
+# Repeat the same request — decision "already_released", nothing new.
+curl -s -X POST "$BASE/sessions/$SESSION_ID/impressos/request" \
+  -H 'content-type: application/json' \
+  -d '{"text": "quero ver os sinais vitais"}' | jq
+
+# Ask for an exam the station does not carry — decision "unavailable".
+curl -s -X POST "$BASE/sessions/$SESSION_ID/impressos/request" \
+  -H 'content-type: application/json' \
+  -d '{"text": "tomografia de crânio"}' | jq
+
+# List everything released so far, in release order.
+curl -s "$BASE/sessions/$SESSION_ID/impressos" | jq
+```
 
 ---
 
@@ -318,10 +361,13 @@ id, generation id and failure kind only.
 - Browser extensions or VPNs that block local WebRTC make **Conectar voz** fail before
   the microphone prompt; use a browser profile without them.
 
-On this branch every voice turn is answered with the canonical refusal: the voice path
-admits only the refusal or an exact package fact until Jev verification (#127) reaches
-`feat/116-realtime-voice`. The refusal is still real synthesized audio, so the steps
-below apply.
+Every voice reply passes through Jev verification (#127) before it is admitted. With the
+default `Backend.Stations.JevDecision.DisabledAdapter` the turn fails closed with
+`station_ai_unavailable` and nothing is spoken, so for this manual test start Phoenix
+with `JEV_E2E_APPROVING_ADAPTER=true` (see
+["E2E-only Jev adapter"](#e2e-only-jev-adapter)). After verification the voice path
+still admits only the canonical refusal or an exact package fact; anything else is
+replaced by the refusal, which is real synthesized audio, so the steps below apply.
 
 **Manual test** (continues the Deepgram checklist above, same backend):
 
@@ -351,22 +397,67 @@ below apply.
 
 ## Test
 
-The root entry point runs web Vitest and Phoenix ExUnit in sequence and
-propagates the first non-zero exit from either suite:
+The standard root command runs three explicit phases in order: web unit tests,
+backend ExUnit, then process-level E2E scenarios.
 
 ```sh
 bash scripts/test.sh
 ```
 
-Equivalent per-runtime commands:
+Focused and complete web commands:
 
 ```sh
-# Web SPA (Vitest + @testing-library/react).
-npm --prefix web test
+# Web unit tests only (Vitest + @testing-library/react).
+npm --prefix web run test:unit
 
-# Backend (ExUnit).
+# Backend tests only (ExUnit).
 ( cd backend && mix test )
+
+# Process/API E2E scenarios only (Vitest starts a real Phoenix process).
+npm --prefix web run test:e2e
+
+# Complete web suite: web unit tests plus process-level E2E.
+npm --prefix web test
 ```
+
+The E2E suite is process/API integration, not browser automation. It drives the
+web API client against a real Phoenix HTTP process and a deterministic local
+provider mock. It covers these scenarios and expected outcomes:
+
+- **Station E2E Happy Path:** starts a consented session, exchanges a learner
+  message, finishes the session, and returns criterion-level feedback; invalid
+  session access also returns the structured `404 session_not_found` error.
+- **Station E2E Technical Failure:** converts an upstream provider failure into
+  `502 station_ai_unavailable`, keeps unfinished feedback unavailable with
+  `422 session_not_finished`, and permits recovery through a fresh session.
+- **Station E2E Session Expiry:** rejects expired sessions with `410
+  session_expired` (or `404 session_not_found` after purge), serves no stale
+  result, and permits a fresh recovery session.
+
+### E2E-only Jev adapter
+
+Jev has no live provider yet, and its default adapter
+(`Backend.Stations.JevDecision.DisabledAdapter`) fails closed: every patient
+reply and every rubric decision is refused. The E2E harness therefore starts
+Phoenix with `JEV_E2E_APPROVING_ADAPTER=true`, which selects
+`Backend.E2ESupport.ApprovingJevAdapter` (`backend/e2e_support/`).
+
+**This adapter bypasses Jev verification and is test-only.** It reads no text
+and calls no provider: it verifies every patient reply, and it awards a
+criterion its last authored level only when a learner evidence item exists to
+cite, staying `uncertain` otherwise. The level and points in the E2E result
+prove the result contract, not the quality of any assessment.
+
+- It is compiled only for `dev` and `test` (`elixirc_paths` in
+  `backend/mix.exs`) and is not compiled into `prod`.
+- `backend/config/runtime.exs` honors the variable only in `dev`, where the
+  harness runs; in `test` and `prod` it is ignored and the default adapter stays
+  in place.
+- Do not set the variable outside the E2E suite.
+
+The runner is fail-fast. A failed phase exits with that phase's exact non-zero
+status and prevents all later phases from running, so an E2E failure can occur
+only after the web unit and backend phases have passed.
 
 ---
 
@@ -390,12 +481,14 @@ and Elixir versions from `backend/.tool-versions`.
 | Script                                       | Purpose                                                                                  |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `scripts/scaffold.sh`                        | Sole generator boundary — preflight, git-root authority, Vite then Phoenix, partial preservation. |
-| `scripts/test.sh`                            | Root test orchestrator — `npm --prefix web test` then `( cd backend && mix test )`.     |
+| `scripts/test.sh`                            | Root test orchestrator — web unit, backend ExUnit, then process-level E2E.               |
 | `tests/scripts/scaffold_red.sh`              | RED/GREEN acceptance tests for `scripts/scaffold.sh` (16 invariants).                   |
-| `tests/scripts/test_red.sh`                  | RED/GREEN acceptance tests for `scripts/test.sh` (ordering + exit-code propagation).    |
+| `tests/scripts/test_red.sh`                  | Hermetic acceptance tests for three-phase ordering and exact fail-fast propagation.     |
 
-Both RED harnesses use bash fake-command stubs over `PATH`, so they are
-hermetic: no network access and no real npm/npx/mix or Vite/Phoenix generators.
+Both shell acceptance harnesses use bash fake-command stubs over `PATH`, so
+they are hermetic: no network access and no real npm/npx/mix or Vite/Phoenix
+generators. The application E2E suite is separate: it starts a real local
+Phoenix process while replacing only the external provider with a local mock.
 
 ```sh
 # All RED harnesses from a clean state.

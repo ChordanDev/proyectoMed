@@ -32,7 +32,9 @@ defmodule Backend.MixProject do
   end
 
   # Specifies which paths to compile per environment.
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # `e2e_support` holds the E2E-only Jev adapter and must never reach `:prod`.
+  defp elixirc_paths(:test), do: ["lib", "e2e_support", "test/support"]
+  defp elixirc_paths(:dev), do: ["lib", "e2e_support"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Specifies your project dependencies.

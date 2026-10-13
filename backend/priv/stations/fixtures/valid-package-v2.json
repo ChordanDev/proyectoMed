@@ -1,0 +1,115 @@
+{
+  "station_id": "chest-pain-initial-assessment",
+  "version": "2.0.0",
+  "language": "pt-BR",
+  "display_title": "Avaliação inicial de dor torácica",
+  "placeholder": true,
+  "patient_profile": {
+    "persona": "Paciente fictício, colaborativo e preocupado",
+    "age": 56,
+    "presenting_context": "Dor torácica fictícia iniciada há duas horas.",
+    "tone": "Responde de forma breve e ansiosa."
+  },
+  "revealable_facts": [
+    {
+      "id": "onset",
+      "topic": "onset",
+      "content": "A dor começou durante uma caminhada.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "associated-symptom",
+      "topic": "associated symptom",
+      "content": "Refere náusea leve após o início da dor.",
+      "disclosure_condition": "after_action"
+    }
+  ],
+  "response_rules": [
+    {"id": "unknown-fact", "instruction": "Do not invent facts absent from this package."}
+  ],
+  "expected_actions": [
+    {"id": "ask-onset", "description": "Ask when the chest pain began."}
+  ],
+  "rubric": [
+    {
+      "id": "onset-assessment",
+      "description": "Assesses the onset of chest pain.",
+      "evidence_questions": ["When did the pain begin?"],
+      "practice_recommendation": "Practice opening chest pain assessments with onset questions.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "description": "Does not assess onset."},
+        {"label": "adequado", "points": 1, "description": "Assesses onset clearly."}
+      ],
+      "actions": [{"id": "ask-onset", "description": "Ask about onset."}],
+      "order": 1,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": "verbal"
+    },
+    {
+      "id": "symptom-characterization",
+      "description": "Characterizes the symptom.",
+      "evidence_questions": ["How does the pain feel?"],
+      "practice_recommendation": "Use a structured symptom description.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "description": "Does not characterize the symptom."},
+        {"label": "parcialmente_adequado", "points": 0.125, "description": "Partially characterizes the symptom."},
+        {"label": "adequado", "points": 0.25, "description": "Characterizes the symptom."}
+      ],
+      "actions": [],
+      "order": 2,
+      "count_cap": 2,
+      "first_n": 1,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null
+    },
+    {
+      "id": "safety-check",
+      "description": "Performs a safety check.",
+      "evidence_questions": ["Was immediate risk addressed?"],
+      "practice_recommendation": "Prioritize immediate safety checks.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "description": "Omits the safety check."},
+        {"label": "adequado", "points": 1, "description": "Performs the safety check."}
+      ],
+      "actions": [],
+      "order": 3,
+      "count_cap": null,
+      "first_n": null,
+      "veto": true,
+      "exclusion": false,
+      "modality_requirement": "physical_exam"
+    },
+    {
+      "id": "teaching-note",
+      "description": "Captures an unobservable teaching note.",
+      "evidence_questions": [],
+      "practice_recommendation": "Review this note outside scoring.",
+      "levels": [
+        {"label": "adequado", "points": 0.5, "description": "Teaching note is available."}
+      ],
+      "actions": [],
+      "order": null,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": true,
+      "modality_requirement": "impressos"
+    }
+  ],
+  "approved_templates": [
+    {
+      "template_id": "opening-summary",
+      "text": "Resuma o motivo da consulta.",
+      "applicability": {"type": "min_learner_turns", "count": 1}
+    },
+    {
+      "template_id": "safety-reminder",
+      "text": "Confirme sinais de alarme.",
+      "applicability": {"type": "unconditional"}
+    }
+  ]
+}

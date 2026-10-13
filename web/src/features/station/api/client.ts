@@ -16,7 +16,21 @@ export interface Session {
   audio_consent: boolean;
   started_at: string;
   expires_at: string;
+  deadline_at: string;
   server_now: string;
+}
+
+export type SessionStatus = "active" | "completed";
+
+export interface SessionMessage {
+  role: "learner" | "patient";
+  text: string;
+}
+
+export interface SessionDetail extends Session {
+  status: SessionStatus;
+  completion_reason: string | null;
+  messages: SessionMessage[];
 }
 
 export interface SendMessageRequest {
@@ -47,19 +61,85 @@ export interface CompletedSession {
   completed_at: string;
 }
 
-export type CriterionStatus = "met" | "omitted" | "uncertain";
+export type LegacyCriterionStatus = "met" | "omitted" | "uncertain";
 
-export interface ResultCriterion {
+export interface LegacyResultCriterion {
   id: string;
-  status: CriterionStatus;
+  status: LegacyCriterionStatus;
   evidence: string[];
   recommendation: string;
 }
 
-export interface SessionResult {
+export interface TranscriptionResult {
+  text: string;
+  duration_seconds?: number | null;
+  transcribed_at: string;
+}
+
+export interface LegacySessionResult {
   session_id: string;
   status: "completed";
+  criteria: LegacyResultCriterion[];
+}
+
+export type CriterionStatus = "assessed" | "uncertain" | "not_observable" | "not_applicable";
+export interface ResultEvidence { id: string; role: "learner" | "patient"; text: string }
+interface CriterionBase {
+  id: string;
+  description: string;
+  max_points: string;
+  evidence_ids: string[];
+  evidence: ResultEvidence[];
+  recommendation: string;
+}
+export type ResultCriterion = CriterionBase & (
+  | { status: "assessed"; reason: null; level: string; level_description: string; points: string }
+  | { status: "uncertain" | "not_observable" | "not_applicable"; reason: string }
+);
+export interface SessionResult {
+  schema_version: "2";
+  session_id: string;
+  status: "completed";
+  placeholder: boolean;
   criteria: ResultCriterion[];
+  coverage: Record<CriterionStatus, number>;
+  estimates: {
+    total: string | null;
+    scored_subtotal: string;
+    scored_max: string;
+    eligible_max: string;
+    unresolved: { id: string; status: "uncertain" | "not_observable" }[];
+  };
+}
+
+export interface Impresso {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+}
+
+export interface RequestImpressoRequest {
+  text: string;
+  request_id?: string;
+}
+
+export type ImpressoDecision = "released" | "already_released" | "unavailable";
+
+export interface RequestImpressoResponse {
+  request_id: string;
+  decision: ImpressoDecision;
+  released_impressos: Impresso[];
+  newly_released: Impresso[];
+  feedback_message: string;
+}
+
+export interface ListImpressosResponse {
+  released_impressos: Impresso[];
+}
+
+export interface DiscardSessionOptions {
+  keepalive?: boolean;
 }
 
 export class ApiError extends Error {
@@ -128,7 +208,41 @@ const decodeSession = (value: unknown): Session => {
     audio_consent: booleanValue(body, "audio_consent", "session"),
     started_at: stringValue(body, "started_at", "session"),
     expires_at: stringValue(body, "expires_at", "session"),
+    deadline_at: stringValue(body, "deadline_at", "session"),
     server_now: stringValue(body, "server_now", "session"),
+  };
+};
+
+const sessionStatuses: readonly SessionStatus[] = ["active", "completed"];
+
+const decodeSessionMessage = (value: unknown): SessionMessage => {
+  const body = objectValue(value, "session message");
+  return {
+    role: literalValue(
+      body,
+      "role",
+      ["learner", "patient"],
+      "session message",
+    ),
+    text: stringValue(body, "text", "session message"),
+  };
+};
+
+const decodeSessionDetail = (value: unknown): SessionDetail => {
+  const body = objectValue(value, "session detail");
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : invalid("session detail");
+  const completionReason = body.completion_reason;
+  if (completionReason !== null && typeof completionReason !== "string") {
+    invalid("session detail");
+  }
+
+  return {
+    ...decodeSession(value),
+    status: literalValue(body, "status", sessionStatuses, "session detail"),
+    completion_reason: completionReason as string | null,
+    messages: messages.map(decodeSessionMessage),
   };
 };
 
@@ -171,23 +285,49 @@ const decodeCompletedSession = (value: unknown): CompletedSession => {
   };
 };
 
-const criterionStatuses: readonly CriterionStatus[] = [
+const legacyCriterionStatuses: readonly LegacyCriterionStatus[] = [
   "met",
   "omitted",
   "uncertain",
 ];
 
-const decodeCriterion = (value: unknown): ResultCriterion => {
+const decodeAudio = (value: unknown): Blob => {
+  if (!(value instanceof Blob) || value.size === 0) throw new Error("audio");
+  return value;
+};
+
+const decodeTranscriptionResult = (value: unknown): TranscriptionResult => {
+  const body = objectValue(value, "transcription");
+  const duration = body.duration_seconds;
+  if (
+    duration !== undefined &&
+    duration !== null &&
+    typeof duration !== "number"
+  ) {
+    invalid("transcription");
+  }
+
+  const result: TranscriptionResult = {
+    text: stringValue(body, "text", "transcription"),
+    transcribed_at: stringValue(body, "transcribed_at", "transcription"),
+  };
+  if (duration !== undefined) {
+    result.duration_seconds = duration as number | null;
+  }
+  return result;
+};
+
+const decodeLegacyCriterion = (value: unknown): LegacyResultCriterion => {
   const body = objectValue(value, "result criterion");
   return {
     id: stringValue(body, "id", "result criterion"),
-    status: literalValue(body, "status", criterionStatuses, "result criterion"),
+    status: literalValue(body, "status", legacyCriterionStatuses, "result criterion"),
     evidence: stringList(body, "evidence", "result criterion"),
     recommendation: stringValue(body, "recommendation", "result criterion"),
   };
 };
 
-const decodeSessionResult = (value: unknown): SessionResult => {
+const decodeLegacySessionResult = (value: unknown): LegacySessionResult => {
   const body = objectValue(value, "session result");
   const criteria = Array.isArray(body.criteria)
     ? body.criteria
@@ -196,7 +336,143 @@ const decodeSessionResult = (value: unknown): SessionResult => {
   return {
     session_id: stringValue(body, "session_id", "session result"),
     status: literalValue(body, "status", ["completed"], "session result"),
-    criteria: criteria.map(decodeCriterion),
+    criteria: criteria.map(decodeLegacyCriterion),
+  };
+};
+
+const assessmentStatuses: readonly CriterionStatus[] = ["assessed", "uncertain", "not_observable", "not_applicable"];
+const decimalValue = (body: JsonObject, key: string): string => {
+  const value = stringValue(body, key, "educational result");
+  // The shortest exact representation of non-negative integer fortieths (multiples of 0.025).
+  return /^(0|[1-9]\d*)(\.\d{0,2}[1-9])?$/.test(value) && thousandths(value) % 25n === 0n ? value : invalid("educational result");
+};
+const thousandths = (value: string): bigint => {
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(whole) * 1000n + BigInt(fraction.padEnd(3, "0"));
+};
+const fortieths = (value: string): bigint => thousandths(value) / 25n;
+const decodeEducationalCriterion = (value: unknown): ResultCriterion => {
+  const body = objectValue(value, "educational criterion");
+  const status = literalValue(body, "status", assessmentStatuses, "educational criterion");
+  const evidence = Array.isArray(body.evidence) ? body.evidence.map((item) => {
+    const excerpt = objectValue(item, "evidence");
+    return { id: stringValue(excerpt, "id", "evidence"), role: literalValue(excerpt, "role", ["learner", "patient"] as const, "evidence"), text: stringValue(excerpt, "text", "evidence") };
+  }) : invalid("evidence");
+  const base: CriterionBase = {
+    id: stringValue(body, "id", "educational criterion"),
+    description: stringValue(body, "description", "educational criterion"),
+    max_points: decimalValue(body, "max_points"),
+    evidence_ids: stringList(body, "evidence_ids", "educational criterion"),
+    evidence,
+    recommendation: stringValue(body, "recommendation", "educational criterion"),
+  };
+  if (base.evidence_ids.length !== evidence.length || evidence.some((item, index) => item.id !== base.evidence_ids[index])) invalid("evidence");
+  if (status === "assessed") {
+    if (body.reason !== null) invalid("educational criterion");
+    const points = decimalValue(body, "points");
+    if (fortieths(points) > fortieths(base.max_points)) invalid("educational criterion");
+    return { ...base, status, reason: null, level: stringValue(body, "level", "educational criterion"), level_description: stringValue(body, "level_description", "educational criterion"), points };
+  }
+  if ("points" in body || "level" in body || "level_description" in body || evidence.length > 0) invalid("educational criterion");
+  const reasons = { uncertain: "assessment_unresolved", not_observable: "required_modality_unavailable", not_applicable: "authored_exclusion" };
+  if (body.reason !== reasons[status]) invalid("educational criterion");
+  return { ...base, status, reason: reasons[status] };
+};
+const decodeSessionResult = (value: unknown): SessionResult => {
+  const body = objectValue(value, "educational result");
+  const criteria = Array.isArray(body.criteria) ? body.criteria.map(decodeEducationalCriterion) : invalid("educational result");
+  if (new Set(criteria.map((item) => item.id)).size !== criteria.length) invalid("educational result");
+  const coverageBody = objectValue(body.coverage, "coverage");
+  const coverage = {} as Record<CriterionStatus, number>;
+  for (const status of assessmentStatuses) {
+    const count = coverageBody[status];
+    if (!Number.isSafeInteger(count) || count !== criteria.filter((item) => item.status === status).length) invalid("coverage");
+    coverage[status] = count as number;
+  }
+  const estimatesBody = objectValue(body.estimates, "estimates");
+  const unresolved = Array.isArray(estimatesBody.unresolved) ? estimatesBody.unresolved.map((item) => {
+    const entry = objectValue(item, "unresolved");
+    return { id: stringValue(entry, "id", "unresolved"), status: literalValue(entry, "status", ["uncertain", "not_observable"] as const, "unresolved") };
+  }) : invalid("estimates");
+  const expectedUnresolved = criteria.filter((item) => item.status === "uncertain" || item.status === "not_observable");
+  if (unresolved.length !== expectedUnresolved.length || unresolved.some((item, index) => item.id !== expectedUnresolved[index].id || item.status !== expectedUnresolved[index].status)) invalid("estimates");
+  const estimates = {
+    total: estimatesBody.total === null ? null : decimalValue(estimatesBody, "total"),
+    scored_subtotal: decimalValue(estimatesBody, "scored_subtotal"),
+    scored_max: decimalValue(estimatesBody, "scored_max"),
+    eligible_max: decimalValue(estimatesBody, "eligible_max"),
+    unresolved,
+  };
+  const assessed = criteria.filter((item) => item.status === "assessed");
+  const eligible = criteria.filter((item) => item.status !== "not_applicable");
+  const sum = (values: string[]) => values.reduce((total, item) => total + fortieths(item), 0n);
+  if (fortieths(estimates.scored_subtotal) !== sum(assessed.map((item) => item.points)) || fortieths(estimates.scored_max) !== sum(assessed.map((item) => item.max_points)) || fortieths(estimates.eligible_max) !== sum(eligible.map((item) => item.max_points))) invalid("estimates");
+  const complete = eligible.length > 0 && unresolved.length === 0;
+  if (complete ? estimates.total !== estimates.scored_subtotal : estimates.total !== null) invalid("estimates");
+  return {
+    schema_version: literalValue(body, "schema_version", ["2"], "educational result"),
+    session_id: stringValue(body, "session_id", "educational result"),
+    status: literalValue(body, "status", ["completed"], "educational result"),
+    placeholder: booleanValue(body, "placeholder", "educational result"),
+    criteria, coverage, estimates,
+  };
+};
+
+const impressoDecisions: readonly ImpressoDecision[] = [
+  "released",
+  "already_released",
+  "unavailable",
+];
+
+const decodeImpresso = (value: unknown): Impresso => {
+  const body = objectValue(value, "impresso");
+  return {
+    id: stringValue(body, "id", "impresso"),
+    title: stringValue(body, "title", "impresso"),
+    category: stringValue(body, "category", "impresso"),
+    content: stringValue(body, "content", "impresso"),
+  };
+};
+
+const impressoList = (body: JsonObject, key: string, label: string): Impresso[] => {
+  const value = body[key];
+  return Array.isArray(value) ? value.map(decodeImpresso) : invalid(label);
+};
+
+const decodeRequestImpressoResponse = (
+  value: unknown,
+): RequestImpressoResponse => {
+  const body = objectValue(value, "impresso request");
+  return {
+    request_id: stringValue(body, "request_id", "impresso request"),
+    decision: literalValue(
+      body,
+      "decision",
+      impressoDecisions,
+      "impresso request",
+    ),
+    released_impressos: impressoList(
+      body,
+      "released_impressos",
+      "impresso request",
+    ),
+    newly_released: impressoList(body, "newly_released", "impresso request"),
+    feedback_message: stringValue(
+      body,
+      "feedback_message",
+      "impresso request",
+    ),
+  };
+};
+
+const decodeListImpressosResponse = (value: unknown): ListImpressosResponse => {
+  const body = objectValue(value, "impresso list");
+  return {
+    released_impressos: impressoList(
+      body,
+      "released_impressos",
+      "impresso list",
+    ),
   };
 };
 
@@ -225,6 +501,8 @@ export const createApiClient = ({
     path: string,
     init: RequestInit,
     decode: (value: unknown) => T,
+    readBody: (response: Response) => Promise<unknown> = (response) =>
+      response.status === 204 ? Promise.resolve(null) : response.json(),
   ): Promise<T> => {
     const controller = new AbortController();
     let timedOut = false;
@@ -259,7 +537,7 @@ export const createApiClient = ({
 
       let body: unknown;
       try {
-        body = await response.json();
+        body = await (response.ok ? readBody(response) : response.json());
       } catch {
         if (timedOut) throw timeoutError();
 
@@ -299,6 +577,8 @@ export const createApiClient = ({
       request("/api/stations/active", { method: "GET" }, decodeActiveStation),
     startSession: (body: StartSessionRequest) =>
       request("/api/stations/active/sessions", jsonPost(body), decodeSession),
+    getSession: (sessionId: string) =>
+      request(sessionPath(sessionId), { method: "GET" }, decodeSessionDetail),
     sendMessage: (sessionId: string, body: SendMessageRequest) =>
       request(
         `${sessionPath(sessionId)}/messages`,
@@ -317,12 +597,64 @@ export const createApiClient = ({
         { method: "POST" },
         decodeVoiceSession,
       ),
+    transcribeAudio: (
+      sessionId: string,
+      audioBlob: Blob,
+      filename = "audio.webm",
+    ) => {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, filename);
+      return request(
+        `${sessionPath(sessionId)}/transcribe`,
+        {
+          method: "POST",
+          body: formData,
+        },
+        decodeTranscriptionResult,
+      );
+    },
+    synthesizeSpeech: (sessionId: string, text: string, voice?: string) =>
+      request(
+        `${sessionPath(sessionId)}/synthesize`,
+        jsonPost(voice === undefined ? { text } : { text, voice }),
+        decodeAudio,
+        (response) => response.blob(),
+      ),
     fetchResult: (sessionId: string) =>
       request(
-        `${sessionPath(sessionId)}/result`,
+        `/api/v2/stations/active/sessions/${encodeURIComponent(sessionId)}/result`,
         { method: "GET" },
         decodeSessionResult,
       ),
+    fetchLegacyResult: (sessionId: string) =>
+      request(`${sessionPath(sessionId)}/result`, { method: "GET" }, decodeLegacySessionResult),
+    requestImpresso: (sessionId: string, body: RequestImpressoRequest) =>
+      request(
+        `${sessionPath(sessionId)}/impressos/request`,
+        jsonPost(body),
+        decodeRequestImpressoResponse,
+      ),
+    getImpressos: (sessionId: string) =>
+      request(
+        `${sessionPath(sessionId)}/impressos`,
+        { method: "GET" },
+        decodeListImpressosResponse,
+      ),
+    discardSession: (
+      sessionId: string,
+      options?: DiscardSessionOptions,
+    ): Promise<void> => {
+      const init: RequestInit = { method: "POST" };
+      if (options?.keepalive) {
+        init.keepalive = true;
+      }
+      return request(
+        `${sessionPath(sessionId)}/discard`,
+        init,
+        () => undefined,
+        async () => undefined,
+      );
+    },
   };
 };
 
@@ -334,8 +666,14 @@ const defaultClient = createApiClient({
 export const {
   getActiveStation,
   startSession,
+  getSession,
   sendMessage,
   finishSession,
+  transcribeAudio,
+  synthesizeSpeech,
   fetchResult,
   createVoiceSession,
+  requestImpresso,
+  getImpressos,
+  discardSession,
 } = defaultClient;

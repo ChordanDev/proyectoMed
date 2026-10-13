@@ -1,0 +1,18 @@
+{
+  "station_id": "invalid-bad-predicate", "version": "2.0.0", "language": "pt-BR", "display_title": "Invalid fixture",
+  "patient_profile": {"persona": "Synthetic patient", "age": 30, "presenting_context": "Synthetic context", "tone": "Neutral"},
+  "revealable_facts": [], "response_rules": [], "expected_actions": [],
+  "rubric": [{"id": "criterion", "description": "Criterion", "evidence_questions": [], "practice_recommendation": "Practice", "levels": [{"label": "adequado", "points": 1, "description": "Adequate"}], "actions": [], "order": null, "count_cap": null, "first_n": null, "veto": false, "exclusion": false, "modality_requirement": null}],
+  "approved_templates": [
+    {
+      "template_id": "unknown-type-template",
+      "text": "Resuma o motivo da consulta.",
+      "applicability": {"type": "when_the_learner_seems_ready"}
+    },
+    {
+      "template_id": "zero-count-template",
+      "text": "Confirme sinais de alarme.",
+      "applicability": {"type": "min_learner_turns", "count": 0}
+    }
+  ]
+}

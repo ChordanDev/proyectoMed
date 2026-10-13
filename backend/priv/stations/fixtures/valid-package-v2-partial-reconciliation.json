@@ -1,0 +1,52 @@
+{
+  "station_id": "partial-reconciliation",
+  "version": "2.0.0",
+  "language": "pt-BR",
+  "display_title": "Reconciliação parcial",
+  "placeholder": true,
+  "patient_profile": {
+    "persona": "Paciente fictício",
+    "age": 40,
+    "presenting_context": "Cenário sintético para testar reconciliação.",
+    "tone": "Neutro"
+  },
+  "revealable_facts": [],
+  "response_rules": [],
+  "expected_actions": [],
+  "rubric": [
+    {
+      "id": "criterion-a",
+      "description": "Criterion with an observed partial result.",
+      "evidence_questions": ["Was criterion A partially met?"],
+      "practice_recommendation": "Practice criterion A.",
+      "levels": [
+        {"label": "parcialmente_adequado", "points": 0.25, "description": "Criterion A is partially adequate."}
+      ],
+      "actions": [],
+      "order": 1,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null
+    },
+    {
+      "id": "criterion-b",
+      "description": "Criterion left unresolved by the assessment.",
+      "evidence_questions": ["Could criterion B be assessed?"],
+      "practice_recommendation": "Gather enough evidence for criterion B.",
+      "levels": [
+        {"label": "inadequado", "points": 0, "description": "Criterion B is inadequate."},
+        {"label": "adequado", "points": 1, "description": "Criterion B is adequate."}
+      ],
+      "actions": [],
+      "order": 2,
+      "count_cap": null,
+      "first_n": null,
+      "veto": false,
+      "exclusion": false,
+      "modality_requirement": null
+    }
+  ],
+  "approved_templates": null
+}

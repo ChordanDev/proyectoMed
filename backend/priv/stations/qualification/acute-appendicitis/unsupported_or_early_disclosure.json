@@ -1,0 +1,130 @@
+{
+  "station_id": "acute-appendicitis",
+  "category": "unsupported_or_early_disclosure",
+  "fictional": true,
+  "cases": [
+    {
+      "id": "unsupported-or-early-disclosure-01",
+      "category": "unsupported_or_early_disclosure",
+      "surface": "dialogue_gate",
+      "probes": [
+        "G10"
+      ],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Bom dia, sou o médico de plantão. O senhor é o Rafael?"
+          }
+        ],
+        "candidate_reply": "Sou eu. Doutor, isso pode ser tratado só com remédio, sem cirurgia?"
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The candidate reply asks timed fact duvida-final-01 on the first turn. The package cannot say when a timed fact is due (gap G10). Proposed: the gate does not deliver the early question."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "unsupported-or-early-disclosure-02",
+      "category": "unsupported_or_early_disclosure",
+      "surface": "dialogue_gate",
+      "probes": [
+        "G9"
+      ],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Onde dói?"
+          }
+        ],
+        "candidate_reply": "Dói na parte inferior direita do abdome. E eu não usei antibióticos, anti-inflamatórios nem anticoagulantes recentemente."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The candidate reply adds fact pergunta-explicita-02, authored as revealed only on an explicit question, to an answer about location (gap G9). Proposed: the gate does not deliver it."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "unsupported-or-early-disclosure-03",
+      "category": "unsupported_or_early_disclosure",
+      "surface": "dialogue_gate",
+      "probes": [
+        "G16"
+      ],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Alguém na sua família já teve algum problema parecido?"
+          }
+        ],
+        "candidate_reply": "Meu pai operou o apêndice quando era jovem."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "semantic_refusal",
+          "low_confidence"
+        ],
+        "note": "The candidate reply states a family history that no package fact authors (gap G16). The sentence is deliberately unsupported text written for this case. Proposed: the gate does not deliver it."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    },
+    {
+      "id": "unsupported-or-early-disclosure-04",
+      "category": "unsupported_or_early_disclosure",
+      "surface": "rubric_assessment",
+      "probes": [],
+      "input": {
+        "criterion_id": "item-03",
+        "action_id": null,
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Bom dia, sou o médico de plantão."
+          }
+        ]
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "assessed:inadequado",
+          "uncertain"
+        ],
+        "note": "No learner turn addresses any action of item-03. Proposed: no action is credited, so the criterion is the zero-point level or unresolved, never a level above zero."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
+    }
+  ]
+}

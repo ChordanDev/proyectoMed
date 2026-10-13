@@ -16,9 +16,17 @@ defmodule BackendWeb.Router do
 
     get "/active", StationController, :active
     post "/active/sessions", StationController, :create_session
+    get "/active/sessions/:id", StationController, :show_session
     post "/active/sessions/:id/messages", StationController, :create_message
     post "/active/sessions/:id/finish", StationController, :finish_session
+    post "/active/sessions/:id/discard", StationController, :discard
     get "/active/sessions/:id/result", StationController, :show_result
+
+    post "/active/sessions/:id/impressos/request",
+         StationController,
+         :request_impresso
+
+    get "/active/sessions/:id/impressos", StationController, :list_impressos
 
     post "/active/sessions/:id/transcribe",
          TranscriptionController,
@@ -41,5 +49,10 @@ defmodule BackendWeb.Router do
     get "/sessions/:id", VoiceWorkerController, :show
     post "/sessions/:id/transcripts", VoiceWorkerController, :create_transcript
     post "/sessions/:id/cancel", VoiceWorkerController, :cancel
+  end
+
+  scope "/api/v2/stations", BackendWeb do
+    pipe_through :api
+    get "/active/sessions/:id/result", StationController, :show_educational_result
   end
 end

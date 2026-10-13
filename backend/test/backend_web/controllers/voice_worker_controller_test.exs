@@ -54,10 +54,22 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
+  defmodule TestVerifyingJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :verified}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup %{conn: conn} do
     Application.put_env(:backend, :voice_worker_secret, @secret)
     prev_adapter = Application.get_env(:backend, :station_ai_adapter)
     Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+    prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
+    Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
 
     on_exit(fn ->
       Application.delete_env(:backend, :voice_worker_secret)
@@ -67,6 +79,12 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
         Application.put_env(:backend, :station_ai_adapter, prev_adapter)
       else
         Application.delete_env(:backend, :station_ai_adapter)
+      end
+
+      if prev_jev_adapter do
+        Application.put_env(:backend, :jev_decision_adapter, prev_jev_adapter)
+      else
+        Application.delete_env(:backend, :jev_decision_adapter)
       end
     end)
 

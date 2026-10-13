@@ -1,19 +1,10 @@
 #!/usr/bin/env bash
-# tests/scripts/test_red.sh
+# Hermetic acceptance harness for scripts/test.sh.
 #
-# RED acceptance harness for scripts/test.sh.
-# Task 1.3 -- proves scripts/test.sh runs the web Vitest suite before the
-# backend Phoenix ExUnit suite, and that it propagates the first non-zero
-# fake-suite status as its own exit code.
-#
-# All assertions fail in PR 1 because scripts/test.sh does not exist yet.
-# Phase 3 implementation is expected to turn these assertions GREEN.
+# PATH-resolved npm and mix stubs prove the exact three phase invocations,
+# ordering, and fail-fast exit-code propagation without running real suites.
 
 set -uo pipefail
-
-# ---------------------------------------------------------------------------
-# Test framework
-# ---------------------------------------------------------------------------
 
 TEST_FILE="${BASH_SOURCE[0]}"
 TESTS_DIR="$(cd "$(dirname "$TEST_FILE")" && pwd -P)"
@@ -22,13 +13,9 @@ TEST_SH="$PROJECT_ROOT/scripts/test.sh"
 
 PASSED=0
 FAILED=0
-CURRENT=""
-
 SCRATCH=""
 ORIG_PATH="$PATH"
 
-# Called indirectly by the EXIT trap.
-# shellcheck disable=SC2329
 cleanup_scratch() {
   if [[ -n "${SCRATCH:-}" ]]; then
     rm -rf "$SCRATCH"
@@ -39,13 +26,12 @@ cleanup_scratch() {
 trap cleanup_scratch EXIT
 
 begin() {
-  CURRENT="$1"
+  cleanup_scratch
   SCRATCH="$(mktemp -d -t test_red)" || {
     echo "FATAL: mktemp failed" >&2
     exit 2
   }
-  PATH="$ORIG_PATH"
-  printf "  [%s] " "$CURRENT"
+  printf "  [%s] " "$1"
 }
 
 ok() {
@@ -58,121 +44,98 @@ bad() {
   FAILED=$((FAILED + 1))
 }
 
-expect_eq() {
-  local actual="$1" expected="$2" why="$3"
-  if [[ "$actual" == "$expected" ]]; then ok; else bad "$why (expected '$expected', got '$actual')"; fi
-}
-
-# Retained as part of the tiny assertion library used by this harness family.
-# shellcheck disable=SC2329
-expect_path_exists() {
-  local path="$1" why="$2"
-  if [[ -e "$path" ]]; then ok; else bad "$why (path missing: $path)"; fi
-}
-
-expect_log_present() {
-  local log="$1" why="$2"
-  if [[ -s "$log" ]]; then ok; else bad "$why (log empty: $log)"; fi
-}
-
-# Build a single combined log + npm/mix stubs that both append their marker
-# to that log when invoked. Lets ordering tests assert on a single source.
 make_suite_stubs() {
-  local log="$1" npm_code="$2" mix_code="$3"
-  local dir="$SCRATCH/bin"
-  mkdir -p "$dir"
-  cat >"$dir/npm" <<SH
+  local log="$1" unit_code="$2" backend_code="$3" e2e_code="$4"
+  local bin="$SCRATCH/bin"
+  mkdir -p "$bin"
+
+  cat >"$bin/npm" <<SH
 #!/usr/bin/env bash
-echo "npm@start" >> "$log"
-exit $npm_code
+case "\$*" in
+  "--prefix $PROJECT_ROOT/web run test:unit")
+    echo "web-unit" >> "$log"
+    exit $unit_code
+    ;;
+  "--prefix $PROJECT_ROOT/web run test:e2e")
+    echo "e2e" >> "$log"
+    exit $e2e_code
+    ;;
+  *)
+    echo "unexpected-npm:\$*" >> "$log"
+    exit 97
+    ;;
+esac
 SH
-  cat >"$dir/mix" <<SH
+
+  cat >"$bin/mix" <<SH
 #!/usr/bin/env bash
-echo "mix@start" >> "$log"
-exit $mix_code
+if [[ "\$PWD" == "$PROJECT_ROOT/backend" && "\$*" == "test" ]]; then
+  echo "backend-exunit" >> "$log"
+  exit $backend_code
+fi
+echo "unexpected-mix:\$PWD:\$*" >> "$log"
+exit 98
 SH
-  chmod +x "$dir/npm" "$dir/mix"
-  echo "$dir"
+
+  chmod +x "$bin/npm" "$bin/mix"
+  PATH="$bin:$ORIG_PATH"
 }
 
-prepend_path() { PATH="$1:$PATH"; }
+assert_run() {
+  local label="$1" unit_code="$2" backend_code="$3" e2e_code="$4"
+  local expected_rc="$5" expected_log="$6"
+  begin "$label"
 
-detect_missing_script() {
-  if [[ ! -e "$TEST_SH" ]]; then
-    bad "scripts/test.sh absent at $TEST_SH (RED pre-condition: production script must exist for root test orchestrator to enter GREEN)"
-    return 0
-  fi
-  return 1
-}
-
-# ---------------------------------------------------------------------------
-# 1.3 Root test orchestration
-# ---------------------------------------------------------------------------
-
-test_web_before_backend_order() {
-  begin "1.3.1 web suite runs before backend suite"
-  detect_missing_script && return
-  local log="$SCRATCH/order.log"
-  local bin
-  bin="$(make_suite_stubs "$log" 0 0)"
-  prepend_path "$bin"
-  "$TEST_SH" >"$SCRATCH/out" 2>"$SCRATCH/err" || true
-
-  expect_log_present "$log" "at least one suite logged an invocation"
-
-  if [[ ! -s "$log" ]]; then
+  if [[ ! -x "$TEST_SH" ]]; then
+    bad "scripts/test.sh is missing or not executable"
     return
   fi
 
-  local npm_pos mix_pos
-  npm_pos="$(grep -n '^npm@start' "$log" | head -1 | cut -d: -f1)"
-  mix_pos="$(grep -n '^mix@start' "$log" | head -1 | cut -d: -f1)"
-  if [[ -z "$npm_pos" || -z "$mix_pos" ]]; then
-    bad "either npm or mix was never invoked (npm_pos=$npm_pos, mix_pos=$mix_pos)"
-  elif ((npm_pos < mix_pos)); then
+  local log="$SCRATCH/order.log" rc=0 actual_log=""
+  make_suite_stubs "$log" "$unit_code" "$backend_code" "$e2e_code"
+  "$TEST_SH" >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
+  if [[ -f "$log" ]]; then
+    actual_log="$(<"$log")"
+  fi
+
+  if [[ "$rc" == "$expected_rc" && "$actual_log" == "$expected_log" ]]; then
     ok
   else
-    bad "npm must precede mix in the order log (npm line $npm_pos vs mix line $mix_pos)"
+    bad "expected rc/log '$expected_rc'/'${expected_log//$'\n'/, }', got '$rc'/'${actual_log//$'\n'/, }'"
   fi
 }
 
-test_first_nonzero_propagates() {
-  begin "1.3.2 first non-zero fake-suite status propagates as the script's exit code"
-  detect_missing_script && return
-  local log="$SCRATCH/order.log"
-  local bin
-  bin="$(make_suite_stubs "$log" 17 0)"
-  prepend_path "$bin"
-  local rc=0
-  "$TEST_SH" >"$SCRATCH/out" 2>"$SCRATCH/err" || rc=$?
-  expect_eq "$rc" "17" "exit code 17 from the web suite must propagate as scripts/test.sh's exit code"
-}
-
-# ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
-
 main() {
-  echo "RED harness -- Phase 3 Root Test Orchestration (work unit 1 of stacked chain)"
-  echo "Change:        scaffold-expo-phoenix-runtime"
+  echo "Acceptance harness -- root test orchestration"
   echo "Project root:  $PROJECT_ROOT"
   echo "Target script: $TEST_SH"
   echo
 
-  test_web_before_backend_order
-  test_first_nonzero_propagates
+  assert_run \
+    "all phases run in order" \
+    0 0 0 0 \
+    $'web-unit\nbackend-exunit\ne2e'
+  assert_run \
+    "web unit failure propagates and stops later phases" \
+    17 0 0 17 \
+    "web-unit"
+  assert_run \
+    "backend failure propagates and stops E2E" \
+    0 23 0 23 \
+    $'web-unit\nbackend-exunit'
+  assert_run \
+    "E2E failure propagates exact status" \
+    0 0 29 29 \
+    $'web-unit\nbackend-exunit\ne2e'
 
   echo
   echo "Summary: $PASSED passed, $FAILED failed"
-  echo
 
   if ((FAILED > 0)); then
-    echo "RED state confirmed: scripts/test.sh is not yet implemented."
     exit 1
   fi
 
   echo "GREEN state confirmed: every test orchestration invariant holds."
-  exit 0
 }
 
 main "$@"

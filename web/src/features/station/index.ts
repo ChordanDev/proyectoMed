@@ -2,22 +2,38 @@ export {
   createApiClient,
   getActiveStation,
   startSession,
+  getSession,
   sendMessage,
   finishSession,
+  transcribeAudio,
+  synthesizeSpeech,
   fetchResult,
   createVoiceSession,
+  discardSession,
+  type DiscardSessionOptions,
   ApiError,
   type ActiveStation,
   type StartSessionRequest,
   type Session,
+  type SessionStatus,
+  type SessionMessage,
+  type SessionDetail,
   type SendMessageRequest,
   type MessageReply,
   type FinishReason,
   type CompletedSession,
+  type TranscriptionResult,
   type CriterionStatus,
   type ResultCriterion,
   type SessionResult,
   type VoiceSession,
+  requestImpresso,
+  getImpressos,
+  type Impresso,
+  type ImpressoDecision,
+  type RequestImpressoRequest,
+  type RequestImpressoResponse,
+  type ListImpressosResponse,
 } from "./api/client";
 
 export {
@@ -44,3 +60,17 @@ export {
 export { VoicePanel, type VoicePanelProps } from "./screens/VoicePanel";
 
 export { StationSession } from "./screens/StationSession";
+
+export {
+  StationScreen,
+  type StationScreenProps,
+  type DisplayMessage,
+} from "./screens/StationScreen";
+
+export {
+  ResultScreen,
+  ResultScreenState,
+  type ResultScreenProps,
+  type ResultScreenStateProps,
+  type ResultScreenStatus,
+} from "./result/ResultScreen";
