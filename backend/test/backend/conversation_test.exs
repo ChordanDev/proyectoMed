@@ -1705,6 +1705,168 @@ defmodule Backend.ConversationTest do
       assert {:ok, ^forced} = Conversation.complete(session.session_id, :timer)
     end
 
+    # Every way a voice generation can end without a patient reply. Each one is
+    # applied to generation 1 of voice turn 1.
+    abandonments = [
+      {"fail_generation/3", :fail_generation, [1, :station_ai_unavailable], {:ok, :failed}},
+      {"cancel_generation/2", :cancel_generation, [1], {:ok, :cancelled}},
+      {"cancel_generation/1", :cancel_generation, [], {:ok, :cancelled}},
+      {"cancel_voice_turn/2 by turn id", :cancel_voice_turn, [1], {:ok, :cancelled}},
+      {"cancel_voice_turn/2 by criteria", :cancel_voice_turn, [[turn_id: 1, generation_id: 1]],
+       {:ok, :cancelled}}
+    ]
+
+    for {label, function, args, expected_reply} <- abandonments do
+      test "#{label} during a manual :timer voice grace completes the session at once" do
+        Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+        session = Conversation.start()
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+        Process.sleep(100)
+        assert Task.yield(waiter, 0) == nil
+        assert %{token: grace_token} = voice_grace(session.session_id)
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        # Far inside the 2 s window: grace expiry cannot explain this reply.
+        assert {:ok, completed} = Task.await(waiter, 500)
+        assert completed.status == :completed
+        assert completed.completion_reason == :timer
+        assert completed.active_generation_id == nil
+        assert voice_grace(session.session_id) == nil
+        assert {:ok, ^completed} = Conversation.fetch(session.session_id)
+
+        # The expiry of the already settled window must change nothing.
+        server = Process.whereis(StationConversation)
+        send(server, {:grace_expired, session.session_id, grace_token})
+        assert voice_grace(session.session_id) == nil
+        assert Process.whereis(StationConversation) == server
+        assert Process.alive?(server)
+        assert {:ok, ^completed} = Conversation.fetch(session.session_id)
+      end
+
+      test "#{label} after the server deadline deferred for the voice generation completes the session at once" do
+        Application.put_env(:backend, :station_duration_ms, 50)
+        Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+        session = Conversation.start()
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        # Past the deadline, far inside the grace window.
+        Process.sleep(150)
+        assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+        assert %{} = voice_grace(session.session_id)
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        assert {:ok, completed} = Conversation.fetch(session.session_id)
+        assert completed.status == :completed
+        assert completed.completion_reason == :timer
+        assert voice_grace(session.session_id) == nil
+
+        assert {:error, :station_time_elapsed} =
+                 Conversation.begin_voice_turn(session.session_id, 2, "Chegou tarde")
+      end
+
+      test "#{label} leaves the completion to a text turn pending under the deadline grace" do
+        Application.put_env(:backend, :station_duration_ms, 50)
+        Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+        session = Conversation.start()
+
+        assert {:ok, _session, token} =
+                 StationConversation.begin_turn(session.session_id, %{
+                   role: :learner,
+                   modality: :text,
+                   text: "Pergunta de texto"
+                 })
+
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        Process.sleep(150)
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+
+        assert {:ok, resolved} =
+                 StationConversation.resolve_turn(
+                   session.session_id,
+                   token,
+                   {:ok, %{role: :patient, modality: :text, text: "Resposta de texto"}}
+                 )
+
+        assert resolved.status == :completed
+        assert resolved.completion_reason == :timer
+        assert voice_grace(session.session_id) == nil
+      end
+
+      test "#{label} does not settle an armed voice grace while a text turn is pending" do
+        Application.put_env(:backend, :turn_grace_ms, 600)
+
+        session = Conversation.start()
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        # The client's finish arrives before the deadline and arms the voice grace;
+        # a text turn is still admitted because the deadline has not passed.
+        waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+        Process.sleep(50)
+        assert %{token: grace_token} = voice_grace(session.session_id)
+
+        assert {:ok, _session, _token} =
+                 StationConversation.begin_turn(session.session_id, %{
+                   role: :learner,
+                   modality: :text,
+                   text: "Pergunta de texto"
+                 })
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+        assert %{token: ^grace_token} = voice_grace(session.session_id)
+        assert Task.yield(waiter, 0) == nil
+
+        # The window still ends the session on its own.
+        assert {:ok, %{status: :completed, completion_reason: :timer}} =
+                 Task.await(waiter, 2_000)
+      end
+    end
+
+    test "a stale cancel during the voice grace leaves the window and the generation untouched" do
+      Application.put_env(:backend, :turn_grace_ms, 400)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+      Process.sleep(50)
+
+      assert {:error, :stale_generation} = Conversation.cancel_generation(session.session_id, 7)
+
+      assert {:error, :stale_generation} =
+               Conversation.fail_generation(session.session_id, 7, :station_ai_unavailable)
+
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, generation_id: 7)
+
+      assert Task.yield(waiter, 0) == nil
+      assert %{} = voice_grace(session.session_id)
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, resolved} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta na graça")
+
+      assert resolved.completion_reason == :timer
+      assert Task.await(waiter, 1_000) == {:ok, resolved}
+    end
+
     test "text rollback removes its own learner message when a voice message was appended after it" do
       session = Conversation.start()
 
@@ -1777,6 +1939,15 @@ defmodule Backend.ConversationTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:backend, key)
   defp restore_env(key, value), do: Application.put_env(:backend, key, value)
+
+  # The voice grace armed for a session, read from the server state; the call
+  # also orders the read after every message already in the server's mailbox.
+  defp voice_grace(session_id) do
+    StationConversation
+    |> :sys.get_state()
+    |> Map.fetch!(:voice_graces)
+    |> Map.get(session_id)
+  end
 
   defp wait_until(fun, attempts \\ 50)
 
