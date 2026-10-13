@@ -144,5 +144,24 @@ covered.
   `VoicePanel` under audio consent. The `App` wiring has no test of its own
   (`web/src/App.test.tsx` was outside the allowed edit surface).
 
+### Independent verification (2026-10-13, on `89ae637`)
+- Verdict: sound with notes. No regression from the resolution: the merged public and
+  private function sets, `GenServer` clauses, exports, client methods and `pt-BR.json`
+  keys equal the union of both parents; no test from either side was dropped.
+- Re-run by the verifier: `mix compile --warnings-as-errors`, `mix test` (964 passed),
+  `mix format --check-formatted`, web typecheck, lint and tests (201 passed), worker
+  unit tests (115 passed). The parent re-ran `mix test`: 964 passed.
+- Cross-feature gaps the merge exposes (not regressions; neither parent covered them):
+  - Voice turns bypass the `deadline_at` admission check. Reproduced: with a text turn
+    pending when the deadline fires, `begin_turn` returns `:station_time_elapsed` but
+    `begin_voice_turn` still commits and `resolve_patient_reply` succeeds.
+  - A text turn's rollback is skipped when a voice message was appended after it, so
+    the unanswered text message stays in the transcript.
+  - An in-flight voice generation gets no grace at the deadline, unlike a text turn.
+  - Jev adds up to 3 s plus one regeneration to a voice turn, against the worker's 5 s
+    HTTP timeout; not measured.
+  - `StationSession` is exported and tested but no longer rendered by `App`.
+
 ## Next step
-Open the PR to `feat/116-realtime-voice` (user decision).
+Open the PR to `feat/116-realtime-voice` (user decision). Track the gaps above as
+follow-up issues before the voice prototype is enabled.
