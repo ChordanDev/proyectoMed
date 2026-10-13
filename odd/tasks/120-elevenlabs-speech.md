@@ -104,8 +104,15 @@ See issue #120.
   `{session_id, turn_id, generation_id, role: "patient", text}`; non-fatal failure
   `{session_id, turn_id, generation_id, failure: "synthesis_failed"}`.
 - Route: delegated writer, both tasks. RDD off; ordinary checks only.
-- Not verified (no credentials or LiveKit server in this run): real ElevenLabs audio,
-  whether the agent job token may publish an audio track, audible latency.
+- Manual test 2026-10-13 (local `livekit-server --dev`, Safari, real Deepgram, OpenAI
+  and ElevenLabs keys, default voice): the learner turn is transcribed and committed,
+  the worker job token has `canPublish` and publishes the `patient-voice` track, and the
+  approved reply is heard as synthesized audio. Every voice turn returned the canonical
+  refusal (five different questions through the worker API), while the text path
+  answers the same question: `admit_voice_reply/2` admits only the refusal or an exact
+  package fact, and the adapter paraphrases. README prerequisites added from this run.
+- Not measured: audible latency. Manual steps 3-6 (supersede, disconnect mid-answer,
+  wrong key, log scan): result pending confirmation from the tester.
 
 ## Known follow-ups
 - Learner speech over a reply that is already playing does not stop it until the next
@@ -118,6 +125,9 @@ See issue #120.
 - A lost commit response retried as `duplicate` still yields no text and no speech for
   that turn (inherited from #119).
 
+- The voice path cannot give a non-refusal answer until `develop` (Jev, #127) is merged
+  into `feat/116-realtime-voice`.
+
 ## Next step
-Manual test from the README with real credentials, then push and open the T1 and T2 PRs
-against `feat/116-realtime-voice` (user decision).
+Confirm manual steps 3-6, then push and open the T1 and T2 PRs against
+`feat/116-realtime-voice` (user decision).

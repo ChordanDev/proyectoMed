@@ -294,6 +294,32 @@ or track publication error, and carries no provider message. `error` still means
 worker job stopped. Reply text is never logged; worker logs carry the session id, turn
 id, generation id and failure kind only.
 
+**Prerequisites** (on top of the Deepgram checklist above):
+
+- The backend needs `OPENAI_API_KEY`: Station AI generates the reply text, and without
+  it no turn gets a reply to speak.
+- `LIVEKIT_URL` must be `ws://127.0.0.1:7880` for the local `livekit-server --dev`, in
+  both the backend and the worker; the `.env.example` value is a cloud placeholder.
+- `ELEVENLABS_VOICE_ID` must be a voice the API key may use. On the free plan, library
+  voices answer `402 paid_plan_required`; use a default voice. Check a voice before
+  starting the worker (expects `http 200`):
+
+  ```sh
+  curl -s -o /dev/null -w 'http %{http_code}\n' -X POST \
+    "https://api.elevenlabs.io/v1/text-to-speech/$ELEVENLABS_VOICE_ID/stream?output_format=pcm_24000" \
+    -H "xi-api-key: $ELEVENLABS_API_KEY" -H "content-type: application/json" \
+    -d '{"text":"Olá, tudo bem?","model_id":"eleven_flash_v2_5"}'
+  ```
+
+- An API key restricted to the Text to Speech endpoint is enough.
+- Browser extensions or VPNs that block local WebRTC make **Conectar voz** fail before
+  the microphone prompt; use a browser profile without them.
+
+On this branch every voice turn is answered with the canonical refusal: the voice path
+admits only the refusal or an exact package fact until Jev verification (#127) reaches
+`feat/116-realtime-voice`. The refusal is still real synthesized audio, so the steps
+below apply.
+
 **Manual test** (continues the Deepgram checklist above, same backend):
 
 1. Start the worker with the extra variables:
