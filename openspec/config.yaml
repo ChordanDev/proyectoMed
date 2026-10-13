@@ -1,9 +1,10 @@
 context: |
-  proyectoMed is a planning/specification repository for a Revalida clinical-practice
-  MVP (Vite + React + TypeScript SPA + Elixir/Phoenix, scaffolded). Source of truth is
-  GitHub Issues on ChordanDev/proyectoMed. The runtime scaffold is now in place:
-  `web/` is a Vite + React + TypeScript SPA and `backend/` is a JSON-only Phoenix API
-  without Ecto or HTML tooling. The scope of this scaffold change is harness-only;
+  proyectoMed is a planning/specification repository for a Revalida
+  clinical-practice MVP (Vite + React + TypeScript SPA + Elixir/Phoenix,
+  scaffolded). Source of truth is GitHub Issues on ChordanDev/proyectoMed. The
+  runtime scaffold is now in place: `web/` is a Vite + React + TypeScript SPA
+  and `backend/` is a JSON-only Phoenix API without Ecto or HTML tooling. The
+  scope of this scaffold change is harness-only;
   clinical, product, and `#12` behavior are explicitly out of scope and remain
   unimplemented.
   Agent conventions: see AGENTS.md, docs/agents/issue-tracker.md,
@@ -17,16 +18,19 @@ testing:
     tests/scripts/test_red.sh), but strict TDD discipline is left to the change
     that implements the first real capability. Toggling strict_tdd is a
     deliberate decision by the capability-implementing change, not by the
-    scaffold change. e2e and coverage remain unavailable for the same reason.
+    scaffold change. Process-level E2E is available independently of strict
+    TDD; coverage remains unavailable.
   capabilities:
     runner:
       available: true
       command: bash scripts/test.sh
       notes: |
-        Root orchestrator: runs web Vitest (npm --prefix web test) then
-        backend ExUnit (( cd backend && mix test )) and propagates the first
-        non-zero exit. PATH-resolved npm/mix so the RED harness can substitute
-        fakes.
+        Root orchestrator: runs web unit Vitest
+        (npm --prefix web run test:unit),
+        backend ExUnit (( cd backend && mix test )), then process-level E2E
+        (npm --prefix web run test:e2e). It propagates the exact first non-zero
+        exit and skips later phases. PATH-resolved npm/mix let the shell
+        acceptance harness substitute fakes.
     unit:
       available: true
       notes: |
@@ -35,14 +39,16 @@ testing:
     integration:
       available: true
       notes: |
-        Backend ConnCase drives a real Plug pipeline against HealthController.
-        Web SPA integration beyond the smoke render is gated on a future change.
+        Backend ConnCase drives the Plug pipeline. Web integration tests cover
+        the Station flow through the API client and process-level E2E harness.
     e2e:
-      available: false
-      rationale: |
-        No browser automation harness is wired. Vite dev server startup and
-        live `GET /` are documented manual checks; they are NOT automated e2e
-        tests.
+      available: true
+      command: npm --prefix web run test:e2e
+      notes: |
+        Vitest runs the happy-path, technical-failure, and session-expiry
+        scenarios in web/src/integration/stationFlow.test.ts. The harness starts
+        a real Phoenix process over HTTP with a deterministic local provider
+        mock. This is process/API E2E, not browser automation.
     coverage:
       available: false
       rationale: |
@@ -72,10 +78,12 @@ testing:
     test_script: scripts/test.sh
     scaffold_red: tests/scripts/scaffold_red.sh
     test_red: tests/scripts/test_red.sh
+    e2e_process: web/src/integration/harness.ts
+    e2e_scenarios: web/src/integration/stationFlow.test.ts
     notes: |
-      Both RED harnesses are hermetic (bash fake-command stubs over PATH).
-      They do not require network access or real npm/npx/mix, Vite, or
-      Phoenix generators.
+      The shell acceptance harnesses are hermetic (bash fake-command stubs over
+      PATH). The E2E harness starts a real Phoenix process and a deterministic
+      local provider mock; it requires no external network access.
 phases:
   proposal:
     required: true
@@ -99,7 +107,8 @@ phases:
     notes: |
       Apply batches MUST run `bash scripts/test.sh` after their work unit
       to prove the existing harness still passes. New work units may add
-      suites but MUST NOT regress mobile Jest or backend ExUnit.
+      suites but MUST NOT regress web Vitest, process-level E2E, or backend
+      ExUnit.
   verify:
     required_for: [archive]
     test_command: bash scripts/test.sh

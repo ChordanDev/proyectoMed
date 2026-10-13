@@ -71,6 +71,24 @@ if secret = System.get_env("VOICE_WORKER_SECRET") do
   config :backend, :voice_worker_secret, secret
 end
 
+with timeout when is_binary(timeout) <- System.get_env("CONVERSATION_TIMEOUT_MS"),
+     {timeout_ms, ""} when timeout_ms > 0 <- Integer.parse(timeout) do
+  config :backend, :conversation_timeout_ms, timeout_ms
+end
+
+with purge_interval when is_binary(purge_interval) <-
+       System.get_env("CONVERSATION_PURGE_INTERVAL_MS"),
+     {purge_interval_ms, ""} when purge_interval_ms > 0 <- Integer.parse(purge_interval) do
+  config :backend, :conversation_purge_interval_ms, purge_interval_ms
+end
+
+# E2E-only: bypasses Jev verification with a deterministic approving adapter.
+# The harness boots Phoenix under `:dev`, so the variable is honored only there:
+# `:test` keeps its injected adapters and `:prod` never compiles this module.
+if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true" do
+  config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
