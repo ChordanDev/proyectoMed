@@ -394,6 +394,38 @@ class BuildTTSTest(unittest.TestCase):
         self.assertIn("session s1", "\n".join(logs.output))
         self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
 
+    def test_blank_required_setting_disables_speech_like_a_missing_one(self):
+        for blank in ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"):
+            env = {
+                "ELEVENLABS_API_KEY": PROVIDER_SECRET,
+                "ELEVENLABS_VOICE_ID": "voice-1",
+                blank: "  ",
+            }
+            with (
+                self.subTest(blank=blank),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(worker.elevenlabs, "TTS") as tts,
+                self.assertLogs("voice-worker", level="WARNING") as logs,
+            ):
+                self.assertIsNone(build_tts("s1", self.CONTEXT))
+
+                tts.assert_not_called()
+                self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+
+    def test_blank_model_falls_back_to_the_default(self):
+        env = {
+            "ELEVENLABS_API_KEY": PROVIDER_SECRET,
+            "ELEVENLABS_VOICE_ID": "voice-1",
+            "ELEVENLABS_MODEL": "",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+        ):
+            build_tts("s1", self.CONTEXT)
+
+        self.assertEqual(tts.call_args.kwargs["model"], "eleven_flash_v2_5")
+
 
 if __name__ == "__main__":
     unittest.main()

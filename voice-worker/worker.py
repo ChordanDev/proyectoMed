@@ -89,17 +89,25 @@ async def entrypoint(ctx: JobContext) -> None:
             ctx.shutdown()
 
 
+def _required_setting(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise KeyError(name)
+    return value
+
+
 def build_tts(session_id: str, context):
     """Build the ElevenLabs provider from the worker environment, or None when unset.
 
     Missing configuration disables patient audio only: replies still reach the room as
-    text, each followed by a `synthesis_failed` event.
+    text, each followed by a `synthesis_failed` event. A blank value counts as missing:
+    the provider would accept it and then fail every reply at request time.
     """
     try:
         return elevenlabs.TTS(
-            api_key=os.environ["ELEVENLABS_API_KEY"],
-            voice_id=os.environ["ELEVENLABS_VOICE_ID"],
-            model=os.environ.get("ELEVENLABS_MODEL", DEFAULT_TTS_MODEL),
+            api_key=_required_setting("ELEVENLABS_API_KEY"),
+            voice_id=_required_setting("ELEVENLABS_VOICE_ID"),
+            model=os.environ.get("ELEVENLABS_MODEL", "").strip() or DEFAULT_TTS_MODEL,
             encoding=TTS_ENCODING,
             language=context["language"],
         )
