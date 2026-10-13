@@ -142,4 +142,4 @@ See issue #120.
   into `feat/116-realtime-voice`.
 
 ## Next step
-Review and merge the chain in order: #184 (T1, `feat/120-speech-player` -> `feat/116-realtime-voice`, commit `efe114b`), then #185 (T2 and documentation, `feat/120-elevenlabs-speech` -> `feat/120-speech-player`). Both exceed the 400-line budget (759 and 851 changed lines, mostly tests); size exception requested.
+Review and merge the chain in order: #184 (T1, `feat/120-speech-player` -> `feat/116-realtime-voice`, commit `efe114b`), then #185 (T2 and documentation, `feat/120-elevenlabs-speech` -> `feat/120-speech-player`). Both exceed the 400-line budget (759 and 851 changed lines, mostly tests); size exception accepted by the maintainer on 2026-10-13.
