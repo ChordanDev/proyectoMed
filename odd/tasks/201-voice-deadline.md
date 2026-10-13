@@ -68,6 +68,14 @@ Forecast: about 450 authored changed lines across three work-unit commits (T1 ab
 - **Learner finish request can outlast the web client timeout.** The web API client applies 15 s to every request (`web/src/features/station/api/client.ts:492`), while a finish with reason `timer` can wait up to `turn_grace_ms` (30 s default) for a pending text turn (already the case before this issue) or, since T1b, an in-flight voice generation. The client then shows its generic error although the server completes the session at grace expiry. Not fixed; web code is outside this issue.
 - **Voice-room cleanup** does not run when the deadline handler completes the session (#121).
 
+## Slices
+
+Chain strategy: feature-branch chain onto `feat/116-realtime-voice`, the pattern used for #120 and #128; each slice targets the previous slice's branch and they merge in order. Authorized by the user on 2026-10-13 (push and pull requests).
+
+1. `feat/201-conversation-deadline` -> `feat/116-realtime-voice`: `b2b8116`, `44e6dce`, `74a4f25`, `76db730`. Conversation deadline policy for voice (T1, T1b). 722 changed lines outside `odd/`, 400 of them tests; size exception requested because T1b closes a hole in T1 and the policy is one unit.
+2. `feat/201-voice-deadline` -> `feat/201-conversation-deadline`: `936098e`, `d70e7e6` and the documentation commits. Worker-facing contract and its consumer (T2, T3). 474 changed lines, 399 of them tests; kept together because the backend status and the worker's handling of it are one contract.
+3. `feat/116-voice-jev-parity` -> `feat/201-voice-deadline`: separate change (Refs #116), stacked here only because it edits the same function.
+
 ## Next step
 
-Choose the chain strategy and open the pull requests. Slices by work-unit commit: `44e6dce` (546), `74a4f25` (176), `936098e` (322), `d70e7e6` (152).
+Review and merge the slices in order; then update the parent pull request #151.
