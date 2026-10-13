@@ -25,7 +25,9 @@ The deadline from #133 is enforced only in `begin_turn`. The voice path from #11
 - **Transcript after grace expiry.** The unanswered voice learner message is removed, as the unanswered text learner message already is. The issue asks for the same transcript answer on both paths.
 - **Rollback by identity.** Text rollback removes its own learner message wherever it sits, and `active_generation_message_index` is corrected when an earlier message is removed.
 - **Worker-facing API.** `409` with `{"error": "station_time_elapsed"}`, the same status and code as the learner API. The worker reads the body code for 409 and maps this one to a non-retryable end of session; any other 409 stays `stale_generation`.
-- **Out of scope.** Manual `complete/2` keeps deciding on pending text turns only (criterion 3 names the deadline handler). Barge-in and LiveKit room deletion on timer completion belong to #121.
+- **Manual completion.** `complete/2` with reason `:timer` follows the deadline handler's decision (see T1b; this reverses the first plan, which left manual completion out). `complete/2` with any other reason keeps deciding on pending text turns only.
+- **Voice contract after T1.** `begin_voice_turn/3` and `commit_voice_turn/3` may return `{:error, :station_time_elapsed}`. `resolve_patient_reply/3` returns it only for the generation the deadline cut off (`elapsed_generation_id`), and inside grace returns `{:ok, session}` whose session is already `:completed` with reason `:timer`. A retry of an already admitted turn past the deadline still returns `{:ok, :duplicate}`.
+- **Out of scope.** Barge-in and LiveKit room deletion on timer completion belong to #121; a session completed by the deadline handler does not run the voice-room cleanup that `Stations.complete_session/2` runs.
 
 ## Scope
 
@@ -33,7 +35,8 @@ Allowed: `backend/lib/backend/stations/conversation.ex`, `backend/lib/backend/st
 
 ## Tasks
 
-- [ ] **T1 — Conversation deadline policy for voice.** Criteria 1, 2, 3, 4. Tests in `backend/test/backend/conversation_test.exs`: voice turn after the deadline; voice generation resolving inside and outside grace; deadline firing with only a voice generation in flight; text rollback with an interleaved voice message. Route: delegated writer (non-trivial module plus tests, reading prepares the write).
+- [x] **T1 — Conversation deadline policy for voice.** Criteria 1, 2, 3, 4. Tests in `backend/test/backend/conversation_test.exs`: voice turn after the deadline; voice generation resolving inside and outside grace; deadline firing with only a voice generation in flight; text rollback with an interleaved voice message. Route: delegated writer (non-trivial module plus tests, reading prepares the write). Evidence: `44e6dce`, 546 changed lines (313 tests). RED observed by the writer: 12 of 13 new tests failed before the implementation. Writer: `mix test` 977 passed, format, `compile --warnings-as-errors` and `credo --strict` clean. Parent spot check: `mix test test/backend/conversation_test.exs`, 76 passed. Assessed tier: medium (`slice_budget_reached`); receipt-driven development off, no native review. No existing test changed.
+- [x] **T1b — Client timer finish keeps the voice grace.** Evidence: `74a4f25`, 176 changed lines (87 tests). RED observed by the writer: the three manual `:timer` tests failed because the caller was answered at once. Writer: `mix test` 981 passed, format, `compile --warnings-as-errors` and `credo --strict` clean. Parent spot check: `mix test test/backend/conversation_test.exs`, 80 passed. Assessed tier: medium (`under_budget`). The deadline handler and manual `:timer` completion share `defer_or_complete_timer/3`. Consequence: the HTTP finish with reason `timer` can block up to `turn_grace_ms` with a voice generation in flight, as it already does with a pending text turn; whether the client's HTTP timeout tolerates that was not checked. Task as planned: Added after T1: the learner client calls `finish("timer")` when its countdown ends (`web/src/features/station/hooks/useStation.ts:365`, `:572`), which reaches manual `Conversation.complete/2` through `Stations.complete_session/2` (`stations.ex:118-122`). With a pending text turn that call already defers; with only a voice generation in flight it completes at once, so criterion 2 fails on the ordinary path whenever the client's finish arrives before the server timer. `complete/2` with reason `:timer` must defer for an in-flight voice generation exactly as the deadline handler does. Other reasons stay unchanged. Route: same delegated writer as T1.
 - [ ] **T2 — Public interface and worker-facing API.** Criteria 5 (backend half), 6. `Backend.Stations` passes `:station_time_elapsed` through from both the entry check and the reply resolve, docstring and spec corrected; controller maps it to 409 `station_time_elapsed`; controller moduledoc and `README.md` document it. Tests in `stations_test.exs` and `voice_worker_controller_test.exs`. Route: delegated writer.
 - [ ] **T3 — Voice worker end of session.** Criterion 5 (worker half). `PhoenixClient` maps 409 `station_time_elapsed` to a non-retryable end of session; other 409 responses unchanged. Tests in `voice-worker/test_transcripts.py`. Route: delegated writer.
 
@@ -49,12 +52,14 @@ The eight criteria of issue #201. Existing text deadline tests pass unchanged. N
 
 ## Delivery
 
-Forecast: about 450 authored changed lines across three work-unit commits (T1 about 250, T2 about 130, T3 about 70). Strategy `ask-on-risk`: the chain strategy is asked before any pull request is opened. Receipt-driven development is off for this clone (clone-local), so no native review runs; verification follows the risk tier from `gentle-ai review assess`.
+Forecast: about 450 authored changed lines across three work-unit commits (T1 about 250, T2 about 130, T3 about 70). Running count after T1: 546, already past the budget, so this feature will be delivered as more than one pull request. Strategy `ask-on-risk`: the chain strategy is still to be asked and is required before any pull request is opened; slice boundaries are the work-unit commits. Receipt-driven development is off for this clone (clone-local), so no native review runs; verification follows the risk tier from `gentle-ai review assess`.
 
 ## Progress
 
 - 2026-10-13: worktree `../proyectoMed-201` created and indexed; the worktree has no `backend/deps`, `mix deps.get` is required before any mix command.
 
+- 2026-10-13: T1 (`44e6dce`) and T1b (`74a4f25`) done. Running count 722 authored changed lines.
+
 ## Next step
 
-T1.
+T2, then T3.
