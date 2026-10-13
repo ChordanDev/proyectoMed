@@ -608,13 +608,23 @@ defmodule Backend.Stations do
   Commits one final learner transcript from the voice worker as a learner
   turn, at most once per monotonic `turn_id` (#118). Generating the patient
   reply is #119.
+
+  Follows the station deadline like `process_voice_turn/3`: a new turn at or
+  after the deadline, or any turn on a session the timer completed, returns
+  `{:error, :station_time_elapsed}` and appends nothing.
   """
   @spec commit_voice_transcript(String.t(), pos_integer(), String.t()) ::
           {:ok, :committed | :duplicate}
-          | {:error, :not_found | :expired | :completed | :no_consent | :stale_generation}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :no_consent
+             | :stale_generation
+             | :station_time_elapsed}
   def commit_voice_transcript(session_id, turn_id, text) do
     with {:ok, session} <- Conversation.fetch(session_id),
-         :ok <- ensure_active(session),
+         :ok <- ensure_voice_turn_open(session),
          :ok <- ensure_audio_consent(session) do
       Conversation.commit_voice_turn(session_id, turn_id, text)
     end
@@ -624,9 +634,10 @@ defmodule Backend.Stations do
   Processes a real-time learner voice turn (#119).
 
   Encapsulates:
-    1. Validating active session state, deadline, and audio consent.
+    1. Validating active session state and audio consent.
     2. Atomically committing the learner turn via `Conversation.begin_voice_turn/3`
-       which assigns a session-scoped monotonic generation identity.
+       which assigns a session-scoped monotonic generation identity and enforces
+       the station deadline.
        Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn,
        except retries of the latest failed generation preserve its technical failure.
     3. Formatting role-labelled context from the active package and session messages.
@@ -637,6 +648,15 @@ defmodule Backend.Stations do
     7. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
     8. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
        solely on success. Stale, cancelled, completed, or expired generations never return text.
+
+  The station deadline is enforced in `Backend.Stations.Conversation`, not here.
+  A new turn at or after the deadline, or any turn on a session the timer
+  completed, returns `{:error, :station_time_elapsed}` and appends nothing; a
+  session completed for any other reason still returns `{:error, :completed}`.
+  A generation in flight when the deadline fires keeps the grace window: a reply
+  resolved inside it is a normal success on a session that is then completed
+  with reason `:timer`, and one resolved after it returns
+  `{:error, :station_time_elapsed}` without being recorded as a failed generation.
   """
   @spec process_voice_turn(String.t(), pos_integer(), String.t()) ::
           {:ok,
@@ -654,6 +674,7 @@ defmodule Backend.Stations do
              | :no_consent
              | :stale_generation
              | :invalid_transcript
+             | :station_time_elapsed
              | :station_ai_unavailable
              | term()}
   def process_voice_turn(session_id, turn_id, text)
@@ -664,7 +685,7 @@ defmodule Backend.Stations do
 
       trimmed_text ->
         with {:ok, session} <- Conversation.fetch(session_id),
-             :ok <- ensure_active(session),
+             :ok <- ensure_voice_turn_open(session),
              :ok <- ensure_audio_consent(session),
              {:ok, :committed, generation_id} <-
                Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
@@ -786,6 +807,13 @@ defmodule Backend.Stations do
   defp ensure_active(%{status: :active}), do: :ok
   defp ensure_active(%{status: :completed}), do: {:error, :completed}
 
+  # Voice turns name the timer as the reason a session is closed, as the
+  # conversation does. The deadline of a still-active session is checked there.
+  defp ensure_voice_turn_open(%{status: :completed, completion_reason: :timer}),
+    do: {:error, :station_time_elapsed}
+
+  defp ensure_voice_turn_open(session), do: ensure_active(session)
+
   defp ensure_audio_consent(%{audio_consent: true}), do: :ok
   defp ensure_audio_consent(_session), do: {:error, :no_consent}
 
@@ -793,7 +821,7 @@ defmodule Backend.Stations do
     package = get_active_package()
 
     with {:ok, current_session} <- Conversation.fetch(session_id),
-         :ok <- ensure_active(current_session),
+         :ok <- ensure_voice_turn_open(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context),
          verify_opts = build_verify_opts(package, current_session, context, %{}),
@@ -812,6 +840,10 @@ defmodule Backend.Stations do
     else
       {:error, :stale_generation} ->
         {:error, :stale_generation}
+
+      # The deadline cut this generation off: an end of session, not a failure.
+      {:error, :station_time_elapsed} ->
+        {:error, :station_time_elapsed}
 
       {:error, :completed} ->
         {:error, :completed}

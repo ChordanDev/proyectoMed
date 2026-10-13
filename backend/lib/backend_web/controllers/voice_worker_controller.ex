@@ -7,7 +7,11 @@ defmodule BackendWeb.VoiceWorkerController do
     * `POST /api/internal/voice/sessions/:id/transcripts` — processes one final
       transcript as a learner turn via `Backend.Stations.process_voice_turn/3`,
       returning only verified `reply_text` with `turn_id` and `generation_id` on success.
-      Duplicate finals stay 200 and never replay text.
+      Duplicate finals stay 200 and never replay text. Once the station time is
+      over it answers `409` with `station_time_elapsed`: a new turn at or after
+      the deadline, any turn on a session the timer completed, or a reply that
+      missed the deadline grace window. Unlike `409 stale_generation`, which only
+      drops one superseded turn, this ends the voice session and must not be retried.
     * `POST /api/internal/voice/sessions/:id/cancel` — cancels a pending voice
       generation via `Backend.Stations.cancel_voice_turn/2`.
 
@@ -127,6 +131,7 @@ defmodule BackendWeb.VoiceWorkerController do
   defp error_details(:not_found), do: {404, "session_not_found"}
   defp error_details(:no_consent), do: {403, "no_consent"}
   defp error_details(:stale_generation), do: {409, "stale_generation"}
+  defp error_details(:station_time_elapsed), do: {409, "station_time_elapsed"}
   defp error_details(:expired), do: {410, "session_expired"}
   defp error_details(:completed), do: {422, "session_completed"}
   defp error_details(:station_ai_unavailable), do: {503, "station_ai_unavailable"}
