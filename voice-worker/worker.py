@@ -124,7 +124,9 @@ class PatientVoice:
     The text event is the only place reply text leaves the worker, and it is published
     before synthesis starts so the learner can read the reply whatever happens to the
     audio. Playback runs in background tasks, so the speech reader keeps hearing the
-    learner; a failure there is published content-free and never stops the job.
+    learner; a failure there is published content-free and never stops the job. A text
+    event the room rejects is reported the same way (`text_delivery_failed`) and the
+    reply is still spoken.
     """
 
     def __init__(self, room, player: SpeechPlayer | None, session_id: str = ""):
@@ -146,16 +148,21 @@ class PatientVoice:
             )
 
     async def on_reply(self, reply: VoiceTurnReply) -> None:
-        await publish(
-            self.room,
-            {
-                "session_id": self.session_id,
-                "turn_id": reply.turn_id,
-                "generation_id": reply.generation_id,
-                "role": "patient",
-                "text": reply.reply_text,
-            },
-        )
+        try:
+            await publish(
+                self.room,
+                {
+                    "session_id": self.session_id,
+                    "turn_id": reply.turn_id,
+                    "generation_id": reply.generation_id,
+                    "role": "patient",
+                    "text": reply.reply_text,
+                },
+            )
+        except Exception:
+            # Called from the speech reader: a room publish error must not stop the
+            # job. Phoenix keeps the approved text, and the reply is still spoken.
+            await self._publish_failure(reply, "text_delivery_failed")
         task = asyncio.create_task(self._speak(reply))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -198,17 +205,27 @@ class PatientVoice:
             )
         else:
             failure = await self.player.speak(reply)
-        if failure is None:
-            return
+        if failure is not None:
+            await self._publish_failure(reply, failure.kind)
+
+    async def _publish_failure(self, reply: VoiceTurnReply, kind: str) -> None:
+        if kind == "text_delivery_failed":
+            logger.warning(
+                "patient text not published for session %s turn %d generation %d: %s",
+                self.session_id,
+                reply.turn_id,
+                reply.generation_id,
+                kind,
+            )
         try:
-            # Not the fatal `error` event: the text was delivered and the job goes on.
+            # Not the fatal `error` event: the job goes on.
             await publish(
                 self.room,
                 {
                     "session_id": self.session_id,
                     "turn_id": reply.turn_id,
                     "generation_id": reply.generation_id,
-                    "failure": failure.kind,
+                    "failure": kind,
                 },
             )
         except Exception:
@@ -217,7 +234,7 @@ class PatientVoice:
                 self.session_id,
                 reply.turn_id,
                 reply.generation_id,
-                failure.kind,
+                kind,
             )
 
 

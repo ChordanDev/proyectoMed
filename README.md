@@ -286,12 +286,15 @@ reply as text followed by a `synthesis_failed` event.
 | Learner transcript    | `{"session_id", "turn_id", "final", "text"}`                                            |
 | Patient text          | `{"session_id", "turn_id", "generation_id", "role": "patient", "text"}`                 |
 | Speech failure        | `{"session_id", "turn_id", "generation_id", "failure": "synthesis_failed"}`             |
+| Text delivery failure | `{"session_id", "turn_id", "generation_id", "failure": "text_delivery_failed"}`         |
 | Worker stopped        | `{"session_id", "error": "<kind>"}`                                                     |
 
-`failure` is not fatal: the patient text for that generation was already delivered and
-the worker keeps serving the session. It covers any provider error, provider disconnect
-or track publication error, and carries no provider message. `error` still means the
-worker job stopped. Reply text is never logged; worker logs carry the session id, turn
+`failure` is not fatal: the worker keeps serving the session. `synthesis_failed` covers
+any provider error, provider disconnect or track publication error, and carries no
+provider message; the patient text for that generation was already delivered.
+`text_delivery_failed` means the room rejected the patient text event: the reply is
+still spoken, and Phoenix keeps the approved text in the session transcript. `error`
+still means the worker job stopped. Reply text is never logged; worker logs carry the session id, turn
 id, generation id and failure kind only.
 
 **Prerequisites** (on top of the Deepgram checklist above):

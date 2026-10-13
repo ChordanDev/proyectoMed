@@ -42,12 +42,18 @@ class VoiceRoom(MockRoom):
         self.published_tracks: list[object] = []
         self.unpublished: list[str] = []
         self.data_error: Exception | None = None
+        self.text_error: Exception | None = None
         participant = self.local_participant
         publish_data = participant.publish_data
 
         async def recording_publish_data(data, topic="transcript", reliable=True):
             if self.data_error is not None and "failure" in json.loads(data):
                 raise self.data_error
+            if (
+                self.text_error is not None
+                and json.loads(data).get("role") == "patient"
+            ):
+                raise self.text_error
             await publish_data(data, topic=topic, reliable=reliable)
             self.timeline.append(("data", json.loads(data)))
 
@@ -307,6 +313,61 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
             await self.disconnect(task)
 
         self.assertEqual(len(self.room.patient_events()), 1)
+        self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+        self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
+
+    async def test_text_event_that_cannot_be_published_still_speaks_and_job_continues(
+        self,
+    ):
+        self.room.text_error = RuntimeError(PROVIDER_SECRET)
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            task = self.connect()
+            await self.say("primeira")
+            self.tts.streams[0].queue.put_nowait(chunk("a1"))
+            await settle()
+            self.assertFalse(task.done())
+
+            self.room.text_error = None
+            await self.say("segunda")
+            self.assertFalse(task.done())
+            await self.disconnect(task)
+
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1", f"{REPLY_TEXT} 2"])
+        self.assertIn(("frame", "a1"), self.room.timeline)
+        self.assertEqual(
+            self.room.patient_events(),
+            [
+                {
+                    "session_id": "s1",
+                    "turn_id": 1,
+                    "generation_id": 1,
+                    "failure": "text_delivery_failed",
+                },
+                {
+                    "session_id": "s1",
+                    "turn_id": 2,
+                    "generation_id": 2,
+                    "role": "patient",
+                    "text": f"{REPLY_TEXT} 2",
+                },
+            ],
+        )
+        output = "\n".join(logs.output)
+        self.assertIn("text_delivery_failed", output)
+        self.assertNotIn(REPLY_TEXT, output)
+        self.assertNotIn(PROVIDER_SECRET, output)
+
+    async def test_room_that_rejects_every_event_does_not_stop_the_job(self):
+        self.room.text_error = RuntimeError(PROVIDER_SECRET)
+        self.room.data_error = RuntimeError(PROVIDER_SECRET)
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            task = self.connect()
+            await self.say("primeira")
+            self.assertFalse(task.done())
+            await self.disconnect(task)
+
+        self.assertEqual(self.room.patient_events(), [])
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
         self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
         self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
 

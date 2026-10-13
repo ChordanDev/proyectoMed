@@ -117,6 +117,15 @@ See issue #120.
   `synthesis_failed` and keeps running; the worker output shows no reply text, key or
   provider message.
 - Not measured: audible latency.
+- Advisory review (Jorge el Curioso, 2026-10-13) of #184 and #185: both approved, no
+  blocker. Follow-ups applied on this branch:
+  - `82628fb`: blank `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` disable speech like
+    missing ones and a blank `ELEVENLABS_MODEL` uses the default (RED 3 failures →
+    GREEN, 113 passed).
+  - Patient text event rejected by the room no longer stops the speech reader: the
+    worker logs and publishes a content-free `text_delivery_failed` and still speaks
+    the reply (RED: job stopped → GREEN, 115 passed). Decision: Phoenix keeps the
+    approved text, so audio is still attempted.
 
 ## Known follow-ups
 - Learner speech over a reply that is already playing does not stop it until the next
