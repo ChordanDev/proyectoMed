@@ -17,6 +17,7 @@ logger = logging.getLogger("voice-worker.transcripts")
 
 class VoiceFailure(Exception):
     """Typed failure. `kind` is one of: auth, timeout, disconnected, malformed, session_inactive, stale_generation,
+    station_time_elapsed (the station deadline ended the session; never retried),
     synthesis_failed (patient speech only; never stops the worker job).
     The room `failure` event may also carry text_delivery_failed (see worker.PatientVoice).
 
@@ -278,7 +279,7 @@ class PhoenixClient:
         if response.status_code in (403, 404, 410, 422):
             raise VoiceFailure("session_inactive")
         if response.status_code == 409:
-            raise VoiceFailure("stale_generation")
+            raise VoiceFailure(_conflict_kind(response))
         if response.status_code == 400:
             raise VoiceFailure("malformed")
         if response.status_code >= 300:
@@ -287,6 +288,20 @@ class PhoenixClient:
             return response.json()
         except ValueError:
             raise VoiceFailure("malformed") from None
+
+
+def _conflict_kind(response: httpx.Response) -> str:
+    """Kind of a 409: one superseded turn, unless Phoenix names the station deadline.
+
+    Only the `error` code is read; an unreadable or unexpected body stays stale.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return "stale_generation"
+    if isinstance(body, dict) and body.get("error") == "station_time_elapsed":
+        return "station_time_elapsed"
+    return "stale_generation"
 
 
 class TurnManager:
