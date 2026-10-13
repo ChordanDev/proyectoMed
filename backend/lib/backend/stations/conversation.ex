@@ -67,7 +67,11 @@ defmodule Backend.Stations.Conversation do
            grace_ref: reference() | nil
          }
 
-  @typep voice_grace :: %{token: reference(), grace_ref: reference() | nil}
+  @typep voice_grace :: %{
+           token: reference(),
+           grace_ref: reference() | nil,
+           waiters: [GenServer.from()]
+         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
@@ -89,6 +93,12 @@ defmodule Backend.Stations.Conversation do
     GenServer.call(__MODULE__, {:append_message, session_id, message})
   end
 
+  @doc """
+  Completes a session. While a text turn is pending the caller waits until it
+  settles or the bounded grace period elapses. A `:timer` completion takes the
+  deadline's decision: it also waits, under the same single grace window, for a
+  voice generation in flight. Any other reason completes at once in that case.
+  """
   @spec complete(String.t(), term()) :: {:ok, session()} | {:error, :not_found | :expired}
   def complete(session_id, reason) do
     GenServer.call(__MODULE__, {:complete, session_id, reason}, call_timeout_ms())
@@ -437,7 +447,7 @@ defmodule Backend.Stations.Conversation do
         {:noreply, state}
 
       nil ->
-        {:reply, complete_now(session_id, reason), cancel_voice_grace(state, session_id)}
+        complete_without_turn(session_id, reason, from, state)
     end
   end
 
@@ -669,7 +679,9 @@ defmodule Backend.Stations.Conversation do
           %{state | turns: state_turns}
       end
 
-    {:reply, :ok, cancel_voice_grace(state, session_id)}
+    {voice_grace, state} = pop_voice_grace(state, session_id)
+    reply_waiters({:error, :not_found}, voice_grace.waiters)
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -693,12 +705,7 @@ defmodule Backend.Stations.Conversation do
         {:noreply, state}
 
       nil ->
-        if voice_generation_in_flight?(session_id) do
-          {:noreply, arm_voice_grace(state, session_id)}
-        else
-          _ = complete_now(session_id, :timer)
-          {:noreply, state}
-        end
+        {:noreply, defer_or_complete_timer(session_id, [], state)}
     end
   end
 
@@ -711,8 +718,8 @@ defmodule Backend.Stations.Conversation do
         state = %{state | turns: Map.delete(state.turns, session_id)}
         {:noreply, state}
 
-      {_turn, %{token: ^token}} ->
-        _ = complete_deferred(session_id, :timer)
+      {_turn, %{token: ^token} = voice_grace} ->
+        reply_waiters(complete_deferred(session_id, :timer), voice_grace.waiters)
         state = %{state | voice_graces: Map.delete(state.voice_graces, session_id)}
         {:noreply, state}
 
@@ -925,12 +932,42 @@ defmodule Backend.Stations.Conversation do
 
   defp ensure_grace_timer(_session_id, turn), do: turn
 
-  # The deadline fired with no pending text turn but a voice generation in
-  # flight: the session gets the same single grace window.
-  defp arm_voice_grace(state, session_id) do
+  defp complete_without_turn(session_id, :timer, from, state) do
+    {:noreply, defer_or_complete_timer(session_id, [from], state)}
+  end
+
+  defp complete_without_turn(session_id, reason, _from, state) do
+    result = complete_now(session_id, reason)
+    {voice_grace, state} = pop_voice_grace(state, session_id)
+    reply_waiters(result, voice_grace.waiters)
+    {:reply, result, state}
+  end
+
+  # The one timer decision when no text turn is pending, shared by the deadline
+  # and a manual `:timer` completion: a voice generation in flight gets the
+  # session's single grace window, otherwise the session completes now.
+  defp defer_or_complete_timer(session_id, waiters, state) do
+    case Map.get(state.voice_graces, session_id) do
+      %{} = voice_grace ->
+        put_voice_grace(state, session_id, %{
+          voice_grace
+          | waiters: waiters ++ voice_grace.waiters
+        })
+
+      nil ->
+        if voice_generation_in_flight?(session_id) do
+          arm_voice_grace(state, session_id, waiters)
+        else
+          reply_waiters(complete_now(session_id, :timer), waiters)
+          state
+        end
+    end
+  end
+
+  defp arm_voice_grace(state, session_id, waiters) do
     token = make_ref()
     ref = Process.send_after(self(), {:grace_expired, session_id, token}, turn_grace_ms())
-    put_voice_grace(state, session_id, %{token: token, grace_ref: ref})
+    put_voice_grace(state, session_id, %{token: token, grace_ref: ref, waiters: waiters})
   end
 
   @spec put_voice_grace(map(), String.t(), voice_grace()) :: map()
@@ -938,14 +975,15 @@ defmodule Backend.Stations.Conversation do
     %{state | voice_graces: Map.put(state.voice_graces, session_id, voice_grace)}
   end
 
-  defp cancel_voice_grace(state, session_id) do
+  # Cancels and removes the session's voice grace; its waiters are the caller's to answer.
+  defp pop_voice_grace(state, session_id) do
     case Map.pop(state.voice_graces, session_id) do
       {nil, _voice_graces} ->
-        state
+        {%{waiters: []}, state}
 
-      {%{grace_ref: grace_ref}, voice_graces} ->
+      {%{grace_ref: grace_ref} = voice_grace, voice_graces} ->
         if grace_ref, do: Process.cancel_timer(grace_ref)
-        %{state | voice_graces: voice_graces}
+        {voice_grace, %{state | voice_graces: voice_graces}}
     end
   end
 
@@ -955,10 +993,9 @@ defmodule Backend.Stations.Conversation do
         {session, state}
 
       # The timer's grace window keeps running for a voice generation still in
-      # flight. A manual completion waiting on this turn is never held back by it.
-      turn.first_reason == :timer and turn.waiters == [] and
-          is_integer(Map.get(session, :active_generation_id)) ->
-        voice_grace = %{token: turn.token, grace_ref: turn.grace_ref}
+      # flight, and callers waiting on the timer completion keep waiting with it.
+      turn.first_reason == :timer and is_integer(Map.get(session, :active_generation_id)) ->
+        voice_grace = %{token: turn.token, grace_ref: turn.grace_ref, waiters: turn.waiters}
         {session, put_voice_grace(state, session_id, voice_grace)}
 
       true ->
@@ -977,9 +1014,11 @@ defmodule Backend.Stations.Conversation do
   # turn still pending under grace owns the completion instead.
   defp finalize_voice_grace(session_id, session, state) do
     if Map.has_key?(state.voice_graces, session_id) do
-      state = cancel_voice_grace(state, session_id)
+      {voice_grace, state} = pop_voice_grace(state, session_id)
+      result = complete_now(session_id, :timer)
+      reply_waiters(result, voice_grace.waiters)
 
-      case complete_now(session_id, :timer) do
+      case result do
         {:ok, completed} -> {completed, state}
         {:error, _reason} -> {session, state}
       end

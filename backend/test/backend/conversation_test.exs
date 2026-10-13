@@ -1618,6 +1618,93 @@ defmodule Backend.ConversationTest do
       assert {:ok, ^completed} = Conversation.fetch(session.session_id)
     end
 
+    test "a manual :timer completion with only a voice generation in flight waits for the reply inside grace" do
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+      # The caller stays parked and the session active while the generation is in flight.
+      Process.sleep(100)
+      assert Task.yield(waiter, 0) == nil
+      assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, resolved} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta na graça")
+
+      assert resolved.status == :completed
+      assert resolved.completion_reason == :timer
+      assert Enum.map(resolved.messages, & &1.text) == ["Fala", "Resposta na graça"]
+      assert Task.await(waiter, 1_000) == {:ok, resolved}
+    end
+
+    test "a manual :timer completion left unanswered is replied at grace expiry without the voice learner message" do
+      Application.put_env(:backend, :turn_grace_ms, 150)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+      Process.sleep(50)
+      assert Task.yield(waiter, 0) == nil
+
+      assert {:ok, forced} = Task.await(waiter, 1_000)
+      assert forced.status == :completed
+      assert forced.completion_reason == :timer
+      assert forced.messages == []
+
+      assert {:error, :station_time_elapsed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta tardia")
+
+      assert {:ok, ^forced} = Conversation.fetch(session.session_id)
+    end
+
+    test "a manual completion with a non-timer reason still completes at once with a voice generation in flight" do
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :user) end)
+      assert {:ok, completed} = Task.await(waiter, 500)
+
+      assert completed.status == :completed
+      assert completed.completion_reason == :user
+      assert Enum.map(completed.messages, & &1.text) == ["Fala"]
+
+      assert {:error, :completed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta tardia")
+    end
+
+    test "a manual :timer completion followed by the server deadline shares one grace window and one completion" do
+      Application.put_env(:backend, :station_duration_ms, 100)
+      Application.put_env(:backend, :turn_grace_ms, 300)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      # The client's finish arrives before the server deadline fires.
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+      # Past the deadline, inside the window opened by the manual completion.
+      Process.sleep(200)
+      assert Task.yield(waiter, 0) == nil
+      assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+
+      assert {:ok, forced} = Task.await(waiter, 1_000)
+      assert forced.completion_reason == :timer
+      assert forced.messages == []
+
+      # A second window armed by the deadline would expire here and must change nothing.
+      Process.sleep(300)
+      assert {:ok, ^forced} = Conversation.fetch(session.session_id)
+      assert {:ok, ^forced} = Conversation.complete(session.session_id, :timer)
+    end
+
     test "text rollback removes its own learner message when a voice message was appended after it" do
       session = Conversation.start()
 
