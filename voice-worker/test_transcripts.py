@@ -414,6 +414,44 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
                     ctx.exception.kind, kind, f"status {status} should map to {kind}"
                 )
 
+    async def test_station_time_elapsed_conflict_ends_the_session_without_retry(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            return httpx.Response(409, json={"error": "station_time_elapsed"})
+
+        async with phoenix(handler) as client:
+            with self.assertRaises(VoiceFailure) as ctx:
+                await client.commit(1, "Onde dói?")
+            self.assertEqual(ctx.exception.kind, "station_time_elapsed")
+            self.assertEqual(str(ctx.exception), "station_time_elapsed")
+        self.assertEqual(calls, ["/api/internal/voice/sessions/s1/transcripts"])
+
+    async def test_other_conflicts_stay_stale_generation(self):
+        responses = {
+            "stale code": httpx.Response(409, json={"error": "stale_generation"}),
+            "unknown code": httpx.Response(409, json={"error": "something_else"}),
+            "missing code": httpx.Response(409, json={}),
+            "non-object body": httpx.Response(409, json=["station_time_elapsed"]),
+            "unreadable body": httpx.Response(409, text="station_time_elapsed"),
+            "empty body": httpx.Response(409),
+        }
+        for label, response in responses.items():
+            with self.subTest(label):
+                async with phoenix(lambda request, r=response: r) as client:
+                    with self.assertRaises(VoiceFailure) as ctx:
+                        await client.commit(1, "Onde dói?")
+                    self.assertEqual(ctx.exception.kind, "stale_generation")
+
+    async def test_station_time_elapsed_code_only_counts_on_a_conflict(self):
+        async with phoenix(
+            lambda request: httpx.Response(422, json={"error": "station_time_elapsed"})
+        ) as client:
+            with self.assertRaises(VoiceFailure) as ctx:
+                await client.commit(1, "Onde dói?")
+            self.assertEqual(ctx.exception.kind, "session_inactive")
+
     async def test_timeouts_and_malformed_bodies_are_typed(self):
         def timeout(request):
             raise httpx.ReadTimeout("slow")
@@ -628,6 +666,73 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(replies), 1)
                 self.assertEqual(replies[0].turn_id, expected)
                 ctx.shutdown.assert_called_once()
+
+    async def test_station_time_elapsed_stops_the_worker_instead_of_marking_the_turn_stale(
+        self,
+    ):
+        posted = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(
+                    200, json={"last_turn_id": 0, "language": "pt-BR", "keyterms": []}
+                )
+            if request.url.path.endswith("/cancel"):
+                # The timer already completed the session on the server.
+                return httpx.Response(422, json={"error": "session_completed"})
+            posted.append(json.loads(request.content))
+            return httpx.Response(409, json={"error": "station_time_elapsed"})
+
+        room = MockRoom()
+        room.name = "station-session-s1"
+        ctx = SimpleNamespace(
+            room=room,
+            connect=AsyncMock(),
+            wait_for_participant=AsyncMock(return_value=MockParticipant("learner-s1")),
+            shutdown=Mock(),
+        )
+        queue = asyncio.Queue()
+        for speech_event in [event(FINAL, "Late question"), event(END), None]:
+            queue.put_nowait(speech_event)
+        stream = MockStream(queue)
+        stream.end_input = Mock()
+        replies = []
+        streams_started = []
+
+        async def run_transcribe(room, learner, context, tracker, phoenix, voice=None):
+            streams_started.append(1)
+            await transcribe(
+                room, learner, context, tracker, phoenix,
+                stt=MockSTT(stream),
+                audio=MockAudioStream(),
+                on_reply=replies.append,
+            )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"PHOENIX_URL": "http://phoenix", "VOICE_WORKER_SECRET": "secret"},
+            ),
+            patch.object(worker, "PhoenixClient", return_value=phoenix(handler)),
+            patch.object(worker, "transcribe", side_effect=run_transcribe),
+            patch.object(worker, "publish", new=AsyncMock()) as publish,
+            self.assertLogs("voice-worker", level="WARNING") as logs,
+        ):
+            await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
+
+        # One attempt, no retry, and the job ends: a turn swallowed as a stale
+        # generation would leave the worker waiting for the next utterance.
+        self.assertEqual(posted, [{"turn_id": 1, "text": "Late question"}])
+        self.assertEqual(replies, [])
+        self.assertEqual(len(streams_started), 1)
+        publish.assert_awaited_with(
+            room, {"session_id": "s1", "error": "station_time_elapsed"}
+        )
+        ctx.shutdown.assert_called_once()
+        self.assertTrue(
+            any("s1: station_time_elapsed" in line for line in logs.output), logs.output
+        )
+        self.assertFalse(any("Late question" in line for line in logs.output))
 
     async def test_cancel_first_fences_held_http_admission_and_transport_retry(self):
         # Offline protocol model, paired with real GenServer/controller tests.
@@ -2319,6 +2424,36 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         await stream_task
 
         self.assertEqual(cancelled, [1, 2])
+        self.assertEqual(replies, [])
+
+    async def test_station_time_elapsed_propagates_instead_of_notifying_a_stale_turn(
+        self,
+    ):
+        client = ControllablePhoenixClient()
+        client.commit_errors[1] = VoiceFailure("station_time_elapsed")
+        tracker = TurnTracker("s1", last_turn_id=0)
+        cancelled: list[int] = []
+        replies: list[VoiceTurnReply] = []
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue),
+                tracker,
+                client,
+                on_reply=replies.append,
+                on_cancel=cancelled.append,
+            )
+        )
+        queue.put_nowait(event(FINAL, "primeira"))
+        queue.put_nowait(event(END))
+
+        with self.assertRaises(VoiceFailure) as ctx:
+            await asyncio.wait_for(stream_task, timeout=2)
+
+        self.assertEqual(ctx.exception.kind, "station_time_elapsed")
+        self.assertEqual(client.commit_calls, [(1, "primeira")])
+        self.assertEqual(cancelled, [])
         self.assertEqual(replies, [])
 
     async def test_accepted_reply_does_not_notify_the_cancel_consumer(self):

@@ -285,6 +285,13 @@ The worker log shows it registered with the LiveKit server.
    the log. The station keeps working through text.
 9. Press **Finalizar estação**: the room is deleted, the worker job ends, and a
    `curl` to the context endpoint answers `422` (`session_completed`).
+
+   When the station time runs out instead, the transcripts endpoint answers `409`
+   (`station_time_elapsed`): for a new turn at or after the deadline, for any turn on
+   a session the timer completed, and for a reply that missed the grace window left
+   to a turn already in flight at the deadline. It is a non-retryable end of session,
+   so the worker must stop instead of retrying. `409` (`stale_generation`) is
+   different: it drops one superseded or cancelled turn and the session keeps going.
 10. The worker never logs transcript text: scan its output from steps 2–7 and confirm
     only lifecycle lines and session ids appear.
 

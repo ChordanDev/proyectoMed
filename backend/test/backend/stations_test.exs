@@ -1604,6 +1604,136 @@ defmodule Backend.StationsTest do
     end
   end
 
+  describe "station deadline on voice turns (#201)" do
+    setup do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      original_grace = Application.get_env(:backend, :turn_grace_ms)
+
+      on_exit(fn ->
+        restore_env(:station_duration_ms, original_duration)
+        restore_env(:turn_grace_ms, original_grace)
+      end)
+
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      :ok
+    end
+
+    test "a voice turn after the deadline returns :station_time_elapsed and leaves the transcript untouched" do
+      Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :turn_grace_ms, 3_000)
+
+      session = Stations.create_session(%{audio_consent: true})
+
+      # A generation in flight keeps the session active past the deadline.
+      first = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
+      assert_receive {:adapter_called, _}, 1000
+
+      Process.sleep(450)
+      assert {:ok, %{status: :active} = before_reject} = Stations.get_session(session.session_id)
+
+      assert {:error, :station_time_elapsed} =
+               Stations.process_voice_turn(session.session_id, 2, "Chegou tarde")
+
+      refute_receive {:adapter_called, _}
+
+      assert {:ok, after_reject} = Stations.get_session(session.session_id)
+      assert after_reject.messages == before_reject.messages
+      assert after_reject.last_voice_turn_id == 1
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      send(first.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+      assert {:ok, %{turn_id: 1}} = Task.await(first)
+    end
+
+    test "a voice turn on a session completed by the timer returns :station_time_elapsed" do
+      Application.put_env(:backend, :station_duration_ms, 30)
+      session = Stations.create_session(%{audio_consent: true})
+
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
+      end)
+
+      assert {:error, :station_time_elapsed} =
+               Stations.process_voice_turn(session.session_id, 1, "Chegou tarde")
+
+      assert {:error, :station_time_elapsed} =
+               Stations.commit_voice_transcript(session.session_id, 1, "Chegou tarde")
+
+      refute_receive {:adapter_called, _}
+
+      assert {:ok, %{messages: [], completion_reason: :timer}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "a generation cut off by the deadline returns :station_time_elapsed when its reply resolves after grace" do
+      Application.put_env(:backend, :station_duration_ms, 200)
+      Application.put_env(:backend, :turn_grace_ms, 100)
+
+      session = Stations.create_session(%{audio_consent: true})
+      task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
+      assert_receive {:adapter_called, _}, 1000
+
+      # Let both the deadline and the grace window elapse without a reply.
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
+      end)
+
+      assert {:ok, forced} = Stations.get_session(session.session_id)
+      assert forced.completion_reason == :timer
+      assert forced.messages == []
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+      assert Task.await(task) == {:error, :station_time_elapsed}
+
+      # Not a technical failure: nothing is recorded against the generation.
+      assert {:ok, ^forced} = Stations.get_session(session.session_id)
+      assert Map.get(forced, :failed_voice_turn) == nil
+    end
+
+    test "a reply resolving inside the grace window succeeds and the timer completes the session" do
+      Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :turn_grace_ms, 3_000)
+
+      session = Stations.create_session(%{audio_consent: true})
+      task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
+      assert_receive {:adapter_called, _}, 1000
+
+      # Past the deadline, inside the grace window.
+      Process.sleep(450)
+      assert {:ok, %{status: :active}} = Stations.get_session(session.session_id)
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      assert {:ok,
+              %{
+                reply_text: "A dor começou durante uma caminhada.",
+                turn_id: 1,
+                generation_id: 1
+              }} = Task.await(task)
+
+      assert {:ok, completed} = Stations.get_session(session.session_id)
+      assert completed.status == :completed
+      assert completed.completion_reason == :timer
+
+      assert Enum.map(completed.messages, &{&1.role, &1.text}) == [
+               {:learner, "Fala"},
+               {:patient, "A dor começou durante uma caminhada."}
+             ]
+    end
+
+    test "a session completed for another reason still returns :completed" do
+      session = Stations.create_session(%{audio_consent: true})
+      assert {:ok, _} = Stations.complete_session(session.session_id)
+
+      assert {:error, :completed} = Stations.process_voice_turn(session.session_id, 1, "Fala")
+
+      assert {:error, :completed} =
+               Stations.commit_voice_transcript(session.session_id, 1, "Fala")
+    end
+  end
+
   describe "impresso requests" do
     setup do
       session = Stations.create_session(%{audio_consent: false})
@@ -1799,6 +1929,22 @@ defmodule Backend.StationsTest do
         end
 
       assert Stations.list_impressos(session.session_id) == {:error, :expired}
+    end
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:backend, key)
+  defp restore_env(key, value), do: Application.put_env(:backend, key, value)
+
+  defp wait_until(fun, attempts \\ 100)
+
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(20)
+      wait_until(fun, attempts - 1)
     end
   end
 end

@@ -401,6 +401,108 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
+  describe "POST transcripts after the station deadline (#201)" do
+    setup do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      original_grace = Application.get_env(:backend, :turn_grace_ms)
+
+      on_exit(fn ->
+        restore_env(:station_duration_ms, original_duration)
+        restore_env(:turn_grace_ms, original_grace)
+      end)
+
+      :ok
+    end
+
+    test "a turn on a session completed by the timer returns 409 station_time_elapsed",
+         %{conn: conn} do
+      Application.put_env(:backend, :station_duration_ms, 30)
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      wait_until(fn -> match?({:ok, %{status: :completed}}, Stations.get_session(id)) end)
+
+      resp =
+        conn
+        |> post(transcripts_path(id), %{turn_id: 1, text: "Chegou tarde"})
+        |> json_response(409)
+
+      assert resp == %{"error" => "station_time_elapsed"}
+      assert {:ok, %{messages: [], completion_reason: :timer}} = Stations.get_session(id)
+    end
+
+    test "a new turn past the deadline returns 409 while the in-flight turn still replies inside grace",
+         _tags do
+      Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :turn_grace_ms, 3_000)
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      in_flight =
+        Task.async(fn ->
+          build_conn()
+          |> put_req_header("authorization", "Bearer " <> @secret)
+          |> post(transcripts_path(id), %{turn_id: 1, text: "Onde dói?"})
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      # Past the deadline, inside the grace window of the in-flight generation.
+      Process.sleep(450)
+
+      late =
+        build_conn()
+        |> put_req_header("authorization", "Bearer " <> @secret)
+        |> post(transcripts_path(id), %{turn_id: 2, text: "Chegou tarde"})
+        |> json_response(409)
+
+      assert late == %{"error" => "station_time_elapsed"}
+
+      send(in_flight.pid, {:resume_adapter, @valid_fact_reply})
+      resp = in_flight |> Task.await() |> json_response(201)
+      assert resp["reply_text"] == @valid_fact_reply
+
+      assert {:ok, %{status: :completed, completion_reason: :timer} = stored} =
+               Stations.get_session(id)
+
+      assert [
+               %{role: :learner, text: "Onde dói?"},
+               %{role: :patient, text: @valid_fact_reply}
+             ] = stored.messages
+    end
+
+    test "a generation cut off by the deadline returns 409 station_time_elapsed and no text",
+         _tags do
+      Application.put_env(:backend, :station_duration_ms, 200)
+      Application.put_env(:backend, :turn_grace_ms, 100)
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      task =
+        Task.async(fn ->
+          build_conn()
+          |> put_req_header("authorization", "Bearer " <> @secret)
+          |> post(transcripts_path(id), %{turn_id: 1, text: "Onde dói?"})
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      wait_until(fn -> match?({:ok, %{status: :completed}}, Stations.get_session(id)) end)
+
+      send(task.pid, {:resume_adapter, @valid_fact_reply})
+
+      resp = task |> Task.await() |> json_response(409)
+      assert resp == %{"error" => "station_time_elapsed"}
+      assert {:ok, %{messages: [], completion_reason: :timer}} = Stations.get_session(id)
+    end
+  end
+
   describe "POST cancel" do
     test "cancel before admission fences delayed transcript and retry without appending", %{
       conn: conn
@@ -577,6 +679,22 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
                %{role: :learner, text: "Segunda pergunta"},
                %{role: :patient, text: @valid_fact_reply}
              ] = stored.messages
+    end
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:backend, key)
+  defp restore_env(key, value), do: Application.put_env(:backend, key, value)
+
+  defp wait_until(fun, attempts \\ 100)
+
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(20)
+      wait_until(fun, attempts - 1)
     end
   end
 end
