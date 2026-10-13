@@ -38,6 +38,8 @@ class FakeSource:
         self.capture_error: Exception | None = None
         self.capture_gate: asyncio.Event | None = None
         self.capturing = asyncio.Event()
+        self.playout_gate: asyncio.Event | None = None
+        self.playing_out = asyncio.Event()
 
     async def capture_frame(self, frame) -> None:
         self.capturing.set()
@@ -46,6 +48,11 @@ class FakeSource:
         if self.capture_error is not None:
             raise self.capture_error
         self.frames.append(frame)
+
+    async def wait_for_playout(self) -> None:
+        self.playing_out.set()
+        if self.playout_gate is not None:
+            await self.playout_gate.wait()
 
     def clear_queue(self) -> None:
         self.cleared += 1
@@ -280,6 +287,22 @@ class SpeechPlayerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source.frames, [])
         self.assertEqual(source.cleared, 1)
         self.assertEqual(stream.closed, 1)
+
+    async def test_generation_stays_cancellable_until_buffered_audio_played_out(self):
+        task = await self.start(accepted(self.tracker, 1))
+        source = self.sources[0]
+        source.playout_gate = asyncio.Event()
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        self.tts.streams[0].queue.put_nowait(None)
+        await source.playing_out.wait()
+
+        # Synthesis is complete, but the learner has not heard the buffered tail yet.
+        self.assertFalse(task.done())
+        self.assertIsNotNone(self.player.speaking)
+        self.player.cancel(1)
+
+        self.assertIsNone(await task)
+        self.assertEqual(source.cleared, 1)
 
     async def test_stale_generation_drops_late_chunks_on_the_per_frame_fence(self):
         task = await self.start(accepted(self.tracker, 1))

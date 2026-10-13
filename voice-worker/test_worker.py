@@ -1,0 +1,492 @@
+# pyright: reportMissingImports=false
+import asyncio
+import json
+import os
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import worker
+from livekit.agents import APIConnectionError
+from livekit.agents.stt import SpeechEvent
+
+from speech import SpeechPlayer
+from test_speech import FakeSource, FakeTTS, chunk, settle
+from test_transcripts import (
+    END,
+    FINAL,
+    INTERIM,
+    ControllablePhoenixClient,
+    MockAudioStream,
+    MockRoom,
+    MockSTT,
+    MockStream,
+    event,
+)
+from transcripts import TurnTracker, VoiceTurnReply
+from worker import PatientVoice, build_tts, transcribe
+
+REPLY_TEXT = "Resposta clinica confidencial"
+PROVIDER_SECRET = "sk-provider-secret"
+
+
+class VoiceRoom(MockRoom):
+    """MockRoom whose worker participant can also publish the patient track.
+
+    `timeline` records data events and audio frames in the order the room saw them.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.timeline: list[tuple[str, object]] = []
+        self.published_tracks: list[object] = []
+        self.unpublished: list[str] = []
+        self.data_error: Exception | None = None
+        self.text_error: Exception | None = None
+        participant = self.local_participant
+        publish_data = participant.publish_data
+
+        async def recording_publish_data(data, topic="transcript", reliable=True):
+            if self.data_error is not None and "failure" in json.loads(data):
+                raise self.data_error
+            if (
+                self.text_error is not None
+                and json.loads(data).get("role") == "patient"
+            ):
+                raise self.text_error
+            await publish_data(data, topic=topic, reliable=reliable)
+            self.timeline.append(("data", json.loads(data)))
+
+        async def publish_track(track, options=None):
+            self.published_tracks.append(track)
+            return SimpleNamespace(sid=f"TR_{len(self.published_tracks)}")
+
+        async def unpublish_track(track_sid):
+            self.unpublished.append(track_sid)
+
+        participant.publish_data = recording_publish_data
+        participant.publish_track = publish_track
+        participant.unpublish_track = unpublish_track
+
+    def patient_events(self) -> list[dict]:
+        return [
+            payload
+            for kind, payload in self.timeline
+            if kind == "data" and "final" not in payload
+        ]
+
+
+class TimelineSource(FakeSource):
+    timeline: list[tuple[str, object]]
+
+    async def capture_frame(self, frame) -> None:
+        await super().capture_frame(frame)
+        self.timeline.append(("frame", frame))
+
+
+class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.client = ControllablePhoenixClient()
+        self.tracker = TurnTracker("s1", last_turn_id=0)
+        self.room = VoiceRoom()
+        self.tts = FakeTTS()
+        self.sources: list[TimelineSource] = []
+        self.queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+        self.stream = MockStream(self.queue)
+        self.voice = PatientVoice(
+            self.room,
+            SpeechPlayer(
+                self.room,
+                self.tracker,
+                self.tts,
+                source_factory=self._source,
+                track_factory=lambda source: SimpleNamespace(source=source),
+            ),
+        )
+
+    def _source(self, sample_rate: int, num_channels: int) -> TimelineSource:
+        source = TimelineSource(sample_rate, num_channels)
+        source.timeline = self.room.timeline
+        self.sources.append(source)
+        return source
+
+    def connect(self, voice="default") -> asyncio.Task:
+        return asyncio.create_task(
+            transcribe(
+                self.room,
+                learner=None,
+                context={"language": "pt-BR", "keyterms": []},
+                tracker=self.tracker,
+                phoenix=self.client,
+                stt=MockSTT(self.stream),
+                audio=MockAudioStream(),
+                voice=self.voice if voice == "default" else voice,
+            )
+        )
+
+    async def say(self, text: str) -> None:
+        self.queue.put_nowait(event(FINAL, text))
+        self.queue.put_nowait(event(END))
+        await asyncio.sleep(0.01)
+
+    async def disconnect(self, task: asyncio.Task) -> None:
+        self.queue.put_nowait(None)
+        await task
+
+    async def test_approved_text_is_published_before_the_first_audio_frame(self):
+        task = self.connect()
+        await self.say("onde dói")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
+        patient = [
+            entry
+            for entry in self.room.timeline
+            if entry[0] == "frame" or "final" not in entry[1]
+        ]
+        self.assertEqual(
+            patient,
+            [
+                (
+                    "data",
+                    {
+                        "session_id": "s1",
+                        "turn_id": 1,
+                        "generation_id": 1,
+                        "role": "patient",
+                        "text": f"{REPLY_TEXT} 1",
+                    },
+                ),
+                ("frame", "a1"),
+            ],
+        )
+        for _data, topic, reliable in self.room.local_participant.published_data:
+            self.assertEqual(topic, "transcript")
+            self.assertTrue(reliable)
+
+        await self.disconnect(task)
+
+    async def test_barge_in_on_the_pending_turn_cancels_playback(self):
+        self.client.commit_delays[2] = asyncio.Event()
+        task = self.connect()
+        await self.say("primeira")
+        old_stream = self.tts.streams[0]
+        old_stream.queue.put_nowait(chunk("a1"))
+        await settle()
+
+        await self.say("segunda")  # held in Phoenix: turn 2 is pending
+        self.assertEqual(old_stream.closed, 0)
+        self.queue.put_nowait(event(INTERIM, "terceira"))
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(old_stream.closed, 1)
+        self.assertEqual(self.sources[0].cleared, 1)
+        old_stream.queue.put_nowait(chunk("late"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        self.assertEqual(self.voice.player.speaking, None)
+
+        self.client.commit_delays[2].set()
+        await self.disconnect(task)
+        self.assertEqual(len(self.tts.texts), 1)
+
+    async def test_newer_accepted_turn_supersedes_playback(self):
+        task = self.connect()
+        await self.say("primeira")
+        old_stream = self.tts.streams[0]
+        old_stream.queue.put_nowait(chunk("old-1"))
+        await settle()
+
+        await self.say("segunda")
+        old_stream.queue.put_nowait(chunk("old-late"))
+        self.tts.streams[1].queue.put_nowait(chunk("new-1"))
+        await settle()
+
+        self.assertEqual(old_stream.closed, 1)
+        self.assertEqual(self.sources[0].frames, ["old-1", "new-1"])
+        self.assertEqual(
+            [(e["turn_id"], e["generation_id"]) for e in self.room.patient_events()],
+            [(1, 1), (2, 2)],
+        )
+        text_2 = self.room.timeline.index(("data", self.room.patient_events()[1]))
+        self.assertLess(text_2, self.room.timeline.index(("frame", "new-1")))
+
+        await self.disconnect(task)
+
+    async def test_learner_disconnect_cancels_playback_and_keeps_the_track(self):
+        task = self.connect()
+        await self.say("primeira")
+        stream = self.tts.streams[0]
+        stream.queue.put_nowait(chunk("a1"))
+        await settle()
+
+        await self.disconnect(task)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertEqual(self.sources[0].cleared, 1)
+        self.assertIsNone(self.voice.player.speaking)
+        stream.queue.put_nowait(chunk("late"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        # The player outlives one learner connection: the job still owns the track.
+        self.assertEqual(self.room.unpublished, [])
+        self.assertEqual(self.tts.closed, 0)
+
+    async def test_reconnected_learner_reuses_the_published_track(self):
+        await self.disconnect(self.connect())
+        self.queue = asyncio.Queue()
+        self.stream = MockStream(self.queue)
+        task = self.connect()
+        await self.say("primeira")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        self.assertEqual(len(self.room.published_tracks), 1)
+        await self.disconnect(task)
+
+    async def test_job_end_releases_speech_resources_once(self):
+        await self.voice.start()
+        task = self.connect()
+        await self.say("primeira")
+        await self.disconnect(task)
+
+        await self.voice.aclose()
+        await self.voice.aclose()
+
+        self.assertEqual(self.room.unpublished, ["TR_1"])
+        self.assertEqual(self.sources[0].closed, 1)
+        self.assertEqual(self.tts.closed, 1)
+
+    async def test_synthesis_failure_publishes_failure_event_and_job_continues(self):
+        self.tts.synthesize_error = APIConnectionError(
+            f"{PROVIDER_SECRET} {REPLY_TEXT}"
+        )
+        with self.assertLogs("voice-worker", level="DEBUG") as logs:
+            task = self.connect()
+            await self.say("primeira")
+
+            self.assertEqual(
+                self.room.patient_events(),
+                [
+                    {
+                        "session_id": "s1",
+                        "turn_id": 1,
+                        "generation_id": 1,
+                        "role": "patient",
+                        "text": f"{REPLY_TEXT} 1",
+                    },
+                    {
+                        "session_id": "s1",
+                        "turn_id": 1,
+                        "generation_id": 1,
+                        "failure": "synthesis_failed",
+                    },
+                ],
+            )
+            self.assertFalse(task.done())
+
+            # The same job speaks the next turn.
+            self.tts.synthesize_error = None
+            await self.say("segunda")
+            self.tts.streams[0].queue.put_nowait(chunk("b1"))
+            await settle()
+            self.assertEqual(self.sources[0].frames, ["b1"])
+            await self.disconnect(task)
+
+        output = "\n".join(logs.output)
+        self.assertIn("synthesis_failed", output)
+        self.assertNotIn(REPLY_TEXT, output)
+        self.assertNotIn(PROVIDER_SECRET, output)
+        for payload in self.room.patient_events():
+            self.assertNotIn("error", payload)
+            self.assertNotIn(PROVIDER_SECRET, json.dumps(payload))
+
+    async def test_failure_event_that_cannot_be_published_does_not_stop_the_job(self):
+        self.tts.synthesize_error = APIConnectionError("down")
+        self.room.data_error = RuntimeError(PROVIDER_SECRET)
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            task = self.connect()
+            await self.say("primeira")
+            self.assertFalse(task.done())
+            await self.disconnect(task)
+
+        self.assertEqual(len(self.room.patient_events()), 1)
+        self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+        self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
+
+    async def test_text_event_that_cannot_be_published_still_speaks_and_job_continues(
+        self,
+    ):
+        self.room.text_error = RuntimeError(PROVIDER_SECRET)
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            task = self.connect()
+            await self.say("primeira")
+            self.tts.streams[0].queue.put_nowait(chunk("a1"))
+            await settle()
+            self.assertFalse(task.done())
+
+            self.room.text_error = None
+            await self.say("segunda")
+            self.assertFalse(task.done())
+            await self.disconnect(task)
+
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1", f"{REPLY_TEXT} 2"])
+        self.assertIn(("frame", "a1"), self.room.timeline)
+        self.assertEqual(
+            self.room.patient_events(),
+            [
+                {
+                    "session_id": "s1",
+                    "turn_id": 1,
+                    "generation_id": 1,
+                    "failure": "text_delivery_failed",
+                },
+                {
+                    "session_id": "s1",
+                    "turn_id": 2,
+                    "generation_id": 2,
+                    "role": "patient",
+                    "text": f"{REPLY_TEXT} 2",
+                },
+            ],
+        )
+        output = "\n".join(logs.output)
+        self.assertIn("text_delivery_failed", output)
+        self.assertNotIn(REPLY_TEXT, output)
+        self.assertNotIn(PROVIDER_SECRET, output)
+
+    async def test_room_that_rejects_every_event_does_not_stop_the_job(self):
+        self.room.text_error = RuntimeError(PROVIDER_SECRET)
+        self.room.data_error = RuntimeError(PROVIDER_SECRET)
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            task = self.connect()
+            await self.say("primeira")
+            self.assertFalse(task.done())
+            await self.disconnect(task)
+
+        self.assertEqual(self.room.patient_events(), [])
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
+        self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+        self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
+
+    async def test_unavailable_provider_falls_back_to_text(self):
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            task = self.connect(voice=PatientVoice(self.room, None))
+            await self.say("primeira")
+            await self.disconnect(task)
+
+        self.assertEqual(
+            [sorted(payload) for payload in self.room.patient_events()],
+            [
+                ["generation_id", "role", "session_id", "text", "turn_id"],
+                ["failure", "generation_id", "session_id", "turn_id"],
+            ],
+        )
+        self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
+
+    async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
+        self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
+        task = self.connect()
+        await self.say("repetida")
+        await self.disconnect(task)
+
+        self.assertEqual(self.room.patient_events(), [])
+        self.assertEqual(self.tts.texts, [])
+        self.assertEqual(self.room.published_tracks, [])
+
+    async def test_track_publication_failure_at_job_start_is_not_fatal(self):
+        async def failing_publish_track(_track, _options=None):
+            raise RuntimeError(PROVIDER_SECRET)
+
+        self.room.local_participant.publish_track = failing_publish_track
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            await self.voice.start()
+
+        output = "\n".join(logs.output)
+        self.assertIn("synthesis_failed", output)
+        self.assertNotIn(PROVIDER_SECRET, output)
+
+
+class BuildTTSTest(unittest.TestCase):
+    CONTEXT = {"language": "pt-BR", "keyterms": []}
+
+    def test_reads_elevenlabs_settings_from_the_worker_environment(self):
+        env = {"ELEVENLABS_API_KEY": PROVIDER_SECRET, "ELEVENLABS_VOICE_ID": "voice-1"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+        ):
+            self.assertIs(build_tts("s1", self.CONTEXT), tts.return_value)
+
+        tts.assert_called_once_with(
+            api_key=PROVIDER_SECRET,
+            voice_id="voice-1",
+            model="eleven_flash_v2_5",
+            encoding="pcm_24000",
+            language="pt-BR",
+        )
+
+    def test_model_can_be_overridden(self):
+        env = {
+            "ELEVENLABS_API_KEY": PROVIDER_SECRET,
+            "ELEVENLABS_VOICE_ID": "voice-1",
+            "ELEVENLABS_MODEL": "eleven_multilingual_v2",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+        ):
+            build_tts("s1", self.CONTEXT)
+
+        self.assertEqual(tts.call_args.kwargs["model"], "eleven_multilingual_v2")
+
+    def test_missing_configuration_disables_speech_without_leaking_it(self):
+        env = {"ELEVENLABS_API_KEY": PROVIDER_SECRET}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+            self.assertLogs("voice-worker", level="WARNING") as logs,
+        ):
+            self.assertIsNone(build_tts("s1", self.CONTEXT))
+
+        tts.assert_not_called()
+        self.assertIn("session s1", "\n".join(logs.output))
+        self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+
+    def test_blank_required_setting_disables_speech_like_a_missing_one(self):
+        for blank in ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"):
+            env = {
+                "ELEVENLABS_API_KEY": PROVIDER_SECRET,
+                "ELEVENLABS_VOICE_ID": "voice-1",
+                blank: "  ",
+            }
+            with (
+                self.subTest(blank=blank),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(worker.elevenlabs, "TTS") as tts,
+                self.assertLogs("voice-worker", level="WARNING") as logs,
+            ):
+                self.assertIsNone(build_tts("s1", self.CONTEXT))
+
+                tts.assert_not_called()
+                self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+
+    def test_blank_model_falls_back_to_the_default(self):
+        env = {
+            "ELEVENLABS_API_KEY": PROVIDER_SECRET,
+            "ELEVENLABS_VOICE_ID": "voice-1",
+            "ELEVENLABS_MODEL": "",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+        ):
+            build_tts("s1", self.CONTEXT)
+
+        self.assertEqual(tts.call_args.kwargs["model"], "eleven_flash_v2_5")
+
+
+if __name__ == "__main__":
+    unittest.main()
