@@ -60,7 +60,7 @@ merged tree; a test is added only where a resolution needs behaviour neither sid
 covered.
 
 ## Tasks
-- [ ] T1 Merge `origin/develop`, resolve all conflicts, restore green suites, commit the
+- [x] T1 Merge `origin/develop`, resolve all conflicts, restore green suites, commit the
   merge. Route: delegated (writer trigger: 12 non-trivial files; preparation reading of
   both sides).
 
@@ -81,5 +81,68 @@ covered.
 - Worktree `../proyectoMed-116-sync`; trial merge: 12 conflicted files, 29 hunks, 141
   files staged cleanly from `develop`.
 
+- T1 done in merge commit `38ab34b` (parents `7af554c`, `6e855eb`). All 12 conflicted
+  files resolved keeping both sides; no separate follow-up commit.
+
+### Resolution decisions
+- `stations.ex`: one `verify_patient_reply/3`, `develop`'s Jev gate; the voice stub is
+  gone. `process_voice_reply` calls it with `build_verify_opts(package, session,
+  context, %{})`, the same options as the text path (conversation, case state,
+  regeneration generator, default Jev deadline). The return shape is unchanged for the
+  voice caller (a map carrying `:text`).
+- Jev rejection (`{:refused, _}`, `{:denied, _}`), `:timeout` and an unavailable
+  adapter take the existing voice failure path: `Conversation.fail_generation/3` and
+  `{:error, :station_ai_unavailable}`. The text path releases no patient text on those
+  outcomes (it rolls the turn back and returns an error; it never substitutes the
+  canonical refusal), so the voice path mirrors that instead of speaking a refusal.
+- `admit_voice_reply/2` is untouched.
+- `complete_session/2`: `develop`'s timer deadline guard plus the voice branch's
+  best-effort LiveKit room cleanup on every successful completion.
+- `conversation.ex`: sessions carry impresso and voice generation fields; voice
+  generation state is cleared in `complete_now/2`, where `develop` moved completion;
+  all handlers from both sides kept.
+- `runtime.exs`, `architecture_test.exs`, web client, feature index, `pt-BR.json`:
+  union of both sides.
+- `conversation_test.exs`: `Conversation` aliases `Backend.Stations.Conversation` (voice
+  branch), `StationConversation` is kept for `develop`'s tests and `LegacyConversation`
+  for the delegate test. `develop`'s tests that used the legacy alias now call the real
+  module directly.
+- `useStation.ts`: `sessionId` is exposed next to `develop`'s state; set on start and on
+  resume, cleared on failure, reset and pagehide discard.
+- `App.tsx`: `develop`'s notice -> station -> result flow, with `VoicePanel` mounted in
+  the active state when audio consent was given. `StationSession` stays exported and
+  tested but is no longer rendered by `App`.
+
+### Non-conflicted files fixed
+- `backend/test/backend_web/controllers/voice_worker_controller_test.exs`: configures a
+  verifying Jev adapter (7 tests returned 503 because the default adapter fails closed).
+- `backend/test/backend/stations_test.exs`: two new tests (voice turn reaches Jev; Jev
+  rejection or unavailability fails the generation without text).
+- `web/src/features/station/hooks/useStation.test.ts`: one new test (resumed session
+  exposes `sessionId`, cleared after reset).
+- `README.md`: the voice manual test states that Jev fails closed by default.
+
+### Checks observed on `38ab34b`
+- `mix precommit`: 964 passed, exit 0.
+- `mix credo --strict`: no issues.
+- `mix dialyzer --format short`: 0 errors, passed.
+- `npm --prefix web run typecheck`: clean.
+- `npm --prefix web run lint`: clean.
+- `npm --prefix web test`: 11 files, 201 tests passed.
+- `bash scripts/test.sh`: exit 0 (web unit 197, backend 964, E2E 4 passed).
+- `uv run python -m unittest` in `voice-worker/`: 115 tests OK.
+
+### Open points for the parent
+- The default Jev adapter is `DisabledAdapter`, so outside tests and the E2E-only
+  approving adapter every voice turn now fails with `station_ai_unavailable`, exactly
+  like the text path on `develop`.
+- The timer auto-completion inside `Conversation` does not delete the LiveKit room;
+  only `complete_session/2` and `discard_session/1` do.
+- Voice turns are not subject to `develop`'s `deadline_at` admission check; they stop
+  once the deadline timer completes the session.
+- `App` now shows both `StationScreen`'s push-to-talk voice and the LiveKit
+  `VoicePanel` under audio consent. The `App` wiring has no test of its own
+  (`web/src/App.test.tsx` was outside the allowed edit surface).
+
 ## Next step
-T1.
+Open the PR to `feat/116-realtime-voice` (user decision).
