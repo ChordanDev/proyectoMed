@@ -257,6 +257,10 @@ defmodule Backend.Stations.Conversation do
   @doc """
   Explicitly cancels a pending generation. When `generation_id` is provided,
   cancels only if that generation is still active, protecting against races with newer turns.
+
+  Cancelling or failing the generation a deadline grace window was waiting for
+  completes the session with reason `:timer` at once, unless a text turn is
+  still pending; the return value is unchanged.
   """
   @spec cancel_generation(String.t(), pos_integer() | nil) ::
           {:ok, :cancelled}
@@ -537,7 +541,7 @@ defmodule Backend.Stations.Conversation do
             |> Map.put(:active_generation_message_index, nil)
 
           true = :ets.insert(__MODULE__, {session_id, session})
-          {:reply, {:ok, :failed}, state}
+          {:reply, {:ok, :failed}, settle_abandoned_voice_grace(session_id, state)}
         else
           {:reply, {:error, :stale_generation}, state}
         end
@@ -565,7 +569,7 @@ defmodule Backend.Stations.Conversation do
             |> Map.put(:active_generation_message_index, nil)
 
           true = :ets.insert(__MODULE__, {session_id, session})
-          {:reply, {:ok, :cancelled}, state}
+          {:reply, {:ok, :cancelled}, settle_abandoned_voice_grace(session_id, state)}
         end
 
       {:error, reason} ->
@@ -627,7 +631,7 @@ defmodule Backend.Stations.Conversation do
             |> Map.put(:active_generation_message_index, nil)
 
           true = :ets.insert(__MODULE__, {session_id, session})
-          {:reply, {:ok, :cancelled}, state}
+          {:reply, {:ok, :cancelled}, settle_abandoned_voice_grace(session_id, state)}
         end
 
       {:error, reason} ->
@@ -1013,17 +1017,35 @@ defmodule Backend.Stations.Conversation do
   # A voice reply settled the generation the deadline was waiting for. A text
   # turn still pending under grace owns the completion instead.
   defp finalize_voice_grace(session_id, session, state) do
+    case complete_voice_grace(session_id, state) do
+      {{:ok, completed}, state} -> {completed, state}
+      {_no_completion, state} -> {session, state}
+    end
+  end
+
+  # The generation the deadline was waiting for was cancelled or failed, so no
+  # reply can arrive inside the window: the session completes now instead of at
+  # grace expiry. The learner message stays, as it does for a generation
+  # abandoned before the deadline. A pending text turn keeps the window.
+  defp settle_abandoned_voice_grace(session_id, state) do
+    if Map.has_key?(state.turns, session_id) do
+      state
+    else
+      {_result, state} = complete_voice_grace(session_id, state)
+      state
+    end
+  end
+
+  # Ends an armed voice grace: the session completes with the timer's reason and
+  # the callers parked on it are answered. `:none` when no window is armed.
+  defp complete_voice_grace(session_id, state) do
     if Map.has_key?(state.voice_graces, session_id) do
       {voice_grace, state} = pop_voice_grace(state, session_id)
       result = complete_now(session_id, :timer)
       reply_waiters(result, voice_grace.waiters)
-
-      case result do
-        {:ok, completed} -> {completed, state}
-        {:error, _reason} -> {session, state}
-      end
+      {result, state}
     else
-      {session, state}
+      {:none, state}
     end
   end
 
