@@ -599,8 +599,11 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 stream.end_input = Mock()
                 replies = []
 
-                async def run_transcribe(room, learner, context, tracker, phoenix):
+                async def run_transcribe(
+                    room, learner, context, tracker, phoenix, voice=None
+                ):
                     self.assertEqual(tracker.last_accepted_turn_id, committed)
+                    self.assertIsInstance(voice, worker.PatientVoice)
                     await transcribe(
                         room, learner, context, tracker, phoenix,
                         stt=MockSTT(stream),
@@ -2258,6 +2261,84 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("reply_text", data)
             self.assertNotIn(clinical_reply, data)
             self.assertNotIn("dor precordial", data)
+
+    async def test_barge_in_notifies_the_cancel_consumer_with_the_superseded_turn(self):
+        client = ControllablePhoenixClient()
+        client.commit_delays[1] = asyncio.Event()
+        client.commit_events[1] = asyncio.Event()
+        client.cancel_events[1] = asyncio.Event()
+        tracker = TurnTracker("s1", last_turn_id=0)
+        cancelled: list[int] = []
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue), tracker, client, on_cancel=cancelled.append
+            )
+        )
+        queue.put_nowait(event(FINAL, "primeira"))
+        queue.put_nowait(event(END))
+        await client.commit_events[1].wait()
+        self.assertEqual(cancelled, [])
+
+        queue.put_nowait(event(SpeechEventType.START_OF_SPEECH))
+        await client.cancel_events[1].wait()
+        self.assertEqual(cancelled, [1])
+
+        client.commit_delays[1].set()
+        queue.put_nowait(None)
+        await stream_task
+
+    async def test_stale_generation_result_notifies_the_cancel_consumer(self):
+        client = ControllablePhoenixClient()
+        client.commit_errors[1] = VoiceFailure("stale_generation")
+        # A superseded reply the tracker refuses is a stale result as well.
+        client.replies[2] = VoiceTurnReply(
+            turn_id=2, status="committed", generation_id=2, reply_text="texto"
+        )
+        tracker = TurnTracker("s1", last_turn_id=0)
+        tracker.cancel(generation_id=2)
+        cancelled: list[int] = []
+        replies: list[VoiceTurnReply] = []
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue),
+                tracker,
+                client,
+                on_reply=replies.append,
+                on_cancel=cancelled.append,
+            )
+        )
+        for text in ("primeira", "segunda"):
+            queue.put_nowait(event(FINAL, text))
+            queue.put_nowait(event(END))
+            await asyncio.sleep(0.01)
+        queue.put_nowait(None)
+        await stream_task
+
+        self.assertEqual(cancelled, [1, 2])
+        self.assertEqual(replies, [])
+
+    async def test_accepted_reply_does_not_notify_the_cancel_consumer(self):
+        client = ControllablePhoenixClient()
+        tracker = TurnTracker("s1", last_turn_id=0)
+        cancelled: list[int] = []
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue), tracker, client, on_cancel=cancelled.append
+            )
+        )
+        queue.put_nowait(event(FINAL, "primeira"))
+        queue.put_nowait(event(END))
+        queue.put_nowait(None)
+        await stream_task
+
+        self.assertEqual(tracker.last_accepted_turn_id, 1)
+        self.assertEqual(cancelled, [])
 
     def test_stale_or_duplicate_reply_rejected_for_synthesis(self):
         tracker = TurnTracker("s1", last_turn_id=0)
