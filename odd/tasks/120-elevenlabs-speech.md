@@ -111,8 +111,12 @@ See issue #120.
   refusal (five different questions through the worker API), while the text path
   answers the same question: `admit_voice_reply/2` admits only the refusal or an exact
   package fact, and the adapter paraphrases. README prerequisites added from this run.
-- Not measured: audible latency. Manual steps 3-6 (supersede, disconnect mid-answer,
-  wrong key, log scan): result pending confirmation from the tester.
+- Manual steps 3-6, reported passing by the tester on 2026-10-13: a newer reply stops
+  the previous audio; an answer interrupted by disconnecting does not resume after
+  reconnecting; with a wrong ElevenLabs key there is no audio, the worker logs
+  `synthesis_failed` and keeps running; the worker output shows no reply text, key or
+  provider message.
+- Not measured: audible latency.
 
 ## Known follow-ups
 - Learner speech over a reply that is already playing does not stop it until the next
@@ -129,5 +133,4 @@ See issue #120.
   into `feat/116-realtime-voice`.
 
 ## Next step
-Confirm manual steps 3-6, then push and open the T1 and T2 PRs against
-`feat/116-realtime-voice` (user decision).
+Push and open the T1 and T2 PRs against `feat/116-realtime-voice` (user decision).
