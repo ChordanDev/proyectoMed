@@ -21,8 +21,8 @@ defmodule Backend.Stations.JevDecision do
       and authored `disclosure_condition` are preserved.
     * **Total text cap, never truncated**: The learner/conversation text handed to
       any adapter (candidate, bounded conversation and latest learner turn for
-      patient requests; the evidence pool for rubric requests) is capped by
-      `max_context_characters/0`. Over the cap the decision fails closed with
+      patient requests, capped by `max_context_characters/0`; the evidence pool
+      for rubric requests, capped by `max_rubric_context_characters/0`). Over the cap the decision fails closed with
       `{:invalid_request, :context_limit_exceeded}` before the adapter is called.
       Trusted package content is not counted.
     * **Canonical fact IDs only**: `used_fact_ids` strictly requires canonical fact
@@ -52,6 +52,11 @@ defmodule Backend.Stations.JevDecision do
   # `max_characters`) + the latest learner turn sent again (2,000) = 24,000.
   # Normal requests never reach it; it is a fail-closed safety net.
   @default_max_context_characters 24_000
+  # The rubric evidence pool is the whole transcript. Stations last 10 minutes
+  # (`Conversation` default station duration) and a real session totals about
+  # 20,000-30,000 characters, so 120,000 leaves ~4-5x headroom while still
+  # bounding abuse (fail closed, never truncate).
+  @default_max_rubric_context_characters 120_000
 
   @type patient_decision_status :: :verified | :semantic_refusal | :low_confidence
 
@@ -174,7 +179,7 @@ defmodule Backend.Stations.JevDecision do
           {:ok, [RubricBatch.decision()]} | {:error, rubric_batch_error()}
   def decide_rubric_batch(request, opts \\ []) when is_list(opts) do
     with {:ok, payload} <- RubricBatch.build_payload(request),
-         :ok <- validate_context_size(evidence_pool_texts(payload.evidence_pool), opts),
+         :ok <- validate_evidence_pool_size(payload.evidence_pool, opts),
          {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
       adapter_request =
         Map.merge(payload, %{deadline_ms: deadline_ms, deadline_at_monotonic_ms: deadline_at})
@@ -233,7 +238,7 @@ defmodule Backend.Stations.JevDecision do
 
   @doc """
   Returns the configured maximum total characters of learner/conversation text
-  sent to an adapter in one request. Trusted package content is not counted.
+  sent to an adapter in one patient request. Trusted package content is not counted.
   """
   @spec max_context_characters() :: pos_integer()
   def max_context_characters do
@@ -241,6 +246,19 @@ defmodule Backend.Stations.JevDecision do
       :backend,
       :jev_decision_max_context_characters,
       @default_max_context_characters
+    )
+  end
+
+  @doc """
+  Returns the configured maximum total characters of evidence pool text sent to
+  an adapter in one rubric request (`decide_rubric/2`, `decide_rubric_batch/2`).
+  """
+  @spec max_rubric_context_characters() :: pos_integer()
+  def max_rubric_context_characters do
+    Application.get_env(
+      :backend,
+      :jev_decision_max_rubric_context_characters,
+      @default_max_rubric_context_characters
     )
   end
 
@@ -336,7 +354,9 @@ defmodule Backend.Stations.JevDecision do
           opts
         )
 
-      with :ok <- validate_context_size(patient_request_texts(minimized), opts) do
+      max_chars = opts[:max_context_characters] || max_context_characters()
+
+      with :ok <- validate_context_size(patient_request_texts(minimized), max_chars) do
         {:ok, minimized}
       end
     end
@@ -373,8 +393,7 @@ defmodule Backend.Stations.JevDecision do
   end
 
   # Fails closed over the cap; the text is never truncated.
-  defp validate_context_size(texts, opts) do
-    max_chars = opts[:max_context_characters] || max_context_characters()
+  defp validate_context_size(texts, max_chars) do
     total = texts |> Enum.map(&text_length/1) |> Enum.sum()
 
     if total > max_chars do
@@ -556,7 +575,7 @@ defmodule Backend.Stations.JevDecision do
           opts
         )
 
-      with :ok <- validate_context_size(evidence_pool_texts(minimized.evidence_pool), opts) do
+      with :ok <- validate_evidence_pool_size(minimized.evidence_pool, opts) do
         {:ok, minimized}
       end
     end
@@ -566,7 +585,10 @@ defmodule Backend.Stations.JevDecision do
     {:error, {:invalid_request, :expected_map}}
   end
 
-  defp evidence_pool_texts(pool), do: Enum.map(pool, & &1.text)
+  defp validate_evidence_pool_size(pool, opts) do
+    max_chars = opts[:max_rubric_context_characters] || max_rubric_context_characters()
+    validate_context_size(Enum.map(pool, & &1.text), max_chars)
+  end
 
   defp validate_criterion(criterion) when is_map(criterion) do
     id = Map.get(criterion, :id) || Map.get(criterion, "id")

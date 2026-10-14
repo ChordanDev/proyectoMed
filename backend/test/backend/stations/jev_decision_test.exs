@@ -1070,6 +1070,10 @@ defmodule Backend.Stations.JevDecisionTest do
       }
     end
 
+    test "defaults to 120,000 characters" do
+      assert JevDecision.max_rubric_context_characters() == 120_000
+    end
+
     test "fails closed with a typed error and never calls the adapter when the evidence pool exceeds the cap" do
       request = rubric_request_with_pool([String.duplicate("a", 30), String.duplicate("b", 21)])
 
@@ -1077,14 +1081,38 @@ defmodule Backend.Stations.JevDecisionTest do
                JevDecision.decide_rubric(request,
                  adapter: EchoAdapter,
                  test_pid: self(),
-                 max_context_characters: 50
+                 max_rubric_context_characters: 50
                )
 
       refute_received {:echo_rubric_request, _}
     end
 
+    test "is not bounded by the patient cap" do
+      request = rubric_request_with_pool([String.duplicate("a", 30), String.duplicate("b", 21)])
+
+      assert {:ok, _} =
+               JevDecision.decide_rubric(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_context_characters: 50
+               )
+
+      assert_received {:echo_rubric_request, _}
+    end
+
+    test "passes an evidence pool over 24,000 but under the default cap to the adapter unchanged" do
+      texts = [String.duplicate("a", 24_001), String.duplicate("b", 30_000)]
+      request = rubric_request_with_pool(texts)
+
+      assert {:ok, _} =
+               JevDecision.decide_rubric(request, adapter: EchoAdapter, test_pid: self())
+
+      assert_received {:echo_rubric_request, echo}
+      assert Enum.map(echo.evidence_pool, & &1.text) == texts
+    end
+
     test "fails closed under the default cap for an oversized evidence pool" do
-      request = rubric_request_with_pool([String.duplicate("a", 24_001)])
+      request = rubric_request_with_pool([String.duplicate("a", 120_001)])
 
       assert {:error, {:invalid_request, :context_limit_exceeded}} =
                JevDecision.decide_rubric(request, adapter: EchoAdapter, test_pid: self())
@@ -1100,7 +1128,7 @@ defmodule Backend.Stations.JevDecisionTest do
                JevDecision.decide_rubric(request,
                  adapter: EchoAdapter,
                  test_pid: self(),
-                 max_context_characters: 50
+                 max_rubric_context_characters: 50
                )
 
       assert_received {:echo_rubric_request, echo}
