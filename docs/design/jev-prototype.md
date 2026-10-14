@@ -1,6 +1,6 @@
 # Jev Prototype Design: Verified Dialogue and Educational Point Estimates
 
-Status: **Accepted architecture as of 2026-09-21. Only the evaluation side owned by [#128](https://github.com/ChordanDev/proyectoMed/issues/128) is described here as implemented, as an internal backend capability with no live adapter and no HTTP exposure (2026-10-06); see [Evaluation contract](#evaluation-contract).** Every other section keeps the "accepted, not implemented" status it states. [ADR-011 (#123)](https://github.com/ChordanDev/proyectoMed/issues/123) and [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124) are Accepted, and [Ticket 14 (#125)](https://github.com/ChordanDev/proyectoMed/issues/125) with children #126–#130 remains the implementation-planning graph. Acceptance authorizes architecture only. These records do not describe shipped Jev, learner-visible estimate, API, or UI behavior; do not activate pilot or production use; and do not select or approve a provider, accept privacy/ZDR/legal terms, establish clinical accuracy, authorize certification/pass-fail/readiness claims, or complete clinical pt-BR qualification.
+Status: **Accepted architecture as of 2026-09-21; implementation cross-checked at `7fac4a2`.** [#128](https://github.com/ChordanDev/proyectoMed/issues/128) supplied the internal assessment engine. This baseline also contains the pre-delivery gate and v2 educational-result HTTP/UI integration. The default decision adapter is disabled. An opt-in TypeSafe adapter (`JEV_ADAPTER=typesafe`, #206) verifies patient replies only; its live use awaits the human privacy and legal gate (#183), and no adapter serves live rubric decisions. ADR-011 (#123) and ADR-012 (#124) authorize architecture, not provider approval, privacy/ZDR/legal acceptance, clinical accuracy, pilot/production activation, certification, pass/fail, or readiness claims. The contracts below distinguish implemented mechanisms from remaining integration and human qualification gates.
 
 ## Decision summary
 
@@ -17,12 +17,12 @@ Status: **Accepted architecture as of 2026-09-21. Only the evaluation side owned
 
 ## Current runtime and accepted architecture
 
-| Area | Current evidence | Accepted, unimplemented change |
+| Area | Current evidence | Remaining boundary |
 |---|---|---|
-| Reply boundary | Closed #44 supplied the prior bounded-reply seam. Current modules remain top-level. | Add the Jev verification decision inside Phoenix while preserving #119–#121 ownership. |
-| Evaluation | Closed #27 supplied the prior evaluator seam, and it still serves `GET .../result`: the learner-visible runtime follows ADR-005 (#38) and has no global score. #128 added the four-state assessment and exact estimates as an internal capability (`Backend.Stations.assess_session/2`) whose default adapter is disabled. | Expose the assessment through the versioned result contract (#129) once a qualified decision adapter and clinical qualification (#130) exist. |
+| Reply boundary | `Backend.Stations.create_message/2` rejects learner text over 2,000 characters (422 `message_too_long`), then invokes `verify_patient_reply/3` → `Backend.Stations.CandidateGate` before committing patient text. `JevDecision` fails closed over its total text caps instead of truncating. Internals live under `backend/lib/backend/stations/`; #44 is the prior bounded-reply seam. | The default decision adapter is disabled; the opt-in TypeSafe patient adapter awaits #183 and uses uncalibrated thresholds. Live-provider qualification and the #119–#121 voice integration remain distinct from the implemented gate. |
+| Evaluation | #128 implements four-state assessment and exact estimates via `Backend.Stations.assess_session/2`. The legacy `/api/stations/.../result` still uses `Evaluator` without points; `/api/v2/stations/.../result` exposes the new assessment and is consumed by the web client. | A qualified live decision adapter and clinical qualification remain absent; HTTP/UI integration does not establish clinical accuracy. |
 | Voice | ADR-009 (#114) is **Accepted** for prototype LiveKit/WebRTC + Deepgram + ElevenLabs. Ticket 13 (#116) owns children #117–#121. | Integrate verification at the established Phoenix safety boundary; do not create another media or orchestration path. |
-| Avatar | ADR-010 (#115) is **Proposed** and V3-only. | No dependency; excluded from this prototype. |
+| Avatar | ADR-010 (#115), **Proposed** and V3-only, is superseded by accepted ADR-013 (#209, Unreal Engine 5.8 + MetaHuman client). | No dependency; ADR-013 does not change the Jev Gate or evaluation. |
 | Impressos | The #105–#108 dependency graph is unchanged. | Consume Impressos events only for criteria whose evidence requires those events. |
 | Context governance | `Backend.Stations` is the public context module, with its internals under `backend/lib/backend/stations/`. | No further change from this design. |
 
@@ -44,6 +44,8 @@ Length, brevity, language, sentiment, plausible tone, or a model-declared templa
 An approved template is not necessarily a clinical answer and is not a universal fallback. A deterministic known violation may route to a zero-clinical-content fallback only when that exact fallback template is approved for the violation and its applicability predicate passes. Otherwise code blocks the candidate and invalidates or ends the attempt according to the governing contract.
 
 ### Pipeline
+
+Implementation note: `CandidateGate` implements deny-first checks, exact-template applicability, the decision seam, and bounded semantic retry. Known violations currently return an error immediately, without the optional approved fallback described above. `Stations.create_message/2` rolls back a failed pending turn; it does not persist a session-wide invalid-attempt status. The outcome table describes the intended learner failure policy. The voice diagram below remains the accepted migration target, not the current transport implementation.
 
 1. **Run deny-only checks.** A known violation blocks the candidate. A clean result does not prove safety.
 2. **Check exact approved-template identity and applicability.** If both pass, the safe renderer may emit the stored text.
@@ -125,15 +127,15 @@ flowchart LR
 
 ## Evaluation contract
 
-Status of this section: **implemented by [#128](https://github.com/ChordanDev/proyectoMed/issues/128) as an internal backend capability (2026-10-06).** Nothing in it is reachable over HTTP, no live decision adapter exists, and its clinical accuracy is unmeasured. What it does not do is listed under [Limits](#limits).
+Status of this section: **assessment engine implemented by [#128](https://github.com/ChordanDev/proyectoMed/issues/128), with subsequent v2 HTTP/UI integration present at `7fac4a2`.** No adapter serves live rubric decisions (the TypeSafe adapter returns `rubric_decision_unsupported`), and clinical accuracy is unmeasured. See [Limits](#limits).
 
 | Question | Answer |
 |---|---|
 | Entry point | `Backend.Stations.assess_session/2`, which runs `Backend.Stations.RubricAssessment.assess/3` on a completed session and the active Station Package. |
 | Success | Criterion results in rubric order, the point estimates, and the list of Jev calls made with the justification of each. |
 | Failure | `{:error, {:invalid_attempt, reason}}` with no criteria at all. |
-| Default behavior | The configured decision adapter is the disabled adapter, so every assessment is an invalid attempt (`adapter_disabled`) until a qualified adapter is configured. |
-| Learner-facing result | Unchanged. `GET .../result` still serves the legacy evaluator's `met \| omitted \| uncertain` shape. |
+| Default behavior | The disabled decision adapter makes any required decision call fail with `adapter_disabled`. An assessment with no questions can complete deterministically without an adapter call. |
+| Learner-facing result | The legacy route still serves `met \| omitted \| uncertain`. The web client uses `/api/v2/stations/active/sessions/:id/result`, which serializes the four-state assessment and exact decimal strings. Technical assessment failure returns 502 `invalid_attempt`, not partial feedback. |
 
 ### Shared evidence
 
@@ -246,7 +248,7 @@ Points are exact. Authored values are multiples of 0.025, held as integer fortie
 | `total` | Equal to `scored_subtotal` only when every active criterion is assessed; otherwise `null`. Also `null` when no criterion is active. |
 | `unresolved` | The active criteria that are `uncertain` or `not_observable`. |
 
-This is an **illustrative fixture only**. It does not infer a real station maximum or publish an expected score. It shows decimal values as a reader would see them; the internal result holds fortieths (`0.25` is `10`), and the wire format belongs to #129:
+This is an **illustrative fixture only**, not an API payload. It does not infer a real station maximum or publish an expected score. It shows numeric decimal values for readability; the internal result holds fortieths (`0.25` is `10`), while the implemented v2 serializer sends decimal strings (for example, `"0.25"`):
 
 ```json
 {
@@ -282,17 +284,17 @@ A technical evaluation timeout, malformed response, transport error, or provider
 
 ### Limits
 
-- **No live adapter.** Only the disabled adapter and test doubles implement the batch contract. Whether a real decision model can classify these questions, return identifiers from the pool, or enumerate a learner's answers in order is unverified.
-- **Not exposed.** The assessment is not served over HTTP and the web client does not read it. The versioned result contract, the decimal wire format, and the pt-BR disclaimer belong to #129. Until then an explicit, tested projection maps an assessment to the legacy shape: assessed at zero is `omitted`, assessed above zero is `met`, `uncertain` and `not_observable` are `uncertain`, and `not_applicable` criteria are dropped.
+- **No live adapter.** The disabled adapter, test doubles, and a dev-only E2E approving adapter implement the batch contract; none qualifies a live provider. The TypeSafe adapter does not implement it, so an assessment that needs a decision call is an invalid attempt under that adapter too. Whether a real decision model can classify these questions, cite supplied identifiers, or enumerate answers in order is unverified.
+- **Exposure is not qualification.** The v2 API, decimal-string wire format, web consumer, and pt-BR disclaimer exist. The legacy endpoint remains separate. A tested internal projection maps assessed zero to `omitted`, assessed above zero to `met`, `uncertain`/`not_observable` to `uncertain`, and drops `not_applicable`; the legacy endpoint does not call that projection.
 - **Clinical accuracy is unmeasured.** Tests cover the deterministic code with scripted classifications. Calibration, acceptance thresholds, and the rubric content of the real station belong to #130.
 - **Architecture rules not implemented:** time windows; pairwise "only what was said before X counts" gates (PEP 2023/1, PDF pp. 10 and 20); and verbalization requirements (p. 20). They need their own authoring fields and are recorded as follow-ups.
 - **Known gaps in the implemented rules:** a ranked step scored zero by a rule is skipped by task order even though the learner attempted it; code cannot detect an unmatched answer that Jev leaves out of `answers`, which would free a slot among the first N unnoticed; and it cannot verify the order of several answers inside a single turn, because they share one position in the pool. Both rest on the classifier and belong to #130's evaluation.
 
 ## Result contract and learner claim
 
-The current `met | omitted | uncertain` result remains authoritative until a versioned contract is implemented (#129). The migration mechanism—a schema version or versioned endpoint—remains an implementation choice. The internal assessment already has a tested projection to that legacy shape (see [Limits](#limits)), but the result endpoint does not use it.
+Both contracts exist. The legacy `/api/stations/active/sessions/:id/result` keeps `met | omitted | uncertain` and no points. The web client calls `/api/v2/stations/active/sessions/:id/result`, whose payload has `schema_version: "2"`, four-state criteria, coverage, and estimates. `EducationalResult` serializes exact points as decimal strings, excludes internal diagnostics, and includes `placeholder`; the controller sets `Cache-Control: no-store`. No live-provider or clinical approval follows from this integration.
 
-The accepted result architecture requires this pt-BR notice before and on the result screen once implemented:
+The notice and result screens include this pt-BR disclaimer:
 
 > **Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.**
 
@@ -316,16 +318,16 @@ The source is the **PEP 2023/1 definitive edition** published by INEP, filename 
 | Verbalization and Impressos-supported actions | p. 20 | `modality_requirement` only; verbalization requirements are not implemented |
 | Nonverbal criteria | pp. 24–25 | No dedicated field; a modality the station cannot provide is `not_observable` |
 
-Cite the INEP URL, not the repository. The two PDF files committed under `docs/` (`revalida 25.1 pep_definitivo.pdf` and `25.1 prova_habilidades_clinicas.pdf`) are, by filename, 2025/1 documents rather than this edition, and their committed bytes are corrupt: binary content was replaced with Unicode replacement characters, so they cannot be read or used to check a page reference. Original partner-authored station content remains required.
+Cite the INEP URL, not a local PDF. The corrupt repository copies named `revalida 25.1 pep_definitivo.pdf` and `25.1 prova_habilidades_clinicas.pdf` were removed with owner authorization in #175; original 25.1 binaries were not supplied. The cited **2023/1** booklet is a separate structural reference, not a replacement for the **2025/1** edition. Original partner-authored station content remains required. `*.pdf binary` in `.gitattributes` disables Git text/diff/merge treatment for future PDFs; it cannot restore corrupted bytes or prevent corruption before Git receives a file.
 
 ## ADR impact
 
 | Artifact | Current runtime fact | Accepted architectural effect |
 |---|---|---|
-| ADR-002 (#35) | Accepted Station AI safety contract; current runtime remains unchanged. | [ADR-011 (#123)](https://github.com/ChordanDev/proyectoMed/issues/123), accepted on 2026-09-21, now architecturally extends or supersedes the relevant safety contract. Implementation remains pending. |
-| ADR-005 (#38) | Accepted no-score rule; the learner-visible runtime still has no global score. | [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124), accepted on 2026-09-21, now architecturally supersedes the no-score rule only for estimates while preserving no certification, pass/fail, or readiness claim. #128 computes the estimates internally; exposing them remains pending (#129). |
+| ADR-002 (#35) | The message path uses `CandidateGate` before committing patient text. | ADR-011 (#123) extends the safety contract; a live qualified provider remains pending. |
+| ADR-005 (#38) | The legacy endpoint remains score-free; v2 exposes educational estimates. | ADR-012 (#124) supersedes the no-score rule only for estimates while preserving no certification, pass/fail, or readiness claim. Implementation is not clinical validation. |
 | ADR-009 (#114) | **Accepted** prototype LiveKit/WebRTC + Deepgram + ElevenLabs | Reused as the voice foundation; not reopened. |
-| ADR-010 (#115) | **Proposed**, V3 only | Excluded from the Jev prototype. |
+| ADR-010 (#115) | **Proposed**, V3 only; superseded by ADR-013 (#209) | Excluded from the Jev prototype. |
 | ADR-008 (#104), #105–#108 | Accepted channel decision and unchanged Impressos DAG | Reused only when a criterion needs event evidence. |
 | #27 and #44 | Closed prior evaluator and bounded-reply seams | Extended through new work; not reopened. |
 
@@ -333,24 +335,23 @@ Both ADRs are Accepted as architecture as of 2026-09-21. Acceptance changes the 
 
 ## Published Ticket 14 breakdown
 
-[Ticket 14 (#125)](https://github.com/ChordanDev/proyectoMed/issues/125) is open with no labels and has exactly five native subissues, #126–#130. The architecture acceptance gate is resolved; #126 has no native blockers. Ticket 14 and all five children still have no readiness labels. The children own only net-new behavior:
+[Ticket 14 (#125)](https://github.com/ChordanDev/proyectoMed/issues/125) groups the following ownership boundaries. This is a code-baseline summary, not a live snapshot of labels, issue state, or native blockers; those remain in GitHub.
 
-| Issue | Scope and ownership | Mode | Exact native blockers |
-|---|---|---|---|
-| [#126](https://github.com/ChordanDev/proyectoMed/issues/126) | Package/schema and fictional fixtures: versioned schema, approved templates/applicability, disclosure conditions, PEP-shaped authored rubric, and explicitly fictional fixtures | AFK | None |
-| [#127](https://github.com/ChordanDev/proyectoMed/issues/127) | Jev adapter/gate: gate adapter, bounded semantic retry, technical-failure taxonomy, and human approval of provider terms, privacy, legal, and ZDR evidence | HITL | #126 |
-| [#128](https://github.com/ChordanDev/proyectoMed/issues/128) | Deterministic evaluation and estimates: owns evaluation Jev calls, validated evidence IDs, deterministic rules, exact decimal arithmetic, and coverage-aware totals. If gate and evaluation reuse one decision-adapter capability, this child consumes it from #127 without transferring evaluation-call ownership. | AFK | #126, #127 |
-| [#129](https://github.com/ChordanDev/proyectoMed/issues/129) | Result contract and disclaimer: versioned API migration, unresolved coverage, pt-BR educational disclaimer, and fixture labels | HITL | #128 |
-| [#130](https://github.com/ChordanDev/proyectoMed/issues/130) | Clinical authoring and qualification: original case re-authoring, provenance/rights review, and human approval of clinical pt-BR calibration and acceptance thresholds | HITL | #126, #127, #128, #129 |
+| Issue | Scope and ownership | Evidence at `7fac4a2` and remaining limit |
+|---|---|---|
+| [#126](https://github.com/ChordanDev/proyectoMed/issues/126) | Package/schema and fictional fixtures | v2 schema and package validation exist, including authored levels/actions and template applicability; content structure is not clinical approval. |
+| [#127](https://github.com/ChordanDev/proyectoMed/issues/127) | Decision adapter/gate and provider qualification | `CandidateGate` and `JevDecision` implement deny-first checks, template bypass, bounded semantic retry, typed failures, and fail-closed text caps (#208). The default adapter is disabled; the opt-in `TypesafeAdapter` (#206) serves patient decisions only. Provider terms/privacy/legal/ZDR approval remains a human gate (#183). |
+| [#128](https://github.com/ChordanDev/proyectoMed/issues/128) | Deterministic assessment and estimates; owns evaluation calls | `RubricAssessment` implements evidence validation, authored rules, exact points, and coverage-aware totals. It shares the decision seam without transferring evaluation-call ownership. See the limits above. |
+| [#129](https://github.com/ChordanDev/proyectoMed/issues/129) | Result contract and disclaimer | `EducationalResult`, the v2 route, client decoding, result UI, disclaimer, and fictional-data labels exist; no qualified live provider is implied. |
+| [#130](https://github.com/ChordanDev/proyectoMed/issues/130) | Clinical content and qualification | `Qualification` and fictional case tooling exist; human provenance/rights review, clinical pt-BR calibration, and acceptance evidence are not established by deterministic tests. |
 
-These are the complete native blocker sets. The accepted voice boundaries #119–#121 remain integration references, not blanket blockers; Impressos #105–#108 remains relevant only to event-dependent criteria. The graph does not transfer media, UI orchestration, cancellation, stale-generation, failure-recovery, realism, or evaluation-call ownership.
+The accepted voice boundaries #119–#121 remain integration references, not blanket blockers; Impressos #105–#108 remains relevant only to event-dependent criteria. This documentation repair does not change tracker relationships or transfer media, orchestration, cancellation, failure recovery, realism, or evaluation-call ownership.
 
-Architecture acceptance is not approval to implement or activate pilot/production use. Provider terms/privacy/legal/ZDR evidence plus clinical pt-BR calibration and acceptance thresholds remain human qualification gates. No issue or document claims ready-for-agent approval, and the native blocker graph remains unchanged.
+Implemented mechanisms and architecture acceptance do not authorize pilot/production use. Provider terms/privacy/legal/ZDR evidence plus clinical pt-BR calibration and acceptance thresholds remain human qualification gates.
 
 ## Open implementation choices
 
-- total turn deadline and bounded context-window values;
-- schema-version field versus versioned endpoint;
+- qualification of the configured deadline/context limits (defaults: 3,000 ms, 10 context turns, 2,000 characters per candidate reply and per learner message, 24,000 total characters per patient request, 120,000 per rubric evidence pool) and of the TypeSafe `0.8`/`0.2` thresholds; implementation defaults are not clinically calibrated values;
 - provider selection, credentials, limits, and evidence for the required human terms/privacy/legal/ZDR approval;
 - clinical pt-BR calibration method and evidence for the required human qualification gate;
 - whether validated sub-action details are public API fields or UI-only grouping;
@@ -374,9 +375,9 @@ These are vendor claims, not repository validation. Zero-data-retention, legal t
 
 ## Repository references
 
-- `CONTEXT.md` — current runtime terms, the internally implemented assessment terms, and accepted, unimplemented architecture terms.
+- `CONTEXT.md` — domain terminology; its historical internal-only assessment wording predates the v2 integration described here.
 - `backend/lib/backend/stations/rubric_assessment.ex` and `backend/lib/backend/stations/rubric_assessment/` — the implemented assessment; `backend/lib/backend/stations/jev_decision/rubric_batch.ex` — the batch contract; `backend/priv/stations/package.schema.json` — the authored rule fields.
-- `SPEC_MVP.md` — current contract plus the accepted, unimplemented extension.
+- `SPEC_MVP.md` — current contracts, implemented mechanisms, and remaining integration/qualification limits.
 - [#123 ADR-011](https://github.com/ChordanDev/proyectoMed/issues/123); [#124 ADR-012](https://github.com/ChordanDev/proyectoMed/issues/124); [#125 Ticket 14](https://github.com/ChordanDev/proyectoMed/issues/125) and children [#126](https://github.com/ChordanDev/proyectoMed/issues/126)–[#130](https://github.com/ChordanDev/proyectoMed/issues/130).
 - #114 ADR-009; #115 ADR-010; #116 Ticket 13 and children #117–#121.
 - #105–#108 Impressos DAG; closed seams #27 and #44.
