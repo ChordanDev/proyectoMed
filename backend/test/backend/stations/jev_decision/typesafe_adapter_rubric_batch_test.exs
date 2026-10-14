@@ -148,10 +148,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
 
     test "thresholds are inclusive: 0.8 is a yes and 0.2 is a no" do
       answer = fn action, text ->
-        cond do
-          action == @onset_action.description and text == @asks_onset -> 0.8
-          true -> 0.2
-        end
+        if action == @onset_action.description and text == @asks_onset, do: 0.8, else: 0.2
       end
 
       assert {:ok, %{decisions: [first, second]}} =

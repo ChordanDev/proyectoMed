@@ -785,10 +785,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     tasks =
       Enum.map(groups, fn questions ->
         payload = %{"model" => config.model, "state" => state, "questions" => questions}
-
-        Task.async(fn ->
-          contained(fn -> ask_group(config, payload, questions, budget_ms) end)
-        end)
+        Task.async(fn -> contained_ask_group(config, payload, questions, budget_ms) end)
       end)
 
     tasks
@@ -809,8 +806,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   # Group tasks are linked, so a raise, exit or throw inside one would take down the
   # caller. It becomes the same typed technical failure the seam reports instead.
-  defp contained(fun) do
-    fun.()
+  defp contained_ask_group(config, payload, questions, budget_ms) do
+    ask_group(config, payload, questions, budget_ms)
   rescue
     _error -> {:error, {:technical_failure, :adapter_crashed}}
   catch
