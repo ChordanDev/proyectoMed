@@ -375,7 +375,7 @@ These are vendor claims, not repository validation. Zero-data-retention, legal t
 
 ## Repository references
 
-- `CONTEXT.md` — domain terminology; its historical internal-only assessment wording predates the v2 integration described here.
+- `CONTEXT.md` — domain terminology, including the v2-exposed assessment and educational estimates described here.
 - `backend/lib/backend/stations/rubric_assessment.ex` and `backend/lib/backend/stations/rubric_assessment/` — the implemented assessment; `backend/lib/backend/stations/jev_decision/rubric_batch.ex` — the batch contract; `backend/priv/stations/package.schema.json` — the authored rule fields.
 - `SPEC_MVP.md` — current contracts, implemented mechanisms, and remaining integration/qualification limits.
 - [#123 ADR-011](https://github.com/ChordanDev/proyectoMed/issues/123); [#124 ADR-012](https://github.com/ChordanDev/proyectoMed/issues/124); [#125 Ticket 14](https://github.com/ChordanDev/proyectoMed/issues/125) and children [#126](https://github.com/ChordanDev/proyectoMed/issues/126)–[#130](https://github.com/ChordanDev/proyectoMed/issues/130).
