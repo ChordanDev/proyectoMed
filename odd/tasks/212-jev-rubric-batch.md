@@ -57,6 +57,8 @@ Every shape fit the 2850 ms budget (3 s deadline minus the 150 ms margin), with 
   - patient turns are never offered as citable items.
 - [x] **T2** Amend `docs/design/jev-prototype.md` for the rubric probability mapping. Route: same writer, separate commit.
 - [x] **T3** Live check. The user runs `mix stations.qualify acute-appendicitis` with the key, and the rubric cases report real outcomes within the deadline. Route: run by the user; the agent never reads the key.
+- [x] **T4** (TR-1) Contain crashes in TypeSafe rubric group requests: a raise, exit or throw inside a group task returns `{:error, {:technical_failure, _}}` and the caller of `JevDecision.decide_rubric_batch` stays alive. Reason: Jorge advisory review of PR #217, 2026-10-14. Route: delegated direct.
+- [x] **T5** (CD-1) Cite only admissible evidence in rubric decisions: citations to real pool items that `Evidence` rejects for channel or modality reasons are dropped per action before rules apply, so they no longer turn a criterion into `{:invalid_evidence, _}`; bogus ids keep failing closed. Reason: Jorge advisory review of PR #217, 2026-10-14. Route: delegated direct.
 
 ## Acceptance criteria
 
@@ -89,4 +91,8 @@ Every shape fit the 2850 ms budget (3 s deadline minus the 150 ms margin), with 
   - Before this change, all 14 rubric cases reported `technical_failure`.
   - No case is adjudicated (0 of 33), so correctness is not established. No criterion reached a positive level in this run.
 - 2026-10-14: merged `origin/develop` (`7fac4a2`, #213). After the merge, `mix test` passed 958 with 0 failures, and compile and format are clean. Pushed the branch and opened PR #217 to `develop` (`Closes #212`).
-- Next: CI and review on #217. The follow-ups are #214 and #215.
+- 2026-10-14: Jorge advisory review of PR #217 confirmed TR-1 and CD-1; added T4 and T5.
+- 2026-10-14: T4 done, commit `1f4dc9a` (`fix(stations): contain crashes in TypeSafe rubric group requests`), route delegated direct. Each group task body is wrapped (rescue, catch exit, catch throw) and returns `{:technical_failure, :adapter_crashed | :task_exit | :adapter_threw}`, the atoms the seam already uses. RED: two seam tests with a raising and an exiting `Req.Test` stub, run from a non-trapping `spawn_monitor` caller: 24/26 passed, both `{:caller_died, _}`. GREEN: `mix test test/backend/stations/jev_decision` 174 passed.
+- 2026-10-14: T5 done, commit `dc03282` (`fix(stations): cite only admissible evidence in rubric decisions`), route delegated direct. `RubricAssessment` drops each sub-action citation that `Evidence.validate` rejects with `:wrong_channel` before validating the rest; `:nonexistent_evidence_id`, `:wrong_role` and `:wrong_provenance` still fail the criterion closed. Criterion-level and first-N answer citations are unchanged. A performed action left without citations follows the existing evidence-less path (`{:unsupported_sub_action, id}` for the mandatory action in the test). RED: `mix test test/backend/stations/rubric_assessment_test.exs` 99/101 passed (`{:invalid_evidence, :wrong_channel, "impresso-req-none"}` in both). GREEN: 232 passed with `test/backend/stations/rubric_assessment`.
+- Verification (backend/): `mix compile --warnings-as-errors` clean; `mix format --check-formatted` clean; `mix test test/backend/stations/jev_decision` 174 passed; `mix test` 962 passed, 0 failures.
+- Next: push the fixes and reply on #217 per the review feedback loop. The follow-ups are #214 and #215.
