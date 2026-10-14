@@ -64,3 +64,8 @@ priv/static/assets/
 # Erlang build tooling.
 .rebar3/
 _ebin/
+
+# Local secrets. Keep example files tracked.
+.env
+.env.*
+!.env.example

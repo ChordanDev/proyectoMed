@@ -36,7 +36,7 @@ The MVP station instructions, Station AI interaction, voice and text input, and 
 
 ## MVP Runtime
 
-The MVP uses an Elixir/Phoenix backend and a Vite + React + TypeScript web SPA. The system is built as a client/server product, with the SPA running in the browser and communicating with the Phoenix API over HTTP.
+The MVP uses an Elixir/Phoenix backend and a native Unreal Engine 5.8 station client with a MetaHuman patient (accepted architecture, ADR-013). The learner performs the station in the Unreal client; Phoenix remains the only authority, and the client holds no clinical rules. The Vite + React + TypeScript web SPA is frozen as an internal test harness: it receives no new features and keeps working unchanged until the Unreal client reaches parity. Both clients communicate with the Phoenix API over HTTP.
 
 ## MVP Work Streams
 
@@ -96,7 +96,7 @@ The MVP is worth extending when pilot learners can complete the station without 
 
 ## MVP Platforms
 
-The first MVP release targets desktop and mobile browsers via the Vite + React web SPA. Native mobile apps (iOS/Android) and Expo Go are outside the initial scope; the priority is browser-based voice via `MediaRecorder`/Web Speech API, microphone permissions, and conversational interaction.
+The station client targets macOS and Windows desktops through the native Unreal Engine 5.8 client (accepted architecture, ADR-013). The frozen web harness runs in desktop browsers for internal validation only. Native mobile apps (iOS/Android), Expo Go, and mobile, console, or browser-streamed builds of the Unreal client are outside the initial scope.
 
 ## Station Retry Policy
 
