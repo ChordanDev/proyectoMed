@@ -95,6 +95,25 @@ Out of scope: the seam, the candidate gate, the bounded reply policy, the voice 
   - *SP-3, the base URL was not validated.* `http://` would have sent the bearer key in clear, and `""` produced a misleading `:network_error`. The base URL must now parse with scheme exactly `https` and a non-empty host; otherwise `{:technical_failure, :invalid_base_url}` before any request. There is no plain-http exception. One existing test of this task used `http://typesafe.internal:9000/` for its override and now uses `https://`. Tests: `""`, `http://api.typesafe.ai`, `https://`, `ftp://x`, a URL without a scheme, an upper-case `HTTP://` URL, an atom and a charlist rejected without calling the provider; `https://example.test` accepted from options and from the application environment; the term survives the seam's sanitizer unchanged.
   - RED, observed with the new tests and the old code: 68 of 74 passed. The rejection tests for both findings failed with "provider must not be called" (the provider was reached with the bad thresholds and the bad URLs); the seam test failed with `{:technical_failure, :adapter_crashed}` (the stub's failure inside the adapter task) instead of `:invalid_base_url`. The acceptance tests passed before the change, as expected.
   - GREEN, observed on `193be5e`: adapter tests 74 passed; `mix test` 912 passed; `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict` (no issues) and `mix dialyzer` passed.
+- [x] **T1 change after the first live qualification runs — `fact_asked` wording.** Code commit `161a9a1` (71 insertions, 13 deletions in 2 files: tests 52, adapter 32).
+  - *What the runs showed.* Case `ambiguity-01` flipped between delivered and low confidence across 3 qualification runs. Eight diagnostic runs traced the flip to `risk:speaks_out_of_role`, which scored 0.17–0.24, on both sides of the 0.2 no-threshold. They also showed that `fact_asked` for `hda-01` stayed at 0.83–0.87 for the vague learner turn "E como está isso?", so the vague question counted as a request for the fact and a reply that released it could be approved.
+  - *Experiment* (maintainer, live API, 5 runs per cell, the same `state` the adapter builds; `fact_asked` score for `hda-01`):
+
+    | wording | vague "E como está isso?" | "Quando começou a dor?" | "Onde é a dor? Ela mudou de lugar?" | "O que te traz aqui hoje?" |
+    |---|---|---|---|---|
+    | previous | 0.85 | 0.97 | 0.92–0.95 | 0.80–0.88 |
+    | v1 "clearly asks" + criteria | 0.10 | 0.35–0.42 | 0.50–0.58 | 0.06–0.07 |
+    | **v2 (chosen)** | 0.58–0.62 | 0.93–0.95 | 0.93–0.94 | 0.40–0.52 |
+
+  - *Chosen wording* (v2, used verbatim because it is what was measured). The question now has object `instructions` and noul `criteria`:
+    - `instructions.question`: ``Does a message with speaker `learner` in `conversation` ask about the subject of `fact`, with a subject that can be identified from the conversation itself?``
+    - `instructions.fact`: the fact content
+    - `criteria.true`: `The learner asks about this subject, and what the question refers to is clear.`
+    - `criteria.false`: `The learner does not ask about this subject, or the question has no identifiable subject in the conversation so far.`
+    No other question, id, mapping or threshold changed. This supersedes the `fact_asked` wording and the "no `criteria`" note in "Decisions made during T1"; it also confirms that the API accepts object `instructions` and `criteria`, which the first pass could not confirm.
+  - *Caveats.* The vague question now lands in the undecided band (0.58–0.62), so a reply that releases the fact after it is low confidence, not a clean refusal. The open opening "O que te traz aqui hoje?" (0.40–0.52) also no longer releases `hda-01`; whether that opening should release it is a content decision for the adjudicator.
+  - RED, observed with the new tests and the old code: 73 of 75 passed. The payload-shape test failed because the `fact_asked` question had keys `["instructions", "type"]` instead of `["criteria", "instructions", "type"]`, and the new exact-shape test failed on the whole question map (string instructions, no criteria).
+  - GREEN, observed on `161a9a1`: adapter tests 75 passed; `mix test` 913 passed; `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict` (no issues) and `mix dialyzer` (0 errors) passed. `README.md` does not quote the question wording and was not changed.
 - [ ] **T2 — Rubric decisions.** Blocked on the open question below.
 
 ## Acceptance criteria
@@ -119,6 +138,7 @@ Actual size of T1 with its correction, `cb7b267..a1519ca` without this document:
 - **Connect phase.** The remaining budget bounds the pool wait, each wait for data and the complete response, but not connection establishment. That phase is bounded only by the seam killing the adapter task at its deadline.
 - **Selection without a key.** `JEV_ADAPTER=typesafe` without `TYPESAFE_API_KEY` boots without any warning and then fails every decision closed. Whether the boot should warn or fail is undecided.
 - **Text length sent to the provider (Jorge SP-1).** The seam caps the candidate text only; the learner messages and the bounded conversation are sent without a length cap. This is tracked as a separate follow-up, outside T1.
+- **`risk:speaks_out_of_role` sits near the no-threshold.** For ordinary patient replies it scores 0.17–0.24 in live runs, on both sides of `no_threshold` 0.2, so the same reply flips between verified and low confidence from run to run. Whether to reword the question or to treat this through the calibration of #183 is undecided.
 - **Portuguese.** The provider states English as its primary language and gives no accuracy for Portuguese; the station content is pt-BR. Only the qualification run can answer this.
 - **Zero data retention.** The provider documents it as an enterprise arrangement through sales; no retention period is stated. This is the human gate in #183 item 4.
 - `docs/design/jev-prototype.md:155` says no probability or confidence value is read. That sentence is about the rubric contract; the patient adapter necessarily thresholds noul probabilities. T1 clarifies the sentence.
@@ -130,6 +150,7 @@ Actual size of T1 with its correction, `cb7b267..a1519ca` without this document:
 - 2026-10-13: T1 corrected in `a1519ca` after independent verification (six findings, listed under T1).
 - 2026-10-14: T1 corrected again in `193be5e` for Jorge findings CD-1 (thresholds must straddle one half) and SP-3 (https base URL only); SP-1 left as a follow-up.
 - 2026-10-14: `mix stations.qualify` ran with `app.config` only, so the `:req` application and its HTTP pool were not started and every live adapter call raised `unknown registry: Req.Finch` (reproduced with `mix run --no-start`; through the seam this reports every case as `technical_failure`). The task now starts `:req` before running. Route: inline (one line in one file). There is no runnable RED in ExUnit because the test run already starts the application; evidence is the direct reproduction before and after (`ArgumentError` versus `{:error, :network_error}` against a closed local port). Checks: format, compile with warnings as errors, `credo --strict` clean; `mix test` 912 passed. Human gate of #183 item 4 recorded on the issue at the maintainer's request (zero data retention not confirmed).
+- 2026-10-14: after the first live qualification runs, the `fact_asked` question changed to the measured v2 wording with object instructions and criteria in `161a9a1`, so a vague learner question no longer counts as a request; `risk:speaks_out_of_role` flipping near the no-threshold is recorded as an open question.
 
 ## Next step
 
