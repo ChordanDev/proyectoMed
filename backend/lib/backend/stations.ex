@@ -23,6 +23,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.TTS
 
   @early_timer_finish_tolerance_ms 2_000
+  @default_learner_message_max_characters 2_000
 
   # ============================================================================
   # Station Package & Metadata
@@ -145,6 +146,11 @@ defmodule Backend.Stations do
   @doc """
   Posts a learner message to the session conversation and generates the next patient reply.
 
+  A message whose text exceeds the learner message limit (2,000 characters by
+  default, config `:learner_message_max_characters`) is rejected with
+  `{:error, :message_too_long}` before it enters the conversation or reaches
+  Jev. It is never truncated.
+
   Encapsulates:
     1. Appending the learner's message to the session conversation.
     2. Preparing the conversation context with active package rules.
@@ -161,6 +167,7 @@ defmodule Backend.Stations do
              | :completed
              | :station_time_elapsed
              | :station_ai_unavailable
+             | :message_too_long
              | term()}
   def create_message(session_id, params) do
     role = Map.get(params, :role) || Map.get(params, "role") || :learner
@@ -173,10 +180,30 @@ defmodule Backend.Stations do
       text: text
     }
 
-    case Conversation.begin_turn(session_id, learner_message) do
-      {:ok, _session, token} -> generate_and_resolve_turn(session_id, token, params)
-      {:error, reason} -> {:error, reason}
+    with :ok <- validate_learner_message_length(text),
+         {:ok, _session, token} <- Conversation.begin_turn(session_id, learner_message) do
+      generate_and_resolve_turn(session_id, token, params)
     end
+  end
+
+  # Domain policy: an oversized message would be resent to Jev on every later
+  # turn of the session, so it is rejected before it enters the conversation.
+  defp validate_learner_message_length(text) when is_binary(text) do
+    if String.length(text) > learner_message_max_characters() do
+      {:error, :message_too_long}
+    else
+      :ok
+    end
+  end
+
+  defp validate_learner_message_length(_text), do: :ok
+
+  defp learner_message_max_characters do
+    Application.get_env(
+      :backend,
+      :learner_message_max_characters,
+      @default_learner_message_max_characters
+    )
   end
 
   defp generate_and_resolve_turn(session_id, token, params) do
@@ -449,7 +476,8 @@ defmodule Backend.Stations do
   Matches a learner's Impresso request text against the active package's
   authored impressos and atomically records the outcome on the session.
 
-  `request_params` accepts `"text"` (required, non-blank) and an optional
+  `request_params` accepts `"text"` (required, non-blank, at most the learner
+  message limit, otherwise `{:error, :message_too_long}`) and an optional
   `"request_id"` for idempotent retries; the server generates one when
   omitted.
 
@@ -461,11 +489,14 @@ defmodule Backend.Stations do
   """
   @spec request_impresso(String.t(), map()) ::
           {:ok, map()}
-          | {:error, :not_found | :expired | :completed | :invalid_request}
+          | {:error, :not_found | :expired | :completed | :invalid_request | :message_too_long}
   def request_impresso(session_id, request_params) do
     text = get_param(request_params, :text)
 
-    with :ok <- validate_impresso_text(text) do
+    # The request text enters the rubric evidence pool, so it shares the
+    # learner message limit and is rejected (never truncated) before recording.
+    with :ok <- validate_impresso_text(text),
+         :ok <- validate_learner_message_length(text) do
       package = get_active_package()
       normalized_text = Impressos.normalize(text)
       matched_ids = Impressos.match(package["impressos"] || [], normalized_text)
