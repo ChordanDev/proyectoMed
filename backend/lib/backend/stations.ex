@@ -476,7 +476,8 @@ defmodule Backend.Stations do
   Matches a learner's Impresso request text against the active package's
   authored impressos and atomically records the outcome on the session.
 
-  `request_params` accepts `"text"` (required, non-blank) and an optional
+  `request_params` accepts `"text"` (required, non-blank, at most the learner
+  message limit, otherwise `{:error, :message_too_long}`) and an optional
   `"request_id"` for idempotent retries; the server generates one when
   omitted.
 
@@ -488,11 +489,14 @@ defmodule Backend.Stations do
   """
   @spec request_impresso(String.t(), map()) ::
           {:ok, map()}
-          | {:error, :not_found | :expired | :completed | :invalid_request}
+          | {:error, :not_found | :expired | :completed | :invalid_request | :message_too_long}
   def request_impresso(session_id, request_params) do
     text = get_param(request_params, :text)
 
-    with :ok <- validate_impresso_text(text) do
+    # The request text enters the rubric evidence pool, so it shares the
+    # learner message limit and is rejected (never truncated) before recording.
+    with :ok <- validate_impresso_text(text),
+         :ok <- validate_learner_message_length(text) do
       package = get_active_package()
       normalized_text = Impressos.normalize(text)
       matched_ids = Impressos.match(package["impressos"] || [], normalized_text)

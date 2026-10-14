@@ -789,6 +789,28 @@ defmodule Backend.StationsTest do
       assert result.feedback_message =~ "Impresso já liberado"
     end
 
+    test "accepts request text of exactly 2,000 characters", %{session: session} do
+      text = String.pad_trailing("sinais vitais ", 2_000, "á")
+
+      assert {:ok, _result} = Stations.request_impresso(session.session_id, %{"text" => text})
+
+      {:ok, updated} = Stations.get_session(session.session_id)
+      assert [%{text: ^text}] = updated.impresso_requests
+    end
+
+    test "rejects request text over 2,000 characters before anything is recorded", %{
+      session: session
+    } do
+      text = String.pad_trailing("sinais vitais ", 2_001, "á")
+
+      assert Stations.request_impresso(session.session_id, %{"text" => text}) ==
+               {:error, :message_too_long}
+
+      {:ok, unchanged} = Stations.get_session(session.session_id)
+      assert unchanged.impresso_requests == []
+      assert {:ok, %{released_impressos: []}} = Stations.list_impressos(session.session_id)
+    end
+
     test "an unavailable exam returns the exact required message and releases nothing", %{
       session: session
     } do

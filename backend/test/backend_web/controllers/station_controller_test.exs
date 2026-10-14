@@ -1063,6 +1063,24 @@ defmodule BackendWeb.StationControllerTest do
       end
     end
 
+    test "rejects request text over 2,000 characters with 422 message_too_long", %{
+      conn: conn,
+      session: session
+    } do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => String.pad_trailing("sinais vitais ", 2_001, "a")
+        })
+
+      assert json_response(conn, 422) == %{
+               "error" => "message_too_long",
+               "message" => "Mensagem muito longa: o limite é de 2.000 caracteres."
+             }
+
+      assert {:ok, unchanged} = Conversation.fetch(session.session_id)
+      assert unchanged.impresso_requests == []
+    end
+
     test "an unavailable exam returns the exact required message", %{
       conn: conn,
       session: session

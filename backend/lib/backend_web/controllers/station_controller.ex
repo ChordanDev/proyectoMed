@@ -335,6 +335,14 @@ defmodule BackendWeb.StationController do
           message: "Requisição inválida: 'text' é obrigatório e não pode ser vazio."
         })
 
+      {:error, :message_too_long} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{
+          error: "message_too_long",
+          message: "Mensagem muito longa: o limite é de 2.000 caracteres."
+        })
+
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
