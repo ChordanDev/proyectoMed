@@ -1012,7 +1012,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
   end
 
   describe "decide_rubric/1,2" do
-    test "is a typed technical failure: rubric decisions are not served by this adapter yet" do
+    test "is a typed technical failure: single rubric decisions are not served" do
       request = %{
         criterion: %{},
         allowed_classes: [],
@@ -1027,10 +1027,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                {:error, {:technical_failure, :rubric_decision_unsupported}}
     end
 
-    test "does not export the optional batch callback" do
+    test "exports the optional batch callback, which serves rubric evaluation" do
       Code.ensure_loaded!(TypesafeAdapter)
-      refute function_exported?(TypesafeAdapter, :decide_rubric_batch, 1)
-      refute function_exported?(TypesafeAdapter, :decide_rubric_batch, 2)
+      assert function_exported?(TypesafeAdapter, :decide_rubric_batch, 1)
+      assert function_exported?(TypesafeAdapter, :decide_rubric_batch, 2)
     end
   end
 

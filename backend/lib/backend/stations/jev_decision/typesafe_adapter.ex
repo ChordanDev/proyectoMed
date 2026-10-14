@@ -1,7 +1,8 @@
 defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @moduledoc """
   `Backend.Stations.JevDecision.Adapter` backed by the TypeSafe System One HTTP API
-  (model Jev). It serves the patient decision only.
+  (model Jev). It serves the patient decision and the batched rubric decision; the
+  single-criterion rubric decision is not served.
 
   This adapter is never the default. It is selected by explicit configuration, and
   using it against the live provider is gated by the human privacy and legal
@@ -41,6 +42,33 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       `risk:follows_learner_instruction`
 
   The rule questions and the `risk:` questions are the risk questions.
+
+  ## Rubric batch
+
+  `decide_rubric_batch/2` asks one noul question per authored action and citable
+  learner item: does this learner item perform this action? Citable items are the
+  pool items with a learner role (`learner` or `student`); patient turns and any other
+  role are never sent. The `state` is `learner_items`, each `%{"item", "text"}` with
+  `item` its 1-based position, and every request carries all of them. Each question's
+  `instructions` is an object: `question`, the `item` number and the authored `action`
+  description. Question ids are positional (`performs:<question>.<action>:<item>`) and
+  map back to exactly one action and one evidence id from the code-supplied pool, so
+  no cited id is ever authored by the provider.
+
+  The answers are thresholded like the patient decision. An action is `performed`
+  when at least one item is a yes, citing every yes item in pool order;
+  `not_performed` when every item is a no, or when there is no citable item (then
+  nothing is sent); and `uncertain` otherwise. The criterion is always classified
+  `uncertain` with no evidence, so the authored rules decide its level from the
+  actions. A question that requests `enumerate_answers` has no mapping and fails the
+  batch with `{:technical_failure, :rubric_enumeration_unsupported}`.
+
+  All questions travel in one request. When its estimated size (one token per four
+  bytes of JSON) exceeds `:max_request_tokens`, whole actions are split into groups,
+  each with the full `state`, sent concurrently under the same deadline. An action
+  that does not fit alone fails the batch with
+  `{:technical_failure, :rubric_request_too_large}`. Any group failure fails the
+  whole batch; a group still running at the deadline is a `:timeout`.
 
   ## Disclosure conditions
 
@@ -85,11 +113,14 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `{:error, {:upstream_error, status}}` - any response other than HTTP 200
     * `{:error, {:invalid_response, reason}}` - a 200 response that carries an `error`
       or is not exactly one valid noul answer per question asked
+    * `{:error, {:technical_failure, :invalid_max_request_tokens}}` - a request size
+      budget that is not a positive integer
 
   ## Configuration
 
   Call options first, then `Application.get_env(:backend, __MODULE__)`: `:api_key`,
-  `:base_url`, `:model`, `:yes_threshold`, `:no_threshold`. The operating system
+  `:base_url`, `:model`, `:yes_threshold`, `:no_threshold`, `:max_request_tokens`
+  (default `64_000`, rubric batch only). The operating system
   environment is never read here; `config/runtime.exs` copies the `TYPESAFE_*`
   variables into the application environment at boot.
 
@@ -103,6 +134,13 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @default_model "jev-1.13.0"
   @default_yes_threshold 0.8
   @default_no_threshold 0.2
+
+  # The provider's per-request budget for one rubric request, in estimated tokens.
+  @default_max_request_tokens 64_000
+
+  # The pool roles whose items a rubric action may cite: the roles
+  # `Backend.Stations.RubricAssessment.Evidence` accepts as learner evidence.
+  @citable_roles [:learner, :student, "learner", "student"]
 
   # Time kept back from the seam deadline so that a slow provider surfaces here as a
   # typed `:timeout` instead of the seam killing the adapter task.
@@ -171,15 +209,34 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @impl true
   def decide_rubric(request), do: decide_rubric(request, [])
 
-  # Rubric decisions are not served by this adapter yet: the rubric contract needs
-  # evidence identifiers that noul answers cannot name (see the feature notes for
-  # issue #206). `{:technical_failure, atom}` is used because the seam's sanitizer
-  # keeps that term as is, so the caller sees why instead of a generic adapter error.
-  # The optional `decide_rubric_batch` callback is deliberately not exported: the
-  # seam then reports `{:technical_failure, :rubric_batch_unsupported}` itself.
+  # The single-criterion rubric decision is not served by this adapter: rubric
+  # evaluation goes through `decide_rubric_batch/2`. `{:technical_failure, atom}` is
+  # used because the seam's sanitizer keeps that term as is, so the caller sees why
+  # instead of a generic adapter error.
   @spec decide_rubric(map(), keyword()) :: {:error, {:technical_failure, atom()}}
   def decide_rubric(_request, _opts) do
     {:error, {:technical_failure, :rubric_decision_unsupported}}
+  end
+
+  @impl true
+  def decide_rubric_batch(request), do: decide_rubric_batch(request, [])
+
+  @spec decide_rubric_batch(map(), keyword()) ::
+          {:ok, %{decisions: [map()]}} | {:error, term()}
+  def decide_rubric_batch(request, opts) when is_map(request) and is_list(opts) do
+    config = get_config(opts)
+    questions = request |> Map.get(:questions, []) |> List.wrap()
+
+    with :ok <- validate_credentials(config.api_key),
+         {:ok, thresholds} <- validate_thresholds(config.yes_threshold, config.no_threshold),
+         :ok <- validate_base_url(config.base_url),
+         {:ok, max_tokens} <- validate_max_request_tokens(config.max_request_tokens),
+         :ok <- reject_enumeration(questions),
+         items = citable_items(request),
+         plans = plan_actions(questions, items),
+         {:ok, nouls} <- ask_actions(request, config, items, plans, max_tokens) do
+      {:ok, %{decisions: rubric_decisions(questions, plans, nouls, thresholds)}}
+    end
   end
 
   # ============================================================================
@@ -198,6 +255,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       model: opts[:model] || Keyword.get(app, :model) || @default_model,
       yes_threshold: threshold(opts, app, :yes_threshold, @default_yes_threshold),
       no_threshold: threshold(opts, app, :no_threshold, @default_no_threshold),
+      max_request_tokens: threshold(opts, app, :max_request_tokens, @default_max_request_tokens),
       req_options:
         app
         |> Keyword.get(:req_options, [])
@@ -234,6 +292,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   end
 
   defp validate_thresholds(_yes, _no), do: {:error, {:technical_failure, :invalid_thresholds}}
+
+  defp validate_max_request_tokens(max) when is_integer(max) and max > 0, do: {:ok, max}
+
+  defp validate_max_request_tokens(_max),
+    do: {:error, {:technical_failure, :invalid_max_request_tokens}}
 
   # The bearer key must never travel in clear, so only `https` with a host is
   # accepted; there is no plain-http exception, not even for tests (they use a plug).
@@ -610,5 +673,167 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       stated == :yes and asked == :no -> :violation
       true -> :undecided
     end
+  end
+
+  # ============================================================================
+  # Rubric batch
+  # ============================================================================
+
+  # No mapping exists from noul answers to an ordered list of the learner's answers.
+  defp reject_enumeration(questions) do
+    if Enum.any?(questions, &(Map.get(&1, :enumerate_answers) == true)),
+      do: {:error, {:technical_failure, :rubric_enumeration_unsupported}},
+      else: :ok
+  end
+
+  @doc """
+  Lists the pool items an action may cite: those with a learner role, in pool order,
+  each with its 1-based position `n` among them. Patient turns and items of any other
+  role are never offered.
+  """
+  @spec citable_items(map()) :: [%{n: pos_integer(), id: String.t(), text: String.t()}]
+  def citable_items(request) do
+    request
+    |> Map.get(:evidence_pool, [])
+    |> List.wrap()
+    |> Enum.filter(&(is_map(&1) and Map.get(&1, :role) in @citable_roles))
+    |> Enum.with_index(1)
+    |> Enum.map(fn {item, n} ->
+      text = Map.get(item, :text)
+      %{n: n, id: item.id, text: if(is_binary(text), do: text, else: "")}
+    end)
+  end
+
+  # One plan per authored action, in question and action order, with one question id
+  # per citable item. Ids are positional (`performs:<question>.<action>:<item>`), so
+  # no authored or learner text ever becomes an id, and each maps back to exactly one
+  # action and one evidence id.
+  defp plan_actions(questions, items) do
+    for {question, q} <- Enum.with_index(questions, 1),
+        {action, a} <- Enum.with_index(Map.get(question, :actions, []), 1) do
+      %{
+        criterion_id: question.criterion.id,
+        action_id: action.id,
+        description: to_string(Map.get(action, :description) || ""),
+        asks: Enum.map(items, &{"performs:#{q}.#{a}:#{&1.n}", &1})
+      }
+    end
+  end
+
+  defp ask_actions(request, config, items, plans, max_tokens) do
+    if Enum.all?(plans, &(&1.asks == [])) do
+      {:ok, %{}}
+    else
+      state = %{"learner_items" => Enum.map(items, &%{"item" => &1.n, "text" => &1.text})}
+
+      with {:ok, groups} <- group_actions(plans, state, config.model, max_tokens),
+           {:ok, budget_ms} <- usable_budget(request) do
+        run_groups(groups, state, config, budget_ms)
+      end
+    end
+  end
+
+  defp action_questions(plan) do
+    Map.new(plan.asks, fn {id, item} ->
+      {id,
+       %{
+         "type" => "noul",
+         "instructions" => %{
+           "question" =>
+             "Does the message in `learner_items` whose `item` equals `item` perform " <>
+               "`action`, in the same words or in different words?",
+           "item" => item.n,
+           "action" => plan.description
+         }
+       }}
+    end)
+  end
+
+  # Packs whole actions into groups whose estimated request stays within the budget.
+  # Every group carries the full state; one request is the common case.
+  defp group_actions(plans, state, model, max_tokens) do
+    base = estimate_tokens(%{"model" => model, "state" => state, "questions" => %{}})
+
+    plans
+    |> Enum.map(&action_questions/1)
+    |> Enum.reduce_while({:ok, []}, fn questions, {:ok, groups} ->
+      cost = estimate_tokens(questions)
+
+      case groups do
+        _ when base + cost > max_tokens ->
+          {:halt, {:error, {:technical_failure, :rubric_request_too_large}}}
+
+        [{size, group} | rest] when size + cost <= max_tokens ->
+          {:cont, {:ok, [{size + cost, Map.merge(group, questions)} | rest]}}
+
+        _ ->
+          {:cont, {:ok, [{base + cost, questions} | groups]}}
+      end
+    end)
+    |> case do
+      {:ok, groups} -> {:ok, groups |> Enum.reverse() |> Enum.map(&elem(&1, 1))}
+      error -> error
+    end
+  end
+
+  # A deterministic estimate: one token per four bytes of encoded JSON, rounded up.
+  defp estimate_tokens(term), do: div(byte_size(Jason.encode!(term)) + 3, 4)
+
+  # Every group runs concurrently under the same deadline, once. Any failure, in group
+  # order, fails the batch; a group still running at the deadline is a timeout.
+  defp run_groups(groups, state, config, budget_ms) do
+    tasks =
+      Enum.map(groups, fn questions ->
+        payload = %{"model" => config.model, "state" => state, "questions" => questions}
+
+        Task.async(fn ->
+          with {:ok, body} <- execute_request(config, payload, budget_ms) do
+            parse_answers(body, Map.keys(questions))
+          end
+        end)
+      end)
+
+    tasks
+    |> Task.yield_many(budget_ms)
+    |> Enum.map(fn {task, result} -> result || Task.shutdown(task, :brutal_kill) end)
+    |> Enum.reduce_while({:ok, %{}}, fn
+      {:ok, {:ok, nouls}}, {:ok, acc} -> {:cont, {:ok, Map.merge(acc, nouls)}}
+      {:ok, {:error, _reason} = error}, _acc -> {:halt, error}
+      _timeout_or_exit, _acc -> {:halt, {:error, :timeout}}
+    end)
+  end
+
+  # Each action is performed when an item is a yes (citing every yes item),
+  # not performed when every item is a no or there is no item, and uncertain
+  # otherwise. The criterion is always uncertain, so authored rules decide its level.
+  defp rubric_decisions(questions, plans, nouls, thresholds) do
+    by_criterion = Enum.group_by(plans, & &1.criterion_id)
+
+    Enum.map(questions, fn question ->
+      %{
+        criterion_id: question.criterion.id,
+        classification: "uncertain",
+        evidence_ids: [],
+        rationale: nil,
+        actions:
+          by_criterion
+          |> Map.get(question.criterion.id, [])
+          |> Enum.map(&action_decision(&1, nouls, thresholds))
+      }
+    end)
+  end
+
+  defp action_decision(plan, nouls, thresholds) do
+    answers = Enum.map(plan.asks, fn {id, item} -> {classify(nouls[id], thresholds), item.id} end)
+    cited = for {:yes, evidence_id} <- answers, do: evidence_id
+
+    classification =
+      cond do
+        cited != [] -> "performed"
+        Enum.all?(answers, &(elem(&1, 0) == :no)) -> "not_performed"
+        true -> "uncertain"
+      end
+
+    %{id: plan.action_id, classification: classification, evidence_ids: cited}
   end
 end
