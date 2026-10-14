@@ -947,6 +947,196 @@ defmodule Backend.Stations.JevDecisionTest do
   end
 
   # ============================================================================
+  # Total Context Size Cap (fail closed, never truncate)
+  # ============================================================================
+
+  describe "total context size cap: patient" do
+    test "defaults to 24,000 characters" do
+      assert JevDecision.max_context_characters() == 24_000
+    end
+
+    test "fails closed with a typed error and never calls the adapter when the bounded conversation exceeds the default cap" do
+      # 10 bounded turns (22,000) + latest learner turn (2,200) + candidate (8) = 24,208.
+      conversation =
+        for _ <- 1..12, do: %{role: :student, text: String.duplicate("a", 2_200)}
+
+      assert {:error, {:invalid_request, :context_limit_exceeded}} =
+               JevDecision.decide_patient(
+                 %{
+                   candidate_text: "verified",
+                   package: sample_package(),
+                   conversation: conversation
+                 },
+                 adapter: EchoAdapter,
+                 test_pid: self()
+               )
+
+      refute_received {:echo_patient_request, _}
+    end
+
+    test "counts the latest learner turn even when it falls outside the bounded window" do
+      conversation = [
+        %{role: :student, text: String.duplicate("q", 30)},
+        %{role: :patient, text: "12345"}
+      ]
+
+      request = %{
+        candidate_text: "0123456789",
+        package: sample_package(),
+        conversation: conversation
+      }
+
+      # Bounded window keeps only the patient turn (5) + candidate (10) = 15,
+      # but the latest learner turn (30) is also sent, so the total is 45.
+      assert {:error, {:invalid_request, :context_limit_exceeded}} =
+               JevDecision.decide_patient(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_context_turns: 1,
+                 max_context_characters: 44
+               )
+
+      refute_received {:echo_patient_request, _}
+
+      assert {:ok, _} =
+               JevDecision.decide_patient(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_context_turns: 1,
+                 max_context_characters: 45
+               )
+
+      assert_received {:echo_patient_request, echo}
+      assert echo.latest_learner_turn.text == String.duplicate("q", 30)
+    end
+
+    test "passes a request at the cap to the adapter unchanged (no truncation)" do
+      learner_text = String.duplicate("á", 40)
+
+      request = %{
+        candidate_text: "0123456789",
+        package: sample_package(),
+        conversation: [%{role: :student, text: learner_text}]
+      }
+
+      # candidate (10) + bounded turn (40) + latest learner turn (40) = 90
+      assert {:ok, _} =
+               JevDecision.decide_patient(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_context_characters: 90
+               )
+
+      assert_received {:echo_patient_request, echo}
+      assert echo.candidate_text == "0123456789"
+
+      assert [%{seq: 1, role: :student, text: ^learner_text, trust: :untrusted}] =
+               echo.conversation
+
+      assert echo.latest_learner_turn == %{
+               seq: 1,
+               role: :student,
+               text: learner_text,
+               trust: :untrusted
+             }
+    end
+
+    test "does not count trusted package content against the cap" do
+      request = %{candidate_text: "0123456789", package: sample_package(), conversation: []}
+
+      assert {:ok, _} =
+               JevDecision.decide_patient(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_context_characters: 10
+               )
+
+      assert_received {:echo_patient_request, _}
+    end
+  end
+
+  describe "total context size cap: rubric" do
+    defp rubric_request_with_pool(texts) do
+      pool =
+        texts
+        |> Enum.with_index(1)
+        |> Enum.map(fn {text, idx} -> %{id: "t-#{idx}", role: "student", text: text} end)
+
+      %{
+        criterion: %{id: "c-1", description: "Desc"},
+        allowed_classes: ["adequado"],
+        allowed_evidence_ids: Enum.map(pool, & &1.id),
+        evidence_pool: pool
+      }
+    end
+
+    test "defaults to 120,000 characters" do
+      assert JevDecision.max_rubric_context_characters() == 120_000
+    end
+
+    test "fails closed with a typed error and never calls the adapter when the evidence pool exceeds the cap" do
+      request = rubric_request_with_pool([String.duplicate("a", 30), String.duplicate("b", 21)])
+
+      assert {:error, {:invalid_request, :context_limit_exceeded}} =
+               JevDecision.decide_rubric(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_rubric_context_characters: 50
+               )
+
+      refute_received {:echo_rubric_request, _}
+    end
+
+    test "is not bounded by the patient cap" do
+      request = rubric_request_with_pool([String.duplicate("a", 30), String.duplicate("b", 21)])
+
+      assert {:ok, _} =
+               JevDecision.decide_rubric(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_context_characters: 50
+               )
+
+      assert_received {:echo_rubric_request, _}
+    end
+
+    test "passes an evidence pool over 24,000 but under the default cap to the adapter unchanged" do
+      texts = [String.duplicate("a", 24_001), String.duplicate("b", 30_000)]
+      request = rubric_request_with_pool(texts)
+
+      assert {:ok, _} =
+               JevDecision.decide_rubric(request, adapter: EchoAdapter, test_pid: self())
+
+      assert_received {:echo_rubric_request, echo}
+      assert Enum.map(echo.evidence_pool, & &1.text) == texts
+    end
+
+    test "fails closed under the default cap for an oversized evidence pool" do
+      request = rubric_request_with_pool([String.duplicate("a", 120_001)])
+
+      assert {:error, {:invalid_request, :context_limit_exceeded}} =
+               JevDecision.decide_rubric(request, adapter: EchoAdapter, test_pid: self())
+
+      refute_received {:echo_rubric_request, _}
+    end
+
+    test "passes an evidence pool at the cap to the adapter unchanged" do
+      texts = [String.duplicate("a", 30), String.duplicate("b", 20)]
+      request = rubric_request_with_pool(texts)
+
+      assert {:ok, _} =
+               JevDecision.decide_rubric(request,
+                 adapter: EchoAdapter,
+                 test_pid: self(),
+                 max_rubric_context_characters: 50
+               )
+
+      assert_received {:echo_rubric_request, echo}
+      assert Enum.map(echo.evidence_pool, & &1.text) == texts
+    end
+  end
+
+  # ============================================================================
   # Privacy-Safe Logging
   # ============================================================================
 

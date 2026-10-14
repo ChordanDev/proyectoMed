@@ -15,7 +15,10 @@ config :backend,
   jev_decision_adapter: Backend.Stations.JevDecision.DisabledAdapter,
   jev_decision_default_deadline_ms: 3_000,
   jev_decision_max_context_turns: 10,
-  jev_decision_max_characters: 2_000
+  jev_decision_max_characters: 2_000,
+  jev_decision_max_context_characters: 24_000,
+  jev_decision_max_rubric_context_characters: 120_000,
+  learner_message_max_characters: 2_000
 
 # Configure the endpoint
 config :backend, BackendWeb.Endpoint,

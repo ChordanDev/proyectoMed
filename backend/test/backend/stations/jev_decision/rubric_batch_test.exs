@@ -857,4 +857,47 @@ defmodule Backend.Stations.JevDecision.RubricBatchTest do
       assert JevDecision.technical_failure?(error)
     end
   end
+
+  describe "total context size cap" do
+    defp pool_characters, do: pool() |> Enum.map(&String.length(&1.text)) |> Enum.sum()
+
+    test "an evidence pool over the cap fails closed before the adapter is called" do
+      assert {:error, {:invalid_request, :context_limit_exceeded} = error} =
+               decide(request([question("crit-1")]), nil,
+                 max_rubric_context_characters: pool_characters() - 1
+               )
+
+      refute_received {:batch_request, _}
+      assert JevDecision.technical_failure?(error)
+    end
+
+    test "an evidence pool over 24,000 but under the default cap reaches the adapter unchanged" do
+      large = [%{id: "turn-1", role: "student", text: String.duplicate("a", 60_000)}]
+
+      assert {:ok, [_decision]} =
+               decide(request([question("crit-1")], %{evidence_pool: large}), nil)
+
+      assert_received {:batch_request, received}
+      assert received.evidence_pool == large
+    end
+
+    test "an evidence pool over the default cap fails closed" do
+      oversized = [%{id: "turn-1", role: "student", text: String.duplicate("a", 120_001)}]
+
+      assert {:error, {:invalid_request, :context_limit_exceeded}} =
+               decide(request([question("crit-1")], %{evidence_pool: oversized}), nil)
+
+      refute_received {:batch_request, _}
+    end
+
+    test "an evidence pool at the cap reaches the adapter unchanged" do
+      assert {:ok, [_decision]} =
+               decide(request([question("crit-1")]), nil,
+                 max_rubric_context_characters: pool_characters()
+               )
+
+      assert_received {:batch_request, received}
+      assert received.evidence_pool == pool()
+    end
+  end
 end
