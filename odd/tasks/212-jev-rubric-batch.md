@@ -88,4 +88,5 @@ Every shape fit the 2850 ms budget (3 s deadline minus the 150 ms margin), with 
   - Rubric outcomes: `action:performed` 2, `action:not_performed` 2, `action:uncertain` 4, `uncertain` 5, `assessed:inadequado` 3.
   - Before this change, all 14 rubric cases reported `technical_failure`.
   - No case is adjudicated (0 of 33), so correctness is not established. No criterion reached a positive level in this run.
-- Next: merge `origin/develop` (`7fac4a2`, #213) into the branch, rerun the checks, then push and open a PR to `develop` (`Closes #212`) once the user authorizes it.
+- 2026-10-14: merged `origin/develop` (`7fac4a2`, #213). After the merge, `mix test` passed 958 with 0 failures, and compile and format are clean. Pushed the branch and opened PR #217 to `develop` (`Closes #212`).
+- Next: CI and review on #217. The follow-ups are #214 and #215.
