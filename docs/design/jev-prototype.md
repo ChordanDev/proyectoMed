@@ -1,6 +1,6 @@
 # Jev Prototype Design: Verified Dialogue and Educational Point Estimates
 
-Status: **Accepted architecture as of 2026-09-21. Only the evaluation side owned by [#128](https://github.com/ChordanDev/proyectoMed/issues/128) is described here as implemented, as an internal backend capability with no live adapter and no HTTP exposure (2026-10-06); see [Evaluation contract](#evaluation-contract).** Every other section keeps the "accepted, not implemented" status it states. [ADR-011 (#123)](https://github.com/ChordanDev/proyectoMed/issues/123) and [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124) are Accepted, and [Ticket 14 (#125)](https://github.com/ChordanDev/proyectoMed/issues/125) with children #126–#130 remains the implementation-planning graph. Acceptance authorizes architecture only. These records do not describe shipped Jev, learner-visible estimate, API, or UI behavior; do not activate pilot or production use; and do not select or approve a provider, accept privacy/ZDR/legal terms, establish clinical accuracy, authorize certification/pass-fail/readiness claims, or complete clinical pt-BR qualification.
+Status: **Accepted architecture as of 2026-09-21. Only the evaluation side owned by [#128](https://github.com/ChordanDev/proyectoMed/issues/128) is described here as implemented, as an internal backend capability with no HTTP exposure (2026-10-06); since #212 the TypeSafe adapter can serve its rubric batch, behind explicit configuration; see [Evaluation contract](#evaluation-contract).** Every other section keeps the "accepted, not implemented" status it states. [ADR-011 (#123)](https://github.com/ChordanDev/proyectoMed/issues/123) and [ADR-012 (#124)](https://github.com/ChordanDev/proyectoMed/issues/124) are Accepted, and [Ticket 14 (#125)](https://github.com/ChordanDev/proyectoMed/issues/125) with children #126–#130 remains the implementation-planning graph. Acceptance authorizes architecture only. These records do not describe shipped Jev, learner-visible estimate, API, or UI behavior; do not activate pilot or production use; and do not select or approve a provider, accept privacy/ZDR/legal terms, establish clinical accuracy, authorize certification/pass-fail/readiness claims, or complete clinical pt-BR qualification.
 
 ## Decision summary
 
@@ -152,7 +152,20 @@ Only verified items are offered to Jev, each reduced to `id`, `role`, and `text`
 
 ### TypeSafe outputs and evidence identity
 
-TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. The implemented contract therefore asks only for classes and for identifiers taken from the code-supplied pool, and code validates every identifier. No probability or confidence value is read by this rubric contract. The patient decision is different: its TypeSafe adapter asks Noul questions only and thresholds their probabilities in code.
+TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. The implemented contract therefore asks only for classes and for identifiers taken from the code-supplied pool, and code validates every identifier. The patient decision's TypeSafe adapter asks Noul questions only and thresholds their probabilities in code.
+
+> Amended 2026-10-14 (issue #212): the TypeSafe adapter now serves the rubric batch with the same probability mapping. The batch contract itself is unchanged and still carries classes and identifiers, never probabilities.
+
+| Step | TypeSafe rubric mapping |
+|---|---|
+| Questions | One Noul question per authored action and citable learner item: "does this learner item perform this action?". Only learner-role pool items are citable; patient turns are never sent. Question ids are generated in code and map back to exactly one action and one pool identifier. |
+| Action class | Probabilities are thresholded in code (yes at or above 0.8, no at or below 0.2). `performed` when at least one item is a yes, `not_performed` when every item is a no or there is no citable item, `uncertain` otherwise. |
+| Cited identifiers | Every yes item of a performed action, always an identifier from the code-supplied pool, so the citation validation below still applies. |
+| Criterion class | Always `uncertain` with no criterion evidence. Authored rules (`min_actions`) decide the level from the action outcomes; a criterion with no deciding rule stays `uncertain` and earns no credit. |
+| Enumeration | Unsupported: a question with `enumerate_answers` fails the batch closed as a typed technical failure. |
+| Request size | One request with every question and the full citable conversation. Above the provider budget (about 64k estimated tokens) whole actions are split into groups that each keep the full conversation and run concurrently under the single batch deadline. Any group failure fails the batch. |
+
+No probability or confidence value leaves the adapter: the rubric code still reads only classes and identifiers.
 
 **One batched call.** Every question that needs Jev travels in one call, with the pool sent once. A second call happens only for a provider capacity limit (the `:max_questions_per_call` option), and every call is recorded as `single_batch` or `provider_capacity`. No call exists for a result dependency: the one rule that depends on other criteria, task order, is computed in code.
 
@@ -282,7 +295,7 @@ A technical evaluation timeout, malformed response, transport error, or provider
 
 ### Limits
 
-- **No live adapter.** Only the disabled adapter and test doubles implement the batch contract. Whether a real decision model can classify these questions, return identifiers from the pool, or enumerate a learner's answers in order is unverified.
+- **Live adapter unqualified.** The TypeSafe adapter implements the batch contract with the probability mapping above (issue #212), but it classifies actions only: the criterion class is always `uncertain` and enumeration is unsupported. Whether its action classifications are clinically accurate is unverified.
 - **Not exposed.** The assessment is not served over HTTP and the web client does not read it. The versioned result contract, the decimal wire format, and the pt-BR disclaimer belong to #129. Until then an explicit, tested projection maps an assessment to the legacy shape: assessed at zero is `omitted`, assessed above zero is `met`, `uncertain` and `not_observable` are `uncertain`, and `not_applicable` criteria are dropped.
 - **Clinical accuracy is unmeasured.** Tests cover the deterministic code with scripted classifications. Calibration, acceptance thresholds, and the rubric content of the real station belong to #130.
 - **Architecture rules not implemented:** time windows; pairwise "only what was said before X counts" gates (PEP 2023/1, PDF pp. 10 and 20); and verbalization requirements (p. 20). They need their own authoring fields and are recorded as follow-ups.
