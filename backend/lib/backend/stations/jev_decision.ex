@@ -19,6 +19,12 @@ defmodule Backend.Stations.JevDecision do
       are explicitly marked with `:trust => :untrusted` and patient turns with
       `:trust => :trusted`; `latest_learner_turn`, `package_id`, `package_version`,
       and authored `disclosure_condition` are preserved.
+    * **Total text cap, never truncated**: The learner/conversation text handed to
+      any adapter (candidate, bounded conversation and latest learner turn for
+      patient requests; the evidence pool for rubric requests) is capped by
+      `max_context_characters/0`. Over the cap the decision fails closed with
+      `{:invalid_request, :context_limit_exceeded}` before the adapter is called.
+      Trusted package content is not counted.
     * **Canonical fact IDs only**: `used_fact_ids` strictly requires canonical fact
       IDs; topic slugs are rejected.
     * **Monotonic deadline & budget sharing**: Monotonic absolute deadlines prevent
@@ -41,6 +47,11 @@ defmodule Backend.Stations.JevDecision do
   @default_deadline_ms 3_000
   @default_max_context_turns 10
   @default_max_characters 2_000
+  # Worst case of a validated session: candidate (2,000) + 10 bounded turns of at
+  # most 2,000 each (learner messages are capped at entry, patient replies by
+  # `max_characters`) + the latest learner turn sent again (2,000) = 24,000.
+  # Normal requests never reach it; it is a fail-closed safety net.
+  @default_max_context_characters 24_000
 
   @type patient_decision_status :: :verified | :semantic_refusal | :low_confidence
 
@@ -163,6 +174,7 @@ defmodule Backend.Stations.JevDecision do
           {:ok, [RubricBatch.decision()]} | {:error, rubric_batch_error()}
   def decide_rubric_batch(request, opts \\ []) when is_list(opts) do
     with {:ok, payload} <- RubricBatch.build_payload(request),
+         :ok <- validate_context_size(evidence_pool_texts(payload.evidence_pool), opts),
          {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
       adapter_request =
         Map.merge(payload, %{deadline_ms: deadline_ms, deadline_at_monotonic_ms: deadline_at})
@@ -217,6 +229,19 @@ defmodule Backend.Stations.JevDecision do
   @spec max_characters() :: pos_integer()
   def max_characters do
     Application.get_env(:backend, :jev_decision_max_characters, @default_max_characters)
+  end
+
+  @doc """
+  Returns the configured maximum total characters of learner/conversation text
+  sent to an adapter in one request. Trusted package content is not counted.
+  """
+  @spec max_context_characters() :: pos_integer()
+  def max_context_characters do
+    Application.get_env(
+      :backend,
+      :jev_decision_max_context_characters,
+      @default_max_context_characters
+    )
   end
 
   @doc "Returns the current monotonic time in milliseconds."
@@ -301,15 +326,19 @@ defmodule Backend.Stations.JevDecision do
          :ok <- validate_package(package),
          :ok <- validate_conversation(conversation),
          {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
-      {:ok,
-       minimize_patient_request(
-         candidate_text,
-         package,
-         conversation,
-         deadline_ms,
-         deadline_at,
-         opts
-       )}
+      minimized =
+        minimize_patient_request(
+          candidate_text,
+          package,
+          conversation,
+          deadline_ms,
+          deadline_at,
+          opts
+        )
+
+      with :ok <- validate_context_size(patient_request_texts(minimized), opts) do
+        {:ok, minimized}
+      end
     end
   end
 
@@ -335,6 +364,30 @@ defmodule Backend.Stations.JevDecision do
   defp validate_candidate_text(_text, _max_chars) do
     {:error, {:invalid_request, :invalid_candidate_text}}
   end
+
+  # Every learner/conversation text the adapter receives. `latest_learner_turn`
+  # is taken from all turns, so it may lie outside the bounded window.
+  defp patient_request_texts(request) do
+    latest = if request.latest_learner_turn, do: [request.latest_learner_turn.text], else: []
+    [request.candidate_text | Enum.map(request.conversation, & &1.text)] ++ latest
+  end
+
+  # Fails closed over the cap; the text is never truncated.
+  defp validate_context_size(texts, opts) do
+    max_chars = opts[:max_context_characters] || max_context_characters()
+    total = texts |> Enum.map(&text_length/1) |> Enum.sum()
+
+    if total > max_chars do
+      {:error, {:invalid_request, :context_limit_exceeded}}
+    else
+      :ok
+    end
+  end
+
+  defp text_length(text) when is_binary(text), do: String.length(text)
+  defp text_length(nil), do: 0
+  # A non-binary text still reaches the adapter, so it is counted conservatively.
+  defp text_length(other), do: other |> inspect() |> String.length()
 
   defp validate_package(package) when is_map(package), do: :ok
   defp validate_package(_package), do: {:error, {:invalid_request, :invalid_package}}
@@ -492,22 +545,28 @@ defmodule Backend.Stations.JevDecision do
          :ok <- validate_allowed_evidence_ids(allowed_evidence_ids),
          :ok <- validate_evidence_pool(evidence_pool),
          {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
-      {:ok,
-       minimize_rubric_request(
-         criterion,
-         allowed_classes,
-         allowed_evidence_ids,
-         evidence_pool,
-         deadline_ms,
-         deadline_at,
-         opts
-       )}
+      minimized =
+        minimize_rubric_request(
+          criterion,
+          allowed_classes,
+          allowed_evidence_ids,
+          evidence_pool,
+          deadline_ms,
+          deadline_at,
+          opts
+        )
+
+      with :ok <- validate_context_size(evidence_pool_texts(minimized.evidence_pool), opts) do
+        {:ok, minimized}
+      end
     end
   end
 
   defp validate_rubric_request(_not_a_map, _opts) do
     {:error, {:invalid_request, :expected_map}}
   end
+
+  defp evidence_pool_texts(pool), do: Enum.map(pool, & &1.text)
 
   defp validate_criterion(criterion) when is_map(criterion) do
     id = Map.get(criterion, :id) || Map.get(criterion, "id")
