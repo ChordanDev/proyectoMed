@@ -211,9 +211,15 @@ to the provider. Do not select it in any environment before that acceptance.
 | `TYPESAFE_YES_THRESHOLD` | A probability at or above it is a yes. | `0.8` |
 | `TYPESAFE_NO_THRESHOLD` | A probability at or below it is a no. | `0.2` |
 
+`backend/config/runtime.exs` reads these variables once, at boot, in `dev` and
+`prod`; the adapter itself never reads the operating system environment, and
+`test` reads none of them. Selecting the adapter without a key boots normally
+and then fails every decision closed.
+
 The thresholds are **uncalibrated defaults** taken from the provider's own
 example; real values belong to the qualification in #183. They must satisfy
-`0 <= no < yes <= 1`, otherwise every decision is a technical failure. An answer
+`0 <= no < yes <= 1`; a value that breaks this, or that is not a number, is never
+replaced by the default: every decision is then a technical failure. An answer
 between them yields `low_confidence`, which the gate treats like a refusal.
 
 If both `JEV_ADAPTER=typesafe` and, in `dev`, `JEV_E2E_APPROVING_ADAPTER=true`

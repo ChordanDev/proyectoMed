@@ -69,15 +69,43 @@ end
 # Live Jev provider (TypeSafe System One). Off unless `JEV_ADAPTER=typesafe` asks
 # for it: without the variable the default `DisabledAdapter` stays in place. Live
 # use is gated by the human privacy and legal acceptance tracked in issue #183.
-# `:test` keeps its injected adapters and reads no key from the environment here.
-# The adapter fails closed without a key.
+#
+# This block is the only place that reads the `TYPESAFE_*` variables: the adapter
+# resolves call options and this application configuration, never the operating
+# system environment. `:test` reads none of it and keeps its injected adapters.
+#
+# Nothing here fails the boot. Without a key the adapter fails every decision
+# closed. A threshold that is not a number is kept as written, so the adapter
+# rejects it (`:invalid_thresholds`) on every decision instead of falling back to
+# its default.
 if config_env() != :test do
+  typesafe_adapter = Backend.Stations.JevDecision.TypesafeAdapter
+
   if System.get_env("JEV_ADAPTER") == "typesafe" do
-    config :backend, :jev_decision_adapter, Backend.Stations.JevDecision.TypesafeAdapter
+    config :backend, :jev_decision_adapter, typesafe_adapter
   end
 
-  if api_key = System.get_env("TYPESAFE_API_KEY") do
-    config :backend, Backend.Stations.JevDecision.TypesafeAdapter, api_key: api_key
+  for {variable, key} <- [
+        {"TYPESAFE_API_KEY", :api_key},
+        {"TYPESAFE_BASE_URL", :base_url},
+        {"TYPESAFE_MODEL", :model}
+      ],
+      value = System.get_env(variable) do
+    config :backend, typesafe_adapter, [{key, value}]
+  end
+
+  for {variable, key} <- [
+        {"TYPESAFE_YES_THRESHOLD", :yes_threshold},
+        {"TYPESAFE_NO_THRESHOLD", :no_threshold}
+      ],
+      raw = System.get_env(variable) do
+    threshold =
+      case Float.parse(String.trim(raw)) do
+        {number, ""} -> number
+        _ -> raw
+      end
+
+    config :backend, typesafe_adapter, [{key, threshold}]
   end
 end
 
