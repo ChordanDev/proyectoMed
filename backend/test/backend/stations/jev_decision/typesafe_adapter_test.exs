@@ -533,7 +533,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
     test "honours base_url and model overrides" do
       opts =
         stub_nouls(OverrideStub, nouls()) ++
-          [base_url: "http://typesafe.internal:9000/", model: "jev-latest"]
+          [base_url: "https://typesafe.internal:9000/", model: "jev-latest"]
 
       assert {:ok, _} = TypesafeAdapter.decide_patient(request(), opts)
       assert_receive {:typesafe_request, conn, payload}
@@ -650,6 +650,84 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
         assert TypesafeAdapter.decide_patient(request(), opts) ==
                  {:error, {:technical_failure, :invalid_thresholds}}
       end
+    end
+
+    test "a no threshold above one half or a yes threshold below it is rejected" do
+      opts = never_called(HalfThresholdStub)
+
+      for {no, yes} <- [{0.99, 1}, {0.6, 0.9}, {0.2, 0.4}, {0.5, 0.5}, {0.51, 0.52}] do
+        assert TypesafeAdapter.decide_patient(
+                 request(),
+                 opts ++ [no_threshold: no, yes_threshold: yes]
+               ) == {:error, {:technical_failure, :invalid_thresholds}}
+      end
+    end
+
+    test "thresholds that straddle one half are accepted" do
+      for {{no, yes}, idx} <- Enum.with_index([{0.5, 0.51}, {0.49, 0.5}, {0.2, 0.8}]) do
+        stub = Module.concat(__MODULE__, "HalfOkStub#{idx}")
+
+        assert {:ok, %{status: :verified}} =
+                 decide(stub, nouls(), no_threshold: no, yes_threshold: yes)
+      end
+    end
+
+    test "a high risk can never count as a no" do
+      assert {:ok, %{status: :semantic_refusal}} =
+               decide(HighRiskStub, nouls(%{@risk_unsupported => 0.95}),
+                 no_threshold: 0.5,
+                 yes_threshold: 0.9
+               )
+
+      assert TypesafeAdapter.decide_patient(
+               request(),
+               never_called(HighNoStub) ++ [no_threshold: 0.99, yes_threshold: 1]
+             ) == {:error, {:technical_failure, :invalid_thresholds}}
+    end
+
+    test "thresholds from the application environment must straddle one half" do
+      Application.put_env(:backend, TypesafeAdapter, no_threshold: 0.6, yes_threshold: 0.9)
+
+      assert TypesafeAdapter.decide_patient(request(), never_called(AppEnvHalfStub)) ==
+               {:error, {:technical_failure, :invalid_thresholds}}
+
+      Application.put_env(:backend, TypesafeAdapter, no_threshold: 0.5, yes_threshold: 0.51)
+      assert {:ok, %{status: :verified}} = decide(AppEnvHalfOkStub, nouls())
+    end
+
+    test "a base URL that is not https with a host is rejected before the provider" do
+      opts = never_called(BaseUrlStub)
+
+      for base_url <- [
+            "",
+            "http://api.typesafe.ai",
+            "https://",
+            "ftp://x",
+            "api.typesafe.ai",
+            "HTTP://api.typesafe.ai",
+            :api,
+            ~c"https://api.typesafe.ai"
+          ] do
+        assert TypesafeAdapter.decide_patient(request(), opts ++ [base_url: base_url]) ==
+                 {:error, {:technical_failure, :invalid_base_url}}
+      end
+    end
+
+    test "an https base URL with a host is accepted" do
+      assert {:ok, _} = decide(HttpsBaseStub, nouls(), base_url: "https://example.test")
+      assert_receive {:typesafe_request, conn, _payload}
+      assert {conn.scheme, conn.host} == {:https, "example.test"}
+    end
+
+    test "the base URL from the application environment is validated too" do
+      Application.put_env(:backend, TypesafeAdapter, base_url: "http://api.typesafe.ai")
+
+      assert TypesafeAdapter.decide_patient(request(), never_called(AppEnvBaseUrlStub)) ==
+               {:error, {:technical_failure, :invalid_base_url}}
+
+      Application.put_env(:backend, TypesafeAdapter, base_url: "https://example.test/")
+      assert {:ok, _} = decide(AppEnvBaseUrlOkStub, nouls())
+      assert_receive {:typesafe_request, %{host: "example.test"}, _payload}
     end
 
     test "accepts the extreme thresholds 0 and 1" do
@@ -1064,6 +1142,18 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
     test "keeps the typed reason of a missing key" do
       assert JevDecision.decide_patient(seam_request(), adapter: TypesafeAdapter, api_key: "") ==
                {:error, {:technical_failure, :missing_credentials}}
+    end
+
+    test "keeps the typed reasons of an invalid base URL and invalid thresholds" do
+      base = [adapter: TypesafeAdapter] ++ never_called(SeamConfigStub)
+
+      assert JevDecision.decide_patient(seam_request(), base ++ [base_url: "http://x.test"]) ==
+               {:error, {:technical_failure, :invalid_base_url}}
+
+      assert JevDecision.decide_patient(
+               seam_request(),
+               base ++ [no_threshold: 0.6, yes_threshold: 0.9]
+             ) == {:error, {:technical_failure, :invalid_thresholds}}
     end
 
     test "keeps the typed reason of an unknown disclosure condition" do

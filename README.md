@@ -217,9 +217,12 @@ to the provider. Do not select it in any environment before that acceptance.
 and then fails every decision closed.
 
 The thresholds are **uncalibrated defaults** taken from the provider's own
-example; real values belong to the qualification in #183. They must satisfy
-`0 <= no < yes <= 1`; a value that breaks this, or that is not a number, is never
-replaced by the default: every decision is then a technical failure. An answer
+example; real values belong to the qualification in #183. They must straddle one
+half, `0 <= no <= 0.5 <= yes <= 1` with `no < yes`, so that a "no" never means a
+probability above one half; a value that breaks this, or that is not a number, is
+never replaced by the default: every decision is then a technical failure.
+`TYPESAFE_BASE_URL` must be an `https` URL with a host, so the key never travels
+in clear; any other value makes every decision a technical failure. An answer
 between them yields `low_confidence`, which the gate treats like a refusal.
 
 If both `JEV_ADAPTER=typesafe` and, in `dev`, `JEV_E2E_APPROVING_ADAPTER=true`

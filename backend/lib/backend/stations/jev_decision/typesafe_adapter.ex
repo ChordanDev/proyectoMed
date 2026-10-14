@@ -68,7 +68,12 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   A technical problem is never an approval:
 
     * `{:error, {:technical_failure, :missing_credentials}}` - no API key
-    * `{:error, {:technical_failure, :invalid_thresholds}}` - not `0 <= no < yes <= 1`
+    * `{:error, {:technical_failure, :invalid_thresholds}}` - thresholds outside
+      `0 <= no_threshold <= 0.5 <= yes_threshold <= 1` with `no_threshold <
+      yes_threshold`, so that a "no" never means a probability above one half and a
+      "yes" never means one below it
+    * `{:error, {:technical_failure, :invalid_base_url}}` - a base URL whose scheme is
+      not exactly `https` or whose host is empty, so the key never travels in clear
     * `{:error, {:technical_failure, :invalid_disclosure_condition}}` - a fact with a
       disclosure condition outside the four known values
     * `{:error, :timeout}` - no budget left before the call, or a transport timeout
@@ -147,6 +152,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
     with :ok <- validate_credentials(config.api_key),
          {:ok, thresholds} <- validate_thresholds(config.yes_threshold, config.no_threshold),
+         :ok <- validate_base_url(config.base_url),
          {:ok, facts} <- plan_facts(request),
          {:ok, budget_ms} <- usable_budget(request),
          rules = plan_rules(request),
@@ -213,12 +219,28 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   defp validate_credentials(_), do: {:error, {:technical_failure, :missing_credentials}}
 
+  # Thresholds must straddle one half: `0 <= no <= 0.5 <= yes <= 1` and `no < yes`.
+  # A plain `no < yes` would let `no: 0.99, yes: 1` classify a 0.95 risk as a "no",
+  # and a minimum gap would still allow `no: 0.89, yes: 0.99`. Straddling one half
+  # means a "no" is never a probability above it and a "yes" never one below it.
   defp validate_thresholds(yes, no)
-       when is_number(yes) and is_number(no) and no >= 0 and no < yes and yes <= 1 do
+       when is_number(yes) and is_number(no) and no >= 0 and no <= 0.5 and yes >= 0.5 and
+              yes <= 1 and no < yes do
     {:ok, %{yes: yes, no: no}}
   end
 
   defp validate_thresholds(_yes, _no), do: {:error, {:technical_failure, :invalid_thresholds}}
+
+  # The bearer key must never travel in clear, so only `https` with a host is
+  # accepted; there is no plain-http exception, not even for tests (they use a plug).
+  defp validate_base_url(base_url) when is_binary(base_url) do
+    case URI.parse(base_url) do
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" -> :ok
+      _ -> {:error, {:technical_failure, :invalid_base_url}}
+    end
+  end
+
+  defp validate_base_url(_base_url), do: {:error, {:technical_failure, :invalid_base_url}}
 
   # ============================================================================
   # Deadline
