@@ -56,7 +56,7 @@ Every shape fit the 2850 ms budget (3 s deadline minus the 150 ms margin), with 
   - timeout, zero budget, transport error, HTTP error, missing or invalid answer: each fails closed;
   - patient turns are never offered as citable items.
 - [x] **T2** Amend `docs/design/jev-prototype.md` for the rubric probability mapping. Route: same writer, separate commit.
-- [ ] **T3** Live check. The user runs `mix stations.qualify acute-appendicitis` with the key, and the rubric cases report real outcomes within the deadline. Route: run by the user; the agent never reads the key.
+- [x] **T3** Live check. The user runs `mix stations.qualify acute-appendicitis` with the key, and the rubric cases report real outcomes within the deadline. Route: run by the user; the agent never reads the key.
 
 ## Acceptance criteria
 
@@ -83,5 +83,9 @@ Every shape fit the 2850 ms budget (3 s deadline minus the 150 ms margin), with 
 - 2026-10-14: T2 done, commit `e05363c` (`docs(design): describe the TypeSafe rubric batch mapping`), route delegated direct. Amended the status line, the "TypeSafe outputs and evidence identity" section and the "No live adapter" limit; +16/-3 lines.
 - Verification (backend/): `mix compile --warnings-as-errors` clean; `mix format --check-formatted` clean; `mix test test/backend/stations/jev_decision` 168 passed; `mix test` 937 passed, 0 failures.
 - Implementation notes: citable items are pool items with role `learner`/`student` (atom or string), matching `Evidence`'s learner roles; the state is `learner_items` (`item` position plus text) and holds only those items; question ids are `performs:<question>.<action>:<item>`; a single action whose request alone exceeds the budget fails closed with `{:technical_failure, :rubric_request_too_large}`; `:max_request_tokens` (default 64000) is read from call options or the adapter's application env, not from `config/runtime.exs`.
-- Follow-up outside this writer's surface: `README.md` (around line 230) still says rubric decisions through the TypeSafe adapter return a technical failure.
-- Next: T3, the user's live `mix stations.qualify acute-appendicitis` run.
+- Follow-up outside the writer's surface: the parent fixed the stale TypeSafe rubric statement in `README.md` (around line 230) in commit `375d36c`.
+- 2026-10-14: T3 done. The user's live run `JEV_ADAPTER=typesafe mix stations.qualify acute-appendicitis` (adapter `TypesafeAdapter`) returned no technical failure on any rubric case except `technical-failure-02`, which is designed to fail.
+  - Rubric outcomes: `action:performed` 2, `action:not_performed` 2, `action:uncertain` 4, `uncertain` 5, `assessed:inadequado` 3.
+  - Before this change, all 14 rubric cases reported `technical_failure`.
+  - No case is adjudicated (0 of 33), so correctness is not established. No criterion reached a positive level in this run.
+- Next: merge `origin/develop` (`7fac4a2`, #213) into the branch, rerun the checks, then push and open a PR to `develop` (`Closes #212`) once the user authorizes it.
