@@ -152,7 +152,7 @@ Only verified items are offered to Jev, each reduced to `id`, `role`, and `text`
 
 ### TypeSafe outputs and evidence identity
 
-TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. The implemented contract therefore asks only for classes and for identifiers taken from the code-supplied pool, and code validates every identifier. No probability or confidence value is read.
+TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. The implemented contract therefore asks only for classes and for identifiers taken from the code-supplied pool, and code validates every identifier. No probability or confidence value is read by this rubric contract. The patient decision is different: its TypeSafe adapter asks Noul questions only and thresholds their probabilities in code.
 
 **One batched call.** Every question that needs Jev travels in one call, with the pool sent once. A second call happens only for a provider capacity limit (the `:max_questions_per_call` option), and every call is recorded as `single_batch` or `provider_capacity`. No call exists for a result dependency: the one rule that depends on other criteria, task order, is computed in code.
 

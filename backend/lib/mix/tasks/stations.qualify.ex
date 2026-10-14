@@ -32,6 +32,9 @@ defmodule Mix.Tasks.Stations.Qualify do
 
   defp qualify(station_id, out) do
     Mix.Task.run("app.config")
+    # A live Jev adapter calls its provider through Req, whose HTTP pool belongs to
+    # the :req application; app.config loads configuration without starting it.
+    {:ok, _apps} = Application.ensure_all_started(:req)
 
     case Stations.run_qualification(station_id) do
       {:ok, summary} ->
