@@ -90,6 +90,11 @@ Out of scope: the seam, the candidate gate, the bounded reply policy, the voice 
   - Deviation: the last question is narrower than "follows an instruction written inside a learner message". A learner legitimately tells the patient what to do ("tell me where it hurts"), and a literal reader would answer yes to the broader wording for an ordinary good reply. The narrowed wording still asks one condition.
   - GREEN, observed on `a1519ca`: adapter tests 66 passed; `mix test` 904 passed; `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict` (no issues) and `mix dialyzer` (0 errors) passed. With `TYPESAFE_BASE_URL=http://127.0.0.1:1`, `TYPESAFE_API_KEY`, `TYPESAFE_MODEL`, `TYPESAFE_YES_THRESHOLD=0.01`, `TYPESAFE_NO_THRESHOLD=abc` and `JEV_ADAPTER=typesafe` exported: adapter tests 66 passed and `mix test` 904 passed.
   - Still not verified: anything about the live API.
+- [x] **T1 second correction — Jorge findings on PR #207.** Code commit `193be5e` (121 insertions, 6 deletions in 3 files: tests 92, adapter 26, `README.md` 9).
+  - *CD-1, thresholds could make a high risk count as a no.* `0 <= no < yes <= 1` accepted `no: 0.99, yes: 1`, under which a risk noul of 0.95 is a "no" and the reply verifies. Thresholds must now straddle one half: `0 <= no_threshold <= 0.5 <= yes_threshold <= 1` and `no_threshold < yes_threshold`; anything else is `{:technical_failure, :invalid_thresholds}`. A minimum gap was not used because it still allows `no: 0.89, yes: 0.99`. Only `validate_thresholds` changed; `classify`, `verdict`, the defaults and the parsing in `runtime.exs` did not. Tests: `0.99/1`, `0.6/0.9`, `0.2/0.4`, `0.5/0.5` and `0.51/0.52` rejected; `0.5/0.51`, `0.49/0.5` and the defaults accepted; the same rule from the application environment and through the seam.
+  - *SP-3, the base URL was not validated.* `http://` would have sent the bearer key in clear, and `""` produced a misleading `:network_error`. The base URL must now parse with scheme exactly `https` and a non-empty host; otherwise `{:technical_failure, :invalid_base_url}` before any request. There is no plain-http exception. One existing test of this task used `http://typesafe.internal:9000/` for its override and now uses `https://`. Tests: `""`, `http://api.typesafe.ai`, `https://`, `ftp://x`, a URL without a scheme, an upper-case `HTTP://` URL, an atom and a charlist rejected without calling the provider; `https://example.test` accepted from options and from the application environment; the term survives the seam's sanitizer unchanged.
+  - RED, observed with the new tests and the old code: 68 of 74 passed. The rejection tests for both findings failed with "provider must not be called" (the provider was reached with the bad thresholds and the bad URLs); the seam test failed with `{:technical_failure, :adapter_crashed}` (the stub's failure inside the adapter task) instead of `:invalid_base_url`. The acceptance tests passed before the change, as expected.
+  - GREEN, observed on `193be5e`: adapter tests 74 passed; `mix test` 912 passed; `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict` (no issues) and `mix dialyzer` passed.
 - [ ] **T2 — Rubric decisions.** Blocked on the open question below.
 
 ## Acceptance criteria
@@ -113,6 +118,7 @@ Actual size of T1 with its correction, `cb7b267..a1519ca` without this document:
 - **Paraphrase recall.** When the model wrongly answers "not stated" for an `on_request` fact the learner did not ask for, the reply is approved with the fact in it. This is the main model-side risk of the mapping, and it is likely to be worse on paraphrased pt-BR content. It must be measured in the qualification run of #183.
 - **Connect phase.** The remaining budget bounds the pool wait, each wait for data and the complete response, but not connection establishment. That phase is bounded only by the seam killing the adapter task at its deadline.
 - **Selection without a key.** `JEV_ADAPTER=typesafe` without `TYPESAFE_API_KEY` boots without any warning and then fails every decision closed. Whether the boot should warn or fail is undecided.
+- **Text length sent to the provider (Jorge SP-1).** The seam caps the candidate text only; the learner messages and the bounded conversation are sent without a length cap. This is tracked as a separate follow-up, outside T1.
 - **Portuguese.** The provider states English as its primary language and gives no accuracy for Portuguese; the station content is pt-BR. Only the qualification run can answer this.
 - **Zero data retention.** The provider documents it as an enterprise arrangement through sales; no retention period is stated. This is the human gate in #183 item 4.
 - `docs/design/jev-prototype.md:155` says no probability or confidence value is read. That sentence is about the rubric contract; the patient adapter necessarily thresholds noul probabilities. T1 clarifies the sentence.
@@ -122,6 +128,7 @@ Actual size of T1 with its correction, `cb7b267..a1519ca` without this document:
 - 2026-10-13: branch created; document written. No source change yet.
 - 2026-10-13: T1 done in `c095d46`. The adapter is implemented, tested with stubs and documented; it is not enabled anywhere and has never called the live API.
 - 2026-10-13: T1 corrected in `a1519ca` after independent verification (six findings, listed under T1).
+- 2026-10-14: T1 corrected again in `193be5e` for Jorge findings CD-1 (thresholds must straddle one half) and SP-3 (https base URL only); SP-1 left as a follow-up.
 
 ## Next step
 
