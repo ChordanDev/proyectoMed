@@ -70,14 +70,29 @@ defmodule Backend.StationsTest do
     end
   end
 
-  defmodule TestFactSubstringWithFabricatedAdapter do
+  defmodule TestNaturalReplyWithFactsAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
       {:ok,
        %{
-         text: "A dor começou durante uma caminhada e também sinto dor intensa no braço esquerdo."
+         text: "Começou quando eu estava caminhando, doutor, e ainda não passou.",
+         used_facts: [
+           %{"topic" => "onset", "content" => "A dor começou durante uma caminhada."}
+         ]
        }}
+    end
+  end
+
+  defmodule TestRegeneratingAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      if Process.put(:voice_regeneration_requested, true) do
+        {:ok, %{text: "Foi durante uma caminhada, doutor.", used_facts: []}}
+      else
+        {:ok, %{text: "initial_refused", used_facts: ["fact-initial-stale"]}}
+      end
     end
   end
 
@@ -86,14 +101,6 @@ defmodule Backend.StationsTest do
     @impl true
     def next_reply(_package, _context) do
       {:ok, %{text: "A dor começou durante uma caminhada."}}
-    end
-  end
-
-  defmodule TestFactWithoutPeriodAdapter do
-    @behaviour Backend.Stations.StationAI
-    @impl true
-    def next_reply(_package, _context) do
-      {:ok, %{text: "A dor começou durante uma caminhada"}}
     end
   end
 
@@ -1120,7 +1127,7 @@ defmodule Backend.StationsTest do
     end
 
     for rule_id <- ["length-cap", "max-length"] do
-      test "process_voice_turn/3 refuses final fact text exceeding #{rule_id} without claiming emitted facts" do
+      test "process_voice_turn/3 denies a reply exceeding #{rule_id} without committing patient content" do
         original_package = Stations.get_active_package()
 
         package =
@@ -1142,26 +1149,19 @@ defmodule Backend.StationsTest do
           :sys.replace_state(Backend.Stations.StationLoader, fn _ -> original_package end)
         end)
 
-        Application.put_env(:backend, :station_ai_adapter, TestFactWithoutPeriodAdapter)
+        # 36 characters, one over the cap
+        Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
         session = Stations.create_session(%{audio_consent: true})
 
-        assert {:ok, result} =
+        assert {:error, :station_ai_unavailable} =
                  Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
 
-        assert result.reply_text == "Não tenho essa informação"
-        assert String.length(result.reply_text) <= 35
-        assert result.used_facts == []
-        assert result.turn_id == 1
-        assert result.generation_id == 1
-
         assert {:ok, updated_session} = Stations.get_session(session.session_id)
-        assert [learner, patient] = updated_session.messages
-        assert learner.text == "Quando começou a dor?"
-        assert patient.role == :patient
-        assert patient.text == "Não tenho essa informação"
-        assert String.length(patient.text) <= 35
+        assert [%{role: :learner, text: "Quando começou a dor?"}] = updated_session.messages
+        assert updated_session.failed_voice_turn.turn_id == 1
+        assert {:ok, nil} = Conversation.active_generation(session.session_id)
 
-        assert {:ok, :duplicate} =
+        assert {:error, :station_ai_unavailable} =
                  Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
 
         assert {:ok, unchanged_session} = Stations.get_session(session.session_id)
@@ -1169,7 +1169,7 @@ defmodule Backend.StationsTest do
       end
     end
 
-    test "process_voice_turn/3 allows authorized fact content to survive and updates session" do
+    test "process_voice_turn/3 commits the verified reply and updates session" do
       Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
       session = Stations.create_session(%{audio_consent: true})
 
@@ -1183,9 +1183,8 @@ defmodule Backend.StationsTest do
       assert result.reply_text == "A dor começou durante uma caminhada."
       assert result.turn_id == 1
       assert result.generation_id == 1
-      assert length(result.used_facts) == 1
-      assert hd(result.used_facts)["topic"] == "onset"
-      assert hd(result.used_facts)["content"] == "A dor começou durante uma caminhada."
+      # used_facts are the ones the verified reply carries, never re-derived from its text
+      assert result.used_facts == []
 
       {:ok, updated_session} = Stations.get_session(session.session_id)
       assert length(updated_session.messages) == 2
@@ -1222,42 +1221,81 @@ defmodule Backend.StationsTest do
       assert List.last(updated_session.messages).text == "Não tenho essa informação"
     end
 
-    test "process_voice_turn/3 fails closed: fabricated pt-BR clinical assertion becomes canonical refusal" do
-      Application.put_env(:backend, :station_ai_adapter, TestFabricatedClinicalAdapter)
+    test "process_voice_turn/3 returns a Jev-approved reply verbatim with the used_facts it carries" do
+      Application.put_env(:backend, :station_ai_adapter, TestNaturalReplyWithFactsAdapter)
       session = Stations.create_session(%{audio_consent: true})
 
       assert {:ok, result} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Quando começou a dor no peito?"
+               )
+
+      # Not an exact package fact: Jev approved it, so it is spoken as written
+      assert result.reply_text ==
+               "Começou quando eu estava caminhando, doutor, e ainda não passou."
+
+      assert result.used_facts == [
+               %{"topic" => "onset", "content" => "A dor começou durante uma caminhada."}
+             ]
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      patient = List.last(updated_session.messages)
+      assert patient.role == :patient
+      assert patient.modality == :voice
+      assert patient.text == result.reply_text
+    end
+
+    test "process_voice_turn/3 delivers the reply Jev replaced through regeneration" do
+      Application.put_env(:backend, :station_ai_adapter, TestRegeneratingAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, RefuseThenVerifyAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, result} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Quando começou a dor no peito?"
+               )
+
+      assert result.reply_text == "Foi durante uma caminhada, doutor."
+      # Facts claimed by the refused candidate never survive the replacement
+      assert result.used_facts == []
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      assert [%{role: :learner}, %{role: :patient, text: text}] = updated_session.messages
+      assert text == "Foi durante uma caminhada, doutor."
+    end
+
+    test "process_voice_turn/3 never commits or returns a fabricated assertion Jev refuses" do
+      Application.put_env(:backend, :station_ai_adapter, TestFabricatedClinicalAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, TestRefusingJevAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:error, :station_ai_unavailable} =
                Stations.process_voice_turn(
                  session.session_id,
                  1,
                  "Você toma algum remédio para o estômago?"
                )
 
-      # Fabricated clinical text must never leave Phoenix; replaced by refusal
-      assert result.reply_text == "Não tenho essa informação"
-      assert result.used_facts == []
-
       {:ok, updated_session} = Stations.get_session(session.session_id)
-      assert List.last(updated_session.messages).text == "Não tenho essa informação"
+
+      assert [%{role: :learner, text: "Você toma algum remédio para o estômago?"}] =
+               updated_session.messages
     end
 
-    test "process_voice_turn/3 fails closed: clinical assertion embedding fact substring plus fabricated text becomes refusal" do
-      Application.put_env(:backend, :station_ai_adapter, TestFactSubstringWithFabricatedAdapter)
+    test "process_voice_turn/3 never commits or returns a reply without usable text" do
+      Application.put_env(:backend, :station_ai_adapter, TemplateReplyAIAdapter)
+      Process.put(:template_reply_text, "   ")
       session = Stations.create_session(%{audio_consent: true})
 
-      assert {:ok, result} =
-               Stations.process_voice_turn(
-                 session.session_id,
-                 1,
-                 "A dor irradia para algum lugar?"
-               )
-
-      # Substring match alone does not make arbitrary clinical assertion safe
-      assert result.reply_text == "Não tenho essa informação"
-      assert result.used_facts == []
+      assert {:error, :station_ai_unavailable} =
+               Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
 
       {:ok, updated_session} = Stations.get_session(session.session_id)
-      assert List.last(updated_session.messages).text == "Não tenho essa informação"
+      assert [%{role: :learner, text: "Quando começou a dor?"}] = updated_session.messages
     end
 
     test "process_voice_turn/3 refuses duplicate or reordered turn_id without calling adapter or returning text" do

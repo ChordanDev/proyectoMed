@@ -642,9 +642,12 @@ defmodule Backend.Stations do
        except retries of the latest failed generation preserve its technical failure.
     3. Formatting role-labelled context from the active package and session messages.
     4. Generating the next bounded patient reply via `StationAI.next_reply/2`.
-    5. Passing through the `verify_patient_reply/3` seam.
-    6. Failing closed: admitting only canonical refusal or exact package-authorized
-       fact content, otherwise substituting canonical refusal before resolution.
+    5. Passing through the `verify_patient_reply/3` seam, the single authority on
+       what the patient may say on both channels. The verified reply is used as
+       returned, exactly as the text path does; there is no voice-only filter.
+    6. Failing closed: a reply that is denied, refused, or left without usable
+       text fails the generation as `:station_ai_unavailable` and commits no
+       patient content.
     7. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
     8. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
        solely on success. Stale, cancelled, completed, or expired generations never return text.
@@ -826,16 +829,15 @@ defmodule Backend.Stations do
          {:ok, ai_reply} <- generate_patient_reply(package, context),
          verify_opts = build_verify_opts(package, current_session, context, %{}),
          {:ok, verified_reply} <- verify_patient_reply(package, ai_reply, verify_opts),
-         raw_text = Map.get(verified_reply, :text) || Map.get(verified_reply, "text"),
-         {:ok, safe_text, used_facts} = admit_voice_reply(raw_text, package),
+         verified_text = extract_reply_text(verified_reply),
          {:ok, _session} <-
-           Conversation.resolve_patient_reply(session_id, generation_id, safe_text) do
+           Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
       {:ok,
        %{
-         reply_text: safe_text,
+         reply_text: verified_text,
          turn_id: turn_id,
          generation_id: generation_id,
-         used_facts: used_facts
+         used_facts: extract_used_facts(verified_reply)
        }}
     else
       {:error, :stale_generation} ->
@@ -860,47 +862,6 @@ defmodule Backend.Stations do
           {:error, reason} -> {:error, reason}
         end
     end
-  end
-
-  defp admit_voice_reply(raw_text, package) do
-    refusal = StationAI.refusal_text()
-    trimmed_refusal = String.trim(refusal)
-    trimmed_text = if is_binary(raw_text), do: String.trim(raw_text), else: ""
-
-    revealable_facts = package["revealable_facts"] || []
-
-    matching_fact =
-      Enum.find(revealable_facts, fn fact ->
-        content = Map.get(fact, "content") || Map.get(fact, :content)
-
-        is_binary(content) and
-          (String.trim(content) == trimmed_text or
-             normalize_fact_text(content) == normalize_fact_text(trimmed_text))
-      end)
-
-    cond do
-      trimmed_text == trimmed_refusal ->
-        {:ok, refusal, []}
-
-      matching_fact != nil ->
-        fact_content = Map.get(matching_fact, "content") || Map.get(matching_fact, :content)
-        bounded_text = StationAI.BoundedReply.bound(fact_content, package)
-
-        if bounded_text == refusal do
-          {:ok, refusal, []}
-        else
-          {:ok, bounded_text, [matching_fact]}
-        end
-
-      true ->
-        {:ok, refusal, []}
-    end
-  end
-
-  defp normalize_fact_text(text) when is_binary(text) do
-    text
-    |> String.trim()
-    |> String.trim_trailing(".")
   end
 
   defp build_verify_opts(package, session, context, params) do

@@ -5,6 +5,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
   @secret "test-worker-secret"
   @valid_fact_reply "A dor começou durante uma caminhada."
+  @natural_reply "Começou quando eu estava caminhando, doutor, e ainda não passou."
 
   defmodule TestSuccessAdapter do
     @behaviour Backend.Stations.StationAI
@@ -31,11 +32,11 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
-  defmodule TestFabricatedClinicalAdapter do
+  defmodule TestNaturalReplyAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
-      {:ok, %{text: "Estou sentindo uma queimação forte e tomei omeprazol de manhã cedo."}}
+      {:ok, %{text: "Começou quando eu estava caminhando, doutor, e ainda não passou."}}
     end
   end
 
@@ -59,6 +60,16 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
     @impl true
     def decide_patient(_request), do: {:ok, %{status: :verified}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
+  defmodule TestRefusingJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :semantic_refusal}}
 
     @impl true
     def decide_rubric(_request), do: {:error, :not_implemented}
@@ -316,8 +327,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert [%{text: "segunda"}, %{role: :patient}] = stored.messages
     end
 
-    test "substitutes canonical refusal for unknown facts without leaking unverified content",
-         %{conn: conn} do
+    test "returns the canonical refusal the verified reply carries", %{conn: conn} do
       Application.put_env(:backend, :station_ai_adapter, TestRefusalAdapter)
       session = Stations.create_session(%{audio_consent: true})
       id = session.session_id
@@ -329,17 +339,42 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
       assert resp["status"] == "committed"
       assert resp["reply_text"] == "Não tenho essa informação"
+    end
 
-      # Also test fabricated clinical assertion fails closed to refusal
-      Application.put_env(:backend, :station_ai_adapter, TestFabricatedClinicalAdapter)
+    test "returns a Jev-approved reply verbatim even when it is not an exact package fact",
+         %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, TestNaturalReplyAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
 
-      resp2 =
+      resp =
         conn
-        |> post(transcripts_path(id), %{turn_id: 2, text: "Você toma remédios?"})
+        |> post(transcripts_path(id), %{turn_id: 1, text: "Quando a dor começou?"})
         |> json_response(201)
 
-      assert resp2["status"] == "committed"
-      assert resp2["reply_text"] == "Não tenho essa informação"
+      assert resp["status"] == "committed"
+      assert resp["reply_text"] == @natural_reply
+
+      {:ok, stored} = Stations.get_session(id)
+      assert [%{role: :learner}, %{role: :patient, text: @natural_reply}] = stored.messages
+    end
+
+    test "a reply Jev refuses returns 503 without text and commits no patient message",
+         %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, TestNaturalReplyAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, TestRefusingJevAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      resp =
+        conn
+        |> post(transcripts_path(id), %{turn_id: 1, text: "Quando a dor começou?"})
+        |> json_response(503)
+
+      refute Map.has_key?(resp, "reply_text")
+
+      {:ok, stored} = Stations.get_session(id)
+      assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
     end
 
     test "rejects malformed payloads", %{conn: conn} do
