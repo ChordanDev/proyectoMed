@@ -1,6 +1,6 @@
 # Jev Prototype Design: Verified Dialogue and Educational Point Estimates
 
-Status: **Accepted architecture as of 2026-09-21; implementation cross-checked at `7fac4a2`.** [#128](https://github.com/ChordanDev/proyectoMed/issues/128) supplied the internal assessment engine. This baseline also contains the pre-delivery gate and v2 educational-result HTTP/UI integration. The default decision adapter is disabled. An opt-in TypeSafe adapter (`JEV_ADAPTER=typesafe`, #206) verifies patient replies only; its live use awaits the human privacy and legal gate (#183), and no adapter serves live rubric decisions. ADR-011 (#123) and ADR-012 (#124) authorize architecture, not provider approval, privacy/ZDR/legal acceptance, clinical accuracy, pilot/production activation, certification, pass/fail, or readiness claims. The contracts below distinguish implemented mechanisms from remaining integration and human qualification gates.
+Status: **Accepted architecture as of 2026-09-21; implementation cross-checked at `7fac4a2`.** [#128](https://github.com/ChordanDev/proyectoMed/issues/128) supplied the internal assessment engine. This baseline also contains the pre-delivery gate and the v2 educational-result HTTP/UI integration. The default decision adapter is disabled. An opt-in TypeSafe adapter (`JEV_ADAPTER=typesafe`, #206) verifies patient replies. Since #212 it also serves rubric batches with the probability mapping in [Evaluation contract](#evaluation-contract). Its live use awaits the human privacy and legal gate (#183). ADR-011 (#123) and ADR-012 (#124) authorize architecture only. They do not approve a provider, accept privacy, ZDR or legal terms, establish clinical accuracy, activate pilot or production use, or authorize certification, pass/fail or readiness claims. The contracts below distinguish implemented mechanisms from the remaining integration and human qualification gates.
 
 ## Decision summary
 
@@ -127,7 +127,7 @@ flowchart LR
 
 ## Evaluation contract
 
-Status of this section: **assessment engine implemented by [#128](https://github.com/ChordanDev/proyectoMed/issues/128), with subsequent v2 HTTP/UI integration present at `7fac4a2`.** No adapter serves live rubric decisions (the TypeSafe adapter returns `rubric_decision_unsupported`), and clinical accuracy is unmeasured. See [Limits](#limits).
+Status of this section: **assessment engine implemented by [#128](https://github.com/ChordanDev/proyectoMed/issues/128), with subsequent v2 HTTP/UI integration present at `7fac4a2`.** Since #212 the opt-in TypeSafe adapter serves rubric batches. It still returns `rubric_decision_unsupported` for single rubric decisions. Clinical accuracy is unmeasured. See [Limits](#limits).
 
 | Question | Answer |
 |---|---|
@@ -154,7 +154,20 @@ Only verified items are offered to Jev, each reduced to `id`, `role`, and `text`
 
 ### TypeSafe outputs and evidence identity
 
-TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. The implemented contract therefore asks only for classes and for identifiers taken from the code-supplied pool, and code validates every identifier. No probability or confidence value is read by this rubric contract. The patient decision is different: its TypeSafe adapter asks Noul questions only and thresholds their probabilities in code.
+TypeSafe Choice/Noul-style primitives may return only constrained classifications or probabilities. They do not make model-authored evidence IDs trustworthy. The implemented contract therefore asks only for classes and for identifiers taken from the code-supplied pool, and code validates every identifier. The patient decision's TypeSafe adapter asks Noul questions only and thresholds their probabilities in code.
+
+> Amended 2026-10-14 (issue #212): the TypeSafe adapter now serves the rubric batch with the same probability mapping. The batch contract itself is unchanged and still carries classes and identifiers, never probabilities.
+
+| Step | TypeSafe rubric mapping |
+|---|---|
+| Questions | One Noul question per authored action and citable learner item: "does this learner item perform this action?". Only learner-role pool items are citable; patient turns are never sent. Question ids are generated in code and map back to exactly one action and one pool identifier. |
+| Action class | Probabilities are thresholded in code (yes at or above 0.8, no at or below 0.2). `performed` when at least one item is a yes, `not_performed` when every item is a no or there is no citable item, `uncertain` otherwise. |
+| Cited identifiers | Every yes item of a performed action, always an identifier from the code-supplied pool, so the citation validation below still applies. |
+| Criterion class | Always `uncertain` with no criterion evidence. Authored rules (`min_actions`) decide the level from the action outcomes; a criterion with no deciding rule stays `uncertain` and earns no credit. |
+| Enumeration | Unsupported: a question with `enumerate_answers` fails the batch closed as a typed technical failure. |
+| Request size | One request with every question and the full citable conversation. Above the provider budget (about 64k estimated tokens) whole actions are split into groups that each keep the full conversation and run concurrently under the single batch deadline. Any group failure fails the batch. |
+
+No probability or confidence value leaves the adapter: the rubric code still reads only classes and identifiers.
 
 **One batched call.** Every question that needs Jev travels in one call, with the pool sent once. A second call happens only for a provider capacity limit (the `:max_questions_per_call` option), and every call is recorded as `single_batch` or `provider_capacity`. No call exists for a result dependency: the one rule that depends on other criteria, task order, is computed in code.
 
@@ -284,7 +297,7 @@ A technical evaluation timeout, malformed response, transport error, or provider
 
 ### Limits
 
-- **No live adapter.** The disabled adapter, test doubles, and a dev-only E2E approving adapter implement the batch contract; none qualifies a live provider. The TypeSafe adapter does not implement it, so an assessment that needs a decision call is an invalid attempt under that adapter too. Whether a real decision model can classify these questions, cite supplied identifiers, or enumerate answers in order is unverified.
+- **Live adapter unqualified.** The disabled adapter, the test doubles and a dev-only E2E approving adapter implement the batch contract. Since #212 the TypeSafe adapter implements it as well, with the probability mapping above, but it classifies actions only. Its criterion class is always `uncertain`, and enumeration is an invalid attempt. Whether its action classifications are clinically accurate is unverified.
 - **Exposure is not qualification.** The v2 API, decimal-string wire format, web consumer, and pt-BR disclaimer exist. The legacy endpoint remains separate. A tested internal projection maps assessed zero to `omitted`, assessed above zero to `met`, `uncertain`/`not_observable` to `uncertain`, and drops `not_applicable`; the legacy endpoint does not call that projection.
 - **Clinical accuracy is unmeasured.** Tests cover the deterministic code with scripted classifications. Calibration, acceptance thresholds, and the rubric content of the real station belong to #130.
 - **Architecture rules not implemented:** time windows; pairwise "only what was said before X counts" gates (PEP 2023/1, PDF pp. 10 and 20); and verbalization requirements (p. 20). They need their own authoring fields and are recorded as follow-ups.
