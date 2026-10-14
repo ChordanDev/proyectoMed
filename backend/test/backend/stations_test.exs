@@ -368,6 +368,42 @@ defmodule Backend.StationsTest do
     end
   end
 
+  describe "learner message length limit" do
+    test "create_message/2 accepts a learner message of exactly 2,000 characters" do
+      session = Stations.create_session(%{audio_consent: true})
+      # Multi-byte graphemes: the limit counts characters, not bytes.
+      text = String.duplicate("á", 2_000)
+
+      assert {:ok, _result} =
+               Stations.create_message(session.session_id, %{
+                 role: "learner",
+                 modality: "text",
+                 text: text
+               })
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: ^text}, %{role: :patient}] = updated_session.messages
+    end
+
+    test "create_message/2 rejects a learner message over 2,000 characters before it enters the conversation or reaches Jev" do
+      Application.put_env(:backend, :jev_decision_adapter, ProbingVerifyingJevAdapter)
+      Application.put_env(:backend, :jev_probe_pid, self())
+      on_exit(fn -> Application.delete_env(:backend, :jev_probe_pid) end)
+
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.create_message(session.session_id, %{
+               role: "learner",
+               modality: "voice",
+               text: String.duplicate("á", 2_001)
+             }) == {:error, :message_too_long}
+
+      {:ok, unchanged} = Stations.get_session(session.session_id)
+      assert unchanged.messages == []
+      refute_received :jev_verification_invoked
+    end
+  end
+
   describe "approved template case-state bypass" do
     # The loader state is the validated package map itself, so the active
     # package is swapped temporarily (restored via on_exit) to serve approved

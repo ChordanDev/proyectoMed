@@ -408,6 +408,26 @@ defmodule BackendWeb.StationControllerTest do
       assert msg1.modality == :voice
     end
 
+    test "rejects a message over 2,000 characters with 422 message_too_long", %{
+      conn: conn,
+      session: session
+    } do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => String.duplicate("a", 2_001)
+        })
+
+      assert json_response(conn, 422) == %{
+               "error" => "message_too_long",
+               "message" => "Mensagem muito longa: o limite é de 2.000 caracteres."
+             }
+
+      assert {:ok, unchanged} = Conversation.fetch(session.session_id)
+      assert unchanged.messages == []
+    end
+
     test "rejects missing role", %{conn: conn, session: session} do
       conn =
         post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
