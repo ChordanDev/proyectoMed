@@ -226,9 +226,12 @@ in clear; any other value makes every decision a technical failure. An answer
 between them yields `low_confidence`, which the gate treats like a refusal.
 
 If both `JEV_ADAPTER=typesafe` and, in `dev`, `JEV_E2E_APPROVING_ADAPTER=true`
-are set, the E2E approving adapter wins. The adapter serves the patient decision
-only: rubric decisions through it return a technical failure. It sends one
-request per decision, does not retry, and logs nothing.
+are set, the E2E approving adapter wins. The adapter sends one request per
+patient decision, does not retry, and logs nothing. It also serves rubric
+batches: it asks one yes/no question per authored action and learner item, cites
+the items above the yes threshold, and leaves the criterion level to the
+authored rules (see `docs/design/jev-prototype.md`). Single rubric decisions and
+enumeration questions return a technical failure.
 
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
