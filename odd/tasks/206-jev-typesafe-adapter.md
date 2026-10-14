@@ -129,6 +129,7 @@ Actual size of T1 with its correction, `cb7b267..a1519ca` without this document:
 - 2026-10-13: T1 done in `c095d46`. The adapter is implemented, tested with stubs and documented; it is not enabled anywhere and has never called the live API.
 - 2026-10-13: T1 corrected in `a1519ca` after independent verification (six findings, listed under T1).
 - 2026-10-14: T1 corrected again in `193be5e` for Jorge findings CD-1 (thresholds must straddle one half) and SP-3 (https base URL only); SP-1 left as a follow-up.
+- 2026-10-14: `mix stations.qualify` ran with `app.config` only, so the `:req` application and its HTTP pool were not started and every live adapter call raised `unknown registry: Req.Finch` (reproduced with `mix run --no-start`; through the seam this reports every case as `technical_failure`). The task now starts `:req` before running. Route: inline (one line in one file). There is no runnable RED in ExUnit because the test run already starts the application; evidence is the direct reproduction before and after (`ArgumentError` versus `{:error, :network_error}` against a closed local port). Checks: format, compile with warnings as errors, `credo --strict` clean; `mix test` 912 passed. Human gate of #183 item 4 recorded on the issue at the maintainer's request (zero data retention not confirmed).
 
 ## Next step
 
