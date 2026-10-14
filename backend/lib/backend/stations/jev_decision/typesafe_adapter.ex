@@ -30,7 +30,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   chosen here; `n` is the 1-based position among the facts, or the rules, asked about:
 
     * `fact_stated:<n>` - the reply states fact `n` (one per fact)
-    * `fact_asked:<n>` - the learner asked for fact `n` (only for `on_request` facts)
+    * `fact_asked:<n>` - the learner asked about the subject of fact `n`, with a
+      subject that can be identified from the conversation (only for `on_request`
+      facts). Its `instructions` is an object, `question` plus the fact under `fact`,
+      and it carries `criteria` that rule out vague questions with no identifiable
+      subject; that wording was chosen from live runs (see issue #206).
     * `rule_broken:<n>` - the reply breaks response rule `n` (one per rule)
     * `risk:unsupported_information`, `risk:contradicts_facts`,
       `risk:contradicts_patient`, `risk:speaks_out_of_role`,
@@ -375,8 +379,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
     rule_questions = Enum.map(rules, &{&1.broken, broken_instructions(&1.instruction)})
 
-    Map.new(fact_questions ++ rule_questions ++ @risk_questions, fn {id, instructions} ->
-      {id, %{"type" => "noul", "instructions" => instructions}}
+    Map.new(fact_questions ++ rule_questions ++ @risk_questions, fn
+      {id, %{} = question} -> {id, Map.put(question, "type", "noul")}
+      {id, instructions} -> {id, %{"type" => "noul", "instructions" => instructions}}
     end)
   end
 
@@ -385,9 +390,26 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       "in the same words or in different words: \"#{content}\""
   end
 
+  # Measured wording (issue #206, live runs of 2026-10-14): the plain "asks a question
+  # that the following fact answers" counted the vague "E como está isso?" as a request
+  # (0.85). These strings are used verbatim because they are what was measured.
   defp asked_instructions(content) do
-    "A message with speaker `learner` in `conversation` asks the patient a question " <>
-      "that the following fact answers: \"#{content}\""
+    %{
+      "instructions" => %{
+        "question" =>
+          "Does a message with speaker `learner` in `conversation` ask about the " <>
+            "subject of `fact`, with a subject that can be identified from the " <>
+            "conversation itself?",
+        "fact" => content
+      },
+      "criteria" => %{
+        "true" =>
+          "The learner asks about this subject, and what the question refers to is clear.",
+        "false" =>
+          "The learner does not ask about this subject, or the question has no " <>
+            "identifiable subject in the conversation so far."
+      }
+    }
   end
 
   defp broken_instructions(instruction) do

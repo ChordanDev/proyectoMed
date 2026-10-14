@@ -400,20 +400,29 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
 
       assert Map.keys(questions) |> Enum.sort() == Enum.sort(@all_ids)
 
-      for {_id, question} <- questions do
-        assert Map.keys(question) |> Enum.sort() == ["instructions", "type"]
+      asked_ids = [@asked_onset, @asked_allergy]
+
+      for {id, question} <- questions do
         assert question["type"] == "noul"
-        assert is_binary(question["instructions"])
+
+        if id in asked_ids do
+          assert Map.keys(question) |> Enum.sort() == ["criteria", "instructions", "type"]
+        else
+          assert Map.keys(question) |> Enum.sort() == ["instructions", "type"]
+          assert is_binary(question["instructions"])
+        end
       end
 
       for {id, fact} <- [
             {@stated_onset, @onset},
-            {@asked_onset, @onset},
             {@stated_sweating, @sweating},
-            {@stated_allergy, @allergy},
-            {@asked_allergy, @allergy}
+            {@stated_allergy, @allergy}
           ] do
         assert questions[id]["instructions"] =~ fact["content"]
+      end
+
+      for {id, fact} <- [{@asked_onset, @onset}, {@asked_allergy, @allergy}] do
+        assert questions[id]["instructions"]["fact"] == fact["content"]
       end
 
       assert questions[@rule_broken]["instructions"] ==
@@ -422,8 +431,35 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
 
       # Learner and candidate text travel only inside `state`, never inside a question.
       for {_id, question} <- questions do
-        refute question["instructions"] =~ @candidate
-        refute question["instructions"] =~ @learner_question
+        rendered = Jason.encode!(question)
+        refute rendered =~ @candidate
+        refute rendered =~ @learner_question
+      end
+    end
+
+    test "the asked question carries object instructions with the fact and both criteria" do
+      assert {:ok, _} = decide(AskedShapeStub, nouls())
+      assert_receive {:typesafe_request, _conn, %{"questions" => questions}}
+
+      for {id, fact} <- [{@asked_onset, @onset}, {@asked_allergy, @allergy}] do
+        assert questions[id] == %{
+                 "type" => "noul",
+                 "instructions" => %{
+                   "question" =>
+                     "Does a message with speaker `learner` in `conversation` ask about the " <>
+                       "subject of `fact`, with a subject that can be identified from the " <>
+                       "conversation itself?",
+                   "fact" => fact["content"]
+                 },
+                 "criteria" => %{
+                   "true" =>
+                     "The learner asks about this subject, and what the question refers to " <>
+                       "is clear.",
+                   "false" =>
+                     "The learner does not ask about this subject, or the question has no " <>
+                       "identifiable subject in the conversation so far."
+                 }
+               }
       end
     end
 
