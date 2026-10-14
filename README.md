@@ -372,9 +372,9 @@ Every voice reply passes through Jev verification (#127) before it is admitted. 
 default `Backend.Stations.JevDecision.DisabledAdapter` the turn fails closed with
 `station_ai_unavailable` and nothing is spoken, so for this manual test start Phoenix
 with `JEV_E2E_APPROVING_ADAPTER=true` (see
-["E2E-only Jev adapter"](#e2e-only-jev-adapter)). After verification the voice path
-still admits only the canonical refusal or an exact package fact; anything else is
-replaced by the refusal, which is real synthesized audio, so the steps below apply.
+["E2E-only Jev adapter"](#e2e-only-jev-adapter)). Jev is the single gate on both
+channels: the voice path speaks the verified reply exactly as the text path would show
+it, and a reply that is denied or refused fails the turn with nothing spoken.
 
 **Manual test** (continues the Deepgram checklist above, same backend):
 
