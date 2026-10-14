@@ -787,9 +787,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
         payload = %{"model" => config.model, "state" => state, "questions" => questions}
 
         Task.async(fn ->
-          with {:ok, body} <- execute_request(config, payload, budget_ms) do
-            parse_answers(body, Map.keys(questions))
-          end
+          contained(fn -> ask_group(config, payload, questions, budget_ms) end)
         end)
       end)
 
@@ -801,6 +799,23 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       {:ok, {:error, _reason} = error}, _acc -> {:halt, error}
       _timeout_or_exit, _acc -> {:halt, {:error, :timeout}}
     end)
+  end
+
+  defp ask_group(config, payload, questions, budget_ms) do
+    with {:ok, body} <- execute_request(config, payload, budget_ms) do
+      parse_answers(body, Map.keys(questions))
+    end
+  end
+
+  # Group tasks are linked, so a raise, exit or throw inside one would take down the
+  # caller. It becomes the same typed technical failure the seam reports instead.
+  defp contained(fun) do
+    fun.()
+  rescue
+    _error -> {:error, {:technical_failure, :adapter_crashed}}
+  catch
+    :exit, _reason -> {:error, {:technical_failure, :task_exit}}
+    :throw, _value -> {:error, {:technical_failure, :adapter_threw}}
   end
 
   # Each action is performed when an item is a yes (citing every yes item),

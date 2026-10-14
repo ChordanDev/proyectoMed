@@ -515,6 +515,48 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
       assert JevDecision.decide_rubric_batch(seam_request, opts) ==
                {:error, {:technical_failure, :rubric_enumeration_unsupported}}
     end
+
+    test "a group request that raises fails closed and the caller survives" do
+      opts = [adapter: TypesafeAdapter] ++ stub_response(RaiseStub, fn _conn -> raise "boom" end)
+
+      assert {:returned, {:error, {:technical_failure, reason}}} =
+               decide_in_non_trapping_caller(request(), opts)
+
+      assert is_atom(reason)
+    end
+
+    test "a group request that exits fails closed and the caller survives" do
+      opts = [adapter: TypesafeAdapter] ++ stub_response(ExitStub, fn _conn -> exit(:boom) end)
+
+      assert {:returned, {:error, {:technical_failure, reason}}} =
+               decide_in_non_trapping_caller(request(), opts)
+
+      assert is_atom(reason)
+    end
+  end
+
+  # Runs the seam in a fresh process that does not trap exits, as a request process
+  # would, and reports whether it returned or died. `$callers` lets the stubs owned
+  # by the test process serve its requests.
+  defp decide_in_non_trapping_caller(seam_request, opts) do
+    parent = self()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        Process.put(:"$callers", [parent])
+        send(parent, {:decided, self(), JevDecision.decide_rubric_batch(seam_request, opts)})
+      end)
+
+    receive do
+      {:decided, ^pid, result} ->
+        Process.demonitor(ref, [:flush])
+        {:returned, result}
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:caller_died, reason}
+    after
+      5_000 -> :no_reply
+    end
   end
 
   defp receive_all(acc \\ []) do
