@@ -66,9 +66,25 @@ with purge_interval when is_binary(purge_interval) <-
   config :backend, :conversation_purge_interval_ms, purge_interval_ms
 end
 
+# Live Jev provider (TypeSafe System One). Off unless `JEV_ADAPTER=typesafe` asks
+# for it: without the variable the default `DisabledAdapter` stays in place. Live
+# use is gated by the human privacy and legal acceptance tracked in issue #183.
+# `:test` keeps its injected adapters and reads no key from the environment here.
+# The adapter fails closed without a key.
+if config_env() != :test do
+  if System.get_env("JEV_ADAPTER") == "typesafe" do
+    config :backend, :jev_decision_adapter, Backend.Stations.JevDecision.TypesafeAdapter
+  end
+
+  if api_key = System.get_env("TYPESAFE_API_KEY") do
+    config :backend, Backend.Stations.JevDecision.TypesafeAdapter, api_key: api_key
+  end
+end
+
 # E2E-only: bypasses Jev verification with a deterministic approving adapter.
 # The harness boots Phoenix under `:dev`, so the variable is honored only there:
 # `:test` keeps its injected adapters and `:prod` never compiles this module.
+# It is evaluated after the live selection above, so it wins when both are set.
 if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true" do
   config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
 end

@@ -191,6 +191,36 @@ prove the result contract, not the quality of any assessment.
   in place.
 - Do not set the variable outside the E2E suite.
 
+### Live Jev adapter (TypeSafe)
+
+`Backend.Stations.JevDecision.TypesafeAdapter` verifies a candidate patient reply
+through the TypeSafe System One API (model Jev). It is **off by default**: the
+default adapter remains `DisabledAdapter`.
+
+**Live use is gated by the human privacy and legal acceptance tracked in issue
+#183.** The adapter sends the candidate reply, the bounded conversation (learner
+text included), the patient profile, the response rules and the revealable facts
+to the provider. Do not select it in any environment before that acceptance.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `JEV_ADAPTER` | `typesafe` selects the live adapter (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps the default adapter. | unset |
+| `TYPESAFE_API_KEY` | Bearer key. Without it every decision is a technical failure, never an approval. | unset |
+| `TYPESAFE_MODEL` | Model identifier. Pinned to a version because thresholds depend on it. | `jev-1.13.0` |
+| `TYPESAFE_BASE_URL` | API base URL. | `https://api.typesafe.ai` |
+| `TYPESAFE_YES_THRESHOLD` | A probability at or above it is a yes. | `0.8` |
+| `TYPESAFE_NO_THRESHOLD` | A probability at or below it is a no. | `0.2` |
+
+The thresholds are **uncalibrated defaults** taken from the provider's own
+example; real values belong to the qualification in #183. They must satisfy
+`0 <= no < yes <= 1`, otherwise every decision is a technical failure. An answer
+between them yields `low_confidence`, which the gate treats like a refusal.
+
+If both `JEV_ADAPTER=typesafe` and, in `dev`, `JEV_E2E_APPROVING_ADAPTER=true`
+are set, the E2E approving adapter wins. The adapter serves the patient decision
+only: rubric decisions through it return a technical failure. It sends one
+request per decision, does not retry, and logs nothing.
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.
