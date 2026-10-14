@@ -454,9 +454,17 @@ defmodule Backend.Stations.RubricAssessment do
 
   defp grounded(draft), do: {:assessed, draft}
 
+  # A sub-action may cite learner evidence the criterion cannot accept, such as an
+  # Impressos event that released nothing or a turn for an Impressos criterion.
+  # Those citations are dropped, so they never void the valid ones beside them; a
+  # performed action left without evidence is unresolved, as any evidence-less one.
+  # Every other rejection (an unknown id, a patient turn, an unverified event)
+  # still fails the criterion closed.
   defp sub_actions(action_decisions, pool, requirement) do
     map_ok(action_decisions, fn action ->
-      with {:ok, evidence} <- Evidence.validate(pool, action.evidence_ids, requirement) do
+      cited = Enum.reject(action.evidence_ids, &wrong_channel?(pool, &1, requirement))
+
+      with {:ok, evidence} <- Evidence.validate(pool, cited, requirement) do
         {:ok,
          %{
            id: action.id,
@@ -465,6 +473,10 @@ defmodule Backend.Stations.RubricAssessment do
          }}
       end
     end)
+  end
+
+  defp wrong_channel?(pool, id, requirement) do
+    match?({:error, {:wrong_channel, _id}}, Evidence.validate(pool, [id], requirement))
   end
 
   # ============================================================================

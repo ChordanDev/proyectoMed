@@ -623,6 +623,58 @@ defmodule Backend.Stations.RubricAssessmentTest do
       assert_unscored(result)
     end
 
+    # An Impressos event that released nothing is learner evidence of the wrong
+    # channel for any criterion, and every event is the wrong channel for a verbal one.
+    test "a sub-action citation of the wrong channel is dropped, keeping the valid ones" do
+      cited = fn ids ->
+        [
+          performed("ask-onset", ids),
+          performed("ask-duration", ["turn-3"]),
+          performed("ask-intensity", ["turn-1", "turn-3"]),
+          not_performed("ask-relief")
+        ]
+      end
+
+      result =
+        rules()
+        |> assess!(
+          session([event("req-none", [], @t3)]),
+          history_answer("inadequado", ["turn-1"], cited.(["turn-1", "impresso-req-none"]))
+        )
+        |> criterion(@history)
+
+      assert result.status == :assessed
+      assert result.level == "adequado"
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+      assert result.sub_actions == cited.(["turn-1"])
+    end
+
+    test "a performed sub-action citing only the wrong channel is an evidence-less one" do
+      actions = fn onset ->
+        [
+          onset,
+          performed("ask-duration"),
+          performed("ask-intensity"),
+          not_performed("ask-relief")
+        ]
+      end
+
+      decide = fn onset ->
+        rules()
+        |> assess!(
+          session([event("req-none", [], @t3)]),
+          history_answer("adequado", ["turn-1"], actions.(onset))
+        )
+        |> criterion(@history)
+      end
+
+      result = decide.(performed("ask-onset", ["impresso-req-none"]))
+
+      assert result == decide.(performed("ask-onset", []))
+      assert result.status == :uncertain
+      refute match?({:invalid_evidence, _rejection, _id}, result.reason)
+    end
+
     test "a level earned by count is grounded by the actions that earned it" do
       actions = [
         performed("ask-onset", ["turn-3"]),
