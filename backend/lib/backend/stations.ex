@@ -158,6 +158,11 @@ defmodule Backend.Stations do
     4. Passing through the Jev verification seam (`verify_patient_reply/3`).
     5. Appending the patient's reply to the session conversation.
     6. Returning `{:ok, reply_map}` or an error.
+
+  When Jev refuses the patient reply (`low_confidence` or `semantic_refusal`),
+  the learner turn is kept without a patient reply and
+  `{:error, {:refused, reason, learner_turn}}` is returned. Technical failures
+  roll the learner turn back, so a retry does not duplicate it.
   """
   @spec create_message(String.t(), map()) ::
           {:ok, map()}
@@ -168,6 +173,7 @@ defmodule Backend.Stations do
              | :station_time_elapsed
              | :station_ai_unavailable
              | :message_too_long
+             | {:refused, :low_confidence | :semantic_refusal, Conversation.message()}
              | term()}
   def create_message(session_id, params) do
     role = Map.get(params, :role) || Map.get(params, "role") || :learner
@@ -242,8 +248,24 @@ defmodule Backend.Stations do
       {:ok, verified_reply} ->
         commit_patient_reply(session_id, token, verified_reply)
 
+      {:error, {:refused, refusal}} ->
+        keep_learner_turn(session_id, token, refusal)
+
       {:error, reason} ->
         rollback_turn(session_id, token, reason)
+    end
+  end
+
+  # A refused patient reply is dropped, but the learner turn is real rubric
+  # evidence, so it is committed without a reply (issue #235). The refused
+  # text is never stored or returned.
+  defp keep_learner_turn(session_id, token, refusal) do
+    case Conversation.resolve_turn(session_id, token, :keep_learner_turn) do
+      {:ok, session} ->
+        {:error, {:refused, refusal, List.last(session.messages)}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

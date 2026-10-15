@@ -57,6 +57,25 @@ defmodule Backend.Stations.AssessSessionTest do
     end
   end
 
+  defmodule RefusingPatientJevDouble do
+    @moduledoc """
+    Refuses every patient reply and grades the rubric like `JevDouble`, so a
+    learner turn kept after a refusal must reach the rubric evidence pool.
+    """
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :semantic_refusal, rationale: "refused"}}
+
+    @impl true
+    def decide_rubric(request), do: JevDouble.decide_rubric(request)
+
+    @impl true
+    def decide_rubric_batch(request), do: JevDouble.decide_rubric_batch(request, [])
+
+    def decide_rubric_batch(request, opts), do: JevDouble.decide_rubric_batch(request, opts)
+  end
+
   setup do
     previous =
       Map.new([:station_ai_adapter, :jev_decision_adapter], fn key ->
@@ -124,6 +143,30 @@ defmodule Backend.Stations.AssessSessionTest do
       assert assessment.estimates.total == 80
       assert assessment.estimates.unresolved == []
       assert assessment.calls == [%{question_count: 1, justification: :single_batch}]
+    end
+
+    test "a learner turn kept after a refused patient reply is in the evidence pool and can be cited" do
+      Application.put_env(:backend, :jev_decision_adapter, RefusingPatientJevDouble)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:error, {:refused, :semantic_refusal, _learner_turn}} =
+               Stations.create_message(session.session_id, %{
+                 role: "learner",
+                 modality: "text",
+                 text: @learner_text
+               })
+
+      {:ok, _completed} = Stations.complete_session(session.session_id, :user)
+
+      assert {:ok, assessment} = Stations.assess_session(session.session_id, test_pid: self())
+
+      assert_received {:batch_request, sent}
+      assert sent.evidence_pool == [%{id: "turn-1", role: "learner", text: @learner_text}]
+
+      assert [criterion] = assessment.criteria
+      assert criterion.status == :assessed
+      assert criterion.evidence_ids == ["turn-1"]
+      assert [%{id: "turn-1", text: @learner_text}] = criterion.evidence
     end
 
     test "the disabled default adapter invalidates the attempt" do

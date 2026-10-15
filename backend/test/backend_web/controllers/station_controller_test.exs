@@ -615,8 +615,13 @@ defmodule BackendWeb.StationControllerTest do
 
         refute refused_conn.resp_body =~ "aperto forte no peito"
 
-        # The learner turn is rolled back and the session stays active.
-        assert %{"status" => "active", "completion_reason" => nil, "messages" => []} =
+        # The learner turn is kept without a patient reply and the session
+        # stays active.
+        assert %{
+                 "status" => "active",
+                 "completion_reason" => nil,
+                 "messages" => [%{"role" => "learner", "text" => "Olá, qual é o seu nome?"}]
+               } =
                  conn
                  |> get(~p"/api/stations/active/sessions/#{session.session_id}")
                  |> json_response(200)
@@ -630,7 +635,7 @@ defmodule BackendWeb.StationControllerTest do
                  "Estou com um aperto forte no peito há duas horas."
 
         assert {:ok, updated_session} = Conversation.fetch(session.session_id)
-        assert Enum.map(updated_session.messages, & &1.role) == [:learner, :patient]
+        assert Enum.map(updated_session.messages, & &1.role) == [:learner, :learner, :patient]
       end
     end
 

@@ -106,6 +106,14 @@ defmodule BackendWeb.StationController do
           message: "A verificação da resposta do paciente excedeu o tempo limite."
         })
 
+      {:error, {:refused, _reason, _learner_turn}} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "reply_verification_failed",
+          message: "A verificação de segurança da resposta do paciente falhou."
+        })
+
       {:error, {tag, _detail}} when tag in [:denied, :refused] ->
         conn
         |> put_status(:bad_gateway)

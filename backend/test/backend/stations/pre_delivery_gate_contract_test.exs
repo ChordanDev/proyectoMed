@@ -373,13 +373,13 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
   # ============================================================================
 
   describe "Requirement 4(c): Semantic refusal / low confidence after retry" do
-    test "semantic refusal exhaust retry budget: no text in history, learner turn rolled back, HTTP 502",
+    test "semantic refusal exhaust retry budget: no text in history, learner turn kept, HTTP 502",
          %{conn: conn, session: session} do
       Application.put_env(:backend, :jev_decision_adapter, RefusingJevDouble)
       refused_text = "Eu acho que tive um infarto quando era criança no Japão."
       Process.put(:custom_ai_reply, refused_text)
 
-      assert {:error, {:refused, :semantic_refusal}} =
+      assert {:error, {:refused, :semantic_refusal, learner_turn}} =
                Stations.create_message(session.session_id, %{
                  role: :learner,
                  modality: :text,
@@ -387,7 +387,7 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
                })
 
       assert {:ok, fetched} = Stations.get_session(session.session_id)
-      assert fetched.messages == []
+      assert fetched.messages == [learner_turn]
 
       conn =
         post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
@@ -405,16 +405,16 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
       refute String.contains?(conn.resp_body, refused_text)
 
       assert {:ok, fetched_after_http} = Stations.get_session(session.session_id)
-      assert fetched_after_http.messages == []
+      assert Enum.map(fetched_after_http.messages, & &1.role) == [:learner, :learner]
     end
 
-    test "low confidence exhaust retry budget: no text in history, learner turn rolled back, HTTP 502",
+    test "low confidence exhaust retry budget: no text in history, learner turn kept, HTTP 502",
          %{conn: conn, session: session} do
       Application.put_env(:backend, :jev_decision_adapter, LowConfidenceJevDouble)
       uncertain_text = "Talvez seja meu coração, não sei bem."
       Process.put(:custom_ai_reply, uncertain_text)
 
-      assert {:error, {:refused, :low_confidence}} =
+      assert {:error, {:refused, :low_confidence, learner_turn}} =
                Stations.create_message(session.session_id, %{
                  role: :learner,
                  modality: :text,
@@ -422,7 +422,7 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
                })
 
       assert {:ok, fetched} = Stations.get_session(session.session_id)
-      assert fetched.messages == []
+      assert fetched.messages == [learner_turn]
 
       conn =
         post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
@@ -439,7 +439,7 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
       refute String.contains?(conn.resp_body, uncertain_text)
 
       assert {:ok, fetched_after_http} = Stations.get_session(session.session_id)
-      assert fetched_after_http.messages == []
+      assert Enum.map(fetched_after_http.messages, & &1.role) == [:learner, :learner]
     end
 
     test "semantic refusal followed by successful retry delivers verified reply and HTTP 200",
