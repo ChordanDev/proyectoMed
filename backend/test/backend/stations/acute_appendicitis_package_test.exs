@@ -110,6 +110,26 @@ defmodule Backend.Stations.AcuteAppendicitisPackageTest do
            ]
   end
 
+  # Issue #228: only the actions that are themselves a request for an impresso
+  # name it. Item 5 asks for authorization and verbalized findings, so the
+  # physical exam handout does not decide any of its actions.
+  test "authors impresso_ids only on the lab and imaging request actions" do
+    authored =
+      for criterion <- package()["rubric"],
+          %{"impresso_ids" => ids} = action <- criterion["actions"] do
+        {criterion["id"], action["id"], ids}
+      end
+
+    assert authored == [
+             {"item-06", "criterio-1", ["impresso-2-hemograma"]},
+             {"item-06", "criterio-2", ["impresso-2-pcr"]},
+             {"item-06", "criterio-3", ["impresso-2-urina-tipo-1"]},
+             {"item-06", "criterio-4",
+              ["impresso-2-ureia", "impresso-2-creatinina", "impresso-2-eletrolitos"]},
+             {"item-08", "criterio-1", ["impresso-3-exame-de-imagem"]}
+           ]
+  end
+
   test "every criterion has rule fields the assessment can apply" do
     for criterion <- package()["rubric"] do
       assert AuthoredRules.check(criterion) == :ok

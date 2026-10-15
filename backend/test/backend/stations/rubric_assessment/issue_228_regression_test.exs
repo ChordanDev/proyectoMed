@@ -26,7 +26,9 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
                   __DIR__
                 )
   @learner_roles [:learner, :student, "learner", "student"]
-  @wrongly_zeroed ["item-02", "item-05", "item-06", "item-07"]
+  @wrongly_zeroed ["item-02", "item-05", "item-07"]
+  @labs "item-06"
+  @lab_request "impresso-qualification-request-2"
 
   # ============================================================================
   # Recorded resolver
@@ -137,6 +139,15 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
 
   defp criterion(%{criteria: criteria}, id), do: Enum.find(criteria, &(&1.id == id))
 
+  # Every TypeSafe request payload received so far, in order.
+  defp typesafe_payloads do
+    receive do
+      {:typesafe_request, payload} -> [payload | typesafe_payloads()]
+    after
+      0 -> []
+    end
+  end
+
   # The learner inputs the fixture records, in order: typed or spoken learner
   # turns and Impressos requests.
   defp learner_inputs(fixture) do
@@ -176,9 +187,8 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
   # CURRENT (WRONG) BEHAVIOR. These assertions encode the grades issue #228
   # reports, so that its follow-up tasks change behavior test-first:
   #
-  #   * T3 flips item 6: its lab actions become `performed` deterministically,
-  #     citing the verified Impressos request that released them.
-  #   * T4 flips items 2, 5, 6 and 7: a resolver-only `not_performed` can no
+  #   * T3 flipped item 6 (see "lab requests decided by released impressos").
+  #   * T4 flips items 2, 5 and 7: a resolver-only `not_performed` can no
   #     longer collapse a criterion to an assessed zero-point level, so the
   #     criterion becomes `:uncertain`.
   #
@@ -217,6 +227,50 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
 
         refute Enum.any?(Map.values(sub_actions), &(&1.classification == "performed"))
       end
+    end
+  end
+
+  # ============================================================================
+  # Lever 2 (T3): lab requests decided by released impressos
+  # ============================================================================
+
+  describe "lab requests decided by released impressos" do
+    setup do
+      fixture = fixture()
+      package = package()
+      {:ok, assessment} = assess(fixture, package, Issue228LabsStub)
+      %{package: package, assessment: assessment}
+    end
+
+    test "item 6 is assessed at its top level, citing the lab request",
+         %{assessment: assessment} do
+      result = criterion(assessment, @labs)
+
+      assert %{status: :assessed, level: "adequado", points: 32, reason: nil} = result
+      assert result.evidence_ids == [@lab_request]
+
+      for sub_action <- result.sub_actions do
+        assert %{classification: "performed", evidence_ids: [@lab_request]} = sub_action
+      end
+    end
+
+    test "neither TypeSafe nor the resolver is asked about item 6",
+         %{package: package} do
+      actions = actions_by_description(package)
+      payloads = typesafe_payloads()
+      assert payloads != []
+
+      asked =
+        for payload <- payloads,
+            {_id, %{"instructions" => %{"action" => action}}} <- payload["questions"],
+            uniq: true,
+            do: elem(Map.fetch!(actions, action), 0)
+
+      assert "item-02" in asked
+      refute @labs in asked
+
+      assert_received {:resolver_request, request}
+      refute @labs in Enum.map(request.criteria, & &1.id)
     end
   end
 end

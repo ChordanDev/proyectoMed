@@ -11,7 +11,12 @@ defmodule Backend.Stations.RubricAssessment do
        Every other criterion becomes a question.
     2. **One evidence pool** is built from the session and shared by every
        question. Only verified items are offered to Jev, while citations are
-       checked against the full pool.
+       checked against the full pool. An action authored with `impresso_ids`
+       that a verified request released is decided `"performed"` here
+       (`Backend.Stations.RubricAssessment.ImpressoActions`), citing that
+       request: it is asked of neither Jev nor the resolver, and a criterion
+       whose actions are all decided this way and whose rule fields decide its
+       level is not asked at all.
     3. **One batched Jev call** carries every question. More calls happen only
        for a provider capacity limit (`:max_questions_per_call`), and every
        call is recorded with its justification.
@@ -57,6 +62,7 @@ defmodule Backend.Stations.RubricAssessment do
   alias Backend.Stations.RubricAssessment.Estimates
   alias Backend.Stations.RubricAssessment.Evidence
   alias Backend.Stations.RubricAssessment.FirstN
+  alias Backend.Stations.RubricAssessment.ImpressoActions
   alias Backend.Stations.RubricAssessment.Points
   alias Backend.Stations.RubricAssessment.Resolver
   alias Backend.Stations.RubricAssessment.TaskOrder
@@ -146,7 +152,8 @@ defmodule Backend.Stations.RubricAssessment do
            criterion: map(),
            max_points: Points.t(),
            requirement: Evidence.requirement(),
-           route: route()
+           route: route(),
+           settled: %{optional(String.t()) => sub_action()}
          }
 
   @typep level :: %{label: String.t(), points: Points.t()}
@@ -175,8 +182,12 @@ defmodule Backend.Stations.RubricAssessment do
     with :ok <- validate_batch_limit(opts),
          pool <- Evidence.build(session, package),
          {:ok, plans} <- triage(package),
+         plans <- Enum.map(plans, &settle(&1, pool)),
          {:ok, decisions, calls} <- ask(questions(plans), pool, opts) do
-      decisions = Resolver.resolve(decisions, asked(plans), pool, opts)
+      decisions =
+        decisions
+        |> Resolver.resolve(asked(plans), pool, opts)
+        |> with_settled(plans)
 
       criteria =
         plans |> Enum.map(&criterion_result(&1, decisions, pool)) |> task_order(plans, pool)
@@ -236,7 +247,8 @@ defmodule Backend.Stations.RubricAssessment do
          criterion: criterion,
          max_points: max_points,
          requirement: requirement,
-         route: route(criterion, requirement, package)
+         route: route(criterion, requirement, package),
+         settled: %{}
        }}
     else
       {:error, reason} -> {:error, {:invalid_package, id, reason}}
@@ -295,17 +307,27 @@ defmodule Backend.Stations.RubricAssessment do
   # ============================================================================
 
   @spec questions([plan()]) :: [RubricBatch.question()]
-  defp questions(plans) do
-    for %{route: :ask} = plan <- plans, do: question(plan)
+  defp questions(plans), do: plans |> asked() |> Enum.map(&question/1)
+
+  # The criteria a provider is asked about: every one to ask, except those
+  # whose actions a released impresso decided and whose rule fields decide the
+  # level from them.
+  defp asked(plans) do
+    for %{route: :ask} = plan <- plans, not settled?(plan), do: plan
   end
 
-  defp asked(plans), do: for(%{route: :ask} = plan <- plans, do: plan)
+  defp settled?(%{criterion: criterion, settled: settled}) do
+    actions = authored_actions(criterion)
 
-  defp question(%{id: id, criterion: criterion}) do
+    actions != [] and Enum.all?(actions, &is_map_key(settled, &1.id)) and
+      AuthoredRules.decides?(criterion)
+  end
+
+  defp question(%{id: id, criterion: criterion, settled: settled}) do
     question = %{
       criterion: %{id: id, description: compose_description(criterion)},
       allowed_classes: level_labels(criterion) ++ [@uncertain_class],
-      actions: authored_actions(criterion)
+      actions: Enum.reject(authored_actions(criterion), &is_map_key(settled, &1.id))
     }
 
     # The enumeration of the learner's answers is requested only where the
@@ -343,6 +365,43 @@ defmodule Backend.Stations.RubricAssessment do
 
   defp label(%{"label" => label}), do: label
   defp label(_level), do: nil
+
+  # ============================================================================
+  # Actions decided by released impressos
+  # ============================================================================
+
+  defp settle(%{route: :ask, criterion: criterion, requirement: requirement} = plan, pool) do
+    %{plan | settled: ImpressoActions.settle(criterion, requirement, pool)}
+  end
+
+  defp settle(plan, _pool), do: plan
+
+  # Puts the settled actions back among the provider's, in authored order. A
+  # criterion nobody was asked about gets a decision with no criterion-level
+  # class, so its rule fields decide the level from the actions.
+  defp with_settled(decisions, plans) do
+    for %{route: :ask, settled: settled} = plan <- plans, settled != %{}, reduce: decisions do
+      acc ->
+        decision =
+          Map.get(acc, plan.id, %{
+            criterion_id: plan.id,
+            classification: @uncertain_class,
+            evidence_ids: [],
+            actions: []
+          })
+
+        Map.put(acc, plan.id, %{decision | actions: in_authored_order(plan, decision.actions)})
+    end
+  end
+
+  defp in_authored_order(%{criterion: criterion, settled: settled}, provided) do
+    by_id = Map.new(provided, &{&1.id, &1})
+
+    for %{id: id} <- authored_actions(criterion),
+        action = settled[id] || by_id[id],
+        action != nil,
+        do: action
+  end
 
   # ============================================================================
   # Batching
