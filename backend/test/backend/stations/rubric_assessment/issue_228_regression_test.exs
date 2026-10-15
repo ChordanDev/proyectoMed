@@ -8,8 +8,10 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
   The recorded answers reproduce the mechanism observed live on 2026-10-15:
   TypeSafe answers middle noul values for actions the learner clearly
   performed in items 2, 5, 6 and 7, the resolver answers `not_performed`
-  without evidence for most of them, and the `min_actions` range collapse turns
-  the rest into a confident zero.
+  without evidence for most of them, and the `min_actions` range collapse turned
+  the rest into a confident zero. T3 grades item 6 from its lab request; T4
+  reports items 2, 5 and 7 as uncertain, since their zero rests only on the
+  resolver's `not_performed` answers.
   """
   use ExUnit.Case, async: true
 
@@ -26,7 +28,9 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
                   __DIR__
                 )
   @learner_roles [:learner, :student, "learner", "student"]
-  @wrongly_zeroed ["item-02", "item-05", "item-06", "item-07"]
+  @wrongly_zeroed ["item-02", "item-05", "item-07"]
+  @labs "item-06"
+  @lab_request "impresso-qualification-request-2"
 
   # ============================================================================
   # Recorded resolver
@@ -137,6 +141,15 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
 
   defp criterion(%{criteria: criteria}, id), do: Enum.find(criteria, &(&1.id == id))
 
+  # Every TypeSafe request payload received so far, in order.
+  defp typesafe_payloads do
+    receive do
+      {:typesafe_request, payload} -> [payload | typesafe_payloads()]
+    after
+      0 -> []
+    end
+  end
+
   # The learner inputs the fixture records, in order: typed or spoken learner
   # turns and Impressos requests.
   defp learner_inputs(fixture) do
@@ -170,53 +183,88 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
   end
 
   # ============================================================================
-  # Characterization baseline
+  # No confident zero without proof (T4)
   # ============================================================================
 
-  # CURRENT (WRONG) BEHAVIOR. These assertions encode the grades issue #228
-  # reports, so that its follow-up tasks change behavior test-first:
-  #
-  #   * T3 flips item 6: its lab actions become `performed` deterministically,
-  #     citing the verified Impressos request that released them.
-  #   * T4 flips items 2, 5, 6 and 7: a resolver-only `not_performed` can no
-  #     longer collapse a criterion to an assessed zero-point level, so the
-  #     criterion becomes `:uncertain`.
-  #
-  # Update these tests in those tasks instead of deleting them.
-  describe "characterization baseline (wrong grades of issue #228)" do
+  # Items 2, 5 and 7 used to be assessed `inadequado` (0 points) with no
+  # evidence: the resolver answered `not_performed` without evidence for most of
+  # their actions, and the `min_actions` range collapse turned the rest into a
+  # confident zero. A zero-point level that only the resolver's `not_performed`
+  # answers reach is reported as uncertain instead.
+  describe "zeros resting on resolver not_performed answers" do
     setup do
       fixture = fixture()
-      {:ok, assessment} = assess(fixture, package(), Issue228BaselineStub)
+      {:ok, assessment} = assess(fixture, package(), Issue228UnprovenZeroStub)
       %{fixture: fixture, assessment: assessment}
     end
 
-    test "items 2, 5, 6 and 7 are assessed at their zero-point level with no evidence",
+    test "items 2, 5 and 7 are uncertain instead of assessed at zero",
          %{assessment: assessment} do
       for id <- @wrongly_zeroed do
         result = criterion(assessment, id)
 
-        assert %{status: :assessed, level: "inadequado", points: 0, reason: nil} = result,
+        assert %{status: :uncertain, reason: {:uncertain_sub_action, _action_id}} = result,
                "#{id}: #{inspect(Map.take(result, [:status, :level, :reason]))}"
 
+        refute Map.has_key?(result, :level)
+        refute Map.has_key?(result, :points)
         assert result.evidence_ids == []
-        assert result.evidence == []
       end
     end
 
-    test "the zeros rest on resolver not_performed decisions without evidence",
+    test "the reason names an action the resolver answered not_performed",
          %{fixture: fixture, assessment: assessment} do
       assert_received {:resolver_request, request}
       assert Enum.map(request.criteria, & &1.id) == @wrongly_zeroed
 
       for id <- @wrongly_zeroed do
-        sub_actions = Map.new(criterion(assessment, id).sub_actions, &{&1.id, &1})
-
-        for {action_id, "not_performed"} <- fixture["recorded"]["resolver"][id] do
-          assert %{classification: "not_performed", evidence_ids: []} = sub_actions[action_id]
-        end
-
-        refute Enum.any?(Map.values(sub_actions), &(&1.classification == "performed"))
+        {:uncertain_sub_action, action_id} = criterion(assessment, id).reason
+        assert fixture["recorded"]["resolver"][id][action_id] == "not_performed"
       end
+    end
+  end
+
+  # ============================================================================
+  # Lever 2 (T3): lab requests decided by released impressos
+  # ============================================================================
+
+  describe "lab requests decided by released impressos" do
+    setup do
+      fixture = fixture()
+      package = package()
+      {:ok, assessment} = assess(fixture, package, Issue228LabsStub)
+      %{package: package, assessment: assessment}
+    end
+
+    test "item 6 is assessed at its top level, citing the lab request",
+         %{assessment: assessment} do
+      result = criterion(assessment, @labs)
+
+      assert %{status: :assessed, level: "adequado", points: 32, reason: nil} = result
+      assert result.evidence_ids == [@lab_request]
+
+      for sub_action <- result.sub_actions do
+        assert %{classification: "performed", evidence_ids: [@lab_request]} = sub_action
+      end
+    end
+
+    test "neither TypeSafe nor the resolver is asked about item 6",
+         %{package: package} do
+      actions = actions_by_description(package)
+      payloads = typesafe_payloads()
+      assert payloads != []
+
+      asked =
+        for payload <- payloads,
+            {_id, %{"instructions" => %{"action" => action}}} <- payload["questions"],
+            uniq: true,
+            do: elem(Map.fetch!(actions, action), 0)
+
+      assert "item-02" in asked
+      refute @labs in asked
+
+      assert_received {:resolver_request, request}
+      refute @labs in Enum.map(request.criteria, & &1.id)
     end
   end
 end

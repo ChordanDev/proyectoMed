@@ -40,6 +40,28 @@ Allowlisted reasons are `assessment_unresolved`,
 raw internal reasons, tagged tuples, provider detail, call diagnostics, and
 sub-action classifications. Sub-actions are not presented as credited actions.
 
+## How a criterion is graded (issue #228)
+
+Grading follows what the learner actually did. Three rules keep a criterion's
+outcome tied to the transcript:
+
+- **Action context.** Each rubric action is asked of the classifier (Jev)
+  together with the description of the criterion it belongs to, so a short
+  action ("PCR") is read in its clinical context.
+- **Impresso-backed actions.** An action authored with `impresso_ids`
+  (`docs/content/authoring-guide.md`) is performed when a verified Impressos
+  request released one of those impressos. It is decided in code, citing that
+  request, and is asked of neither Jev nor the rubric resolver.
+- **No zero without proof.** A zero-point level needs no evidence, because a
+  genuine omission leaves nothing to cite. The rubric resolver's
+  `not_performed` answers cite nothing either, so they never ground a zero on
+  their own: when a criterion reaches its zero-point level only because of
+  them (with those actions left undecided, Jev's answers and the rules reach
+  other levels too), the criterion is `uncertain` with reason
+  `assessment_unresolved`, not assessed at `"0"`. A zero that Jev's own
+  answers or a deterministic rule decide stays assessed. The resolver request
+  runs at `temperature` 0.
+
 Every point value is a shortest exact **decimal string**, not a JSON number:
 `"0"`, `"0.025"`, `"0.125"`, `"0.4"`, `"1.125"`, etc. A value has at most three
 fraction digits, no trailing zero, and is a multiple of 0.025. The backend uses

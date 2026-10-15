@@ -117,6 +117,13 @@ defmodule Backend.Stations.RubricAssessment.AuthoredRules do
   end
 
   @doc """
+  Says whether a package criterion (string keys) authors `min_actions` thresholds,
+  so its level follows from the action counts alone, with no Jev level needed.
+  """
+  @spec authors_thresholds?(map()) :: boolean()
+  def authors_thresholds?(criterion) when is_map(criterion), do: thresholds?(levels(criterion))
+
+  @doc """
   Decides the level of a criterion from the level Jev chose, or `:uncertain`
   when it chose none, and the validated decisions of its authored actions.
 
