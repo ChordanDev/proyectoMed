@@ -361,6 +361,16 @@ export const useStation = (api: StationApi = defaultApi) => {
             throw cause;
           }
 
+          if (
+            cause instanceof ApiError &&
+            cause.code === "reply_verification_failed"
+          ) {
+            // The backend rolled back this learner turn and the session is
+            // still active: keep the station running and let the caller
+            // offer a retry instead of ending the station.
+            throw cause;
+          }
+
           fail(cause);
           return null;
         } finally {

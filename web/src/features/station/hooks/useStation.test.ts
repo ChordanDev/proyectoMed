@@ -450,6 +450,48 @@ describe("useStation", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the station active and rethrows when a patient reply fails verification", async () => {
+    const refusal = new ApiError(
+      502,
+      "reply_verification_failed",
+      "Não foi possível verificar a resposta do paciente.",
+    );
+    const api = apiMock({
+      sendMessage: vi
+        .fn()
+        .mockRejectedValueOnce(refusal)
+        .mockResolvedValueOnce(reply),
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.send(message);
+      } catch (cause) {
+        caught = cause;
+      }
+    });
+
+    expect(caught).toBe(refusal);
+    expect(result.current.status).toBe("active");
+    expect(result.current.error).toBeNull();
+    expect(result.current.remainingMs).not.toBeNull();
+    expect(api.finishSession).not.toHaveBeenCalled();
+
+    let retryReply: MessageReply | null = null;
+    await act(async () => {
+      retryReply = await result.current.send(message);
+    });
+    expect(retryReply).toEqual(reply);
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(result.current.status).toBe("active");
+  });
+
   it("transcribes consented session audio without failing the station", async () => {
     const transcribeAudio = vi.fn().mockResolvedValue({
       text: "  Quando começou a dor?  ",

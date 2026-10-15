@@ -504,6 +504,74 @@ describe("StationScreen", () => {
     });
     expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
   });
+
+  describe("when the patient reply fails verification", () => {
+    const verificationRefusal = () =>
+      Object.assign(new Error("Não foi possível verificar a resposta."), {
+        code: "reply_verification_failed",
+      });
+
+    it("removes the learner bubble, restores the draft, and shows an inline notice", async () => {
+      const user = userEvent.setup();
+      const onSend = vi.fn().mockRejectedValueOnce(verificationRefusal());
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), "Bom dia, tudo bem?");
+      await user.click(screen.getByTestId("send-button"));
+
+      expect(
+        await screen.findByTestId("reply-verification-notice"),
+      ).toHaveTextContent(strings.replyVerificationFailedNotice);
+      expect(strings.replyVerificationFailedNotice).toBe(
+        "O paciente não conseguiu responder a essa mensagem. Tente enviar novamente ou reformular a pergunta.",
+      );
+      expect(screen.queryByText("Bom dia, tudo bem?")).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).toHaveValue(
+        "Bom dia, tudo bem?",
+      );
+      expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).not.toBeDisabled();
+    });
+
+    it("clears the notice when the learner edits the draft", async () => {
+      const user = userEvent.setup();
+      const onSend = vi.fn().mockRejectedValueOnce(verificationRefusal());
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), "Olá");
+      await user.click(screen.getByTestId("send-button"));
+      await screen.findByTestId("reply-verification-notice");
+
+      await user.type(screen.getByTestId("message-input"), "!");
+
+      expect(
+        screen.queryByTestId("reply-verification-notice"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).toHaveValue("Olá!");
+    });
+
+    it("clears the notice when the retried send succeeds", async () => {
+      const user = userEvent.setup();
+      const onSend = vi
+        .fn()
+        .mockRejectedValueOnce(verificationRefusal())
+        .mockResolvedValueOnce("Bom dia, doutor.");
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), "Bom dia");
+      await user.click(screen.getByTestId("send-button"));
+      await screen.findByTestId("reply-verification-notice");
+
+      await user.click(screen.getByTestId("send-button"));
+
+      expect(await screen.findByText("Bom dia, doutor.")).toBeInTheDocument();
+      expect(screen.getByText("Bom dia")).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("reply-verification-notice"),
+      ).not.toBeInTheDocument();
+      expect(onSend).toHaveBeenNthCalledWith(2, "Bom dia");
+    });
+  });
 });
 
 describe("StationScreen playback", () => {
