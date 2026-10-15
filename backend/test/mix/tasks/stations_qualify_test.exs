@@ -19,6 +19,16 @@ defmodule Mix.Tasks.Stations.QualifyTest do
     assert output =~ "adapter_disabled"
   end
 
+  test "drives the opening-greeting case through Jev instead of a deterministic denial" do
+    output = run(["acute-appendicitis"])
+
+    assert output =~ "Adjudication: 0 of 34 cases adjudicated"
+    assert output =~ "unsupported_or_early_disclosure | 5 |"
+
+    assert output =~
+             "unsupported-or-early-disclosure-05 | unsupported_or_early_disclosure | dialogue_gate | adapter_disabled | adapter_disabled"
+  end
+
   @tag :tmp_dir
   test "writes the same report only when --out is given", %{tmp_dir: tmp_dir} do
     path = Path.join(tmp_dir, "run.txt")
