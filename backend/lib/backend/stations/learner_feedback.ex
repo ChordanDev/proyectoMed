@@ -25,10 +25,12 @@ defmodule Backend.Stations.LearnerFeedback do
       keeps the authored text for that criterion only.
     * **Cache.** Generated texts are stored with the session
       (`Backend.Stations.Conversation.put_learner_feedback/2`), each bound to
-      the fingerprint of its graded outcome (id, status, level, points and
-      sorted evidence ids). A changed outcome regenerates only that criterion.
-      Fallbacks are never cached, so a transient failure retries on the next
-      fetch.
+      the fingerprint of its graded outcome (id, status, level, points, sorted
+      evidence ids and sorted sub-action id/classification pairs). A changed
+      outcome regenerates only that criterion. Fallbacks are never cached, so
+      a transient failure retries on the next fetch. A cache read or write that
+      exits (timeout, process gone) degrades to no cache; the texts are still
+      returned for this response.
 
   The provider is selected with `:learner_feedback_adapter` (a
   `Backend.Stations.LearnerFeedback.Adapter`) and defaults to the
@@ -79,9 +81,13 @@ defmodule Backend.Stations.LearnerFeedback do
 
   defp cached_texts(session_id, eligible) do
     cache =
-      case Conversation.learner_feedback(session_id) do
-        {:ok, cache} -> cache
-        {:error, _reason} -> %{}
+      try do
+        case Conversation.learner_feedback(session_id) do
+          {:ok, cache} -> cache
+          {:error, _reason} -> %{}
+        end
+      catch
+        :exit, _reason -> %{}
       end
 
     for criterion <- eligible,
@@ -136,13 +142,18 @@ defmodule Backend.Stations.LearnerFeedback do
          %{fingerprint: fingerprint(criterion), text: Map.fetch!(valid, criterion.id)}}
       end
 
-    _ = Conversation.put_learner_feedback(session_id, entries)
-    :ok
+    try do
+      _ = Conversation.put_learner_feedback(session_id, entries)
+      :ok
+    catch
+      :exit, _reason -> :ok
+    end
   end
 
   defp fingerprint(criterion) do
     {criterion.id, criterion.status, criterion[:level], criterion[:points],
-     Enum.sort(criterion.evidence_ids)}
+     Enum.sort(criterion.evidence_ids),
+     criterion.sub_actions |> Enum.map(&{&1.id, &1.classification}) |> Enum.sort()}
   end
 
   defp request_criterion(criterion, authored) do
