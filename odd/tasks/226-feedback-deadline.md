@@ -37,7 +37,7 @@ Learner feedback (#215) gets up to 60 s to finish so the result shows generated 
 - [x] **T1** Backend: 60 s default feedback deadline (`config/config.exs`, `@default_deadline_ms` in `LearnerFeedback.OpenAIAdapter`), `LEARNER_FEEDBACK_DEADLINE_MS` override in `config/runtime.exs`, latency log per feedback call; tests for slow-but-in-deadline provider and latency log. Route: delegated direct (writer trigger: 2+ non-trivial files).
 - [x] **T2** Web: longer timeout for the educational result request only; waiting message on the result screen; tests. Route: delegated direct.
 - [x] **T3** Docs: `docs/educational-result-api.md` notes the first result fetch may take up to about a minute; this record. Route: delegated direct (same writer as T1/T2), separate commit.
-- [ ] **T4** Live check by the user on acute-appendicitis. Route: run by the user.
+- [x] **T4** Live check by the user on acute-appendicitis. Route: run by the user.
 
 ## Progress
 
@@ -52,3 +52,4 @@ Learner feedback (#215) gets up to 60 s to finish so the result shows generated 
 - 2026-10-15: T3 done in the docs commit that carries this entry (`docs(stations): note learner feedback wait on first result fetch`). Route: delegated direct.
 - Verification (after T2): `mix format --check-formatted` ok; `mix compile --warnings-as-errors --force` ok; `mix credo --strict` no issues; `mix test` 1051 passed; `npm --prefix web run typecheck` ok; `npm --prefix web run lint` ok; `npm --prefix web test` 187 passed (8 files).
 - Next: T4 live check by the user on acute-appendicitis, then PR to `develop` (`Closes #226`).
+- 2026-10-15: T4 done (live, acute-appendicitis, temporary uncommitted `station_loader.ex` switch, OpenAI `gpt-4o-mini`): all 10 assessed criteria showed generated pt-BR recommendations of 1-3 sentences; the uncertain criterion kept the authored text; no pass/fail language. Finding outside this issue: several grades contradict the transcript (item 2 scored 0 with location, migration, character, progression and intensity asked; items 5, 6 and 7 scored 0 although the exam, labs and their interpretation were sent), and the generated feedback faithfully explains those wrong grades. Next: PR to `develop` (`Closes #226`).
