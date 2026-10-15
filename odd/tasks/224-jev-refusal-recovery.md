@@ -33,6 +33,13 @@ A Jev verification refusal on one learner turn must not end the station, and Jev
   - `unsupported-or-early-disclosure-05` (category `unsupported_or_early_disclosure`; the category list is fixed in `cases.ex`): learner greeting + full-name question, candidate "Boa tarde, doutor. Meu nome é Rafael Nogueira." (name from `patient_profile.presenting_context`), proposed `delivered`, adjudication pending.
   - Disabled-adapter run reaches Jev (`adapter_disabled`), so no deterministic denial; `stations_qualify_test.exs` asserts 34 cases and the new row.
   - Evidence: focused qualification + controller + qualify task tests 85 passed; full `mix test` 1029 passed; `mix format --check-formatted` clean.
+- [x] T4a (delegated writer, backend) — Per-question Jev diagnostics for calibration, no behavior or threshold change.
+  - `TypesafeAdapter.decide_patient/2` logs at `:debug` one line `[TypesafeAdapter] patient verdict=<status>` + every `<question id>=<noul, 3 decimals>:<yes|no|undecided>`, sorted by id; ids are positional, so no learner, candidate or authored text, fact id or key. Moduledoc "logs nothing" replaced by a Logging section.
+  - `Qualification` logs `[Qualification] case=<id> surface=<surface>` at `:debug` before each case (cases run sequentially), so adapter lines that follow belong to that case.
+  - `mix stations.qualify --debug` sets Logger to `:debug` for the run; without it a level more verbose than `:info` (dev default `:debug`) is raised to `:info`; the configured level is restored. Debug lines go to the console only, never to `--out`.
+  - RED: adapter debug-log test (empty log), qualification case-line test, and `--debug` task test (usage error) failed before implementation. `Logger.put_process_level/2` does not reach `capture_log` here, so the tests set the global level in non-async modules.
+  - Evidence: `mix format --check-formatted` clean; `mix compile --warnings-as-errors` ok; focused jev_decision + qualify task + qualification tests 204 passed; full `mix test` 1035 passed; dev `mix stations.qualify acute-appendicitis --debug` printed 34 case lines, the default run printed no debug line.
+  - Live diagnostic (maintainer, from `backend/`, with `TYPESAFE_API_KEY` set): `JEV_ADAPTER=typesafe mix stations.qualify acute-appendicitis --debug --out ../tmp/224-before.txt`
 - [ ] T4 (HITL, maintainer keys) — Live `mix stations.qualify acute-appendicitis` before; diagnose undecided nouls; calibrate (thresholds / question wording / candidate shape); after run; record evidence on #224.
 
 ## Checks
