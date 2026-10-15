@@ -466,19 +466,33 @@
       "actions": [
         {
           "id": "criterio-1",
-          "description": "Hemograma completo"
+          "description": "Hemograma completo",
+          "impresso_ids": [
+            "impresso-2-hemograma"
+          ]
         },
         {
           "id": "criterio-2",
-          "description": "PCR"
+          "description": "PCR",
+          "impresso_ids": [
+            "impresso-2-pcr"
+          ]
         },
         {
           "id": "criterio-3",
-          "description": "urina tipo 1"
+          "description": "urina tipo 1",
+          "impresso_ids": [
+            "impresso-2-urina-tipo-1"
+          ]
         },
         {
           "id": "criterio-4",
-          "description": "função renal e eletrólitos, especialmente se houver necessidade de contraste ou hidratação"
+          "description": "função renal e eletrólitos, especialmente se houver necessidade de contraste ou hidratação",
+          "impresso_ids": [
+            "impresso-2-ureia",
+            "impresso-2-creatinina",
+            "impresso-2-eletrolitos"
+          ]
         }
       ],
       "order": null,
@@ -573,7 +587,10 @@
       "actions": [
         {
           "id": "criterio-1",
-          "description": "Solicita imagem adequada, considerando TC ou ultrassonografia conforme disponibilidade e contexto"
+          "description": "Solicita imagem adequada, considerando TC ou ultrassonografia conforme disponibilidade e contexto",
+          "impresso_ids": [
+            "impresso-3-exame-de-imagem"
+          ]
         },
         {
           "id": "criterio-2",

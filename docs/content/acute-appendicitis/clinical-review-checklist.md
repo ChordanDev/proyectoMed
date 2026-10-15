@@ -625,6 +625,7 @@ These were derived by the transcriber and are not partner-authored.
 | D18 | `impressos[].title` for the seven Impresso 2 parts | Source title, " — ", and the line label or subheading. | [ ] | [ ] | | |
 | D19 | `impressos[].keywords` | Every keyword (table below). | [ ] | [ ] | | |
 | D20 | `approved_templates` | `null`. The source authors no template. | [ ] | [ ] | | |
+| D21 | `rubric[].actions[].impresso_ids` on `item-06` `criterio-1`–`4` and `item-08` `criterio-1` (issue #228) | Each lab group names the Impresso 2 parts that answer it (`criterio-4`: `-ureia`, `-creatinina`, `-eletrolitos`); the imaging request names `impresso-3-exame-de-imagem`. A verified request that releases one of them grades the action performed without a provider. `item-05` names none. | [ ] | [ ] | | |
 
 ## 9. Sign-off
 

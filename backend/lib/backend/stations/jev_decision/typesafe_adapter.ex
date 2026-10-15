@@ -63,7 +63,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   actions. A question that requests `enumerate_answers` has no mapping and fails the
   batch with `{:technical_failure, :rubric_enumeration_unsupported}`.
 
-  All questions travel in one request. When its estimated size (one token per four
+  All questions travel in one request. When its estimated size (one token per two
   bytes of JSON) exceeds `:max_request_tokens`, whole actions are split into groups,
   each with the full `state`, sent concurrently under the same deadline. An action
   that does not fit alone fails the batch with
@@ -742,6 +742,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
         {action, a} <- Enum.with_index(Map.get(question, :actions, []), 1) do
       %{
         criterion_id: question.criterion.id,
+        criterion_description: to_string(Map.get(question.criterion, :description) || ""),
         action_id: action.id,
         description: to_string(Map.get(action, :description) || ""),
         asks: Enum.map(items, &{"performs:#{q}.#{a}:#{&1.n}", &1})
@@ -762,6 +763,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     end
   end
 
+  # The action alone is often a fragment ("PCR"), so each question also carries the
+  # criterion it belongs to (issue #228): it tells the provider what kind of act counts.
   defp action_questions(plan) do
     Map.new(plan.asks, fn {id, item} ->
       {id,
@@ -769,9 +772,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
          "type" => "noul",
          "instructions" => %{
            "question" =>
-             "Does the message in `learner_items` whose `item` equals `item` perform " <>
-               "`action`, in the same words or in different words?",
+             "`action` is one of the actions assessed by `criterion`. Does the message " <>
+               "in `learner_items` whose `item` equals `item` perform `action`, in the " <>
+               "same words or in different words?",
            "item" => item.n,
+           "criterion" => plan.criterion_description,
            "action" => plan.description
          }
        }}
@@ -805,8 +810,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     end
   end
 
-  # A deterministic estimate: one token per four bytes of encoded JSON, rounded up.
-  defp estimate_tokens(term), do: div(byte_size(Jason.encode!(term)) + 3, 4)
+  # A deterministic estimate: one token per two bytes of JSON, rounded up. One per
+  # four bytes underestimated Portuguese text: a 255,741-byte group estimated at
+  # 63,936 tokens was rejected live with `max_tokens_exceeded` against the 64k
+  # budget (issue #228).
+  defp estimate_tokens(term), do: div(byte_size(Jason.encode!(term)) + 1, 2)
 
   # Every group runs concurrently under the same deadline, once. Any failure, in group
   # order, fails the batch; a group still running at the deadline is a timeout.
