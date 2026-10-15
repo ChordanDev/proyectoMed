@@ -314,7 +314,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
       pool = [%{id: "turn-1", role: "student", text: @asks_onset}]
 
       answer = fn action, _text -> if String.starts_with?(action, "B "), do: 0.9, else: 0.1 end
-      opts = stub_answers(SplitStub, answer) ++ [max_request_tokens: 1_000]
+      opts = stub_answers(SplitStub, answer) ++ [max_request_tokens: 2_000]
 
       assert {:ok, %{decisions: [first, second]}} =
                TypesafeAdapter.decide_rubric_batch(
@@ -336,6 +336,30 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
       assert actions(first)["act-a"].classification == "not_performed"
       assert actions(first)["act-b"].evidence_ids == ["turn-1"]
       assert actions(second)["act-c"].classification == "not_performed"
+    end
+
+    # Live 2026-10-15 (issue #228): a 255,741-byte group estimated at 63,936 tokens
+    # (one per four bytes) was rejected with `max_tokens_exceeded` against the 64k
+    # budget. Portuguese text inside JSON costs more, so the estimate is one token per
+    # two bytes: a request of about 3 KB no longer fits a 1,000-token budget.
+    test "the size estimate counts one token per two bytes of JSON" do
+      action = %{id: "act-long", description: String.duplicate("x", 2_700)}
+
+      questions = [
+        %{
+          criterion: %{id: "item-01", description: "Caracteriza a dor."},
+          allowed_classes: ["adequado", "uncertain"],
+          actions: [action]
+        }
+      ]
+
+      assert TypesafeAdapter.decide_rubric_batch(
+               request(%{
+                 questions: questions,
+                 evidence_pool: [%{id: "turn-1", role: "student", text: @asks_onset}]
+               }),
+               never_called(EstimateStub) ++ [max_request_tokens: 1_000]
+             ) == {:error, {:technical_failure, :rubric_request_too_large}}
     end
 
     test "a single action above the size budget fails closed before any call" do
@@ -475,7 +499,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
           else
             Req.Test.json(conn, %{"answers" => answers_for(payload, fn _, _ -> 0.99 end)})
           end
-        end) ++ [max_request_tokens: 1_000]
+        end) ++ [max_request_tokens: 2_000]
 
       assert TypesafeAdapter.decide_rubric_batch(
                request(%{

@@ -63,7 +63,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   actions. A question that requests `enumerate_answers` has no mapping and fails the
   batch with `{:technical_failure, :rubric_enumeration_unsupported}`.
 
-  All questions travel in one request. When its estimated size (one token per four
+  All questions travel in one request. When its estimated size (one token per two
   bytes of JSON) exceeds `:max_request_tokens`, whole actions are split into groups,
   each with the full `state`, sent concurrently under the same deadline. An action
   that does not fit alone fails the batch with
@@ -811,7 +811,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   end
 
   # A deterministic estimate: one token per four bytes of encoded JSON, rounded up.
-  defp estimate_tokens(term), do: div(byte_size(Jason.encode!(term)) + 3, 4)
+  # One token per two bytes of JSON. One per four bytes underestimated Portuguese
+  # text: a 255,741-byte group estimated at 63,936 tokens was rejected live with
+  # `max_tokens_exceeded` against the 64k budget (issue #228).
+  defp estimate_tokens(term), do: div(byte_size(Jason.encode!(term)) + 1, 2)
 
   # Every group runs concurrently under the same deadline, once. Any failure, in group
   # order, fails the batch; a group still running at the deadline is a timeout.
