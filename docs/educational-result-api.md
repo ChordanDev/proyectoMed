@@ -20,7 +20,7 @@ fails technically.
 | `level`, `level_description`, `points` | Present **only** when assessed; authored label/description and exact points |
 | `evidence_ids`, `evidence` | Validated current-session excerpts `{id, role, text}`, in pool order; unresolved/excluded criteria have empty evidence |
 | `reason` | `null` when assessed; otherwise the bounded categories below |
-| `recommendation` | Authored practice recommendation; never generated or translated by this boundary |
+| `recommendation` | For `assessed` criteria, LLM-written feedback (issue #215) generated from the graded record only, in the package `language`, at most 400 characters; it explains the outcome and never changes `level`, `status` or `points`. Falls back to the authored `practice_recommendation` on any provider failure, timeout or invalid output, and always for non-assessed criteria. Generated once per session and kept while the criterion's graded outcome is unchanged |
 | `coverage` | Counts for all four statuses, including excluded criteria |
 | `placeholder` | True only when package metadata explicitly authors `placeholder: true` |
 
