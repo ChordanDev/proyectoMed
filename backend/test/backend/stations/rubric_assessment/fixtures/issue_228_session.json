@@ -1,0 +1,119 @@
+{
+  "description": "Issue #228: a fictional acute-appendicitis attempt modeled on the 2026-10-15 live run, with recorded provider answers that reproduce its wrong grades for items 2, 5, 6 and 7. Turns use the qualification case turn shape; `key` names a learner turn or Impressos request so the recorded answers can refer to it.",
+  "station_id": "acute-appendicitis",
+  "turns": [
+    {"key": "greeting", "role": "learner", "modality": "text", "text": "Bom dia, eu sou o estudante de medicina que vai atendê-lo hoje. O senhor pode me confirmar seu nome completo?"},
+    {"role": "patient", "modality": "text", "text": "Bom dia, doutor. Sou o Carlos Eduardo."},
+    {"key": "pain-location", "role": "learner", "modality": "text", "text": "Onde começou a dor e ela mudou de lugar desde então?"},
+    {"role": "patient", "modality": "text", "text": "Começou em volta do umbigo e depois foi para o lado direito, embaixo."},
+    {"key": "pain-character", "role": "learner", "modality": "text", "text": "Como é essa dor, ela piorou com o tempo? De zero a dez, qual a intensidade agora?"},
+    {"role": "patient", "modality": "text", "text": "É contínua e foi piorando. Agora está uns oito."},
+    {"key": "associated-symptoms", "role": "learner", "modality": "text", "text": "O senhor teve febre, náuseas ou vômitos? E o apetite, como está?"},
+    {"role": "patient", "modality": "text", "text": "Tive febre baixa, enjoo e vomitei uma vez. Perdi o apetite."},
+    {"key": "urinary-symptoms", "role": "learner", "modality": "text", "text": "Está com ardência ao urinar ou alguma mudança na urina? Mediu a febre?"},
+    {"role": "patient", "modality": "text", "text": "Não, a urina está normal. A febre foi 37,9."},
+    {"key": "meds-allergies", "role": "learner", "modality": "text", "text": "O senhor usa algum medicamento? Tem alergia a algum remédio?"},
+    {"role": "patient", "modality": "text", "text": "Não uso nada e não tenho alergia."},
+    {"key": "exam-authorization", "role": "learner", "modality": "text", "text": "Vou examinar a sua barriga agora, com o senhor deitado de barriga para cima. Posso?"},
+    {"role": "patient", "modality": "text", "text": "Pode, doutor."},
+    {"key": "request-physical-exam", "role": "learner", "modality": "impressos", "text": "Solicito o exame físico."},
+    {"key": "exam-verbalization", "role": "learner", "modality": "text", "text": "Na palpação profunda há dor acentuada no ponto de McBurney, na fossa ilíaca direita. Blumberg positivo, com dor à descompressão brusca. Rovsing positivo; psoas e obturador negativos."},
+    {"key": "request-labs", "role": "learner", "modality": "impressos", "text": "Solicito hemograma, PCR, urina tipo 1, ureia, creatinina, eletrólitos e glicemia."},
+    {"key": "lab-interpretation", "role": "learner", "modality": "text", "text": "O hemograma mostra leucocitose com neutrofilia e desvio à esquerda, e a PCR está elevada. A urina tipo 1 não sugere infecção urinária, e a função renal e os eletrólitos estão preservados."},
+    {"key": "request-imaging", "role": "learner", "modality": "impressos", "text": "Solicito tomografia computadorizada de abdome e pelve."},
+    {"key": "imaging-hypothesis", "role": "learner", "modality": "text", "text": "A tomografia mostra apêndice dilatado, com espessamento parietal e inflamação periapendicular, sem abscesso ou perfuração. Minha hipótese é apendicite aguda."},
+    {"key": "support-measures", "role": "learner", "modality": "text", "text": "Vou manter o senhor em jejum, puncionar um acesso venoso com soro fisiológico e reavaliar, prescrever analgesia com dipirona, ondansetrona para o enjoo, e monitorar os sinais vitais."},
+    {"key": "surgery-antibiotic", "role": "learner", "modality": "text", "text": "Vou chamar a cirurgia geral agora e iniciar antibiótico intravenoso, ceftriaxona com metronidazol, sem atrasar a avaliação cirúrgica. O senhor deve precisar de apendicectomia de urgência."},
+    {"role": "patient", "modality": "text", "text": "Vou precisar operar mesmo? E quanto tempo fico internado?"},
+    {"key": "patient-doubts", "role": "learner", "modality": "text", "text": "Sim, o mais provável é apendicite e a cirurgia retira o apêndice inflamado, mas a decisão final é da equipe cirúrgica, que vai pedir o seu consentimento antes. Se não houver complicação, a internação costuma ser de um a dois dias."}
+  ],
+  "recorded": {
+    "typesafe_default_noul": 0.05,
+    "typesafe_noul": {
+      "item-01": {
+        "criterio-1": {"greeting": 0.96},
+        "criterio-2": {"greeting": 0.94}
+      },
+      "item-02": {
+        "criterio-1": {"pain-location": 0.55},
+        "criterio-2": {"pain-location": 0.45},
+        "criterio-3": {"pain-character": 0.6},
+        "criterio-5": {"pain-character": 0.4}
+      },
+      "item-03": {
+        "criterio-1": {"associated-symptoms": 0.95, "urinary-symptoms": 0.9},
+        "criterio-2": {"associated-symptoms": 0.95},
+        "criterio-3": {"associated-symptoms": 0.92},
+        "criterio-5": {"urinary-symptoms": 0.93}
+      },
+      "item-04": {
+        "criterio-3": {"meds-allergies": 0.95},
+        "criterio-4": {"meds-allergies": 0.95}
+      },
+      "item-05": {
+        "criterio-1": {"exam-authorization": 0.65},
+        "criterio-2": {"exam-verbalization": 0.5},
+        "criterio-3": {"exam-verbalization": 0.45},
+        "criterio-4": {"exam-verbalization": 0.35}
+      },
+      "item-06": {
+        "criterio-1": {"request-labs": 0.5, "lab-interpretation": 0.3},
+        "criterio-2": {"request-labs": 0.45, "lab-interpretation": 0.3},
+        "criterio-3": {"request-labs": 0.4},
+        "criterio-4": {"request-labs": 0.35}
+      },
+      "item-07": {
+        "criterio-1": {"lab-interpretation": 0.6},
+        "criterio-2": {"lab-interpretation": 0.55},
+        "criterio-3": {"lab-interpretation": 0.4},
+        "criterio-4": {"lab-interpretation": 0.5}
+      },
+      "item-08": {
+        "criterio-1": {"request-imaging": 0.93},
+        "criterio-2": {"imaging-hypothesis": 0.95},
+        "criterio-3": {"imaging-hypothesis": 0.94},
+        "criterio-4": {"imaging-hypothesis": 0.97}
+      },
+      "item-09": {
+        "criterio-1": {"support-measures": 0.95},
+        "criterio-2": {"support-measures": 0.9},
+        "criterio-3": {"support-measures": 0.95},
+        "criterio-4": {"support-measures": 0.93},
+        "criterio-5": {"support-measures": 0.9}
+      },
+      "item-10": {
+        "criterio-1": {"surgery-antibiotic": 0.96},
+        "criterio-2": {"surgery-antibiotic": 0.92},
+        "criterio-3": {"surgery-antibiotic": 0.95}
+      },
+      "item-11": {
+        "criterio-1": {"surgery-antibiotic": 0.9},
+        "criterio-2": {"patient-doubts": 0.92},
+        "criterio-3": {"patient-doubts": 0.9},
+        "criterio-4": {"patient-doubts": 0.88}
+      }
+    },
+    "resolver": {
+      "item-02": {
+        "criterio-1": "not_performed",
+        "criterio-2": "not_performed",
+        "criterio-3": "not_performed"
+      },
+      "item-05": {
+        "criterio-1": "not_performed",
+        "criterio-2": "not_performed",
+        "criterio-3": "not_performed"
+      },
+      "item-06": {
+        "criterio-1": "not_performed",
+        "criterio-2": "not_performed",
+        "criterio-3": "not_performed"
+      },
+      "item-07": {
+        "criterio-1": "not_performed",
+        "criterio-2": "not_performed",
+        "criterio-3": "not_performed"
+      }
+    }
+  }
+}
