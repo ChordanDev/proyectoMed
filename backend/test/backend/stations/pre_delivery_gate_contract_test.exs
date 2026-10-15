@@ -396,10 +396,11 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
           "text" => "Você já infartou antes?"
         })
 
-      assert json_response(conn, 502) == %{
+      assert %{
                "error" => "reply_verification_failed",
-               "message" => "A verificação de segurança da resposta do paciente falhou."
-             }
+               "message" => "A verificação de segurança da resposta do paciente falhou.",
+               "learner_turn" => %{"role" => "learner", "text" => _}
+             } = json_response(conn, 502)
 
       refute String.contains?(conn.resp_body, "Japão")
       refute String.contains?(conn.resp_body, refused_text)
@@ -431,10 +432,11 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
           "text" => "O que você acha que é?"
         })
 
-      assert json_response(conn, 502) == %{
+      assert %{
                "error" => "reply_verification_failed",
-               "message" => "A verificação de segurança da resposta do paciente falhou."
-             }
+               "message" => "A verificação de segurança da resposta do paciente falhou.",
+               "learner_turn" => %{"role" => "learner", "text" => _}
+             } = json_response(conn, 502)
 
       refute String.contains?(conn.resp_body, uncertain_text)
 
