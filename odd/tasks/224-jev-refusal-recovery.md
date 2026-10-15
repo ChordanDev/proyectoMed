@@ -14,6 +14,12 @@ A Jev verification refusal on one learner turn must not end the station, and Jev
 - Semantic-retry failure path (T2 investigation): the 3,000 ms Jev deadline is set in `build_verify_opts` (`stations.ex:606`) after the initial OpenAI generation, so it covers Jev call 1 + regeneration + Jev recheck. The HTTP regenerator is arity 0 (`stations.ex:661`), so `invoke_generator` (`candidate_gate.ex:360-397`) cannot pass the remaining budget and the OpenAI call is not cut at the deadline. A regeneration error (`:upstream_error`, `:network_error`, `:malformed_response`, `{:invalid_adapter_output, _}`, `{:generator_crash, _}`) propagates unchanged (`candidate_gate.ex:305`, `stations.ex:245-246`) to the controller catch-all → 502 `station_ai_unavailable`. A budget exhausted before/after regeneration or before the recheck (`candidate_gate.ex:303,306,340`), an OpenAI transport timeout, or a Jev call exceeding its remaining budget (`jev_decision.ex:705-707`) yields `{:error, :timeout}` → 504 `timeout`. Only a refusal on the recheck yields 502 `reply_verification_failed`. Both 502 `station_ai_unavailable` and 504 `timeout` still end the station in the web (only `reply_verification_failed` and `station_time_elapsed` are recoverable).
 - TypesafeAdapter verdict: any risk/rule noul between 0.2 and 0.8 makes the reply `:low_confidence`. No qualification case covers an opening greeting.
 
+## Findings (live diagnostics 2026-10-15)
+
+- "Before" qualification (`acute-appendicitis`, live Jev): of 18 dialogue cases, 4 differ from `proposed_expected`. Undecided where `delivered` was proposed: `uncertainty-01` (speaks_out_of_role 0.49), `modality-gap-03` (unsupported_information 0.29), `ambiguity-02` (fact_asked:10 0.68). Delivered where refusal was proposed: `unsupported-or-early-disclosure-01` (known gap G10). The greeting case `unsupported-or-early-disclosure-05` (correct name "Rafael Nogueira") was verified with every question <= 0.09.
+- Live greeting (gpt-4o-mini, learner "Olá, boa tarde. Eu sou o Dr. Vicenzo, médico plantonista. Qual é o seu nome completo?", 6 generations): OpenAI invented names ("João da Silva", "Antônio Silva", "Carlos Almeida", "Carlos Alberto") or answered the refusal text "Não tenho essa informação.". Jev scored speaks_out_of_role/rule_broken ~0.23-0.29 (undecided) for invented names and 0.89 for the refusal.
+- Root cause is the candidate shape, not the Jev thresholds: the authored name only appears in `patient_profile.presenting_context`, written to the examiner in the second person, and restriction 1 of `StationAI.system_prompt/1` forces the refusal for anything outside `revealable_facts`. Thresholds stay unchanged.
+
 ## Decisions (maintainer 2026-10-14)
 
 - On `reply_verification_failed`: station stays active, timer keeps running, the learner's text is restored to the input, inline pt-BR notice: "O paciente não conseguiu responder a essa mensagem. Tente enviar novamente ou reformular a pergunta." The turn does not count (backend rollback already does this).
@@ -40,6 +46,15 @@ A Jev verification refusal on one learner turn must not end the station, and Jev
   - RED: adapter debug-log test (empty log), qualification case-line test, and `--debug` task test (usage error) failed before implementation. `Logger.put_process_level/2` does not reach `capture_log` here, so the tests set the global level in non-async modules.
   - Evidence: `mix format --check-formatted` clean; `mix compile --warnings-as-errors` ok; focused jev_decision + qualify task + qualification tests 204 passed; full `mix test` 1035 passed; dev `mix stations.qualify acute-appendicitis --debug` printed 34 case lines, the default run printed no debug line.
   - Live diagnostic (maintainer, from `backend/`, with `TYPESAFE_API_KEY` set): `JEV_ADAPTER=typesafe mix stations.qualify acute-appendicitis --debug --out ../tmp/224-before.txt`
+- [x] T5 (delegated writer, web) — `timeout` (504) and `station_ai_unavailable` (502) on create-message are recoverable like `reply_verification_failed` (maintainer decision 2026-10-15).
+  - Single seam: `recoverableTurnNotice(cause)` in `useStation.ts` maps code → pt-BR notice (`reply_verification_failed` → `replyVerificationFailedNotice`; `timeout`, `station_ai_unavailable` → new `turnUnavailableNotice` "Não foi possível obter a resposta agora. Tente enviar novamente."). The hook rethrows those codes without `fail`; `StationScreen.sendTurn` drops the learner bubble, restores the draft, and shows the mapped notice (`data-testid="turn-retry-notice"`). Session start/finish/result errors, client-side `request_timeout`, and `station_time_elapsed` are unchanged.
+  - Backend check: `Stations.generate_and_resolve_turn` rolls back the pending learner turn on any initial generation error (→ `station_ai_unavailable`), and `verify_and_resolve_turn` rolls back on every verification error, including `:timeout` and regeneration failures.
+  - `stationFlow.test.ts` unchanged: its `station_ai_unavailable` assertion is at API-client level (not the hook) and already expects the session to remain unfinished.
+  - RED: 2 hook tests + 4 new screen tests failed (and the 3 T1 screen tests after the test id rename). GREEN: `npm --prefix web test` 8 files / 182 passed; build ok; lint clean.
+- [x] T6 (delegated writer, backend) — The simulated patient knows its own identity.
+  - `StationAI.system_prompt/1` adds a "QUEM VOCÊ É" section: the Contexto is written for the examiner, the patient IS the person described there, it may state its name, age and occupation as written there; other context data (vitals, findings, clinical information) stays unsayable unless a revealable fact. Restriction 1 gains the identity exception; restrictions 2-4 unchanged. No package schema, authored content, Jev payload, or threshold change.
+  - RED: 3 of 4 new tests in `test/backend/stations/station_ai_test.exs` failed (restrictions-intact test is characterization). GREEN: `mix test` 1039 passed; format and `compile --warnings-as-errors` clean.
+  - Live re-run of the greeting and the qualification "after" run remain with T4 (maintainer keys).
 - [ ] T4 (HITL, maintainer keys) — Live `mix stations.qualify acute-appendicitis` before; diagnose undecided nouls; calibrate (thresholds / question wording / candidate shape); after run; record evidence on #224.
 
 ## Checks
@@ -49,4 +64,4 @@ A Jev verification refusal on one learner turn must not end the station, and Jev
 
 ## Progress
 
-- Route: T1 delegated (2+ non-trivial web files). T1 done; commit recorded in git log on the branch (`fix(web): keep station active when a patient reply fails verification`).
+- Route: T1 delegated (2+ non-trivial web files). T5 and T6 delegated to one writer (2+ non-trivial files). T1 done; commit recorded in git log on the branch (`fix(web): keep station active when a patient reply fails verification`).

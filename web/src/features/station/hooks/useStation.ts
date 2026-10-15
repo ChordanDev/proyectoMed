@@ -59,6 +59,29 @@ const defaultApi: StationApi = {
 const unknownErrorMessage =
   "A estação não pôde ser concluída. Você pode reiniciar.";
 
+// Create-message failures after which the backend rolled the learner turn back
+// and left the session active, mapped to the pt-BR notice offering a retry.
+// The single seam deciding which turn failures keep the station running.
+const recoverableTurnNotices: Readonly<Record<string, string>> = {
+  reply_verification_failed: strings.replyVerificationFailedNotice,
+  timeout: strings.turnUnavailableNotice,
+  station_ai_unavailable: strings.turnUnavailableNotice,
+};
+
+/**
+ * Returns the retry notice for a recoverable create-message failure, or null
+ * when the failure must end the station.
+ */
+export const recoverableTurnNotice = (cause: unknown): string | null => {
+  const code =
+    typeof cause === "object" && cause !== null
+      ? (cause as { code?: unknown }).code
+      : undefined;
+  return typeof code === "string" && Object.prototype.hasOwnProperty.call(recoverableTurnNotices, code)
+    ? recoverableTurnNotices[code]
+    : null;
+};
+
 const unknownImpressoErrorMessage =
   "Não foi possível solicitar o impresso. Tente novamente.";
 
@@ -363,7 +386,7 @@ export const useStation = (api: StationApi = defaultApi) => {
 
           if (
             cause instanceof ApiError &&
-            cause.code === "reply_verification_failed"
+            recoverableTurnNotice(cause) !== null
           ) {
             // The backend rolled back this learner turn and the session is
             // still active: keep the station running and let the caller

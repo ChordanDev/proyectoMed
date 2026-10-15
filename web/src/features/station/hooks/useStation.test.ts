@@ -492,6 +492,79 @@ describe("useStation", () => {
     expect(result.current.status).toBe("active");
   });
 
+  it.each([
+    [504, "timeout", "A resposta do paciente demorou demais."],
+    [
+      502,
+      "station_ai_unavailable",
+      "O serviço da estação de IA está temporariamente indisponível.",
+    ],
+  ])(
+    "keeps the station active and rethrows when a turn fails with %i %s",
+    async (status, code, detail) => {
+      const failure = new ApiError(status, code, detail);
+      const api = apiMock({
+        sendMessage: vi
+          .fn()
+          .mockRejectedValueOnce(failure)
+          .mockResolvedValueOnce(reply),
+      });
+      const { result } = await renderHook(() => useStation(api));
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+
+      let caught: unknown;
+      await act(async () => {
+        try {
+          await result.current.send(message);
+        } catch (cause) {
+          caught = cause;
+        }
+      });
+
+      expect(caught).toBe(failure);
+      expect(result.current.status).toBe("active");
+      expect(result.current.error).toBeNull();
+      expect(api.finishSession).not.toHaveBeenCalled();
+
+      let retryReply: MessageReply | null = null;
+      await act(async () => {
+        retryReply = await result.current.send(message);
+      });
+      expect(retryReply).toEqual(reply);
+      expect(result.current.status).toBe("active");
+    },
+  );
+
+  it("still fails the station when the client-side request deadline elapses", async () => {
+    // The backend may still commit this turn, so a client-side timeout is not
+    // a rolled-back turn and must not be offered as a retry.
+    const api = apiMock({
+      sendMessage: vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(
+            0,
+            "request_timeout",
+            "A solicitação excedeu o tempo limite.",
+          ),
+        ),
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    await act(async () => {
+      await result.current.send(message);
+    });
+
+    expect(result.current.status).toBe("failed");
+  });
+
   it("transcribes consented session audio without failing the station", async () => {
     const transcribeAudio = vi.fn().mockResolvedValue({
       text: "  Quando começou a dor?  ",
