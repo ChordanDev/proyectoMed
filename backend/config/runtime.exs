@@ -130,6 +130,13 @@ if config_env() != :test do
        {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
     config :backend, :rubric_resolver_deadline_ms, deadline_ms
   end
+
+  # `LEARNER_FEEDBACK_DEADLINE_MS` overrides the learner feedback deadline (60 s,
+  # issue #226). Anything but a positive integer keeps the default.
+  with raw when is_binary(raw) <- System.get_env("LEARNER_FEEDBACK_DEADLINE_MS"),
+       {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
+    config :backend, :learner_feedback_deadline_ms, deadline_ms
+  end
 end
 
 # E2E-only: bypasses Jev verification with a deterministic approving adapter.

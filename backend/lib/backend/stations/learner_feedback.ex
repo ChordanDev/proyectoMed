@@ -17,8 +17,10 @@ defmodule Backend.Stations.LearnerFeedback do
       authored actions, and the text of the learner evidence the assessment
       already cited. The conversation is never sent.
     * **Deadline.** The call runs under `:learner_feedback_deadline_ms`
-      (default 3000 ms); a timeout, error or crash keeps the authored text for
-      every criterion. There are no retries.
+      (default 60 000 ms, overridden at boot by `LEARNER_FEEDBACK_DEADLINE_MS`);
+      a timeout, error or crash keeps the authored text for every criterion.
+      There are no retries. Each call logs its latency at info level (success)
+      or warning level (fallback), never the texts.
     * **Validation.** Each text must be a non-blank string of at most 400
       characters once trimmed, and must not contain global score or
       pass/fail/readiness language (`@forbidden`). An invalid or missing text
@@ -45,7 +47,7 @@ defmodule Backend.Stations.LearnerFeedback do
   alias Backend.Stations.LearnerFeedback.DisabledAdapter
   alias Backend.Stations.RubricAssessment.Points
 
-  @default_deadline_ms 3_000
+  @default_deadline_ms 60_000
   @max_characters 400
   @performed "performed"
   @not_performed "not_performed"
@@ -107,7 +109,11 @@ defmodule Backend.Stations.LearnerFeedback do
       criteria: Enum.map(pending, &request_criterion(&1, Map.fetch!(authored, &1.id)))
     }
 
-    case run_with_deadline(request) do
+    started_at = System.monotonic_time(:millisecond)
+    result = run_with_deadline(request)
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+
+    case result do
       {:ok, output} when is_map(output) ->
         valid =
           for criterion <- pending,
@@ -116,11 +122,19 @@ defmodule Backend.Stations.LearnerFeedback do
               into: %{},
               do: {criterion.id, text}
 
+        Logger.info(
+          "Learner feedback answered in #{elapsed_ms} ms: " <>
+            "#{map_size(valid)} texts for #{length(pending)} criteria"
+        )
+
         store(session_id, pending, valid)
         valid
 
       {:ok, _malformed} ->
-        Logger.warning("Learner feedback output is malformed; keeping authored text")
+        Logger.warning(
+          "Learner feedback output is malformed after #{elapsed_ms} ms; keeping authored text"
+        )
+
         %{}
 
       {:error, :disabled} ->
@@ -128,7 +142,8 @@ defmodule Backend.Stations.LearnerFeedback do
 
       {:error, reason} ->
         Logger.warning(
-          "Learner feedback unavailable (#{failure_kind(reason)}); keeping authored text"
+          "Learner feedback unavailable (#{failure_kind(reason)}) after #{elapsed_ms} ms; " <>
+            "keeping authored text"
         )
 
         %{}
