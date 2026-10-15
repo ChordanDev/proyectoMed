@@ -31,8 +31,10 @@ defmodule Backend.Stations.LearnerFeedback do
       fetch.
 
   The provider is selected with `:learner_feedback_adapter` (a
-  `Backend.Stations.LearnerFeedback.Adapter`) and defaults to the
-  `Backend.Stations.LearnerFeedback.DisabledAdapter`.
+  `Backend.Stations.LearnerFeedback.Adapter`). `config/config.exs` sets it to
+  `Backend.Stations.LearnerFeedback.OpenAIAdapter` for dev and prod, and
+  `config/test.exs` keeps the `Backend.Stations.LearnerFeedback.DisabledAdapter`,
+  which is also the fallback when the key is unset.
   """
 
   require Logger
