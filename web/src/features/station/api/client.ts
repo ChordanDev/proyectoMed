@@ -467,6 +467,11 @@ const decodeApiError = (status: number, value: unknown): ApiError => {
   return new ApiError(status, code, message);
 };
 
+// The educational result runs the rubric resolver (10 s deadline) and then
+// generates learner feedback (60 s deadline) before answering, so its first
+// fetch may take about a minute. Every other request keeps `timeoutMs`.
+const EDUCATIONAL_RESULT_TIMEOUT_MS = 80_000;
+
 export const createApiClient = ({
   baseUrl,
   fetch: fetchImpl = fetch,
@@ -484,6 +489,7 @@ export const createApiClient = ({
     decode: (value: unknown) => T,
     readBody: (response: Response) => Promise<unknown> = (response) =>
       response.status === 204 ? Promise.resolve(null) : response.json(),
+    requestTimeoutMs: number = timeoutMs,
   ): Promise<T> => {
     const controller = new AbortController();
     let timedOut = false;
@@ -496,7 +502,7 @@ export const createApiClient = ({
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, timeoutMs);
+    }, requestTimeoutMs);
 
     try {
       let response: Response;
@@ -600,6 +606,8 @@ export const createApiClient = ({
         `/api/v2/stations/active/sessions/${encodeURIComponent(sessionId)}/result`,
         { method: "GET" },
         decodeSessionResult,
+        undefined,
+        EDUCATIONAL_RESULT_TIMEOUT_MS,
       ),
     fetchLegacyResult: (sessionId: string) =>
       request(`${sessionPath(sessionId)}/result`, { method: "GET" }, decodeLegacySessionResult),

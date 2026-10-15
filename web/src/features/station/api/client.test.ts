@@ -381,6 +381,70 @@ describe("station API client", () => {
     }
   });
 
+  describe("request deadlines", () => {
+    const stalledFetch = () => {
+      const signals: AbortSignal[] = [];
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (signal) {
+              signals.push(signal);
+              signal.addEventListener("abort", () => reject(new Error("aborted")));
+            }
+          }),
+      );
+      return { fetchMock, signals };
+    };
+
+    it("waits up to 80 s for the educational result, which may still be generating feedback", async () => {
+      vi.useFakeTimers();
+      const { fetchMock, signals } = stalledFetch();
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      try {
+        const pending = client.fetchResult("session-1");
+        const rejection = expect(pending).rejects.toMatchObject({
+          name: "ApiError",
+          status: 0,
+          code: "request_timeout",
+        });
+
+        await vi.advanceTimersByTimeAsync(79_999);
+        expect(signals[0]?.aborted).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(signals[0]?.aborted).toBe(true);
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      ["getActiveStation", (client: ReturnType<typeof createApiClient>) => client.getActiveStation()],
+      ["fetchLegacyResult", (client: ReturnType<typeof createApiClient>) => client.fetchLegacyResult("session-1")],
+      ["getSession", (client: ReturnType<typeof createApiClient>) => client.getSession("session-1")],
+    ] as const)("keeps the 15 s deadline for %s", async (_name, call) => {
+      vi.useFakeTimers();
+      const { fetchMock, signals } = stalledFetch();
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      try {
+        const rejection = expect(call(client)).rejects.toMatchObject({ code: "request_timeout" });
+
+        await vi.advanceTimersByTimeAsync(14_999);
+        expect(signals[0]?.aborted).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(signals[0]?.aborted).toBe(true);
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("discardSession", () => {
     it("sends a POST request to discard the session and resolves cleanly on 204 No Content", async () => {
       const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce({

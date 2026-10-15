@@ -140,6 +140,15 @@ describe("educational result presentation", () => {
     expect(restart).toHaveBeenCalledTimes(1);
   });
 
+  it("tells the learner that generating feedback can take up to a minute while the result loads", () => {
+    const { rerender } = render(<ResultScreen status="finishing" result={null} onRestart={vi.fn()} />);
+    const loading = screen.getByRole("status");
+    expect(loading).toHaveTextContent(strings.loadingResult);
+    expect(within(loading).getByText("Gerando feedback da estação… isso pode levar até um minuto.")).toBeInTheDocument();
+    rerender(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
+    expect(screen.queryByText(/até um minuto/)).not.toBeInTheDocument();
+  });
+
   it("keeps technical failure separate from educational uncertainty", () => {
     const { rerender } = render(<ResultScreen status="finishing" result={null} onRestart={vi.fn()} />);
     const loading = screen.getByRole("status");

@@ -48,6 +48,7 @@ export function ResultScreenState({
         aria-atomic="true"
       >
         <p className="result-screen-state__text">{strings.loadingResult}</p>
+        <p className="result-screen-state__note">{strings.loadingResultFeedbackWait}</p>
       </section>
     );
   }
