@@ -504,6 +504,130 @@ describe("StationScreen", () => {
     });
     expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
   });
+
+  describe("when the patient reply fails verification", () => {
+    const verificationRefusal = () =>
+      Object.assign(new Error("Não foi possível verificar a resposta."), {
+        code: "reply_verification_failed",
+      });
+
+    it("removes the learner bubble, restores the draft, and shows an inline notice", async () => {
+      const user = userEvent.setup();
+      const onSend = vi.fn().mockRejectedValueOnce(verificationRefusal());
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), "Bom dia, tudo bem?");
+      await user.click(screen.getByTestId("send-button"));
+
+      expect(
+        await screen.findByTestId("turn-retry-notice"),
+      ).toHaveTextContent(strings.replyVerificationFailedNotice);
+      expect(strings.replyVerificationFailedNotice).toBe(
+        "O paciente não conseguiu responder a essa mensagem. Tente enviar novamente ou reformular a pergunta.",
+      );
+      expect(screen.queryByText("Bom dia, tudo bem?")).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).toHaveValue(
+        "Bom dia, tudo bem?",
+      );
+      expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).not.toBeDisabled();
+    });
+
+    it("clears the notice when the learner edits the draft", async () => {
+      const user = userEvent.setup();
+      const onSend = vi.fn().mockRejectedValueOnce(verificationRefusal());
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), "Olá");
+      await user.click(screen.getByTestId("send-button"));
+      await screen.findByTestId("turn-retry-notice");
+
+      await user.type(screen.getByTestId("message-input"), "!");
+
+      expect(
+        screen.queryByTestId("turn-retry-notice"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).toHaveValue("Olá!");
+    });
+
+    it("clears the notice when the retried send succeeds", async () => {
+      const user = userEvent.setup();
+      const onSend = vi
+        .fn()
+        .mockRejectedValueOnce(verificationRefusal())
+        .mockResolvedValueOnce("Bom dia, doutor.");
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), "Bom dia");
+      await user.click(screen.getByTestId("send-button"));
+      await screen.findByTestId("turn-retry-notice");
+
+      await user.click(screen.getByTestId("send-button"));
+
+      expect(await screen.findByText("Bom dia, doutor.")).toBeInTheDocument();
+      expect(screen.getByText("Bom dia")).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("turn-retry-notice"),
+      ).not.toBeInTheDocument();
+      expect(onSend).toHaveBeenNthCalledWith(2, "Bom dia");
+    });
+  });
+
+  describe.each(["timeout", "station_ai_unavailable"])(
+    "when the turn fails with %s",
+    (code) => {
+      const turnFailure = () =>
+        Object.assign(new Error("Falha na resposta do paciente."), { code });
+
+      it("removes the learner bubble, restores the draft, and shows the retry notice", async () => {
+        const user = userEvent.setup();
+        const onSend = vi.fn().mockRejectedValueOnce(turnFailure());
+        render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+        await user.type(
+          screen.getByTestId("message-input"),
+          "Qual é o seu nome completo?",
+        );
+        await user.click(screen.getByTestId("send-button"));
+
+        expect(await screen.findByTestId("turn-retry-notice")).toHaveTextContent(
+          strings.turnUnavailableNotice,
+        );
+        expect(strings.turnUnavailableNotice).toBe(
+          "Não foi possível obter a resposta agora. Tente enviar novamente.",
+        );
+        expect(
+          screen.queryByText("Qual é o seu nome completo?"),
+        ).not.toBeInTheDocument();
+        expect(screen.getByTestId("message-input")).toHaveValue(
+          "Qual é o seu nome completo?",
+        );
+        expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
+        expect(screen.getByTestId("message-input")).not.toBeDisabled();
+      });
+
+      it("clears the notice when the retried send succeeds", async () => {
+        const user = userEvent.setup();
+        const onSend = vi
+          .fn()
+          .mockRejectedValueOnce(turnFailure())
+          .mockResolvedValueOnce("Rafael Nogueira, doutor.");
+        render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+        await user.type(screen.getByTestId("message-input"), "Seu nome?");
+        await user.click(screen.getByTestId("send-button"));
+        await screen.findByTestId("turn-retry-notice");
+
+        await user.click(screen.getByTestId("send-button"));
+
+        expect(
+          await screen.findByText("Rafael Nogueira, doutor."),
+        ).toBeInTheDocument();
+        expect(screen.queryByTestId("turn-retry-notice")).not.toBeInTheDocument();
+        expect(onSend).toHaveBeenNthCalledWith(2, "Seu nome?");
+      });
+    },
+  );
 });
 
 describe("StationScreen playback", () => {

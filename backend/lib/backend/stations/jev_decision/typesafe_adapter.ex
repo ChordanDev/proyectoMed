@@ -125,8 +125,19 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   variables into the application environment at boot.
 
   The request is sent once (`retry: false`, no redirect), and its timeouts are the
-  remaining seam budget minus a margin. The adapter logs nothing.
+  remaining seam budget minus a margin.
+
+  ## Logging
+
+  Only `decide_patient/2` logs, and only at `:debug` level: after the answers are
+  parsed, one line `[TypesafeAdapter] patient verdict=<status>` followed by every
+  question as `<question id>=<noul rounded to 3 decimals>:<yes|no|undecided>`. Question
+  ids are positional, so the line carries no learner, candidate or authored text, no
+  fact id and no credential. It exists to calibrate the thresholds and the question
+  wording; `mix stations.qualify --debug` shows it. Nothing else is logged.
   """
+
+  require Logger
 
   @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -202,8 +213,26 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
          payload = build_payload(request, facts, questions, config.model),
          {:ok, body} <- execute_request(config, payload, budget_ms),
          {:ok, nouls} <- parse_answers(body, Map.keys(questions)) do
-      {:ok, verdict(facts, risk_ids(rules), nouls, thresholds)}
+      decision = verdict(facts, risk_ids(rules), nouls, thresholds)
+      log_classifications(decision.status, nouls, thresholds)
+      {:ok, decision}
     end
+  end
+
+  # Calibration evidence for maintainers: question ids are positional and chosen in
+  # this module, so the line never carries learner, candidate or authored text.
+  defp log_classifications(status, nouls, thresholds) do
+    Logger.debug(fn ->
+      answers =
+        nouls
+        |> Enum.sort()
+        |> Enum.map_join(" ", fn {id, noul} ->
+          rounded = :erlang.float_to_binary(noul / 1, decimals: 3)
+          "#{id}=#{rounded}:#{classify(noul, thresholds)}"
+        end)
+
+      "[TypesafeAdapter] patient verdict=#{status} #{answers}"
+    end)
   end
 
   @impl true

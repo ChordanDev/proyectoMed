@@ -125,6 +125,34 @@
         "date": null,
         "expected": null
       }
+    },
+    {
+      "id": "unsupported-or-early-disclosure-05",
+      "category": "unsupported_or_early_disclosure",
+      "surface": "dialogue_gate",
+      "probes": [],
+      "input": {
+        "turns": [
+          {
+            "role": "learner",
+            "modality": "text",
+            "text": "Olá, boa tarde. Eu sou o Dr. Silva, médico plantonista. Qual é o seu nome completo?"
+          }
+        ],
+        "candidate_reply": "Boa tarde, doutor. Meu nome é Rafael Nogueira."
+      },
+      "proposed_expected": {
+        "outcomes": [
+          "delivered"
+        ],
+        "note": "Opening greeting on the first turn. The candidate reply states only the full name authored in the patient profile presenting context and discloses no revealable fact. Proposed: delivered; an ordinary faithful opening reply must not be refused or left undecided (issue #224)."
+      },
+      "adjudication": {
+        "status": "pending",
+        "adjudicator": null,
+        "date": null,
+        "expected": null
+      }
     }
   ]
 }

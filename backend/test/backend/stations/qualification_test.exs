@@ -497,3 +497,37 @@ defmodule Backend.Stations.QualificationTest do
     end
   end
 end
+
+defmodule Backend.Stations.QualificationDebugLogTest do
+  # async: false because the test raises the global Logger level to :debug.
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
+
+  alias Backend.Stations.Qualification
+
+  @moduletag capture_log: true
+
+  @station_id "acute-appendicitis"
+
+  test "logs each case id and surface before observing it, and no case text" do
+    level = Logger.level()
+    Logger.configure(level: :debug)
+    on_exit(fn -> Logger.configure(level: level) end)
+
+    log = capture_log([level: :debug], fn -> Qualification.run(@station_id) end)
+    {:ok, %{cases: cases}} = Qualification.load(@station_id)
+
+    for case_map <- cases do
+      assert log =~ "[Qualification] case=#{case_map["id"]} surface=#{case_map["surface"]}"
+
+      texts =
+        [case_map["input"]["candidate_reply"]] ++
+          Enum.map(case_map["input"]["turns"], & &1["text"])
+
+      for text <- texts, is_binary(text), String.trim(text) != "" do
+        refute log =~ text
+      end
+    end
+  end
+end

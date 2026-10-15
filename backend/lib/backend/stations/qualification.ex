@@ -36,8 +36,12 @@ defmodule Backend.Stations.Qualification do
 
   A summary and its rendered report hold case identifiers, categories, surfaces
   and outcome labels only. No case text, candidate reply, rationale or adapter
-  payload is kept, logged or written.
+  payload is kept, logged or written. Before each case, a `:debug` line
+  `[Qualification] case=<id> surface=<surface>` names the case, so the adapter's
+  own debug lines that follow it can be attributed to that case.
   """
+
+  require Logger
 
   alias Backend.Stations.CandidateGate
   alias Backend.Stations.Impressos
@@ -287,6 +291,8 @@ defmodule Backend.Stations.Qualification do
   # ============================================================================
 
   defp case_result(case_map, package, jev_opts) do
+    # Lets a maintainer attribute the adapter's debug lines to the case that follows.
+    Logger.debug("[Qualification] case=#{case_map["id"]} surface=#{case_map["surface"]}")
     observed = observe(case_map, package, jev_opts ++ deadline(case_map["input"]))
 
     %{

@@ -1009,6 +1009,52 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
         end
       end
     end
+
+    test "at debug level the patient decision logs only question ids, nouls and classes" do
+      # The level is global; this module is not async.
+      level = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: level) end)
+
+      nouls =
+        nouls(%{
+          @stated_onset => 0.97349,
+          @asked_onset => 0.5,
+          @rule_broken => 0.41,
+          @risk_unsupported => 0
+        })
+
+      {result, log} = with_log([level: :debug], fn -> decide(DebugLogStub, nouls) end)
+
+      assert {:ok, %{status: :low_confidence}} = result
+      assert log =~ "[TypesafeAdapter] patient verdict=low_confidence"
+      assert log =~ "fact_stated:1=0.973:yes"
+      assert log =~ "fact_asked:1=0.500:undecided"
+      assert log =~ "rule_broken:1=0.410:undecided"
+      assert log =~ "risk:unsupported_information=0.000:no"
+      assert log =~ "risk:contradicts_facts=0.020:no"
+
+      for id <- @all_ids, do: assert(log =~ " #{id}=")
+
+      for secret <- [
+            @candidate,
+            @learner_question,
+            "Bom dia",
+            "ts-test-key",
+            "Maria",
+            "fact-onset",
+            @onset["content"],
+            @rule["instruction"]
+          ] do
+        refute log =~ secret
+      end
+    end
+
+    test "at the configured test level the patient decision logs nothing" do
+      {_result, log} = with_log(fn -> decide(QuietLogStub, nouls()) end)
+
+      assert log == ""
+    end
   end
 
   describe "decide_rubric/1,2" do

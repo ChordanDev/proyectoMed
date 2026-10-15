@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { Impresso, RequestImpressoResponse } from "../api/client";
+import { recoverableTurnNotice } from "../hooks/useStation";
 import strings from "../i18n/pt-BR.json";
 import "./StationScreen.css";
 
@@ -76,6 +77,7 @@ export function StationScreen({
   const [transcribing, setTranscribing] = useState(false);
   const [voiceFallback, setVoiceFallback] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [turnRetryNotice, setTurnRetryNotice] = useState<string | null>(null);
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const [loadingAudioIndex, setLoadingAudioIndex] = useState<number | null>(
     null,
@@ -246,6 +248,7 @@ export function StationScreen({
       setMessages((previous) => [...previous, learnerMessage]);
       setSending(true);
       setSendError(null);
+      setTurnRetryNotice(null);
 
       try {
         const replyText = await sender(text);
@@ -258,11 +261,20 @@ export function StationScreen({
           setSendError(strings.stationError);
         }
       } catch (cause) {
+        const retryNotice = recoverableTurnNotice(cause);
         if (isStationTimeElapsedError(cause)) {
           // The station's deadline elapsed while this turn was in flight:
           // it was never accepted, so it must not linger in the transcript.
           if (mountedRef.current) {
             setMessages((previous) => previous.slice(0, -1));
+          }
+        } else if (retryNotice !== null) {
+          // The backend rolled this turn back and the station is still
+          // active: drop the learner bubble and hand the text back for a retry.
+          if (mountedRef.current) {
+            setMessages((previous) => previous.slice(0, -1));
+            setInputValue(text);
+            setTurnRetryNotice(retryNotice);
           }
         } else {
           setSendError(strings.stationError);
@@ -529,6 +541,16 @@ export function StationScreen({
         </div>
       )}
 
+      {turnRetryNotice && (
+        <div
+          className="station-impresso-notice"
+          role="status"
+          data-testid="turn-retry-notice"
+        >
+          {turnRetryNotice}
+        </div>
+      )}
+
       {impressoFeedback && (
         <div
           className="station-impresso-notice"
@@ -545,7 +567,10 @@ export function StationScreen({
           className="station-input-area__input"
           placeholder={strings.inputPlaceholder}
           value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
+          onChange={(event) => {
+            setInputValue(event.target.value);
+            setTurnRetryNotice(null);
+          }}
           onKeyDown={handleKeyDown}
           disabled={disabled || busy}
           data-testid="message-input"

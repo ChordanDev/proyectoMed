@@ -52,6 +52,8 @@
   "sendingMessage": "Enviando...",
   "loadingStation": "Carregando estação...",
   "stationError": "Erro na estação. Tente novamente.",
+  "replyVerificationFailedNotice": "O paciente não conseguiu responder a essa mensagem. Tente enviar novamente ou reformular a pergunta.",
+  "turnUnavailableNotice": "Não foi possível obter a resposta agora. Tente enviar novamente.",
   "timeRemainingLabel": "Tempo restante para finalizar a estação",
   "playAudio": "Ouvir resposta",
   "stopAudio": "Parar áudio",
