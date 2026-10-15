@@ -49,11 +49,29 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  # Returns the patient verdict configured under :controller_test_jev_patient_result,
+  # so one test can drive refusals, technical failures, and recovery.
+  defmodule ConfigurableJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request) do
+      Application.fetch_env!(:backend, :controller_test_jev_patient_result)
+    end
+
+    @impl true
+    def decide_rubric(_request) do
+      {:error, :not_implemented}
+    end
+  end
+
   setup do
     prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
     Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
 
     on_exit(fn ->
+      Application.delete_env(:backend, :controller_test_jev_patient_result)
+
       if prev_jev_adapter do
         Application.put_env(:backend, :jev_decision_adapter, prev_jev_adapter)
       else
@@ -581,6 +599,56 @@ defmodule BackendWeb.StationControllerTest do
                "error" => "station_ai_unavailable",
                "message" => "O serviço da estação de IA está temporariamente indisponível."
              }
+    end
+
+    for refusal <- [:low_confidence, :semantic_refusal] do
+      test "returns 502 reply_verification_failed when Jev refuses with #{refusal}, keeping the session active",
+           %{conn: conn, session: session} do
+        use_configurable_jev({:ok, %{status: unquote(refusal), rationale: "refused"}})
+
+        refused_conn = post_learner_text(conn, session, "Olá, qual é o seu nome?")
+
+        assert json_response(refused_conn, 502) == %{
+                 "error" => "reply_verification_failed",
+                 "message" => "A verificação de segurança da resposta do paciente falhou."
+               }
+
+        refute refused_conn.resp_body =~ "aperto forte no peito"
+
+        # The learner turn is rolled back and the session stays active.
+        assert %{"status" => "active", "completion_reason" => nil, "messages" => []} =
+                 conn
+                 |> get(~p"/api/stations/active/sessions/#{session.session_id}")
+                 |> json_response(200)
+
+        # A follow-up message on the same session is delivered normally.
+        use_configurable_jev({:ok, %{status: :verified}})
+
+        retry_conn = post_learner_text(conn, session, "Olá, qual é o seu nome?")
+
+        assert json_response(retry_conn, 200)["reply_text"] ==
+                 "Estou com um aperto forte no peito há duas horas."
+
+        assert {:ok, updated_session} = Conversation.fetch(session.session_id)
+        assert Enum.map(updated_session.messages, & &1.role) == [:learner, :patient]
+      end
+    end
+
+    for failure <- [{:technical_failure, :missing_credentials}, :network_error] do
+      test "returns 502 station_ai_unavailable when Jev fails technically with #{inspect(failure)}",
+           %{conn: conn, session: session} do
+        use_configurable_jev({:error, unquote(Macro.escape(failure))})
+
+        conn = post_learner_text(conn, session, "Olá, qual é o seu nome?")
+
+        assert json_response(conn, 502) == %{
+                 "error" => "station_ai_unavailable",
+                 "message" => "O serviço da estação de IA está temporariamente indisponível."
+               }
+
+        refute conn.resp_body =~ "aperto forte no peito"
+        assert {:ok, %{messages: []}} = Conversation.fetch(session.session_id)
+      end
     end
 
     test "returns 409 station_time_elapsed for a turn received at/after the deadline", %{
@@ -1474,5 +1542,18 @@ defmodule BackendWeb.StationControllerTest do
                "message" => "Sessão não encontrada."
              }
     end
+  end
+
+  defp use_configurable_jev(patient_result) do
+    Application.put_env(:backend, :controller_test_jev_patient_result, patient_result)
+    Application.put_env(:backend, :jev_decision_adapter, ConfigurableJevAdapter)
+  end
+
+  defp post_learner_text(conn, session, text) do
+    post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+      "role" => "learner",
+      "modality" => "text",
+      "text" => text
+    })
   end
 end
