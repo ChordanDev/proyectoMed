@@ -12,7 +12,13 @@ import {
   type SessionDetail,
   type SessionResult,
 } from "../api/client";
-import { sessionIdStorageKey, useStation, type StationApi } from "./useStation";
+import {
+  keptLearnerTurnNotice,
+  sessionIdStorageKey,
+  useStation,
+  type StationApi,
+} from "./useStation";
+import strings from "../i18n/pt-BR.json";
 import { partialResult } from "../result/educational-result.fixture";
 
 afterEach(() => {
@@ -448,6 +454,55 @@ describe("useStation", () => {
     });
     expect(receivedReply).toBeNull();
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the station active and rethrows a refusal that kept the learner turn", async () => {
+    const refusal = new ApiError(
+      502,
+      "reply_verification_failed",
+      "Não foi possível verificar a resposta do paciente.",
+      { role: "learner", text: "Bom dia" },
+    );
+    const api = apiMock({
+      sendMessage: vi.fn().mockRejectedValueOnce(refusal),
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.send(message);
+      } catch (cause) {
+        caught = cause;
+      }
+    });
+
+    expect(caught).toBe(refusal);
+    expect(keptLearnerTurnNotice(caught)).toBe(strings.learnerTurnKeptNotice);
+    expect(result.current.status).toBe("active");
+    expect(result.current.error).toBeNull();
+    expect(api.finishSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a refusal without the kept turn",
+      new ApiError(502, "reply_verification_failed", "Falhou."),
+    ],
+    [
+      "a technical failure",
+      new ApiError(502, "station_ai_unavailable", "Indisponível.", {
+        role: "learner",
+        text: "Bom dia",
+      }),
+    ],
+    ["a non-object cause", "reply_verification_failed"],
+  ])("reports no kept learner turn for %s", (_label, cause) => {
+    expect(keptLearnerTurnNotice(cause)).toBeNull();
   });
 
   it("keeps the station active and rethrows when a patient reply fails verification", async () => {

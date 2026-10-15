@@ -573,6 +573,59 @@ describe("StationScreen", () => {
     });
   });
 
+  describe("when the patient reply is refused but the learner turn was kept", () => {
+    const keptTurnRefusal = (text: string) =>
+      Object.assign(new Error("Não foi possível verificar a resposta."), {
+        code: "reply_verification_failed",
+        learnerTurn: { role: "learner", text },
+      });
+
+    it("keeps the learner bubble, clears the input, and says the message was recorded", async () => {
+      const user = userEvent.setup();
+      const text = "Na palpação há dor no ponto de McBurney.";
+      const onSend = vi.fn().mockRejectedValueOnce(keptTurnRefusal(text));
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), text);
+      await user.click(screen.getByTestId("send-button"));
+
+      expect(
+        await screen.findByTestId("turn-retry-notice"),
+      ).toHaveTextContent(strings.learnerTurnKeptNotice);
+      expect(strings.learnerTurnKeptNotice).toBe(
+        "Sua mensagem foi registrada, mas o paciente não respondeu a ela.",
+      );
+      expect(screen.getByText(text)).toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).toHaveValue("");
+      expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).not.toBeDisabled();
+    });
+
+    it("sends the next message after the kept turn without resending it", async () => {
+      const user = userEvent.setup();
+      const onSend = vi
+        .fn()
+        .mockRejectedValueOnce(keptTurnRefusal("Exame normal."))
+        .mockResolvedValueOnce("Entendi, doutor.");
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), "Exame normal.");
+      await user.click(screen.getByTestId("send-button"));
+      await screen.findByTestId("turn-retry-notice");
+
+      await user.type(screen.getByTestId("message-input"), "Tem alergias?");
+      await user.click(screen.getByTestId("send-button"));
+
+      expect(await screen.findByText("Entendi, doutor.")).toBeInTheDocument();
+      expect(screen.getByText("Exame normal.")).toBeInTheDocument();
+      expect(screen.getByText("Tem alergias?")).toBeInTheDocument();
+      expect(onSend).toHaveBeenNthCalledWith(2, "Tem alergias?");
+      expect(
+        screen.queryByTestId("turn-retry-notice"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   describe.each(["timeout", "station_ai_unavailable"])(
     "when the turn fails with %s",
     (code) => {

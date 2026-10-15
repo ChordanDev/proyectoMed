@@ -139,6 +139,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    // The learner turn the backend kept although it refused the patient reply.
+    readonly learnerTurn?: SessionMessage,
   ) {
     super(message);
     this.name = "ApiError";
@@ -464,7 +466,18 @@ const decodeApiError = (status: number, value: unknown): ApiError => {
   const message =
     typeof body.message === "string" ? body.message : "A solicitação falhou.";
 
-  return new ApiError(status, code, message);
+  return new ApiError(status, code, message, decodeKeptLearnerTurn(body));
+};
+
+// A refused patient reply keeps the learner turn (`learner_turn`). Anything
+// that is not a well-formed learner turn is ignored, never trusted.
+const decodeKeptLearnerTurn = (body: JsonObject): SessionMessage | undefined => {
+  const turn = body.learner_turn;
+  if (typeof turn !== "object" || turn === null) return undefined;
+  const { role, text } = turn as JsonObject;
+  return role === "learner" && typeof text === "string"
+    ? { role, text }
+    : undefined;
 };
 
 // The educational result runs the rubric resolver (10 s deadline) and then

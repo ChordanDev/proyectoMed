@@ -259,6 +259,62 @@ describe("station API client", () => {
     });
   });
 
+  it("surfaces the kept learner turn on a refused patient reply", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        {
+          error: "reply_verification_failed",
+          message: "A verificação de segurança da resposta do paciente falhou.",
+          learner_turn: {
+            role: "learner",
+            modality: "text",
+            text: "Há dor no ponto de McBurney.",
+            at: "2026-10-15T12:00:00Z",
+          },
+        },
+        502,
+      ),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.sendMessage("session-1", {
+        role: "learner",
+        modality: "text",
+        text: "Há dor no ponto de McBurney.",
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 502,
+      code: "reply_verification_failed",
+      learnerTurn: { role: "learner", text: "Há dor no ponto de McBurney." },
+    });
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["malformed", { role: "patient", text: "Resposta recusada" }],
+  ])("leaves learnerTurn undefined when the kept turn is %s", async (_label, learnerTurn) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        {
+          error: "reply_verification_failed",
+          message: "A verificação de segurança da resposta do paciente falhou.",
+          learner_turn: learnerTurn,
+        },
+        502,
+      ),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    const failure = await client
+      .sendMessage("session-1", { role: "learner", modality: "text", text: "Olá" })
+      .catch((cause: unknown) => cause);
+
+    expect(failure).toMatchObject({ code: "reply_verification_failed" });
+    expect((failure as { learnerTurn?: unknown }).learnerTurn).toBeUndefined();
+  });
+
   it("requests an impresso and decodes the released documents", async () => {
     const responseBody = {
       request_id: "req-1",

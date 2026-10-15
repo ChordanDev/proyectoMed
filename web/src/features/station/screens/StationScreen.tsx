@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { Impresso, RequestImpressoResponse } from "../api/client";
-import { recoverableTurnNotice } from "../hooks/useStation";
+import {
+  keptLearnerTurnNotice,
+  recoverableTurnNotice,
+} from "../hooks/useStation";
 import strings from "../i18n/pt-BR.json";
 import "./StationScreen.css";
 
@@ -261,8 +264,13 @@ export function StationScreen({
           setSendError(strings.stationError);
         }
       } catch (cause) {
+        const keptTurnNotice = keptLearnerTurnNotice(cause);
         const retryNotice = recoverableTurnNotice(cause);
-        if (isStationTimeElapsedError(cause)) {
+        if (keptTurnNotice !== null) {
+          // The patient did not answer, but the backend recorded the learner
+          // turn: keep the bubble and leave the input empty.
+          if (mountedRef.current) setTurnRetryNotice(keptTurnNotice);
+        } else if (isStationTimeElapsedError(cause)) {
           // The station's deadline elapsed while this turn was in flight:
           // it was never accepted, so it must not linger in the transcript.
           if (mountedRef.current) {
