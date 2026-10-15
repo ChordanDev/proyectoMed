@@ -26,16 +26,25 @@ defmodule Backend.Stations.StationAI.OpenAIAdapter do
 
   @impl true
   def next_reply(package, context, opts \\ []) do
-    config = get_config(opts)
+    config = config(opts)
 
     with :ok <- validate_credentials(config.api_key),
          payload <- build_payload(package, context, config.model),
-         {:ok, response} <- execute_request(config, payload) do
+         {:ok, response} <- post_chat_completion(config, payload) do
       parse_response(response)
     end
   end
 
-  defp get_config(opts) do
+  # Shared with `Backend.Stations.LearnerFeedback.OpenAIAdapter` so both
+  # OpenAI seams read the same credentials, base URL, model and Req options.
+  @doc false
+  @spec config(keyword()) :: %{
+          api_key: String.t() | nil,
+          base_url: String.t(),
+          model: String.t(),
+          req_options: keyword()
+        }
+  def config(opts) do
     legacy_app = Application.get_env(:backend, Backend.StationAI.OpenAIAdapter, [])
     current_app = Application.get_env(:backend, __MODULE__, [])
     app = Keyword.merge(legacy_app, current_app)
@@ -56,11 +65,13 @@ defmodule Backend.Stations.StationAI.OpenAIAdapter do
     }
   end
 
-  defp validate_credentials(key) when is_binary(key) do
+  @doc false
+  @spec validate_credentials(term()) :: :ok | {:error, :missing_credentials}
+  def validate_credentials(key) when is_binary(key) do
     if String.trim(key) == "", do: {:error, :missing_credentials}, else: :ok
   end
 
-  defp validate_credentials(_), do: {:error, :missing_credentials}
+  def validate_credentials(_), do: {:error, :missing_credentials}
 
   defp build_payload(package, context, model) do
     system_msg = %{
@@ -86,7 +97,10 @@ defmodule Backend.Stations.StationAI.OpenAIAdapter do
     %{"role" => role, "content" => msg[:text] || msg["text"]}
   end
 
-  defp execute_request(config, payload) do
+  @doc false
+  @spec post_chat_completion(map(), map()) ::
+          {:ok, term()} | {:error, :upstream_error | :timeout | :network_error}
+  def post_chat_completion(config, payload) do
     url = String.trim_trailing(config.base_url, "/") <> "/v1/chat/completions"
 
     req_opts =
