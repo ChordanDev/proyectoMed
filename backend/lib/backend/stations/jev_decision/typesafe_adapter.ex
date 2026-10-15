@@ -810,10 +810,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     end
   end
 
-  # A deterministic estimate: one token per four bytes of encoded JSON, rounded up.
-  # One token per two bytes of JSON. One per four bytes underestimated Portuguese
-  # text: a 255,741-byte group estimated at 63,936 tokens was rejected live with
-  # `max_tokens_exceeded` against the 64k budget (issue #228).
+  # A deterministic estimate: one token per two bytes of JSON, rounded up. One per
+  # four bytes underestimated Portuguese text: a 255,741-byte group estimated at
+  # 63,936 tokens was rejected live with `max_tokens_exceeded` against the 64k
+  # budget (issue #228).
   defp estimate_tokens(term), do: div(byte_size(Jason.encode!(term)) + 1, 2)
 
   # Every group runs concurrently under the same deadline, once. Any failure, in group

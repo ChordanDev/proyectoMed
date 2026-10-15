@@ -309,4 +309,31 @@ defmodule Backend.Stations.RubricAssessment.ImpressoActionsTest do
     assert %{status: :assessed, level: "adequado"} = result
     assert Enum.all?(result.sub_actions, &(&1.classification == "performed"))
   end
+
+  # Jorge review of #228 (CD-C1): a mandatory or forbidden role without thresholds
+  # still needs Jev's level when every action is performed, so the criterion is
+  # asked instead of ending uncertain.
+  test "a criterion with roles but no thresholds is still asked for its level" do
+    package =
+      update_criterion(package(), @labs, fn criterion ->
+        criterion
+        |> Map.update!("levels", fn levels ->
+          Enum.map(levels, &Map.delete(&1, "min_actions"))
+        end)
+        |> Map.update!("actions", fn actions ->
+          Enum.map(actions, &Map.put(&1, "role", "mandatory"))
+        end)
+      end)
+
+    {:ok, assessment} =
+      assess(package, session([event("r1", @all_labs)]),
+        classification: "adequado",
+        evidence_ids: ["impresso-r1"]
+      )
+
+    assert_received {:batch_request, %{questions: [question]}}
+    assert question.actions == []
+
+    assert %{status: :assessed, level: "adequado"} = criterion(assessment, @labs)
+  end
 end

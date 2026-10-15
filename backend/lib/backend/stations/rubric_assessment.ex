@@ -316,8 +316,9 @@ defmodule Backend.Stations.RubricAssessment do
   defp questions(plans), do: plans |> asked() |> Enum.map(&question/1)
 
   # The criteria a provider is asked about: every one to ask, except those
-  # whose actions a released impresso decided and whose rule fields decide the
-  # level from them.
+  # whose actions a released impresso decided and whose thresholds decide the
+  # level from them. A mandatory or forbidden role alone still needs Jev's level
+  # when every action is performed (Jorge review of #228), so it is asked.
   defp asked(plans) do
     for %{route: :ask} = plan <- plans, not settled?(plan), do: plan
   end
@@ -326,7 +327,7 @@ defmodule Backend.Stations.RubricAssessment do
     actions = authored_actions(criterion)
 
     actions != [] and Enum.all?(actions, &is_map_key(settled, &1.id)) and
-      AuthoredRules.decides?(criterion)
+      AuthoredRules.authors_thresholds?(criterion)
   end
 
   defp question(%{id: id, criterion: criterion, settled: settled}) do
