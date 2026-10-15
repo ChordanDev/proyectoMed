@@ -338,6 +338,61 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       assert Enum.map(request.criteria, & &1.id) == ["exam"]
     end
 
+    test "a changed action classification regenerates the criterion", %{session_id: id} do
+      attach(id)
+      assert_received {:feedback_request, _}
+
+      sub_actions = [
+        %{id: "onset", classification: "performed", evidence_ids: ["turn-1"]},
+        %{id: "radiation", classification: "performed", evidence_ids: ["turn-1"]},
+        %{id: "duration", classification: "uncertain", evidence_ids: []}
+      ]
+
+      changed = %{@history | sub_actions: sub_actions}
+      attach(id, %{@assessment | criteria: [changed, @exam, @unclear]})
+      assert_received {:feedback_request, request}
+      assert Enum.map(request.criteria, & &1.id) == ["history"]
+      assert hd(request.criteria).missing_actions == []
+    end
+
+    test "unchanged action classifications in another order reuse the cache", %{
+      session_id: id
+    } do
+      attach(id)
+      assert_received {:feedback_request, _}
+
+      reordered = %{@history | sub_actions: Enum.reverse(@history.sub_actions)}
+      attach(id, %{@assessment | criteria: [reordered, @exam, @unclear]})
+      refute_received {:feedback_request, _}
+    end
+
+    # Unregistering the Conversation name makes every GenServer.call to it exit
+    # with :noproc at once, deterministically and without waiting for a call
+    # timeout. The process keeps running and is re-registered afterwards. This
+    # module is async: false, so no concurrent test depends on the name.
+    test "an exiting cache read and write still returns generated feedback", %{
+      session_id: id
+    } do
+      pid = Process.whereis(Backend.Stations.Conversation)
+      true = Process.unregister(Backend.Stations.Conversation)
+
+      result =
+        try do
+          attach(id)
+        after
+          Process.register(pid, Backend.Stations.Conversation)
+        end
+
+      assert recommendations(result) == %{
+               "history" => @generated["history"],
+               "exam" => @generated["exam"],
+               "unclear" => "Authored unclear recommendation."
+             }
+
+      assert without_recommendations(result) == without_recommendations(@assessment)
+      assert_received {:feedback_request, _}
+    end
+
     test "a failure is not cached, so the next fetch retries", %{session_id: id} do
       respond_with(fn _request -> {:error, :unavailable} end)
       assert_authored(attach(id))
