@@ -11,9 +11,9 @@ After Jev's rubric batch, an LLM decides only the actions Jev left `uncertain`. 
 - **Placement:** a resolver step inside `Backend.Stations.RubricAssessment`, after the Jev batch decisions return in `ask/3` (`rubric_assessment.ex:~355`) and before criterion judging. Jev's undecided action is `%{classification: "uncertain", evidence_ids: []}` (`typesafe_adapter.ex:~837`).
 - **Seam:** new behaviour for the rubric resolver with its own config key `:rubric_resolver_adapter` (default: disabled → resolver is a no-op, undecided stays `uncertain`). Adapter injectable via opts (`:resolver_adapter`) like `:adapter` for Jev. One real implementation: OpenAI chat completions with `response_format` `json_schema` (strict). Patient decisions keep `:jev_decision_adapter`; rubric resolver is independent, so rubric and patient can use different providers.
 - **Input to the LLM:** per criterion, every authored action with Jev's classification, the learner-only evidence pool (`id`, `text`), and the list of action ids it may decide (only Jev-`uncertain` ones).
-- **Output schema:** `{"actions": [{"id", "classification": "performed"|"not_performed"|"uncertain", "evidence_ids": [string]}]}`.
+- **Output schema:** `{"actions": [{"criterion_id", "id", "classification": "performed"|"not_performed"|"uncertain", "evidence_ids": [string]}]}` (action ids are unique only within a criterion). The strict schema stays static (no per-request enum) so the provider can cache it.
 - **Merge rules (in code):** decisions for ids Jev decided clearly are ignored; unknown ids ignored; `performed` needs ≥1 citation and every citation must pass `Evidence.validate` as learner evidence, otherwise the action stays `uncertain`; malformed output / error / timeout → all undecided actions stay `uncertain`.
-- **Deadline:** its own deadline, `:rubric_resolver_deadline_ms` (default 5_000), overridable via opts; not shared with Jev's 3 s rubric deadline.
+- **Deadline:** its own deadline, `:rubric_resolver_deadline_ms` (default 10_000), overridable via opts and `RUBRIC_RESOLVER_DEADLINE_MS`; not shared with Jev's 3 s rubric deadline. Changed from 5 s to 10 s on 2026-10-14 after live measurement (1.2–4.3 s per call).
 - **Docs:** amend `docs/design/jev-prototype.md` (~:155-170) to describe the resolver step; Jev contract stays probability-free.
 
 ## Tasks
@@ -35,5 +35,7 @@ After Jev's rubric batch, an LLM decides only the actions Jev left `uncertain`. 
 - 2026-10-14: T3 done in `e756d58` (route: delegated writer). Qualification `:resolver_adapter` + `Resolver:` header; design doc amended.
 - Verification at each commit (backend/): `mix format --check-formatted` clean; `mix compile --warnings-as-errors` clean; `mix credo --strict` no issues; `mix test` 981 → 989 → 991 passed, 0 failures.
 - Design gap resolved technically: rubric action ids are unique only within a criterion, so each resolver output entry also carries `criterion_id` (`{"actions": [{"criterion_id", "id", "classification", "evidence_ids"}]}`). An action decided twice is ignored. The adapter receives `opts[:resolver_opts]`, never the Jev options. The OpenAI adapter also types `:refused` and `:network_error`.
-- Next: T4 (user-run live qualification).
+- 2026-10-14: `096d6c6` — resolver latency log + `RUBRIC_RESOLVER_DEADLINE_MS` override. Live run: 15/15 resolver calls answered in 1.2–4.3 s with a 30 s deadline; the first run at 5 s had 3 timeouts, all left `uncertain` (fail-safe held). The log also showed over-answering (e.g. 15 decisions for 6 undecided actions).
+- 2026-10-14: `edf2e96` (route: delegated writer) — default deadline 10 s; the OpenAI adapter now sends per criterion `decide` (Jev-uncertain actions) apart from `context_actions` (Jev's final classes, context only) plus `decision_count`, and the system prompt asks for exactly one entry per action to decide. Schema unchanged and static. Req.Test asserts the outgoing body. Verification: `mix format --check-formatted` clean; `mix compile --warnings-as-errors` clean; `mix credo --strict` no issues; `mix test` 992 passed, 0 failures.
+- Next: T4 re-run live qualification to confirm decision counts match undecided actions.
 
