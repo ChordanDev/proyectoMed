@@ -34,7 +34,7 @@ defmodule Backend.Stations.LearnerFeedback.OpenAIAdapter do
 
   alias Backend.Stations.StationAI.OpenAIAdapter, as: OpenAI
 
-  @default_deadline_ms 3_000
+  @default_deadline_ms 60_000
   @timeout_margin_ms 250
   @min_receive_timeout_ms 500
 

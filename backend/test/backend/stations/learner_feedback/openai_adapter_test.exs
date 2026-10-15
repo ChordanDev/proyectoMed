@@ -33,6 +33,53 @@ defmodule Backend.Stations.LearnerFeedback.OpenAIAdapterTest do
     )
   end
 
+  describe "receive timeout" do
+    # A Req adapter that reports the receive timeout the request was built with.
+    defp timeout_probe(test_pid) do
+      fn request ->
+        send(test_pid, {:receive_timeout, request.options[:receive_timeout]})
+
+        {request,
+         Req.Response.new(status: 200, body: completion(~s({"feedback": {"anamnese": "Ok."}})))}
+      end
+    end
+
+    setup do
+      previous = Application.fetch_env(:backend, :learner_feedback_deadline_ms)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:backend, :learner_feedback_deadline_ms, value)
+          :error -> Application.delete_env(:backend, :learner_feedback_deadline_ms)
+        end
+      end)
+    end
+
+    test "follows the configured deadline" do
+      Application.put_env(:backend, :learner_feedback_deadline_ms, 10_000)
+
+      assert {:ok, _} =
+               OpenAIAdapter.write_feedback(@request,
+                 api_key: "sk-test-secret-key",
+                 req_options: [adapter: timeout_probe(self())]
+               )
+
+      assert_receive {:receive_timeout, 9_750}
+    end
+
+    test "defaults to just below one minute without a configured deadline" do
+      Application.delete_env(:backend, :learner_feedback_deadline_ms)
+
+      assert {:ok, _} =
+               OpenAIAdapter.write_feedback(@request,
+                 api_key: "sk-test-secret-key",
+                 req_options: [adapter: timeout_probe(self())]
+               )
+
+      assert_receive {:receive_timeout, 59_750}
+    end
+  end
+
   describe "request" do
     test "posts the graded record with model, JSON output and language, never a conversation" do
       test_pid = self()

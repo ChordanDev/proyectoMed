@@ -37,6 +37,7 @@
   "criterionUncertain": "Incerto",
   "resultRestartButton": "Reiniciar estação",
   "loadingResult": "Gerando o resultado da estação...",
+  "loadingResultFeedbackWait": "Gerando feedback da estação… isso pode levar até um minuto.",
   "resultUnavailable": "Não foi possível carregar o resultado da estação.",
   "resultRestartDiscards": "Ao reiniciar, esta tentativa é descartada e não poderá ser recuperada.",
   "resultReportTitle": "Resultado educacional da estação",

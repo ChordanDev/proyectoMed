@@ -2,6 +2,10 @@ defmodule Backend.Stations.LearnerFeedbackTest do
   # Swaps the application-level learner feedback adapter, so it cannot run concurrently.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
+  require Logger
+
   alias Backend.Stations
   alias Backend.Stations.LearnerFeedback
 
@@ -245,6 +249,68 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       assert elapsed_us < 400_000
     end
 
+    test "a slow provider that answers within the configured deadline is used", %{
+      session_id: id
+    } do
+      Application.put_env(:backend, :learner_feedback_deadline_ms, 1_000)
+
+      respond_with(fn _request ->
+        Process.sleep(150)
+        {:ok, @generated}
+      end)
+
+      assert recommendations(attach(id))["history"] == @generated["history"]
+    end
+
+    test "without a configured deadline a provider slower than 3 s is still used", %{
+      session_id: id
+    } do
+      Application.delete_env(:backend, :learner_feedback_deadline_ms)
+
+      respond_with(fn _request ->
+        Process.sleep(3_100)
+        {:ok, @generated}
+      end)
+
+      assert recommendations(attach(id))["history"] == @generated["history"]
+    end
+
+    test "the configured deadline is one minute" do
+      assert Application.fetch_env!(:backend, :learner_feedback_deadline_ms) == 60_000
+    end
+
+    test "logs the latency of a successful call without any feedback text", %{session_id: id} do
+      # The test environment logs at :warning; this module's info line is the subject here.
+      Logger.put_module_level(LearnerFeedback, :info)
+      on_exit(fn -> Logger.delete_module_level(LearnerFeedback) end)
+
+      log = capture_log([level: :info], fn -> attach(id) end)
+
+      assert log =~ ~r/Learner feedback answered in \d+ ms: 2 texts for 2 criteria/
+      refute log =~ @generated["history"]
+      refute log =~ "Quando começou a dor?"
+    end
+
+    test "logs the latency of a failed call", %{session_id: id} do
+      respond_with(fn _request -> {:error, :upstream_error} end)
+      log = capture_log([level: :info], fn -> attach(id) end)
+
+      assert log =~
+               ~r/Learner feedback unavailable \(upstream_error\) after \d+ ms; keeping authored text/
+    end
+
+    test "logs the latency of a timed out call", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_deadline_ms, 20)
+
+      respond_with(fn _request ->
+        Process.sleep(500)
+        {:ok, @generated}
+      end)
+
+      log = capture_log([level: :info], fn -> attach(id) end)
+      assert log =~ ~r/Learner feedback unavailable \(timeout\) after \d+ ms/
+    end
+
     test "raise, exit and throw fall back for every criterion", %{session_id: id} do
       for crash <- [
             fn _ -> raise "boom" end,
@@ -422,6 +488,53 @@ defmodule Backend.Stations.LearnerFeedbackTest do
 
       attach(id)
       assert_received {:feedback_request, _}
+    end
+  end
+
+  describe "config/runtime.exs" do
+    @runtime_config Path.expand("../../../config/runtime.exs", __DIR__)
+    @deadline_var "LEARNER_FEEDBACK_DEADLINE_MS"
+
+    # Evaluates the runtime configuration for `env` with the deadline variable set
+    # to `value` (or unset for `nil`), without touching the running application.
+    defp runtime_deadline(env, value) do
+      previous = System.get_env(@deadline_var)
+      if value, do: System.put_env(@deadline_var, value), else: System.delete_env(@deadline_var)
+
+      try do
+        @runtime_config
+        |> Config.Reader.read!(env: env)
+        |> Keyword.get(:backend, [])
+        |> Keyword.fetch(:learner_feedback_deadline_ms)
+      after
+        if previous,
+          do: System.put_env(@deadline_var, previous),
+          else: System.delete_env(@deadline_var)
+      end
+    end
+
+    test "a positive integer overrides the deadline" do
+      assert runtime_deadline(:dev, "45000") == {:ok, 45_000}
+      assert runtime_deadline(:dev, " 65000 ") == {:ok, 65_000}
+    end
+
+    test "a value above 65 s is capped so the 80 s web wait still covers the request" do
+      assert runtime_deadline(:dev, "90000") == {:ok, 65_000}
+      assert runtime_deadline(:dev, "3600000") == {:ok, 65_000}
+    end
+
+    test "without the variable the configured default stays" do
+      assert runtime_deadline(:dev, nil) == :error
+    end
+
+    test "an invalid value keeps the configured default" do
+      for value <- ["", "0", "-5", "60s", "1.5", "soon"] do
+        assert runtime_deadline(:dev, value) == :error
+      end
+    end
+
+    test "the test environment reads none of it" do
+      assert runtime_deadline(:test, "45000") == :error
     end
   end
 end
