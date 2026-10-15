@@ -24,6 +24,15 @@ fails technically.
 | `coverage` | Counts for all four statuses, including excluded criteria |
 | `placeholder` | True only when package metadata explicitly authors `placeholder: true` |
 
+**Response time (issue #226).** The first fetch for a session runs the rubric
+resolver and then generates learner feedback before it answers, so it may take
+up to about a minute. Learner feedback has a 60 s deadline by default;
+`LEARNER_FEEDBACK_DEADLINE_MS` (a positive integer, read at boot outside `:test`)
+overrides it, and any other value keeps the default. Each call logs its latency,
+never the texts. Later fetches reuse the cached feedback. The web client waits
+up to 80 s for this request only and shows a waiting message meanwhile; every
+other request keeps its 15 s timeout.
+
 Allowlisted reasons are `assessment_unresolved`,
 `required_modality_unavailable`, and `authored_exclusion`. They deliberately omit
 raw internal reasons, tagged tuples, provider detail, call diagnostics, and
