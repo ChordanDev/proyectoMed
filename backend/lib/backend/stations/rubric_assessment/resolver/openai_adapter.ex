@@ -3,9 +3,12 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
   Rubric resolver backed by OpenAI's Chat Completions API with strict
   structured output (`response_format` `json_schema`).
 
-  The provider sees the resolver request as JSON: the criteria with their
-  authored actions and Jev's classifications, the action ids it may decide,
-  and the learner-only evidence pool. It answers one decision per action.
+  The provider sees the resolver request as JSON, reshaped so the work is
+  explicit: each criterion lists the actions to `decide` (Jev left them
+  uncertain) apart from its `context_actions` (Jev's final classifications,
+  context only), next to the learner-only evidence pool and the exact number
+  of decisions expected. It answers one decision per action to decide. The
+  strict JSON schema is static on purpose, so the provider can cache it.
   `Backend.Stations.RubricAssessment.Resolver` validates and merges the answer;
   nothing here grants credit.
 
@@ -41,15 +44,16 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
 
   @system_prompt """
   You assess a medical student's simulated consultation against rubric actions.
-  For each criterion, decide only the actions listed in its decidable_action_ids. \
-  The other actions are already decided and are context only.
+  Each criterion lists the actions you must decide under "decide". \
+  Its "context_actions" are already decided and are context only: never return them.
+  Return exactly one entry per action in "decide", with its criterion_id and id, \
+  and nothing else: the answer holds exactly decision_count entries.
   Answer "performed" only when evidence items show the student did the action, \
   and cite the ids of those items in evidence_ids.
   Cite only ids from evidence_pool. It holds the student's own turns and requests; \
   never cite anything else.
   Answer "not_performed", with no citations, when the evidence shows the action was not done.
   When you are unsure, answer "uncertain".
-  Return exactly one entry per decidable action, with its criterion_id and id.
   """
 
   @impl true
@@ -121,7 +125,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
       "model" => model,
       "messages" => [
         %{"role" => "system", "content" => @system_prompt},
-        %{"role" => "user", "content" => Jason.encode!(request)}
+        %{"role" => "user", "content" => Jason.encode!(user_content(request))}
       ],
       "response_format" => %{
         "type" => "json_schema",
@@ -131,6 +135,42 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
           "schema" => schema()
         }
       }
+    }
+  end
+
+  @doc """
+  The user message sent for a resolver request: per criterion, the actions to
+  `decide` apart from the already decided `context_actions`, the learner
+  evidence pool and the number of decisions expected.
+  """
+  @spec user_content(map()) :: map()
+  def user_content(%{criteria: criteria, evidence_pool: evidence_pool}) do
+    criteria = Enum.map(criteria, &prompt_criterion/1)
+
+    %{
+      "criteria" => criteria,
+      "evidence_pool" => Enum.map(evidence_pool, &%{"id" => &1.id, "text" => &1.text}),
+      "decision_count" => Enum.sum(Enum.map(criteria, &length(&1["decide"])))
+    }
+  end
+
+  defp prompt_criterion(criterion) do
+    decidable = MapSet.new(criterion.decidable_action_ids)
+    {decide, context} = Enum.split_with(criterion.actions, &MapSet.member?(decidable, &1.id))
+
+    %{
+      "criterion_id" => criterion.id,
+      "description" => criterion.description,
+      "decide" => Enum.map(decide, &%{"id" => &1.id, "description" => &1.description}),
+      "context_actions" =>
+        Enum.map(
+          context,
+          &%{
+            "id" => &1.id,
+            "description" => &1.description,
+            "classification" => &1.classification
+          }
+        )
     }
   end
 

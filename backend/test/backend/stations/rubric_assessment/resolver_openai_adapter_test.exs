@@ -65,7 +65,27 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapterTest do
 
       assert [system, user] = payload["messages"]
       assert system == %{"role" => "system", "content" => OpenAIAdapter.system_prompt()}
-      assert Jason.decode!(user["content"]) == Jason.decode!(Jason.encode!(@request))
+
+      assert Jason.decode!(user["content"]) == %{
+               "criteria" => [
+                 %{
+                   "criterion_id" => "history-taking",
+                   "description" => "Investigates the history items.",
+                   "decide" => [
+                     %{"id" => "ask-intensity", "description" => "Ask about intensity."}
+                   ],
+                   "context_actions" => [
+                     %{
+                       "id" => "ask-onset",
+                       "description" => "Ask about onset.",
+                       "classification" => "performed"
+                     }
+                   ]
+                 }
+               ],
+               "evidence_pool" => [%{"id" => "turn-1", "text" => "A dor é forte?"}],
+               "decision_count" => 1
+             }
 
       assert payload["response_format"] == %{
                "type" => "json_schema",
@@ -75,6 +95,79 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapterTest do
                  "schema" => OpenAIAdapter.schema()
                }
              }
+    end
+
+    test "asks only for the decidable actions and marks Jev's answers as context" do
+      test_pid = self()
+
+      request = %{
+        criteria: [
+          %{
+            id: "history-taking",
+            description: "Investigates the history items.",
+            actions: [
+              %{id: "ask-onset", description: "Ask about onset.", classification: "performed"},
+              %{
+                id: "ask-intensity",
+                description: "Ask about intensity.",
+                classification: "uncertain"
+              },
+              %{
+                id: "ask-radiation",
+                description: "Ask about radiation.",
+                classification: "uncertain"
+              },
+              %{id: "ask-fever", description: "Ask about fever.", classification: "not_performed"}
+            ],
+            decidable_action_ids: ["ask-intensity", "ask-radiation"]
+          },
+          %{
+            id: "exam",
+            description: "Requests the exam.",
+            actions: [
+              %{id: "request-ecg", description: "Request an ECG.", classification: "uncertain"}
+            ],
+            decidable_action_ids: ["request-ecg"]
+          }
+        ],
+        evidence_pool: [%{id: "turn-1", text: "A dor é forte?"}]
+      }
+
+      stub(ResolverDecidableStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:payload, Jason.decode!(body)})
+        Req.Test.json(conn, content(%{"actions" => []}))
+      end)
+
+      assert {:ok, %{actions: []}} =
+               OpenAIAdapter.resolve(request,
+                 api_key: "sk-test",
+                 plug: {Req.Test, ResolverDecidableStub}
+               )
+
+      assert_receive {:payload, payload}
+      [%{"content" => system}, %{"content" => user}] = payload["messages"]
+
+      assert system =~ ~s(exactly one entry per action in "decide")
+      assert system =~ "context only: never return them"
+      assert system =~ "decision_count"
+
+      user = Jason.decode!(user)
+      assert user["decision_count"] == 3
+
+      assert [history, exam] = user["criteria"]
+      assert Enum.map(history["decide"], & &1["id"]) == ["ask-intensity", "ask-radiation"]
+
+      assert Enum.map(history["context_actions"], &{&1["id"], &1["classification"]}) == [
+               {"ask-onset", "performed"},
+               {"ask-fever", "not_performed"}
+             ]
+
+      assert Enum.map(exam["decide"], & &1["id"]) == ["request-ecg"]
+      assert exam["context_actions"] == []
+      refute Enum.any?(history["decide"] ++ exam["decide"], &Map.has_key?(&1, "classification"))
+
+      assert payload["response_format"]["json_schema"]["schema"] == OpenAIAdapter.schema()
     end
 
     test "uses the resolver model before the station OpenAI model" do

@@ -28,7 +28,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   A technical failure (an error, malformed output, a raise or the deadline)
   never invalidates the attempt: every undecided action stays `"uncertain"`.
   The resolver has its own deadline, `:rubric_resolver_deadline_ms` (default
-  5000 ms), independent of Jev's.
+  10000 ms), independent of Jev's.
 
   The adapter is `opts[:resolver_adapter]` or the `:rubric_resolver_adapter`
   application setting, `Backend.Stations.RubricAssessment.Resolver.DisabledAdapter`
@@ -45,7 +45,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   @performed "performed"
   @not_performed "not_performed"
   @classes [@performed, @not_performed, @uncertain]
-  @default_deadline_ms 5_000
+  @default_deadline_ms 10_000
 
   @typedoc "An authored action with Jev's classification."
   @type action :: %{id: String.t(), description: String.t(), classification: String.t()}
