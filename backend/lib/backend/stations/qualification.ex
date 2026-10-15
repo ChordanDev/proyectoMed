@@ -5,7 +5,9 @@ defmodule Backend.Stations.Qualification do
 
   The harness drives each fictional case of
   `priv/stations/qualification/<station_id>/` through the real seam, with the
-  configured Jev adapter, and records the observed structural outcome:
+  configured Jev adapter and, for the rubric, the configured rubric resolver
+  (`Backend.Stations.RubricAssessment.Resolver`), and records the observed
+  structural outcome:
 
     * a `dialogue_gate` case calls
       `Backend.Stations.CandidateGate.verify_and_deliver/4` with the case's
@@ -42,6 +44,7 @@ defmodule Backend.Stations.Qualification do
   alias Backend.Stations.JevDecision
   alias Backend.Stations.Qualification.Cases
   alias Backend.Stations.RubricAssessment
+  alias Backend.Stations.RubricAssessment.Resolver
   alias Backend.Stations.StationPackage
 
   @results [:agreed_with_adjudication, :disagreed, :not_adjudicated, :adapter_disabled] ++
@@ -78,6 +81,7 @@ defmodule Backend.Stations.Qualification do
   @type summary :: %{
           station_id: String.t(),
           adapter: module(),
+          resolver: module(),
           thresholds: :undefined | :defined,
           adjudicated: non_neg_integer(),
           cases: [case_result()],
@@ -124,17 +128,19 @@ defmodule Backend.Stations.Qualification do
   @doc """
   Runs every loaded case through its seam and summarises the results.
 
-  `opts[:adapter]` overrides the configured Jev adapter. No other option is
-  read.
+  `opts[:adapter]` overrides the configured Jev adapter and
+  `opts[:resolver_adapter]` the configured rubric resolver, which only rubric
+  cases reach. No other option is read.
   """
   @spec evaluate(loaded(), keyword()) :: summary()
   def evaluate(%{package: package, cases: cases} = loaded, opts \\ []) when is_list(opts) do
-    jev_opts = Keyword.take(opts, [:adapter])
+    jev_opts = Keyword.take(opts, [:adapter, :resolver_adapter])
     results = Enum.map(cases, &case_result(&1, package, jev_opts))
 
     %{
       station_id: loaded.station_id,
       adapter: JevDecision.resolve_adapter(jev_opts),
+      resolver: Resolver.adapter(jev_opts),
       thresholds: loaded.thresholds,
       adjudicated: Enum.count(cases, &adjudicated?/1),
       cases: results,
@@ -155,6 +161,7 @@ defmodule Backend.Stations.Qualification do
     header = [
       "Jev qualification run: #{summary.station_id}",
       "Adapter: #{inspect(summary.adapter)}",
+      "Resolver: #{inspect(summary.resolver)}",
       "Thresholds: #{thresholds_line(summary.thresholds)}",
       "Adjudication: #{summary.adjudicated} of #{length(summary.cases)} cases adjudicated",
       "This output is not a clinical accuracy claim. It counts structural agreement with",
@@ -295,7 +302,7 @@ defmodule Backend.Stations.Qualification do
     conversation = input["turns"] |> Enum.with_index(1) |> Enum.map(&message/1)
 
     gate_opts =
-      jev_opts ++
+      Keyword.delete(jev_opts, :resolver_adapter) ++
         [
           station_id: package["station_id"],
           version: package["version"],

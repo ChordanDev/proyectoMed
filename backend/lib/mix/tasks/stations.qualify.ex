@@ -3,7 +3,8 @@ defmodule Mix.Tasks.Stations.Qualify do
 
   @moduledoc """
   Runs the fictional qualification cases of a station through the Jev dialogue
-  gate and the rubric assessment, with the configured Jev adapter.
+  gate and the rubric assessment, with the configured Jev adapter and rubric
+  resolver (`RUBRIC_RESOLVER`). The report names both.
 
       mix stations.qualify acute-appendicitis
       mix stations.qualify acute-appendicitis --out run.txt
