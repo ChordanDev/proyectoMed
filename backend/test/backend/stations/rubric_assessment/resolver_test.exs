@@ -362,4 +362,91 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
       assert result.points == Points.zero()
     end
   end
+
+  # ============================================================================
+  # No confident zero without proof (issue #228)
+  # ============================================================================
+
+  describe "a zero-point level resting on resolver not_performed answers" do
+    test "a zero grounded only on Jev's not_performed answers stays assessed" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        not_performed("ask-duration"),
+        not_performed("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result = assess(resolved([]), answers: jev_answers(actions)) |> history()
+
+      assert %{status: :assessed, level: "inadequado", reason: nil} = result
+      assert result.points == Points.zero()
+      assert result.sub_actions == actions
+    end
+
+    test "a zero only the resolver's not_performed answers reach is uncertain" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        uncertain("ask-duration"),
+        uncertain("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result =
+        assess(
+          resolved([
+            llm("ask-duration", "not_performed", []),
+            llm("ask-intensity", "not_performed", [])
+          ]),
+          answers: jev_answers(actions)
+        )
+        |> history()
+
+      assert result.status == :uncertain
+      assert result.reason == {:uncertain_sub_action, "ask-duration"}
+      refute Map.has_key?(result, :level)
+      refute Map.has_key?(result, :points)
+      assert result.sub_actions == []
+    end
+
+    test "a missing mandatory action the resolver decided is uncertain" do
+      actions = [
+        uncertain("ask-onset"),
+        performed("ask-duration", ["turn-3"]),
+        not_performed("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result =
+        assess(resolved([llm("ask-onset", "not_performed", [])]), answers: jev_answers(actions))
+        |> history()
+
+      assert result.status == :uncertain
+      assert result.reason == {:uncertain_sub_action, "ask-onset"}
+    end
+
+    test "a zero Jev's answers decide whatever the resolver said stays assessed" do
+      actions = [
+        not_performed("ask-onset"),
+        uncertain("ask-duration"),
+        not_performed("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result =
+        assess(resolved([llm("ask-duration", "not_performed", [])]),
+          answers: jev_answers(actions)
+        )
+        |> history()
+
+      assert %{status: :assessed, level: "inadequado", reason: nil} = result
+      assert action(result, "ask-duration") == not_performed("ask-duration")
+    end
+
+    test "a level above zero reached with resolver not_performed answers stays assessed" do
+      result =
+        assess(resolved([llm("ask-intensity", "not_performed", [])])) |> history()
+
+      assert %{status: :assessed, level: "parcialmente_adequado", points: 20} = result
+    end
+  end
 end

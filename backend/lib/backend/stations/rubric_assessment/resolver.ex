@@ -23,7 +23,8 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
       evidence for the criterion's requirement; otherwise the action stays
       `"uncertain"`;
     * `"not_performed"` is taken without evidence, and `"uncertain"` changes
-      nothing.
+      nothing. The rubric assessment never lets such answers alone ground a
+      zero-point level (`Backend.Stations.RubricAssessment`, step 4).
 
   A technical failure (an error, malformed output, a raise or the deadline)
   never invalidates the attempt: every undecided action stays `"uncertain"`.

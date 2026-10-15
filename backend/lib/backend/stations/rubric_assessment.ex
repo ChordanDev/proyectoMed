@@ -11,7 +11,12 @@ defmodule Backend.Stations.RubricAssessment do
        Every other criterion becomes a question.
     2. **One evidence pool** is built from the session and shared by every
        question. Only verified items are offered to Jev, while citations are
-       checked against the full pool.
+       checked against the full pool. An action authored with `impresso_ids`
+       that a verified request released is decided `"performed"` here
+       (`Backend.Stations.RubricAssessment.ImpressoActions`), citing that
+       request: it is asked of neither Jev nor the resolver, and a criterion
+       whose actions are all decided this way and whose rule fields decide its
+       level is not asked at all.
     3. **One batched Jev call** carries every question. More calls happen only
        for a provider capacity limit (`:max_questions_per_call`), and every
        call is recorded with its justification.
@@ -21,6 +26,10 @@ defmodule Backend.Stations.RubricAssessment do
        positive decision must cite learner evidence that passes validation, and
        a resolver failure leaves those actions `"uncertain"` without
        invalidating the attempt.
+       Its `"not_performed"` answers cite nothing, so they never ground a
+       zero-point level on their own: when the level is zero only because of
+       them (Jev's answers and the rules, with those actions left undecided,
+       reach other outcomes too), the criterion is `:uncertain`.
     5. **Deterministic post-processing** validates each cited evidence
        identifier and fails closed per criterion: nothing is repaired, dropped
        or substituted.
@@ -57,11 +66,13 @@ defmodule Backend.Stations.RubricAssessment do
   alias Backend.Stations.RubricAssessment.Estimates
   alias Backend.Stations.RubricAssessment.Evidence
   alias Backend.Stations.RubricAssessment.FirstN
+  alias Backend.Stations.RubricAssessment.ImpressoActions
   alias Backend.Stations.RubricAssessment.Points
   alias Backend.Stations.RubricAssessment.Resolver
   alias Backend.Stations.RubricAssessment.TaskOrder
 
   @uncertain_class "uncertain"
+  @not_performed_class "not_performed"
   @task_order "task_order"
   @own_opts [
     :max_questions_per_call,
@@ -146,7 +157,9 @@ defmodule Backend.Stations.RubricAssessment do
            criterion: map(),
            max_points: Points.t(),
            requirement: Evidence.requirement(),
-           route: route()
+           route: route(),
+           settled: %{optional(String.t()) => sub_action()},
+           unproven: MapSet.t(String.t())
          }
 
   @typep level :: %{label: String.t(), points: Points.t()}
@@ -175,8 +188,11 @@ defmodule Backend.Stations.RubricAssessment do
     with :ok <- validate_batch_limit(opts),
          pool <- Evidence.build(session, package),
          {:ok, plans} <- triage(package),
+         plans <- Enum.map(plans, &settle(&1, pool)),
          {:ok, decisions, calls} <- ask(questions(plans), pool, opts) do
-      decisions = Resolver.resolve(decisions, asked(plans), pool, opts)
+      resolved = Resolver.resolve(decisions, asked(plans), pool, opts)
+      plans = with_unproven(plans, decisions, resolved)
+      decisions = with_settled(resolved, plans)
 
       criteria =
         plans |> Enum.map(&criterion_result(&1, decisions, pool)) |> task_order(plans, pool)
@@ -236,7 +252,9 @@ defmodule Backend.Stations.RubricAssessment do
          criterion: criterion,
          max_points: max_points,
          requirement: requirement,
-         route: route(criterion, requirement, package)
+         route: route(criterion, requirement, package),
+         settled: %{},
+         unproven: MapSet.new()
        }}
     else
       {:error, reason} -> {:error, {:invalid_package, id, reason}}
@@ -295,17 +313,28 @@ defmodule Backend.Stations.RubricAssessment do
   # ============================================================================
 
   @spec questions([plan()]) :: [RubricBatch.question()]
-  defp questions(plans) do
-    for %{route: :ask} = plan <- plans, do: question(plan)
+  defp questions(plans), do: plans |> asked() |> Enum.map(&question/1)
+
+  # The criteria a provider is asked about: every one to ask, except those
+  # whose actions a released impresso decided and whose thresholds decide the
+  # level from them. A mandatory or forbidden role alone still needs Jev's level
+  # when every action is performed (Jorge review of #228), so it is asked.
+  defp asked(plans) do
+    for %{route: :ask} = plan <- plans, not settled?(plan), do: plan
   end
 
-  defp asked(plans), do: for(%{route: :ask} = plan <- plans, do: plan)
+  defp settled?(%{criterion: criterion, settled: settled}) do
+    actions = authored_actions(criterion)
 
-  defp question(%{id: id, criterion: criterion}) do
+    actions != [] and Enum.all?(actions, &is_map_key(settled, &1.id)) and
+      AuthoredRules.authors_thresholds?(criterion)
+  end
+
+  defp question(%{id: id, criterion: criterion, settled: settled}) do
     question = %{
       criterion: %{id: id, description: compose_description(criterion)},
       allowed_classes: level_labels(criterion) ++ [@uncertain_class],
-      actions: authored_actions(criterion)
+      actions: Enum.reject(authored_actions(criterion), &is_map_key(settled, &1.id))
     }
 
     # The enumeration of the learner's answers is requested only where the
@@ -343,6 +372,68 @@ defmodule Backend.Stations.RubricAssessment do
 
   defp label(%{"label" => label}), do: label
   defp label(_level), do: nil
+
+  # ============================================================================
+  # Actions decided by released impressos
+  # ============================================================================
+
+  defp settle(%{route: :ask, criterion: criterion, requirement: requirement} = plan, pool) do
+    %{plan | settled: ImpressoActions.settle(criterion, requirement, pool)}
+  end
+
+  defp settle(plan, _pool), do: plan
+
+  # Puts the settled actions back among the provider's, in authored order. A
+  # criterion nobody was asked about gets a decision with no criterion-level
+  # class, so its rule fields decide the level from the actions.
+  defp with_settled(decisions, plans) do
+    for %{route: :ask, settled: settled} = plan <- plans, settled != %{}, reduce: decisions do
+      acc ->
+        decision =
+          Map.get(acc, plan.id, %{
+            criterion_id: plan.id,
+            classification: @uncertain_class,
+            evidence_ids: [],
+            actions: []
+          })
+
+        Map.put(acc, plan.id, %{decision | actions: in_authored_order(plan, decision.actions)})
+    end
+  end
+
+  defp in_authored_order(%{criterion: criterion, settled: settled}, provided) do
+    by_id = Map.new(provided, &{&1.id, &1})
+
+    for %{id: id} <- authored_actions(criterion),
+        action = settled[id] || by_id[id],
+        action != nil,
+        do: action
+  end
+
+  # ============================================================================
+  # Actions decided not performed by the resolver
+  # ============================================================================
+
+  # Records, per criterion, the actions Jev left uncertain that the resolver
+  # answered `"not_performed"`. Such an answer cites nothing, so it may not be
+  # the only ground of a zero-point level (`proven_zero/6`).
+  defp with_unproven(plans, asked_decisions, resolved) do
+    Enum.map(plans, fn plan ->
+      %{plan | unproven: resolver_not_performed(asked_decisions[plan.id], resolved[plan.id])}
+    end)
+  end
+
+  defp resolver_not_performed(%{actions: asked}, %{actions: resolved}) do
+    undecided =
+      for %{classification: @uncertain_class, id: id} <- asked, into: MapSet.new(), do: id
+
+    for %{classification: @not_performed_class, id: id} <- resolved,
+        MapSet.member?(undecided, id),
+        into: MapSet.new(),
+        do: id
+  end
+
+  defp resolver_not_performed(_asked, _resolved), do: MapSet.new()
 
   # ============================================================================
   # Batching
@@ -433,12 +524,11 @@ defmodule Backend.Stations.RubricAssessment do
     rule(plan, level(criterion, decision.classification), decision, pool)
   end
 
-  defp rule(%{criterion: criterion, requirement: requirement}, jev_level, decision, pool) do
+  defp rule(%{requirement: requirement} = plan, jev_level, decision, pool) do
     with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
          {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement),
-         {:ok, eligible} <-
-           FirstN.eligible(criterion, sub_actions, answers(decision), pool, requirement),
-         {:ok, level, grounding} <- AuthoredRules.decide_level(criterion, jev_level, eligible) do
+         {:ok, level, grounding} <- decide(plan, jev_level, sub_actions, decision, pool),
+         :ok <- proven_zero(plan, jev_level, level, sub_actions, decision, pool) do
       grounded(%{
         level: level,
         evidence: with_actions(evidence, grounding, pool),
@@ -448,6 +538,48 @@ defmodule Backend.Stations.RubricAssessment do
       {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
       {:uncertain, _reason} = uncertain -> uncertain
     end
+  end
+
+  defp decide(
+         %{criterion: criterion, requirement: requirement},
+         jev_level,
+         sub_actions,
+         decision,
+         pool
+       ) do
+    with {:ok, eligible} <-
+           FirstN.eligible(criterion, sub_actions, answers(decision), pool, requirement) do
+      AuthoredRules.decide_level(criterion, jev_level, eligible)
+    end
+  end
+
+  # A zero-point level needs no evidence, so the resolver's `"not_performed"`
+  # answers, which cite nothing, could otherwise turn a criterion into a
+  # confident zero without proof. The zero stands only when Jev's answers and
+  # the deterministic rules reach it with those actions left undecided; when
+  # they reach several outcomes, the criterion is uncertain.
+  defp proven_zero(%{unproven: unproven} = plan, jev_level, level, sub_actions, decision, pool) do
+    undecided = Enum.map(sub_actions, &undecide(&1, unproven))
+
+    if level.points != Points.zero() or undecided == sub_actions do
+      :ok
+    else
+      case decide(plan, jev_level, undecided, decision, pool) do
+        {:ok, ^level, _grounding} -> :ok
+        {:uncertain, _reason} = uncertain -> uncertain
+        _other -> {:uncertain, {:uncertain_sub_action, first_unproven(sub_actions, unproven)}}
+      end
+    end
+  end
+
+  defp undecide(%{id: id} = sub_action, unproven) do
+    if MapSet.member?(unproven, id),
+      do: %{sub_action | classification: @uncertain_class, evidence_ids: []},
+      else: sub_action
+  end
+
+  defp first_unproven(sub_actions, unproven) do
+    Enum.find_value(sub_actions, &(MapSet.member?(unproven, &1.id) && &1.id))
   end
 
   # Present only on a decision whose question requested the enumeration.
@@ -465,7 +597,8 @@ defmodule Backend.Stations.RubricAssessment do
   end
 
   # Credit is never awarded without grounded learner evidence; a zero-point
-  # level needs none, because a genuine omission leaves nothing to cite.
+  # level needs none, because a genuine omission leaves nothing to cite (but
+  # see `proven_zero/6` for a zero the resolver alone reaches).
   defp grounded(%{level: %{points: points}, evidence: []}) when points > 0 do
     {:uncertain, :unsupported_credit}
   end
