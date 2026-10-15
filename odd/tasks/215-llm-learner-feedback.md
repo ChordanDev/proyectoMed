@@ -33,7 +33,8 @@ Today `recommendation` is the static authored `practice_recommendation` (`backen
 
 ## Forecast and delivery
 
-- Forecast: about 650 authored changed lines (T1 ~350, T2 ~250, T3 ~50). Above the 400-line budget, so strategy `ask-on-risk` applies; chain strategy pending the maintainer's choice.
+- Forecast: about 650 authored changed lines (T1 ~350, T2 ~250, T3 ~50). Above the 400-line budget, so strategy `ask-on-risk` applies; chain strategy chosen below.
+- **Delivery:** chain strategy `feature-branch-chain`, chosen by the maintainer. Parent/tracker branch `feat/215-llm-learner-feedback` (draft PR to `develop`, `Closes #215`); child 1 `feat/215-1-feedback-step` (T1, PR to the parent); child 2 `feat/215-2-openai-feedback-adapter` (T2 and T3, PR to child 1).
 
 ## Tasks
 
@@ -42,11 +43,13 @@ Today `recommendation` is the static authored `practice_recommendation` (`backen
   - levels, statuses, points and estimates identical with and without feedback generation;
   - error, timeout, crash, malformed output, missing criterion, over-length and pass/fail/score text each fall back;
   - second fetch reuses the cache (one provider call); a changed graded outcome regenerates only that criterion.
-- [ ] **T2** OpenAI adapter for learner feedback (Req, `retry: false`, stubbed HTTP tests, structured JSON output parsed per criterion id), config wiring. Route: delegated direct.
-- [ ] **T3** Docs: `docs/educational-result-api.md:23` (recommendation may be generated, with authored fallback) and this design record. Route: same writer, separate commit.
+- [x] **T2** OpenAI adapter for learner feedback (Req, `retry: false`, stubbed HTTP tests, structured JSON output parsed per criterion id), config wiring. Route: delegated direct.
+- [x] **T3** Docs: `docs/educational-result-api.md:23` (recommendation may be generated, with authored fallback) and this design record. Route: same writer, separate commit.
 - [ ] **T4** Live check by the user against OpenAI on acute-appendicitis. Route: run by the user; the agent never reads keys.
 
 ## Progress
 
 - 2026-10-14: design points settled with the maintainer (above). Next: T1.
 - 2026-10-14: T1 done in `be02235` (`feat(stations): write learner feedback from the graded result with authored fallback`), route delegated direct. Test-first: RED observed with 18/25 failing in `learner_feedback_test.exs` and `educational_result_test.exs` (module undefined, no feedback request), then GREEN. Verification from `backend/`: `mix format --check-formatted` clean; `mix compile --warnings-as-errors --force` clean; `mix credo --strict` no issues; `mix test` 980 passed, 0 failures. Design notes: the cache lives in the session map under `:learner_feedback` (`Conversation.learner_feedback/1`, `put_learner_feedback/2`), so it dies with discard and expiry; the fingerprint is the tuple `{id, status, level, points, sorted evidence_ids}` compared by equality; `missing_actions` are sub-actions classified `not_performed` (uncertain ones are not sent); the next level is the authored level with the smallest points above the obtained points; the `:disabled` default is not logged, other failures log only an atom kind. Next: T2 (OpenAI adapter).
+- 2026-10-14: T2 done in `f294e69` (`feat(stations): write learner feedback through OpenAI`) on `feat/215-2-openai-feedback-adapter`, route delegated direct. Test-first: RED observed with 0/11 passing in `test/backend/stations/learner_feedback/openai_adapter_test.exs` (module undefined), then GREEN 11/11. Design notes: `Backend.Stations.LearnerFeedback.OpenAIAdapter` reuses the patient adapter's config, credential check and normalized `POST /v1/chat/completions` (`retry: false`) through a minimal extraction (`config/1`, `validate_credentials/1`, `post_chat_completion/2`, all `@doc false`); `receive_timeout` is the feedback deadline minus 250 ms (at least 500 ms); output is requested with `response_format: json_object` and parsed from `{"feedback": {...}}`, any other shape is `:malformed_response`; values pass through as-is and `LearnerFeedback` polices them. `config/config.exs` now defaults `:learner_feedback_adapter` to the OpenAI adapter; `config/test.exs` keeps the disabled adapter; a missing key yields `:missing_credentials`, which keeps the authored text.
+- 2026-10-14: T3 done (`docs(stations): document generated learner feedback recommendation`): `docs/educational-result-api.md` describes the generated `recommendation` and its authored fallback; this record updated with the delivery chain. Verification from `backend/` after T2 and T3: `mix format --check-formatted` clean; `mix compile --warnings-as-errors --force` clean; `mix credo --strict` no issues; `mix test` 991 passed, 0 failures. Next: T4 (live check by the user against OpenAI on acute-appendicitis).
