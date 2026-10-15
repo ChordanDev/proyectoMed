@@ -44,6 +44,16 @@ defmodule BackendWeb.EducationalResultTest do
     def decide_rubric_batch(_), do: {:error, {:transport_error, "private-provider-detail"}}
   end
 
+  defmodule FeedbackDouble do
+    @behaviour Backend.Stations.LearnerFeedback.Adapter
+
+    @impl true
+    def write_feedback(request) do
+      send(Application.fetch_env!(:backend, __MODULE__), {:feedback_request, request})
+      {:ok, Map.new(request.criteria, &{&1.id, "Feedback for #{&1.id}."})}
+    end
+  end
+
   setup do
     package = Stations.get_active_package()
     adapter = Application.fetch_env(:backend, :jev_decision_adapter)
@@ -117,6 +127,48 @@ defmodule BackendWeb.EducationalResultTest do
     refute Map.has_key?(uncertain, "level")
     refute Map.has_key?(body, "calls")
     refute Map.has_key?(assessed, "sub_actions")
+  end
+
+  test "v2 replaces only assessed recommendations with generated feedback", %{
+    conn: conn,
+    session_id: id
+  } do
+    authored = conn |> get("/api/v2/stations/active/sessions/#{id}/result") |> json_response(200)
+    previous = Application.fetch_env(:backend, :learner_feedback_adapter)
+    Application.put_env(:backend, :learner_feedback_adapter, FeedbackDouble)
+    Application.put_env(:backend, FeedbackDouble, self())
+
+    on_exit(fn ->
+      Application.delete_env(:backend, FeedbackDouble)
+
+      case previous do
+        {:ok, value} -> Application.put_env(:backend, :learner_feedback_adapter, value)
+        :error -> Application.delete_env(:backend, :learner_feedback_adapter)
+      end
+    end)
+
+    body = conn |> get("/api/v2/stations/active/sessions/#{id}/result") |> json_response(200)
+    assert_received {:feedback_request, request}
+    assert Enum.map(request.criteria, & &1.id) == ["criterion-a"]
+
+    assert [assessed, uncertain] = body["criteria"]
+    assert assessed["recommendation"] == "Feedback for criterion-a."
+    assert uncertain["recommendation"] == "Gather enough evidence for criterion B."
+
+    drop = fn result ->
+      update_in(result["criteria"], fn criteria ->
+        Enum.map(criteria, &Map.delete(&1, "recommendation"))
+      end)
+    end
+
+    assert drop.(body) == drop.(authored)
+    assert body["estimates"] == authored["estimates"]
+    assert body["coverage"] == authored["coverage"]
+
+    assert conn |> get("/api/v2/stations/active/sessions/#{id}/result") |> json_response(200) ==
+             body
+
+    refute_received {:feedback_request, _}
   end
 
   test "provider transport errors expose only an invalid attempt, never diagnostics or partial points",
