@@ -42,7 +42,7 @@ No truncation of the rubric input was found (#208 caps fail closed; the 10-turn 
 ## Tasks
 
 - [x] **T1** Deterministic regression harness: a fixture transcript of the run (learner turns plus impresso requests) graded through `RubricAssessment.assess` with recorded TypeSafe noul answers (`Req.Test`) and recorded resolver decisions; assertions for items 2, 5, 6 and 7 that encode today's wrong grades as the RED baseline for T2-T4. Route: delegated direct.
-- [x] **T2** Lever 1: rubric questions include the criterion description with the action description; tests on the question text and the batch cap. Route: delegated direct.
+- [x] **T2** Lever 1: rubric questions include the criterion description with the action description; tests on the question text. Route: inline (one production function plus one test; writer trigger not fired).
 - [ ] **T3** Lever 2: optional `impresso_ids` on rubric actions (package schema, loader validation, acute-appendicitis lab and imaging actions authored), deterministic `performed` from verified releasing impresso events before any provider call; tests. Route: delegated direct.
 - [ ] **T4** No confident zero without proof: resolver-only `not_performed` cannot collapse a criterion to an assessed zero-point level (it becomes `uncertain`); resolver `temperature: 0`; tests. Route: delegated direct.
 - [ ] **T5** Docs and live check by the maintainer on acute-appendicitis; record rollback evidence for cause 4. Route: run by the user.
