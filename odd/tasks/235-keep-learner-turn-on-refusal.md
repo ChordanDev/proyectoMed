@@ -21,7 +21,7 @@ In the #228 live run, exam verbalization and lab interpretation were addressed t
 
 - [x] T1 Backend: on `{:refused, _}` patient verification, commit the learner turn without a patient reply; technical failures roll back. Tests in stations tests, including the kept turn in the rubric evidence pool.
 - [x] T2 API: the refusal keeps `reply_verification_failed` and adds the stored learner turn to the body. Controller tests.
-- [ ] T3 Web: on that refusal the bubble stays, the input is cleared, and a pt-BR notice says the message was recorded and the patient did not answer it. Technical-failure path keeps #224 behavior. Tests.
+- [x] T3 Web: on that refusal the bubble stays, the input is cleared, and a pt-BR notice says the message was recorded and the patient did not answer it. Technical-failure path keeps #224 behavior. Tests.
 - [ ] T4 Live check on acute-appendicitis (temporary, uncommitted `station_loader.ex` change): exam findings and lab interpretation are graded when the patient reply is refused.
 
 ## Routing
@@ -40,6 +40,8 @@ In the #228 live run, exam verbalization and lab interpretation were addressed t
 - T1 done (route: delegated writer). Commit `fdeb7c7`. `Backend.Stations.create_message` returns `{:error, {:refused, reason, learner_turn}}` on a refused patient reply; the turn resolves with the new `Conversation.resolve_turn(..., :keep_learner_turn)`. RED: 4 new tests failed (`{:refused, reason}` returned); GREEN: full backend suite 1086 passed. Updated the #224-era contract tests that asserted rollback on refusal.
 - T2 done (route: delegated writer). Commit `9155d49`. Refusal body: `{"error": "reply_verification_failed", "message": ..., "learner_turn": {"role", "modality", "text", "at"}}`, HTTP 502. RED: 2 controller tests failed (no `learner_turn`); GREEN: full backend suite 1086 passed.
 
+- T3 done (route: delegated writer). Commit `13acb97`. `ApiError.learnerTurn` decodes `learner_turn`; `keptLearnerTurnNotice` in `useStation.ts` selects the kept-turn path; `StationScreen.sendTurn` keeps the bubble, leaves the input empty, and shows `learnerTurnKeptNotice` ("Sua mensagem foi registrada, mas o paciente não respondeu a ela."). RED: 7 new web tests failed; GREEN: web suite 196 passed, typecheck, lint and build clean; backend suite 1086 passed.
+
 ## Next step
 
-T3.
+T4 (parent-driven live check).
