@@ -16,3 +16,7 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Learner feedback never calls a provider in tests unless a test swaps in a double.
+config :backend,
+  learner_feedback_adapter: Backend.Stations.LearnerFeedback.DisabledAdapter

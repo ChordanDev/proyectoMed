@@ -3,7 +3,9 @@ defmodule Backend.Stations.Conversation do
   Holds active station conversations in an ephemeral, in-memory session store.
 
   Sessions are never persisted. A completed session is immutable: calling
-  `complete/2` again returns the original completed session.
+  `complete/2` again returns the original completed session. The only data
+  added to a completed session is its learner feedback cache
+  (`put_learner_feedback/2`), which lives and dies with the session.
   """
 
   use GenServer
@@ -16,6 +18,7 @@ defmodule Backend.Stations.Conversation do
   @type session :: %{
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
+          optional(:learner_feedback) => learner_feedback(),
           session_id: String.t(),
           station_id: String.t(),
           station_version: String.t(),
@@ -42,6 +45,12 @@ defmodule Backend.Stations.Conversation do
           released_ids: [String.t()],
           at: DateTime.t()
         }
+
+  @typedoc """
+  Generated learner feedback by criterion id, each entry bound to the
+  fingerprint of the graded outcome it was written for.
+  """
+  @type learner_feedback :: %{String.t() => %{fingerprint: term(), text: String.t()}}
 
   @type turn_token :: reference()
 
@@ -150,6 +159,26 @@ defmodule Backend.Stations.Conversation do
   @spec discard(String.t()) :: :ok
   def discard(session_id) do
     GenServer.call(__MODULE__, {:discard, session_id})
+  end
+
+  @doc "Returns the learner feedback cache of a session, or `%{}` when it has none."
+  @spec learner_feedback(String.t()) ::
+          {:ok, learner_feedback()} | {:error, :not_found | :expired}
+  def learner_feedback(session_id) do
+    with {:ok, session} <- fetch(session_id) do
+      {:ok, Map.get(session, :learner_feedback, %{})}
+    end
+  end
+
+  @doc """
+  Merges `entries` into the learner feedback cache of a session, replacing
+  entries with the same criterion id. A missing or expired session is left
+  untouched, so the cache never outlives a discarded session.
+  """
+  @spec put_learner_feedback(String.t(), learner_feedback()) ::
+          :ok | {:error, :not_found | :expired}
+  def put_learner_feedback(session_id, entries) when is_map(entries) do
+    GenServer.call(__MODULE__, {:put_learner_feedback, session_id, entries})
   end
 
   @impl true
@@ -319,6 +348,18 @@ defmodule Backend.Stations.Conversation do
 
       {:ok, %{status: :completed}} ->
         {:reply, {:error, :completed}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:put_learner_feedback, session_id, entries}, _from, state) do
+    case fetch_session(session_id) do
+      {:ok, session} ->
+        cache = session |> Map.get(:learner_feedback, %{}) |> Map.merge(entries)
+        true = :ets.insert(__MODULE__, {session_id, Map.put(session, :learner_feedback, cache)})
+        {:reply, :ok, state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}

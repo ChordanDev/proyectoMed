@@ -367,12 +367,21 @@ defmodule Backend.Stations do
     end
   end
 
-  @doc "Returns the explicit v2 educational result, without provider diagnostics or persistence."
+  @doc """
+  Returns the explicit v2 educational result, without provider diagnostics or persistence.
+
+  After grading, `Backend.Stations.LearnerFeedback` replaces the
+  `recommendation` of each assessed criterion with generated learner feedback
+  (issue #215), cached with the session and bound to the graded outcome. Any
+  feedback failure keeps the authored `practice_recommendation`; grading is
+  never changed.
+  """
   @spec get_educational_result(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_educational_result(session_id, opts \\ []) do
     with {:ok, assessment} <- assess_session(session_id, opts) do
-      {:ok,
-       Backend.Stations.EducationalResult.serialize(session_id, assessment, get_active_package())}
+      package = get_active_package()
+      assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
+      {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
     end
   end
 
