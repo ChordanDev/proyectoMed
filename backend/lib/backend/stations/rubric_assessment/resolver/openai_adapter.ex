@@ -9,6 +9,8 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
   context only), next to the learner-only evidence pool and the exact number
   of decisions expected. It answers one decision per action to decide. The
   strict JSON schema is static on purpose, so the provider can cache it.
+  The request runs at `temperature` 0, so identical input gets the same
+  decisions as far as the provider allows.
   `Backend.Stations.RubricAssessment.Resolver` validates and merges the answer;
   nothing here grants credit.
 
@@ -126,6 +128,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
   defp payload(request, model) do
     %{
       "model" => model,
+      "temperature" => 0,
       "messages" => [
         %{"role" => "system", "content" => @system_prompt},
         %{"role" => "user", "content" => Jason.encode!(user_content(request))}

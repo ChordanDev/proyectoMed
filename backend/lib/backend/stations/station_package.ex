@@ -15,6 +15,10 @@ defmodule Backend.Stations.StationPackage do
   `actions[].role` and a criterion `rule`. Their cross-field consistency, and
   the reachability of the thresholds under `count_cap` and `first_n`, are
   checked here, because the JSON schema cannot express all of it.
+
+  `actions[].impresso_ids` is optional too (issue #228): a non-empty list of the
+  authored impresso ids whose release means the learner requested what the
+  action asks. It is not allowed on a `first_n` criterion.
   """
 
   alias Backend.Stations.RubricAssessment.Points
@@ -240,8 +244,15 @@ defmodule Backend.Stations.StationPackage do
   defp validate_entry(errors, _entry, field, _required_fields),
     do: ["#{field} entries must be objects" | errors]
 
-  defp validate_rubric(errors, %{"rubric" => rubric}) when is_list(rubric) do
-    errors = Enum.reduce(rubric, errors, &validate_rubric_criterion/2)
+  defp validate_rubric(errors, %{"rubric" => rubric} = package) when is_list(rubric) do
+    impresso_ids = authored_impresso_ids(package)
+
+    errors =
+      Enum.reduce(rubric, errors, fn criterion, errors ->
+        criterion
+        |> validate_rubric_criterion(errors)
+        |> validate_action_impresso_ids(criterion, impresso_ids)
+      end)
 
     errors
     |> validate_unique_ids(rubric, "rubric criterion ids must be unique")
@@ -495,6 +506,50 @@ defmodule Backend.Stations.StationPackage do
     do: ["rubric actions role must be one of: #{Enum.join(@action_roles, ", ")}" | errors]
 
   defp validate_action_role(errors, _action), do: errors
+
+  defp validate_action_impresso_ids(errors, %{"actions" => actions} = criterion, authored)
+       when is_list(actions) do
+    with_ids = Enum.filter(maps(actions), &Map.has_key?(&1, "impresso_ids"))
+
+    errors =
+      Enum.reduce(with_ids, errors, fn %{"impresso_ids" => ids}, errors ->
+        validate_impresso_id_list(errors, ids, authored)
+      end)
+
+    add_error_if(
+      errors,
+      with_ids != [] and is_integer(criterion["first_n"]),
+      "rubric criteria with first_n must not author action impresso_ids"
+    )
+  end
+
+  defp validate_action_impresso_ids(errors, _criterion, _authored), do: errors
+
+  defp validate_impresso_id_list(errors, [_ | _] = ids, authored) do
+    if Enum.all?(ids, &non_empty_string?/1) do
+      case Enum.reject(ids, &(&1 in authored)) do
+        [] ->
+          errors
+
+        unknown ->
+          [
+            "rubric actions impresso_ids must name authored impressos: #{Enum.join(unknown, ", ")}"
+            | errors
+          ]
+      end
+    else
+      ["rubric actions impresso_ids must be a non-empty list of strings" | errors]
+    end
+  end
+
+  defp validate_impresso_id_list(errors, _ids, _authored),
+    do: ["rubric actions impresso_ids must be a non-empty list of strings" | errors]
+
+  defp authored_impresso_ids(%{"impressos" => impressos}) when is_list(impressos) do
+    for %{"id" => id} <- impressos, non_empty_string?(id), do: id
+  end
+
+  defp authored_impresso_ids(_package), do: []
 
   defp validate_nullable_integer_fields(errors, criterion) do
     Enum.reduce(@criterion_nullable_integer_fields, errors, fn field, errors ->

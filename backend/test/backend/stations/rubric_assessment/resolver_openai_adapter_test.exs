@@ -62,6 +62,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapterTest do
 
       assert_receive {:req, "/v1/chat/completions", ["Bearer sk-test"], payload}
       assert payload["model"] == "gpt-4o-mini"
+      assert payload["temperature"] == 0
 
       assert [system, user] = payload["messages"]
       assert system == %{"role" => "system", "content" => OpenAIAdapter.system_prompt()}

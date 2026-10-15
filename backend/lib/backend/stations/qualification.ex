@@ -369,10 +369,17 @@ defmodule Backend.Stations.Qualification do
   # Session
   # ============================================================================
 
-  # The session an attempt with these turns would leave: transcript messages,
-  # and one Impressos request event per `impressos` turn, decided by the same
-  # keyword match as a live request.
-  defp session(turns, package) do
+  @doc """
+  Builds the session an attempt with these turns would leave: transcript
+  messages, and one Impressos request event per `impressos` turn, decided by the
+  same keyword match as a live request.
+
+  Each turn is a case turn map with string keys: `"role"` (`"learner"` or
+  `"patient"`), `"modality"` (`"text"`, `"voice"` or `"impressos"`) and
+  `"text"`. Turns are one second apart, so their authored order is kept.
+  """
+  @spec session([map()], map()) :: %{messages: [map()], impresso_requests: [map()]}
+  def session(turns, package) when is_list(turns) and is_map(package) do
     {messages, events, _released} =
       turns
       |> Enum.with_index(1)
