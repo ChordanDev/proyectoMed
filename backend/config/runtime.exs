@@ -109,6 +109,23 @@ if config_env() != :test do
   end
 end
 
+# Rubric resolver (issue #214): an LLM that decides only the rubric actions Jev
+# left undecided. Off unless `RUBRIC_RESOLVER=openai` asks for it: without the
+# variable the default `DisabledAdapter` leaves those actions uncertain. It reuses
+# the OpenAI key and base URL configured above; `RUBRIC_RESOLVER_MODEL` picks its
+# model, which otherwise falls back to `OPENAI_MODEL`. `:test` reads none of it.
+if config_env() != :test do
+  resolver_adapter = Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter
+
+  if System.get_env("RUBRIC_RESOLVER") == "openai" do
+    config :backend, :rubric_resolver_adapter, resolver_adapter
+  end
+
+  if model = System.get_env("RUBRIC_RESOLVER_MODEL") do
+    config :backend, resolver_adapter, model: model
+  end
+end
+
 # E2E-only: bypasses Jev verification with a deterministic approving adapter.
 # The harness boots Phoenix under `:dev`, so the variable is honored only there:
 # `:test` keeps its injected adapters and `:prod` never compiles this module.
