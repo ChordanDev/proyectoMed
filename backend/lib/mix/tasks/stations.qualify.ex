@@ -49,17 +49,19 @@ defmodule Mix.Tasks.Stations.Qualify do
     # the :req application; app.config loads configuration without starting it.
     {:ok, _apps} = Application.ensure_all_started(:req)
 
-    with_log_level(run_level(debug?), fn ->
-      case Stations.run_qualification(station_id) do
-        {:ok, summary} ->
-          report = Stations.render_qualification(summary)
-          Mix.shell().info(report)
-          if out, do: write_report(out, report)
+    with_log_level(run_level(debug?), fn -> report(station_id, out) end)
+  end
 
-        {:error, reason} ->
-          Mix.raise("Qualification of #{station_id} did not run: #{inspect(reason)}")
-      end
-    end)
+  defp report(station_id, out) do
+    case Stations.run_qualification(station_id) do
+      {:ok, summary} ->
+        report = Stations.render_qualification(summary)
+        Mix.shell().info(report)
+        if out, do: write_report(out, report)
+
+      {:error, reason} ->
+        Mix.raise("Qualification of #{station_id} did not run: #{inspect(reason)}")
+    end
   end
 
   defp run_level(true), do: :debug
