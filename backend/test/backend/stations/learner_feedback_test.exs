@@ -515,7 +515,12 @@ defmodule Backend.Stations.LearnerFeedbackTest do
 
     test "a positive integer overrides the deadline" do
       assert runtime_deadline(:dev, "45000") == {:ok, 45_000}
-      assert runtime_deadline(:dev, " 90000 ") == {:ok, 90_000}
+      assert runtime_deadline(:dev, " 65000 ") == {:ok, 65_000}
+    end
+
+    test "a value above 65 s is capped so the 80 s web wait still covers the request" do
+      assert runtime_deadline(:dev, "90000") == {:ok, 65_000}
+      assert runtime_deadline(:dev, "3600000") == {:ok, 65_000}
     end
 
     test "without the variable the configured default stays" do

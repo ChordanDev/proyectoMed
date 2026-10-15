@@ -28,7 +28,9 @@ fails technically.
 resolver and then generates learner feedback before it answers, so it may take
 up to about a minute. Learner feedback has a 60 s deadline by default;
 `LEARNER_FEEDBACK_DEADLINE_MS` (a positive integer, read at boot outside `:test`)
-overrides it, and any other value keeps the default. Each call logs its latency,
+overrides it, and any other value keeps the default. The override is capped at
+65 s, so the resolver (10 s) plus feedback stay inside the web client's 80 s
+wait. Each call logs its latency,
 never the texts. Later fetches reuse the cached feedback. The web client waits
 up to 80 s for this request only and shows a waiting message meanwhile; every
 other request keeps its 15 s timeout.
