@@ -166,6 +166,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   defp run(adapter, request, opts) do
     adapter_opts = Keyword.get(opts, :resolver_opts, [])
     deadline_ms = deadline_ms(opts)
+    started_at = System.monotonic_time(:millisecond)
 
     task =
       Task.async(fn ->
@@ -186,10 +187,28 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
         {:exit, _reason} -> {:error, :task_exit}
       end
 
-    with {:error, reason} <- validate_output(result) do
-      Logger.warning("Rubric resolver left undecided actions uncertain: #{tag(reason)}")
-      {:error, reason}
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+
+    case validate_output(result) do
+      {:ok, actions} = ok ->
+        Logger.info(
+          "Rubric resolver answered in #{elapsed_ms} ms: " <>
+            "#{length(actions)} decisions for #{decidable_count(request)} undecided actions"
+        )
+
+        ok
+
+      {:error, reason} = error ->
+        Logger.warning(
+          "Rubric resolver left undecided actions uncertain after #{elapsed_ms} ms: #{tag(reason)}"
+        )
+
+        error
     end
+  end
+
+  defp decidable_count(%{criteria: criteria}) do
+    Enum.reduce(criteria, 0, &(length(&1.decidable_action_ids) + &2))
   end
 
   defp validate_output({:ok, %{actions: actions}}) when is_list(actions) do

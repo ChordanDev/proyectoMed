@@ -124,6 +124,12 @@ if config_env() != :test do
   if model = System.get_env("RUBRIC_RESOLVER_MODEL") do
     config :backend, resolver_adapter, model: model
   end
+
+  # `RUBRIC_RESOLVER_DEADLINE_MS` overrides the resolver's own deadline (5 s).
+  with raw when is_binary(raw) <- System.get_env("RUBRIC_RESOLVER_DEADLINE_MS"),
+       {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
+    config :backend, :rubric_resolver_deadline_ms, deadline_ms
+  end
 end
 
 # E2E-only: bypasses Jev verification with a deterministic approving adapter.
