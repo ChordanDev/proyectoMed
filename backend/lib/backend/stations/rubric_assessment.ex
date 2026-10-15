@@ -15,10 +15,16 @@ defmodule Backend.Stations.RubricAssessment do
     3. **One batched Jev call** carries every question. More calls happen only
        for a provider capacity limit (`:max_questions_per_call`), and every
        call is recorded with its justification.
-    4. **Deterministic post-processing** validates each cited evidence
+    4. **The rubric resolver** (`Backend.Stations.RubricAssessment.Resolver`)
+       decides, through its own provider and deadline, only the authored
+       actions Jev left `"uncertain"`. Jev's clear answers stay final, a
+       positive decision must cite learner evidence that passes validation, and
+       a resolver failure leaves those actions `"uncertain"` without
+       invalidating the attempt.
+    5. **Deterministic post-processing** validates each cited evidence
        identifier and fails closed per criterion: nothing is repaired, dropped
        or substituted.
-    5. **The task-order criterion** (`rule: "task_order"`) is assessed in code
+    6. **The task-order criterion** (`rule: "task_order"`) is assessed in code
        from the results of the ranked criteria and the position of their
        earliest evidence (`Backend.Stations.RubricAssessment.TaskOrder`). It is
        never a question, and it counts in the totals like any other criterion.
@@ -52,11 +58,17 @@ defmodule Backend.Stations.RubricAssessment do
   alias Backend.Stations.RubricAssessment.Evidence
   alias Backend.Stations.RubricAssessment.FirstN
   alias Backend.Stations.RubricAssessment.Points
+  alias Backend.Stations.RubricAssessment.Resolver
   alias Backend.Stations.RubricAssessment.TaskOrder
 
   @uncertain_class "uncertain"
   @task_order "task_order"
-  @own_opts [:max_questions_per_call]
+  @own_opts [
+    :max_questions_per_call,
+    :resolver_adapter,
+    :resolver_opts,
+    :rubric_resolver_deadline_ms
+  ]
 
   @typedoc "Why a criterion that is not assessed has no level."
   @type reason ::
@@ -148,7 +160,9 @@ defmodule Backend.Stations.RubricAssessment do
   session map with `messages` and, optionally, `impresso_requests`. `opts` are
   passed to `Backend.Stations.JevDecision.decide_rubric_batch/2` (`:adapter`
   and the deadline options), except `:max_questions_per_call`, a positive
-  integer that caps the questions of one call.
+  integer that caps the questions of one call, and the resolver options
+  (`:resolver_adapter`, `:resolver_opts`, `:rubric_resolver_deadline_ms`) read
+  by `Backend.Stations.RubricAssessment.Resolver`.
 
   Returns criterion results in rubric order, the point estimates and the Jev
   calls made, or `{:error, {:invalid_attempt, reason}}` with no criteria when a
@@ -162,6 +176,8 @@ defmodule Backend.Stations.RubricAssessment do
          pool <- Evidence.build(session, package),
          {:ok, plans} <- triage(package),
          {:ok, decisions, calls} <- ask(questions(plans), pool, opts) do
+      decisions = Resolver.resolve(decisions, asked(plans), pool, opts)
+
       criteria =
         plans |> Enum.map(&criterion_result(&1, decisions, pool)) |> task_order(plans, pool)
 
@@ -282,6 +298,8 @@ defmodule Backend.Stations.RubricAssessment do
   defp questions(plans) do
     for %{route: :ask} = plan <- plans, do: question(plan)
   end
+
+  defp asked(plans), do: for(%{route: :ask} = plan <- plans, do: plan)
 
   defp question(%{id: id, criterion: criterion}) do
     question = %{

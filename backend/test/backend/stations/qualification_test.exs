@@ -4,6 +4,7 @@ defmodule Backend.Stations.QualificationTest do
   alias Backend.Stations.JevDecision.DisabledAdapter
   alias Backend.Stations.Qualification
   alias Backend.Stations.Qualification.Cases
+  alias Backend.Stations.RubricAssessment.Resolver
 
   @moduletag capture_log: true
 
@@ -61,6 +62,62 @@ defmodule Backend.Stations.QualificationTest do
     end
 
     defp action(_criterion_id, id), do: %{id: id, classification: "not_performed"}
+  end
+
+  defmodule UndecidedDouble do
+    @moduledoc "Verifies every candidate reply and leaves every rubric action undecided."
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :verified}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+
+    @impl true
+    def decide_rubric_batch(request) do
+      decisions =
+        for question <- request.questions do
+          %{
+            criterion_id: question.criterion.id,
+            classification: "uncertain",
+            evidence_ids: [],
+            actions:
+              Enum.map(
+                question.actions,
+                &%{id: &1.id, classification: "uncertain", evidence_ids: []}
+              )
+          }
+        end
+
+      {:ok, %{decisions: decisions}}
+    end
+  end
+
+  defmodule ResolverDouble do
+    @moduledoc """
+    Decides every undecided action as `ScriptedDouble` would: `criterio-1` of
+    `item-01` performed with the first turn, every other one not performed.
+    """
+    @behaviour Backend.Stations.RubricAssessment.Resolver
+
+    @impl true
+    def resolve(request, _opts) do
+      actions =
+        for criterion <- request.criteria, id <- criterion.decidable_action_ids do
+          decide(criterion.id, id)
+        end
+
+      {:ok, %{actions: actions}}
+    end
+
+    defp decide("item-01", "criterio-1" = id) do
+      %{criterion_id: "item-01", id: id, classification: "performed", evidence_ids: ["turn-1"]}
+    end
+
+    defp decide(criterion_id, id) do
+      %{criterion_id: criterion_id, id: id, classification: "not_performed", evidence_ids: []}
+    end
   end
 
   defp adjudicated(outcomes) do
@@ -283,6 +340,7 @@ defmodule Backend.Stations.QualificationTest do
 
     test "names the adapter and reports undefined thresholds", %{summary: summary} do
       assert summary.adapter == DisabledAdapter
+      assert summary.resolver == Resolver.DisabledAdapter
       assert summary.thresholds == :undefined
       assert summary.adjudicated == 0
     end
@@ -314,6 +372,7 @@ defmodule Backend.Stations.QualificationTest do
       report = Qualification.render(summary)
 
       assert report =~ "Adapter: Backend.Stations.JevDecision.DisabledAdapter"
+      assert report =~ "Resolver: Backend.Stations.RubricAssessment.Resolver.DisabledAdapter"
       assert report =~ "Thresholds: undefined"
       assert report =~ "not a clinical accuracy claim"
       refute report =~ ~r/\b(pass|passed|fail|failed|qualified|accurate)\b/i
@@ -410,6 +469,31 @@ defmodule Backend.Stations.QualificationTest do
       assert results["fx-6"] == :adapter_disabled
       assert results["fx-9"] == :agreed_with_adjudication
       assert summary.totals.disagreed == 0
+    end
+  end
+
+  describe "evaluate/2 with a rubric resolver" do
+    defp observed(summary), do: Map.new(summary.cases, &{&1.id, &1.observed})
+
+    test "the resolver decides the actions Jev left undecided" do
+      undecided = Qualification.evaluate(loaded(fixture()), adapter: UndecidedDouble)
+      assert undecided.resolver == Resolver.DisabledAdapter
+      assert observed(undecided)["fx-6"] == "uncertain"
+
+      resolved =
+        Qualification.evaluate(loaded(fixture()),
+          adapter: UndecidedDouble,
+          resolver_adapter: ResolverDouble
+        )
+
+      assert resolved.resolver == ResolverDouble
+      assert observed(resolved)["fx-6"] == "action:performed"
+      assert Qualification.render(resolved) =~ "Resolver: #{inspect(ResolverDouble)}"
+    end
+
+    test "run/2 passes the resolver adapter through" do
+      assert {:ok, summary} = Qualification.run(@station_id, resolver_adapter: ResolverDouble)
+      assert summary.resolver == ResolverDouble
     end
   end
 end
