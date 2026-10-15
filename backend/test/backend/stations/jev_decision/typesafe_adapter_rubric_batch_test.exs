@@ -118,6 +118,32 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
       assert Enum.map(first.actions, & &1.id) == ["act-onset", "act-fever"]
     end
 
+    test "every action question carries its criterion description as context" do
+      assert {:ok, _result} =
+               TypesafeAdapter.decide_rubric_batch(
+                 request(),
+                 stub_answers(ContextStub, &matching/2)
+               )
+
+      assert_received {:typesafe_request, payload}
+
+      by_action =
+        payload["questions"]
+        |> Map.values()
+        |> Enum.group_by(& &1["instructions"]["action"], & &1["instructions"])
+
+      for instructions <-
+            by_action[@onset_action.description] ++
+              by_action[@fever_action.description] do
+        assert instructions["criterion"] == "Caracteriza a dor."
+        assert instructions["question"] =~ "`criterion`"
+      end
+
+      for instructions <- by_action[@vomit_action.description] do
+        assert instructions["criterion"] == "Sintomas associados."
+      end
+    end
+
     test "cites every learner item answered yes, in pool order" do
       answer = fn action, text ->
         if action == @onset_action.description and text in [@asks_onset, @asks_vomiting],

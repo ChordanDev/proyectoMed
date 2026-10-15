@@ -742,6 +742,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
         {action, a} <- Enum.with_index(Map.get(question, :actions, []), 1) do
       %{
         criterion_id: question.criterion.id,
+        criterion_description: to_string(Map.get(question.criterion, :description) || ""),
         action_id: action.id,
         description: to_string(Map.get(action, :description) || ""),
         asks: Enum.map(items, &{"performs:#{q}.#{a}:#{&1.n}", &1})
@@ -762,6 +763,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     end
   end
 
+  # The action alone is often a fragment ("PCR"), so each question also carries the
+  # criterion it belongs to (issue #228): it tells the provider what kind of act counts.
   defp action_questions(plan) do
     Map.new(plan.asks, fn {id, item} ->
       {id,
@@ -769,9 +772,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
          "type" => "noul",
          "instructions" => %{
            "question" =>
-             "Does the message in `learner_items` whose `item` equals `item` perform " <>
-               "`action`, in the same words or in different words?",
+             "`action` is one of the actions assessed by `criterion`. Does the message " <>
+               "in `learner_items` whose `item` equals `item` perform `action`, in the " <>
+               "same words or in different words?",
            "item" => item.n,
+           "criterion" => plan.criterion_description,
            "action" => plan.description
          }
        }}
