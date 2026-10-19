@@ -178,7 +178,38 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       nouls = nouls(%{@stated_allergy => 0.96, @asked_allergy => 0.03})
 
       assert decide(UnaskedStub, nouls) ==
-               {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-allergy"]}}
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-allergy"],
+                  unasked_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "names only the unasked on_request facts, not the asked ones or other risks" do
+      nouls =
+        nouls(%{
+          @stated_onset => 0.97,
+          @asked_onset => 0.95,
+          @stated_allergy => 0.96,
+          @asked_allergy => 0.03
+        })
+
+      assert decide(MixedUnaskedStub, nouls) ==
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-onset", "fact-allergy"],
+                  unasked_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "a refusal for a risk alone names no unasked fact" do
+      nouls = nouls(%{@stated_onset => 0.97, @asked_onset => 0.95, @risk_unsupported => 0.93})
+
+      assert {:ok, decision} = decide(RiskOnlyStub, nouls)
+      assert decision.status == :semantic_refusal
+      refute Map.has_key?(decision, :unasked_fact_ids)
     end
 
     test "a timed fact needs no asked question" do
@@ -259,7 +290,13 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       assert TypesafeAdapter.decide_patient(
                with_facts([@onset, twin]),
                stub_nouls(TwinUnaskedStub, unasked)
-             ) == {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-onset"]}}
+             ) ==
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-onset"],
+                  unasked_fact_ids: ["fact-onset"]
+                }}
     end
 
     test "is low confidence when a risk answer falls between the thresholds" do
@@ -1196,6 +1233,23 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
 
       assert_receive {:typesafe_request, _conn, payload}
       assert payload["state"]["latest_learner_message"] == @learner_question
+    end
+
+    test "passes the unasked on_request fact ids of a refusal through the seam" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            SeamUnaskedStub,
+            nouls(%{@stated_allergy => 0.96, @asked_allergy => 0.03})
+          )
+
+      assert JevDecision.decide_patient(seam_request(), opts) ==
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-allergy"],
+                  unasked_fact_ids: ["fact-allergy"]
+                }}
     end
 
     test "returns a sanitized error for an overloaded provider, with a log free of payload text" do

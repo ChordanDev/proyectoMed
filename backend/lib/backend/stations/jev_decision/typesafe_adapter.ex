@@ -85,6 +85,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   value strictly between them is undecided.
 
     * `used_fact_ids` - the facts whose stated answer is a yes
+    * `unasked_fact_ids` - present only when non-empty: the authored ids of the
+      `on_request` facts stated (yes) while the learner did not ask for them (no).
+      `CandidateGate` names them in its single regeneration (issue #242).
     * `:semantic_refusal` - a risk answer is a yes, or an `on_request` fact is stated
       (yes) while the learner did not ask for it (no)
     * `:verified` - every risk answer is a no and no answer the verdict depends on is
@@ -656,8 +659,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   question of `facts` and for every id in `risk_ids`.
   """
   @spec verdict([fact_plan()], [String.t()], %{String.t() => number()}, thresholds()) :: %{
-          status: :verified | :semantic_refusal | :low_confidence,
-          used_fact_ids: [String.t()]
+          required(:status) => :verified | :semantic_refusal | :low_confidence,
+          required(:used_fact_ids) => [String.t()],
+          optional(:unasked_fact_ids) => [String.t()]
         }
   def verdict(facts, risk_ids, nouls, thresholds) do
     risks = Enum.map(risk_ids, &classify(nouls[&1], thresholds))
@@ -668,6 +672,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       for(fact <- facts, classify(nouls[fact.stated], thresholds) == :yes, do: fact.id)
       |> Enum.uniq()
 
+    unasked_fact_ids =
+      for({fact, :violation} <- Enum.zip(facts, disclosures), do: fact.id)
+      |> Enum.uniq()
+
     status =
       cond do
         :yes in risks or :violation in disclosures -> :semantic_refusal
@@ -676,7 +684,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       end
 
     %{status: status, used_fact_ids: used_fact_ids}
+    |> put_unasked_fact_ids(unasked_fact_ids)
   end
+
+  defp put_unasked_fact_ids(decision, []), do: decision
+  defp put_unasked_fact_ids(decision, ids), do: Map.put(decision, :unasked_fact_ids, ids)
 
   @doc "Classifies a noul against the thresholds; both thresholds are inclusive."
   @spec classify(number(), thresholds()) :: :yes | :no | :undecided

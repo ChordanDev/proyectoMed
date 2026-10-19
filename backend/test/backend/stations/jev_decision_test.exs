@@ -45,6 +45,18 @@ defmodule Backend.Stations.JevDecisionTest do
       {:ok, %{status: :verified, used_fact_ids: ["onset"]}}
     end
 
+    defp decide_text("unasked_fact", _req) do
+      {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-1"], unasked_fact_ids: ["fact-1"]}}
+    end
+
+    defp decide_text("unasked_unknown_fact", _req) do
+      {:ok, %{status: :semantic_refusal, unasked_fact_ids: ["nonexistent-fact-99"]}}
+    end
+
+    defp decide_text("unasked_not_a_list", _req) do
+      {:ok, %{status: :semantic_refusal, unasked_fact_ids: "fact-1"}}
+    end
+
     defp decide_text("nonexistent_fact", _req) do
       {:ok, %{status: :verified, used_fact_ids: ["nonexistent-fact-99"]}}
     end
@@ -342,6 +354,35 @@ defmodule Backend.Stations.JevDecisionTest do
 
       assert {:error, {:invalid_response, :nonexistent_fact_ids}} =
                JevDecision.decide_patient(request, adapter: DeterministicDouble)
+    end
+
+    test "passes canonical unasked fact ids of a refusal through" do
+      request = %{
+        candidate_text: "unasked_fact",
+        package: sample_package(),
+        conversation: sample_conversation()
+      }
+
+      assert {:ok,
+              %{
+                status: :semantic_refusal,
+                used_fact_ids: ["fact-1"],
+                unasked_fact_ids: ["fact-1"]
+              }} =
+               JevDecision.decide_patient(request, adapter: DeterministicDouble)
+    end
+
+    test "rejects unasked fact ids that are not canonical package fact ids" do
+      for text <- ["unasked_unknown_fact", "unasked_not_a_list"] do
+        request = %{
+          candidate_text: text,
+          package: sample_package(),
+          conversation: sample_conversation()
+        }
+
+        assert {:error, {:invalid_response, _reason}} =
+                 JevDecision.decide_patient(request, adapter: DeterministicDouble)
+      end
     end
   end
 
