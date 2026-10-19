@@ -19,7 +19,7 @@ Choose the active station at boot through a runtime setting (for example `ACTIVE
 ## Tasks
 
 - [x] T1 Runtime setting read in `config/runtime.exs`, loader uses it, boot error for an unknown id, tests, README entry next to `JEV_ADAPTER` / `RUBRIC_RESOLVER`.
-- [ ] T2 Manual check: boot with `ACTIVE_STATION_ID=acute-appendicitis` and `curl /api/stations/active`.
+- [x] T2 Manual check: boot with `ACTIVE_STATION_ID=acute-appendicitis` and `curl /api/stations/active`.
 
 ## Routing
 
