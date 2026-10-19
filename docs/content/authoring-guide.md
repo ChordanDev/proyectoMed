@@ -134,6 +134,8 @@ An impresso is a handout released when the learner asks for it.
 | `keywords` | List of non-empty strings (the list may be empty: never released). | `validator:714` |
 | `content` | Non-empty string (Markdown) or a non-empty object. | `validator:726` |
 
+The web drawer renders a Markdown subset in string `content` (`web/src/features/station/screens/ImpressoContent.tsx`): `### ` headings, `**bold**`, `- ` bullet lists, paragraphs separated by a blank line, and single line breaks. Anything else, including HTML, is shown as literal text. Keep to this subset.
+
 How release works (`impressos:42`): the learner's text is lower-cased and stripped of accents; an impresso is released, whole, when any keyword occurs in it starting at the beginning of a word.
 
 - A keyword cannot tell a request from a mention, or a pertinent request from an impertinent one.
