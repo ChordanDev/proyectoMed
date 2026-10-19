@@ -22,7 +22,7 @@ In the #228 live run, exam verbalization and lab interpretation were addressed t
 - [x] T1 Backend: on `{:refused, _}` patient verification, commit the learner turn without a patient reply; technical failures roll back. Tests in stations tests, including the kept turn in the rubric evidence pool.
 - [x] T2 API: the refusal keeps `reply_verification_failed` and adds the stored learner turn to the body. Controller tests.
 - [x] T3 Web: on that refusal the bubble stays, the input is cleared, and a pt-BR notice says the message was recorded and the patient did not answer it. Technical-failure path keeps #224 behavior. Tests.
-- [ ] T4 Live check on acute-appendicitis (temporary, uncommitted `station_loader.ex` change): exam findings and lab interpretation are graded when the patient reply is refused.
+- [x] T4 Live check on acute-appendicitis (temporary, uncommitted `station_loader.ex` change): exam findings and lab interpretation are graded when the patient reply is refused.
 
 ## Routing
 
@@ -42,6 +42,9 @@ In the #228 live run, exam verbalization and lab interpretation were addressed t
 
 - T3 done (route: delegated writer). Commit `13acb97`. `ApiError.learnerTurn` decodes `learner_turn`; `keptLearnerTurnNotice` in `useStation.ts` selects the kept-turn path; `StationScreen.sendTurn` keeps the bubble, leaves the input empty, and shows `learnerTurnKeptNotice` ("Sua mensagem foi registrada, mas o paciente não respondeu a ela."). RED: 7 new web tests failed; GREEN: web suite 196 passed, typecheck, lint and build clean; backend suite 1086 passed.
 
+- T4 done (route: parent-driven live run, 2026-10-19, `JEV_ADAPTER=typesafe RUBRIC_RESOLVER=openai`, acute-appendicitis via a temporary uncommitted `station_loader.ex` change, reverted afterwards). Three patient replies were refused and their learner turns kept: an anamnesis question (`semantic_refusal`, HTTP 502 with `learner_turn`), the exam authorization, and the verbalized exam findings. The UI kept the bubble, cleared the input, and showed the pt-BR notice; no patient text appeared. Result 9.6/10, 11/11 assessed: item 5 scored 1.2/1.2 citing the kept authorization and findings turns; item 7 scored 0.8/0.8 citing the lab interpretation (in #228 both were 0).
+- Follow-ups observed, out of scope: `semantic_refusal` with every `risk:*` at `no` and only an undecided `fact_stated` (possible over-refusal); impresso requests match keywords exactly ("exame físico abdominal" was not recognized); some criteria cite an unrelated evidence turn (items 7 and 10 also cite "O que o trouxe aqui hoje?"); item 2 scored 0.4 because migration and duration were volunteered by the patient, not asked by the learner.
+
 ## Next step
 
-T4 (parent-driven live check).
+Open the PR to `develop` (`Closes #235`) when the maintainer asks.
