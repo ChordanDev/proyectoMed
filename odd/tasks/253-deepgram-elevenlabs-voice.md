@@ -76,6 +76,10 @@ and ElevenLabs keys already exist from the real-time voice prototype (#116).
   `text`, `model_id`, `output_format` default `mp3_44100_128`). The raw-audio body
   for Deepgram follows the reference branch and Deepgram's documented binary upload
   (the reference page only shows the URL form).
+- Local CI (mirror of `.github/workflows/pr-validation.yml`) on `547af81`: LOCAL CI
+  PASSED — web unit 213/213 (9 files), backend ExUnit 1200 passed, E2E 4/4, `tsc`,
+  ESLint, `mix format --check-formatted`, Credo and Dialyzer clean. GitHub Actions is
+  blocked by billing.
 - T4 pending: live check needs the maintainer's keys.
 
 ## Next step
