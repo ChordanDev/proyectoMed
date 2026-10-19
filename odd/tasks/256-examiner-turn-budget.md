@@ -39,7 +39,9 @@ In the 2026-10-19 Claude rehearsal the verbalized exam findings failed twice wit
 - 2026-10-19: T2 done (route: inline). RED: 4 failing (patient payload model/thinking, patient ignores `:model`, `:patient_model` from config, runtime config writes `ANTHROPIC_PATIENT_MODEL`); 4 guards already passed (non-Sonnet patient gets no thinking; resolver and feedback keep `:model`, effort `medium`, no thinking). GREEN: 43/43; full backend 1248 passed; credo and warnings-as-errors clean. `fallbacks: "default"` stays on both models (the reference lists it for Opus 5.5 and Sonnet 5.5 on the Claude API).
 - 2026-10-19: T2 commit `1ac9900`.
 - 2026-10-19: T3 done (route: inline). RED: 1/1 new log test failing (no `patient_generation` lines). GREEN: 22/22 in the contract file; full backend 1249 passed; credo and warnings-as-errors clean. `Stations` logs `[Stations] patient_generation latency_ms=N outcome=ok|error` and `JevDecision` logs `[JevDecision] patient_verification latency_ms=N outcome=<status>|error`, both at debug, with no text.
+- 2026-10-19: T3 commit `21ad514`. Local CI (mirror of `pr-validation.yml`) passed at `21ad514`: web unit 213 passed, backend `mix test` 1249 passed, process E2E 4 passed; format, warnings-as-errors and credo clean. GitHub Actions is blocked by billing.
+- Pending: T4 live check (no key available to the writer). The first patient generation runs before the Jev deadline starts, so only the regeneration shares the 3 s budget; the debug latencies will show whether `JEV_DECISION_DEFAULT_DEADLINE_MS` needs tuning.
 
 ## Next step
 
-Local CI, then T4 (live check, user-run): `LLM_PROVIDER=anthropic JEV_ADAPTER=typesafe` with debug logs to read the latencies.
+ T4 (live check, user-run): `LLM_PROVIDER=anthropic JEV_ADAPTER=typesafe` with debug logs to read the latencies.
