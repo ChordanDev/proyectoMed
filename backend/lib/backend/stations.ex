@@ -680,7 +680,7 @@ defmodule Backend.Stations do
   defp resolve_verify_generator(params, package, context) do
     case Map.get(params, :generator) || Map.get(params, "generator") do
       gen when is_function(gen) -> gen
-      _ -> fn -> generate_patient_reply(package, context) end
+      _ -> fn _pkg, _conv, _remaining_ms, guidance -> regenerate(package, context, guidance) end
     end
   end
 
@@ -734,6 +734,15 @@ defmodule Backend.Stations do
       other -> other
     end
   end
+
+  # The gate's single regeneration: `guidance.withheld_fact_ids` names, by authored
+  # id, the on-request facts the refused candidate stated without being asked
+  # (issue #242). The refused text itself never reaches the regeneration.
+  defp regenerate(package, context, %{withheld_fact_ids: [_ | _] = ids}) do
+    generate_patient_reply(package, Map.put(context, :withheld_fact_ids, ids))
+  end
+
+  defp regenerate(package, context, _guidance), do: generate_patient_reply(package, context)
 
   defp generate_patient_reply(package, context) do
     adapter = resolve_station_ai_adapter()

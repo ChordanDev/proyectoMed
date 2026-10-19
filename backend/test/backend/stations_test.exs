@@ -109,6 +109,50 @@ defmodule Backend.StationsTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  # Issue #242: the patient volunteers an unasked on_request fact unless the
+  # regeneration names it as withheld.
+  @volunteering_reply "Pioro ao andar, sem febre, e também perdi o apetite."
+  @compliant_reply "Pioro ao andar e não tive febre nem vômitos."
+
+  defmodule WithholdingAwareAIAdapter do
+    @behaviour Backend.Stations.StationAI
+
+    @impl true
+    def next_reply(_package, context) do
+      withheld = Map.get(context, :withheld_fact_ids, [])
+
+      if pid = Application.get_env(:backend, :test_withheld_probe_pid),
+        do: send(pid, {:withheld, withheld})
+
+      if withheld == [] do
+        {:ok, %{text: "Pioro ao andar, sem febre, e também perdi o apetite.", used_facts: []}}
+      else
+        {:ok, %{text: "Pioro ao andar e não tive febre nem vômitos.", used_facts: []}}
+      end
+    end
+  end
+
+  defmodule UnaskedFactJevAdapter do
+    @moduledoc "Refuses the volunteering reply, naming the first on_request fact as unasked."
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(
+          %{candidate_text: "Pioro ao andar, sem febre, e também perdi o apetite."} = request
+        ) do
+      fact =
+        request.package["revealable_facts"]
+        |> Enum.find(&(&1["disclosure_condition"] == "on_request"))
+
+      {:ok, %{status: :semantic_refusal, unasked_fact_ids: [fact["id"]]}}
+    end
+
+    def decide_patient(_request), do: {:ok, %{status: :verified}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup do
     prev_adapter = Application.get_env(:backend, :station_ai_adapter)
     prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
@@ -377,6 +421,39 @@ defmodule Backend.StationsTest do
         assert session_after.messages == [learner_turn]
         refute inspect(session_after) =~ "forte dor no peito"
       end
+    end
+
+    test "create_message/2 regenerates once naming the unasked fact and delivers the compliant reply" do
+      Application.put_env(:backend, :station_ai_adapter, WithholdingAwareAIAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, UnaskedFactJevAdapter)
+      Application.put_env(:backend, :test_withheld_probe_pid, self())
+      on_exit(fn -> Application.delete_env(:backend, :test_withheld_probe_pid) end)
+
+      session = Stations.create_session(%{audio_consent: true})
+
+      on_request_id =
+        Stations.get_active_package()["revealable_facts"]
+        |> Enum.find(&(&1["disclosure_condition"] == "on_request"))
+        |> Map.fetch!("id")
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          Stations.create_message(session.session_id, %{
+            role: "learner",
+            modality: "text",
+            text: "Alguma coisa piora a dor? Teve febre?"
+          })
+        end)
+
+      assert {:ok, %{reply_text: @compliant_reply}} = result
+      assert_received {:withheld, []}
+      assert_received {:withheld, [^on_request_id]}
+      refute_received {:withheld, _}
+
+      {:ok, session_after} = Stations.get_session(session.session_id)
+      refute inspect(session_after) =~ @volunteering_reply
+      refute inspect(result) =~ @volunteering_reply
+      refute log =~ @volunteering_reply
     end
 
     test "create_message/2 rolls the learner turn back when Jev fails technically" do

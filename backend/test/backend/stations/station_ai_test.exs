@@ -12,6 +12,40 @@ defmodule Backend.StationAI.SystemPromptTest do
     %{prompt: @package_path |> File.read!() |> Jason.decode!() |> StationAI.system_prompt()}
   end
 
+  describe "system_prompt/2 withheld facts (issue #242)" do
+    setup do
+      %{package: @package_path |> File.read!() |> Jason.decode!()}
+    end
+
+    test "without withheld facts the prompt is the plain prompt", %{package: package} do
+      assert StationAI.system_prompt(package, %{withheld_fact_ids: []}) ==
+               StationAI.system_prompt(package)
+
+      assert StationAI.system_prompt(package, %{}) == StationAI.system_prompt(package)
+    end
+
+    test "names each withheld fact by authored id and content, and only those", %{
+      package: package
+    } do
+      [withheld | _] =
+        on_request =
+        Enum.filter(package["revealable_facts"], &(&1["disclosure_condition"] == "on_request"))
+
+      prompt =
+        StationAI.system_prompt(package, %{withheld_fact_ids: [withheld["id"], "unknown-id"]})
+
+      [_, section] = String.split(prompt, "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR")
+
+      assert section =~ "(#{withheld["id"]})"
+      assert section =~ withheld["content"]
+      refute section =~ "unknown-id"
+
+      for other <- on_request -- [withheld] do
+        refute section =~ "(#{other["id"]})"
+      end
+    end
+  end
+
   describe "system_prompt/1 patient identity" do
     test "keeps the examiner-facing context and says the patient is the person it describes",
          %{prompt: prompt} do

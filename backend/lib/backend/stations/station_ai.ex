@@ -37,8 +37,9 @@ defmodule Backend.Stations.StationAI do
         }
 
   @type context :: %{
-          conversation: [conversation_message()],
-          language: String.t()
+          required(:conversation) => [conversation_message()],
+          required(:language) => String.t(),
+          optional(:withheld_fact_ids) => [String.t()]
         }
 
   @type reply :: %{
@@ -109,7 +110,23 @@ defmodule Backend.Stations.StationAI do
   context (vitals, findings) stays unsayable unless it is a revealable fact.
   """
   @spec system_prompt(package()) :: String.t()
-  def system_prompt(package) do
+  def system_prompt(package), do: system_prompt(package, %{})
+
+  @doc """
+  Builds the system prompt for `package`, adding the facts the patient must not
+  mention yet when `context` carries `withheld_fact_ids`.
+
+  `withheld_fact_ids` are authored fact ids (issue #242): the regeneration after a
+  candidate stated an on-request fact the learner had not asked for. Each id is
+  rendered with its authored content from the package; ids the package does not
+  know are ignored. Without withheld facts the prompt equals `system_prompt/1`.
+  """
+  @spec system_prompt(package(), map()) :: String.t()
+  def system_prompt(package, context) when is_map(context) do
+    base_prompt(package) <> withheld_section(package, Map.get(context, :withheld_fact_ids, []))
+  end
+
+  defp base_prompt(package) do
     profile = Map.fetch!(package, "patient_profile")
     language = Map.fetch!(package, "language")
 
@@ -181,6 +198,26 @@ defmodule Backend.Stations.StationAI do
     end
   end
 
+  defp withheld_section(package, ids) when is_list(ids) and ids != [] do
+    withheld =
+      Enum.filter(package["revealable_facts"] || [], fn fact ->
+        is_map(fact) and fact["id"] in ids
+      end)
+
+    if withheld == [] do
+      ""
+    else
+      """
+
+      FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR
+      O estudante ainda não perguntou sobre os fatos abaixo. Não os mencione nesta resposta, nem de passagem; responda só ao que foi perguntado.
+      #{Enum.map_join(withheld, "\n", &"  - (#{&1["id"]}) [#{&1["topic"]}] #{&1["content"]}")}
+      """
+    end
+  end
+
+  defp withheld_section(_package, _ids), do: ""
+
   defp format_facts([]), do: "  (nenhum)"
 
   defp format_facts(facts) when is_list(facts) do
@@ -214,6 +251,7 @@ defmodule Backend.StationAI do
 
   defdelegate next_reply(package, context), to: Backend.Stations.StationAI
   defdelegate system_prompt(package), to: Backend.Stations.StationAI
+  defdelegate system_prompt(package, context), to: Backend.Stations.StationAI
   defdelegate detect_used_facts(text, facts), to: Backend.Stations.StationAI
   defdelegate refusal_text(), to: Backend.Stations.StationAI
 end

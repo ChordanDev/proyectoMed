@@ -41,6 +41,10 @@ defmodule Backend.Stations.CandidateGateTest do
       {:ok, %{status: :semantic_refusal, rationale: "Prompt injection detected in candidate"}}
     end
 
+    defp decide_candidate("volunteers_unasked_fact", _req) do
+      {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-1"], unasked_fact_ids: ["fact-1"]}}
+    end
+
     defp decide_candidate("low_confidence_text", _req) do
       {:ok, %{status: :low_confidence, rationale: "Uncertain clinical grounding"}}
     end
@@ -1014,6 +1018,94 @@ defmodule Backend.Stations.CandidateGateTest do
                  adapter: DoubleAdapter,
                  generator: nil
                )
+    end
+  end
+
+  # ============================================================================
+  # 5b. Targeted Regeneration For Unasked On-Request Facts (issue #242)
+  # ============================================================================
+
+  describe "Targeted regeneration for unasked on-request facts" do
+    test "the retry receives the unasked fact ids and the compliant reply is delivered" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_without_unasked_fact"}
+      end
+
+      assert {:ok, "regen_ok_without_unasked_fact"} =
+               CandidateGate.verify_and_deliver(
+                 "volunteers_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+
+      assert_received {:guidance, %{withheld_fact_ids: ["fact-1"]}}
+      refute_received {:guidance, _}
+    end
+
+    test "a refusal for any other reason keeps the plain retry, with no withheld fact" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_plain"}
+      end
+
+      for refused <- ["ungrounded_hallucination", "low_confidence_text"] do
+        assert {:ok, "regen_ok_plain"} =
+                 CandidateGate.verify_and_deliver(
+                   refused,
+                   base_package(),
+                   sample_conversation(),
+                   adapter: DoubleAdapter,
+                   generator: generator
+                 )
+
+        assert_received {:guidance, %{withheld_fact_ids: []}}
+        refute_received {:guidance, _}
+      end
+    end
+
+    test "older generator arities keep working on a targeted refusal" do
+      assert {:ok, "regen_ok_legacy"} =
+               CandidateGate.verify_and_deliver(
+                 "volunteers_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: fn -> {:ok, "regen_ok_legacy"} end
+               )
+    end
+
+    test "refused text is never logged, passed to the retry, or returned" do
+      refused = "volunteers_unasked_fact"
+      test_pid = self()
+
+      generator = fn pkg, conv, _remaining_ms, guidance ->
+        send(test_pid, {:retry_inputs, inspect({pkg, conv, guidance})})
+        {:ok, "regen_refused_again"}
+      end
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          CandidateGate.verify_and_deliver(
+            refused,
+            base_package(),
+            sample_conversation(),
+            adapter: DoubleAdapter,
+            generator: generator
+          )
+        end)
+
+      assert result == {:error, {:refused, :semantic_refusal}}
+      assert_received {:retry_inputs, retry_inputs}
+      refute retry_inputs =~ refused
+      refute log =~ refused
+      refute log =~ "regen_refused_again"
     end
   end
 
