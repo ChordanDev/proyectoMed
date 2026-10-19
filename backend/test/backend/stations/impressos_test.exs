@@ -30,6 +30,28 @@ defmodule Backend.Stations.ImpressosTest do
       normalized = Impressos.normalize("tomografia de crânio")
       assert Impressos.match(@impressos, normalized) == []
     end
+
+    test "a keyword must start at a word boundary, so abbreviations do not match inside words" do
+      impressos = [
+        %{"id" => "eas", "keywords" => ["EAS"]},
+        %{"id" => "sodio", "keywords" => ["sódio"]},
+        %{"id" => "tc", "keywords" => ["TC"]}
+      ]
+
+      for text <- ["dor em outras áreas", "um episódio de vômito", "febre, náusea etc"] do
+        assert Impressos.match(impressos, Impressos.normalize(text)) == [], text
+      end
+
+      assert Impressos.match(impressos, Impressos.normalize("EAS")) == ["eas"]
+
+      assert Impressos.match(impressos, Impressos.normalize("solicito (EAS), sódio e TC")) ==
+               ["eas", "sodio", "tc"]
+    end
+
+    test "a keyword still matches a longer word it starts, such as a plural" do
+      normalized = Impressos.normalize("quero os eletrocardiogramas")
+      assert Impressos.match(@impressos, normalized) == ["ecg"]
+    end
   end
 
   describe "decide/2" do

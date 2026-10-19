@@ -785,7 +785,18 @@
       "title": "IMPRESSO 1 — EXAME FÍSICO SEGMENTAR",
       "category": "physical_exam",
       "keywords": [
-        "exame físico"
+        "exame físico",
+        "exame segmentar",
+        "exame do abdome",
+        "exame abdominal",
+        "examinar o abdome",
+        "examinar a barriga",
+        "examinar o paciente",
+        "palpação abdominal",
+        "palpação do abdome",
+        "palpar o abdome",
+        "palpar a barriga",
+        "sinais vitais"
       ],
       "content": "- **Estado geral:** regular, consciente, orientado, fácies de dor; hidratado, sem cianose ou icterícia.\n- **Sinais vitais no exame:** PA 126/78 mmHg; FC 102 bpm; FR 18 irpm; temperatura 38,1 °C; SpO₂ 98% em ar ambiente.\n- **Aparelho cardiovascular:** bulhas normofonéticas, ritmo regular, sem sopros.\n- **Aparelho respiratório:** murmúrio vesicular presente bilateralmente, sem ruídos adventícios.\n- **Abdome — inspeção:** plano, sem cicatrizes, distensão, equimoses ou circulação colateral; movimentação reduzida durante a respiração profunda.\n- **Ausculta:** ruídos hidroaéreos presentes, discretamente diminuídos; sem sopros.\n- **Percussão:** timpanismo predominante; sem macicez anormal.\n- **Palpação superficial:** dor localizada no quadrante inferior direito, com defesa voluntária discreta.\n- **Palpação profunda:** dor acentuada na fossa ilíaca direita, especialmente no ponto de McBurney. Descompressão brusca dolorosa na fossa ilíaca direita: sinal de Blumberg positivo.\n- **Manobras:** sinal de Rovsing positivo; sinal do psoas negativo; sinal do obturador negativo. Sem dor à punho-percussão lombar.\n- **Neurológico:** alerta, orientado em tempo, espaço e pessoa; sem déficit motor grosseiro.\n- **Geniturinário:** sem dor testicular à inspeção referida; não é necessário exame genital invasivo na ausência de indicação clínica."
     },
@@ -794,7 +805,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Hemograma completo",
       "category": "laboratory",
       "keywords": [
-        "hemograma"
+        "hemograma",
+        "leucograma"
       ],
       "content": "**Hemograma completo:**\n\n- Hemoglobina: 14,6 g/dL. Referência adulto masculino: 13,0–17,0 g/dL.\n- Hematócrito: 43%. Referência adulto masculino: 40–52%.\n- Leucócitos: 15.800/mm³. Referência: 4.000–11.000/mm³.\n- Neutrófilos: 86%; bastonetes: 8%. Referências usuais: neutrófilos segmentados 40–75%; bastonetes 0–5%.\n- Plaquetas: 268.000/mm³. Referência: 150.000–450.000/mm³."
     },
@@ -804,7 +816,8 @@
       "category": "laboratory",
       "keywords": [
         "PCR",
-        "proteína C-reativa"
+        "proteína C-reativa",
+        "proteína C reativa"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- PCR: 86 mg/L. Referência: inferior a 5 mg/L."
     },
@@ -813,7 +826,10 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Sódio, Potássio",
       "category": "laboratory",
       "keywords": [
-        "eletrólitos"
+        "eletrólitos",
+        "sódio",
+        "potássio",
+        "ionograma"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Sódio: 138 mmol/L. Referência: 135–145 mmol/L.\n- Potássio: 4,1 mmol/L. Referência: 3,5–5,1 mmol/L."
     },
@@ -822,7 +838,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Ureia",
       "category": "laboratory",
       "keywords": [
-        "ureia"
+        "ureia",
+        "função renal"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Ureia: 28 mg/dL. Referência: 15–45 mg/dL."
     },
@@ -831,7 +848,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Creatinina",
       "category": "laboratory",
       "keywords": [
-        "creatinina"
+        "creatinina",
+        "função renal"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Creatinina: 0,9 mg/dL. Referência adulto masculino: 0,7–1,3 mg/dL."
     },
@@ -840,7 +858,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Glicemia",
       "category": "laboratory",
       "keywords": [
-        "glicemia"
+        "glicemia",
+        "glicose"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Glicemia: 104 mg/dL. Referência em jejum: 70–99 mg/dL."
     },
@@ -849,7 +868,14 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Urina tipo 1 (EAS)",
       "category": "laboratory",
       "keywords": [
-        "urina tipo 1"
+        "urina tipo 1",
+        "urina tipo I",
+        "urina 1",
+        "EAS",
+        "exame de urina",
+        "sumário de urina",
+        "parcial de urina",
+        "urinálise"
       ],
       "content": "**Urina tipo 1 (EAS):**\n\n- Densidade: 1,020; pH: 6,0.\n- Nitrito negativo; esterase leucocitária negativa.\n- Leucócitos: 2/campo; hemácias: 1/campo.\n- Sem bacteriúria significativa, proteinúria ou cetonúria relevante."
     },
@@ -859,7 +885,20 @@
       "category": "imaging",
       "keywords": [
         "ultrassonografia de abdome e pelve",
-        "tomografia computadorizada de abdome e pelve"
+        "tomografia computadorizada de abdome e pelve",
+        "ultrassonografia",
+        "ultrassom",
+        "USG",
+        "ecografia",
+        "TC de abdome",
+        "TC do abdome",
+        "TC abdominal",
+        "tomografia de abdome",
+        "tomografia do abdome",
+        "tomografia abdominal",
+        "tomografia computadorizada de abdome",
+        "tomografia computadorizada do abdome",
+        "exame de imagem"
       ],
       "content": "**Tomografia computadorizada de abdome e pelve com contraste intravenoso:**\n\n- Apêndice cecal em posição habitual, com diâmetro externo máximo de 10 mm, espessamento parietal e realce mucoso.\n- Presença de densificação da gordura periapendicular e pequena quantidade de líquido adjacente.\n- Apendicolito de 5 mm no interior do apêndice.\n- Sem pneumoperitônio, abscesso organizado, coleção ou sinais de perfuração.\n- Sem dilatação de alças ou sinais de obstrução intestinal.\n- Rins sem hidronefrose; bexiga sem alteração relevante.\n\n**Conclusão:** achados compatíveis com apendicite aguda, sem evidência tomográfica de perfuração ou abscesso."
     },

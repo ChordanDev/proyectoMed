@@ -4,7 +4,7 @@ defmodule Backend.Stations.Impressos do
   imaging / report) requests against the active Station Package.
 
   Matching is a normalized (downcased, accent-stripped) keyword substring
-  match — no LLM involved.
+  match anchored at a word start — no LLM involved.
   """
 
   @combining_marks_range 0x0300..0x036F
@@ -29,19 +29,27 @@ defmodule Backend.Stations.Impressos do
   end
 
   @doc """
-  Returns the ids of every impresso (in authored order) whose keywords are a
-  substring of `normalized_text`. `impressos` is the raw package `impressos`
-  list (string-keyed maps).
+  Returns the ids of every impresso (in authored order) whose keywords occur
+  in `normalized_text` starting at a word boundary. `impressos` is the raw
+  package `impressos` list (string-keyed maps).
+
+  A keyword may end inside a longer word ("eletrocardiograma" matches
+  "eletrocardiogramas"), but must not start inside one, so short authored
+  abbreviations such as "EAS", "TC" or "sódio" do not match inside "áreas",
+  "etc" or "episódio".
   """
   @spec match([map()], String.t()) :: [String.t()]
   def match(impressos, normalized_text) when is_list(impressos) and is_binary(normalized_text) do
     impressos
     |> Enum.filter(fn impresso ->
-      Enum.any?(impresso["keywords"] || [], fn keyword ->
-        String.contains?(normalized_text, normalize(keyword))
-      end)
+      Enum.any?(impresso["keywords"] || [], &keyword_match?(normalized_text, &1))
     end)
     |> Enum.map(& &1["id"])
+  end
+
+  defp keyword_match?(normalized_text, keyword) do
+    pattern = Regex.compile!("(?<![[:alnum:]])" <> Regex.escape(normalize(keyword)), "u")
+    Regex.match?(pattern, normalized_text)
   end
 
   @doc """
