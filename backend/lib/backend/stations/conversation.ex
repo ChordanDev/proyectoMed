@@ -102,13 +102,18 @@ defmodule Backend.Stations.Conversation do
   end
 
   @doc """
-  Resolves a pending turn identified by `token`, either appending the patient
-  reply (`{:ok, message}`) or rolling back the learner message (`:rollback`).
+  Resolves a pending turn identified by `token`: appends the patient reply
+  (`{:ok, message}`), keeps the learner message without a patient reply
+  (`:keep_learner_turn`), or rolls back the learner message (`:rollback`).
 
   Returns `{:error, :station_time_elapsed}` if the token is no longer pending
   (already rolled back by the grace timer, or unknown/stale).
   """
-  @spec resolve_turn(String.t(), turn_token(), {:ok, map()} | :rollback) ::
+  @spec resolve_turn(
+          String.t(),
+          turn_token(),
+          {:ok, map()} | :keep_learner_turn | :rollback
+        ) ::
           {:ok, session()} | {:error, :station_time_elapsed | :not_found | :expired}
   def resolve_turn(session_id, token, resolution) do
     GenServer.call(__MODULE__, {:resolve_turn, session_id, token, resolution}, call_timeout_ms())
@@ -557,6 +562,10 @@ defmodule Backend.Stations.Conversation do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp apply_resolution(session_id, _turn, :keep_learner_turn) do
+    active_session(session_id)
   end
 
   defp apply_resolution(session_id, turn, :rollback) do

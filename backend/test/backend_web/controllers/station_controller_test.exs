@@ -608,15 +608,25 @@ defmodule BackendWeb.StationControllerTest do
 
         refused_conn = post_learner_text(conn, session, "Olá, qual é o seu nome?")
 
-        assert json_response(refused_conn, 502) == %{
+        assert %{
                  "error" => "reply_verification_failed",
-                 "message" => "A verificação de segurança da resposta do paciente falhou."
-               }
+                 "message" => "A verificação de segurança da resposta do paciente falhou.",
+                 "learner_turn" => learner_turn
+               } = json_response(refused_conn, 502)
+
+        assert Map.keys(json_response(refused_conn, 502)) ==
+                 ["error", "learner_turn", "message"]
+
+        assert %{"role" => "learner", "modality" => "text", "text" => "Olá, qual é o seu nome?"} =
+                 learner_turn
+
+        assert {:ok, _at, _offset} = DateTime.from_iso8601(learner_turn["at"])
 
         refute refused_conn.resp_body =~ "aperto forte no peito"
 
-        # The learner turn is rolled back and the session stays active.
-        assert %{"status" => "active", "completion_reason" => nil, "messages" => []} =
+        # The learner turn is kept without a patient reply and the session
+        # stays active; the stored turn is the one returned in the body.
+        assert %{"status" => "active", "completion_reason" => nil, "messages" => [^learner_turn]} =
                  conn
                  |> get(~p"/api/stations/active/sessions/#{session.session_id}")
                  |> json_response(200)
@@ -630,7 +640,7 @@ defmodule BackendWeb.StationControllerTest do
                  "Estou com um aperto forte no peito há duas horas."
 
         assert {:ok, updated_session} = Conversation.fetch(session.session_id)
-        assert Enum.map(updated_session.messages, & &1.role) == [:learner, :patient]
+        assert Enum.map(updated_session.messages, & &1.role) == [:learner, :learner, :patient]
       end
     end
 

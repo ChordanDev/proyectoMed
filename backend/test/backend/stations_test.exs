@@ -71,6 +71,17 @@ defmodule Backend.StationsTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  defmodule ConfiguredPatientJevAdapter do
+    @moduledoc "Answers every patient verification with the result set in application env."
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: Application.fetch_env!(:backend, :test_patient_decision)
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   defmodule TemplateReplyAIAdapter do
     @behaviour Backend.Stations.StationAI
 
@@ -120,6 +131,12 @@ defmodule Backend.StationsTest do
     end)
 
     :ok
+  end
+
+  defp use_patient_decision(decision) do
+    Application.put_env(:backend, :jev_decision_adapter, ConfiguredPatientJevAdapter)
+    Application.put_env(:backend, :test_patient_decision, decision)
+    on_exit(fn -> Application.delete_env(:backend, :test_patient_decision) end)
   end
 
   describe "package & metadata" do
@@ -338,6 +355,75 @@ defmodule Backend.StationsTest do
       assert length(session_after_retry.messages) == 2
       assert hd(session_after_retry.messages).text == "Olá"
       assert List.last(session_after_retry.messages).text == result.reply_text
+    end
+
+    for refusal <- [:low_confidence, :semantic_refusal] do
+      test "create_message/2 keeps the learner turn and drops the patient reply when Jev refuses with #{refusal}" do
+        use_patient_decision({:ok, %{status: unquote(refusal), rationale: "refused"}})
+        session = Stations.create_session(%{audio_consent: true})
+
+        assert {:error, {:refused, unquote(refusal), learner_turn}} =
+                 Stations.create_message(session.session_id, %{
+                   role: "learner",
+                   modality: "text",
+                   text: "Na palpação há dor no ponto de McBurney."
+                 })
+
+        assert %{role: :learner, modality: :text, at: %DateTime{}} = learner_turn
+        assert learner_turn.text == "Na palpação há dor no ponto de McBurney."
+
+        {:ok, session_after} = Stations.get_session(session.session_id)
+        assert session_after.status == :active
+        assert session_after.messages == [learner_turn]
+        refute inspect(session_after) =~ "forte dor no peito"
+      end
+    end
+
+    test "create_message/2 rolls the learner turn back when Jev fails technically" do
+      use_patient_decision({:error, :provider_unavailable})
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:error, reason} =
+               Stations.create_message(session.session_id, %{
+                 role: "learner",
+                 modality: "text",
+                 text: "Olá"
+               })
+
+      refute match?({:refused, _, _}, reason)
+
+      {:ok, session_after} = Stations.get_session(session.session_id)
+      assert session_after.status == :active
+      assert session_after.messages == []
+    end
+
+    test "create_message/2 accepts the next turn after a refused patient reply without duplicating the kept turn" do
+      use_patient_decision({:ok, %{status: :semantic_refusal, rationale: "refused"}})
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:error, {:refused, :semantic_refusal, _turn}} =
+               Stations.create_message(session.session_id, %{
+                 role: "learner",
+                 modality: "text",
+                 text: "Primeira mensagem"
+               })
+
+      Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
+
+      assert {:ok, _reply} =
+               Stations.create_message(session.session_id, %{
+                 role: "learner",
+                 modality: "text",
+                 text: "Segunda mensagem"
+               })
+
+      {:ok, session_after} = Stations.get_session(session.session_id)
+
+      assert Enum.map(session_after.messages, &{&1.role, &1.text}) == [
+               {:learner, "Primeira mensagem"},
+               {:learner, "Segunda mensagem"},
+               {:patient, "Estou sentindo uma forte dor no peito há 2 horas."}
+             ]
     end
 
     test "create_message/2 preserves an accepted pending turn's reply when completion races it" do

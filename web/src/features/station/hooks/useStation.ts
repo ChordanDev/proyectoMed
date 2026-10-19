@@ -59,9 +59,10 @@ const defaultApi: StationApi = {
 const unknownErrorMessage =
   "A estação não pôde ser concluída. Você pode reiniciar.";
 
-// Create-message failures after which the backend rolled the learner turn back
-// and left the session active, mapped to the pt-BR notice offering a retry.
-// The single seam deciding which turn failures keep the station running.
+// Create-message failures after which the session stays active, mapped to the
+// pt-BR notice offering a retry. The single seam deciding which turn failures
+// keep the station running. A reply_verification_failed carrying the kept
+// learner turn is reported by `keptLearnerTurnNotice` instead.
 const recoverableTurnNotices: Readonly<Record<string, string>> = {
   reply_verification_failed: strings.replyVerificationFailedNotice,
   timeout: strings.turnUnavailableNotice,
@@ -79,6 +80,21 @@ export const recoverableTurnNotice = (cause: unknown): string | null => {
       : undefined;
   return typeof code === "string" && Object.prototype.hasOwnProperty.call(recoverableTurnNotices, code)
     ? recoverableTurnNotices[code]
+    : null;
+};
+
+/**
+ * Returns the pt-BR notice for a refused patient reply whose learner turn the
+ * backend kept (the error carries `learnerTurn`), or null otherwise. Such a
+ * turn stays in the transcript: it must not be resent.
+ */
+export const keptLearnerTurnNotice = (cause: unknown): string | null => {
+  if (typeof cause !== "object" || cause === null) return null;
+  const { code, learnerTurn } = cause as { code?: unknown; learnerTurn?: unknown };
+  return code === "reply_verification_failed" &&
+    typeof learnerTurn === "object" &&
+    learnerTurn !== null
+    ? strings.learnerTurnKeptNotice
     : null;
 };
 
@@ -388,9 +404,9 @@ export const useStation = (api: StationApi = defaultApi) => {
             cause instanceof ApiError &&
             recoverableTurnNotice(cause) !== null
           ) {
-            // The backend rolled back this learner turn and the session is
-            // still active: keep the station running and let the caller
-            // offer a retry instead of ending the station.
+            // The session is still active (the backend either rolled the
+            // learner turn back or kept it without a patient reply): keep the
+            // station running and let the caller decide what to show.
             throw cause;
           }
 
