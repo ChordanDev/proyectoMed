@@ -4,18 +4,26 @@ import type {
   Impresso,
   RequestImpressoResponse,
 } from "../api/client";
-import {
-  keptLearnerTurnNotice,
-  recoverableTurnNotice,
-} from "../hooks/useStation";
+import { isKeptLearnerTurn, recoverableTurnNotice } from "../hooks/useStation";
 import strings from "../i18n/pt-BR.json";
 import { StationBrief } from "./StationBrief";
 import "./StationScreen.css";
 
+/**
+ * One transcript entry. `examiner` entries are display-only: they are built in
+ * the browser, never sent to or stored by the server, never carry patient text
+ * and never enter the rubric evidence pool.
+ */
 export interface DisplayMessage {
-  role: "learner" | "patient";
+  role: "learner" | "patient" | "examiner";
   text: string;
 }
+
+const roleLabels: Readonly<Record<DisplayMessage["role"], string>> = {
+  learner: strings.roleLearner,
+  patient: strings.rolePatient,
+  examiner: strings.roleExaminer,
+};
 
 export interface StationScreenProps {
   /** Send a text turn and receive the AI reply text. Returns null on failure. */
@@ -273,12 +281,17 @@ export function StationScreen({
           setSendError(strings.stationError);
         }
       } catch (cause) {
-        const keptTurnNotice = keptLearnerTurnNotice(cause);
         const retryNotice = recoverableTurnNotice(cause);
-        if (keptTurnNotice !== null) {
+        if (isKeptLearnerTurn(cause)) {
           // The patient did not answer, but the backend recorded the learner
-          // turn: keep the bubble and leave the input empty.
-          if (mountedRef.current) setTurnRetryNotice(keptTurnNotice);
+          // turn (typically addressed to the examiner): keep the bubble, leave
+          // the input empty and let the examiner acknowledge it on screen only.
+          if (mountedRef.current) {
+            setMessages((previous) => [
+              ...previous,
+              { role: "examiner", text: strings.examinerAcknowledgement },
+            ]);
+          }
         } else if (isStationTimeElapsedError(cause)) {
           // The station's deadline elapsed while this turn was in flight:
           // it was never accepted, so it must not linger in the transcript.
@@ -506,18 +519,18 @@ export function StationScreen({
             !unavailableAudioIndices.has(index);
           const isLoadingAudio = loadingAudioIndex === index;
           const isPlaying = playingIndex === index;
+          const roleLabel = roleLabels[message.role];
+          const isExaminer = message.role === "examiner";
 
           return (
             <div
               key={index}
               className={`station-message station-message--${message.role}`}
               data-testid={`message-${message.role}`}
+              role={isExaminer ? "note" : undefined}
+              aria-label={isExaminer ? `${roleLabel}: ${message.text}` : undefined}
             >
-              <div className="station-message__role">
-                {message.role === "learner"
-                  ? strings.roleLearner
-                  : strings.rolePatient}
-              </div>
+              <div className="station-message__role">{roleLabel}</div>
               {message.text}
               {canPlay && (
                 <button

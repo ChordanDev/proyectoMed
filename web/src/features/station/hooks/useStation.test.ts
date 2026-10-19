@@ -13,12 +13,11 @@ import {
   type SessionResult,
 } from "../api/client";
 import {
-  keptLearnerTurnNotice,
+  isKeptLearnerTurn,
   sessionIdStorageKey,
   useStation,
   type StationApi,
 } from "./useStation";
-import strings from "../i18n/pt-BR.json";
 import { partialResult } from "../result/educational-result.fixture";
 
 afterEach(() => {
@@ -482,7 +481,7 @@ describe("useStation", () => {
     });
 
     expect(caught).toBe(refusal);
-    expect(keptLearnerTurnNotice(caught)).toBe(strings.learnerTurnKeptNotice);
+    expect(isKeptLearnerTurn(caught)).toBe(true);
     expect(result.current.status).toBe("active");
     expect(result.current.error).toBeNull();
     expect(api.finishSession).not.toHaveBeenCalled();
@@ -502,7 +501,7 @@ describe("useStation", () => {
     ],
     ["a non-object cause", "reply_verification_failed"],
   ])("reports no kept learner turn for %s", (_label, cause) => {
-    expect(keptLearnerTurnNotice(cause)).toBeNull();
+    expect(isKeptLearnerTurn(cause)).toBe(false);
   });
 
   it("keeps the station active and rethrows when a patient reply fails verification", async () => {

@@ -636,25 +636,51 @@ describe("StationScreen", () => {
         learnerTurn: { role: "learner", text },
       });
 
-    it("keeps the learner bubble, clears the input, and says the message was recorded", async () => {
+    it("keeps the learner bubble and shows an examiner acknowledgement instead of a system notice", async () => {
       const user = userEvent.setup();
       const text = "Na palpação há dor no ponto de McBurney.";
       const onSend = vi.fn().mockRejectedValueOnce(keptTurnRefusal(text));
-      render(<StationScreen {...defaultProps} onSend={onSend} />);
+      const onRequestImpresso = vi.fn();
+      render(
+        <StationScreen
+          {...defaultProps}
+          onSend={onSend}
+          onRequestImpresso={onRequestImpresso}
+        />,
+      );
 
       await user.type(screen.getByTestId("message-input"), text);
       await user.click(screen.getByTestId("send-button"));
 
-      expect(
-        await screen.findByTestId("turn-retry-notice"),
-      ).toHaveTextContent(strings.learnerTurnKeptNotice);
-      expect(strings.learnerTurnKeptNotice).toBe(
-        "Sua mensagem foi registrada, mas o paciente não respondeu a ela.",
+      const acknowledgement = await screen.findByTestId("message-examiner");
+      expect(acknowledgement).toHaveTextContent(strings.roleExaminer);
+      expect(acknowledgement).toHaveTextContent(strings.examinerAcknowledgement);
+      expect(strings.roleExaminer).toBe("Examinador");
+      expect(strings.examinerAcknowledgement).toBe("Anotado.");
+      expect(acknowledgement).toHaveAttribute("role", "note");
+      expect(acknowledgement).toHaveAccessibleName("Examinador: Anotado.");
+      expect(acknowledgement).toHaveClass("station-message--examiner");
+
+      const entries = within(screen.getByTestId("message-list")).getAllByTestId(
+        /^message-/,
       );
-      expect(screen.getByText(text)).toBeInTheDocument();
-      expect(screen.getByTestId("message-input")).toHaveValue("");
+      expect(entries.map((entry) => entry.dataset.testid)).toEqual([
+        "message-learner",
+        "message-examiner",
+      ]);
+      expect(entries[0]).toHaveTextContent(text);
+      expect(screen.queryByTestId("message-patient")).not.toBeInTheDocument();
+      expect(acknowledgement).not.toHaveTextContent(text);
+      expect(within(acknowledgement).queryByRole("button")).toBeNull();
+
+      expect(screen.queryByTestId("turn-retry-notice")).not.toBeInTheDocument();
       expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
+      expect(screen.getByTestId("message-input")).toHaveValue("");
       expect(screen.getByTestId("message-input")).not.toBeDisabled();
+
+      // Display-only: the acknowledgement never reaches the server.
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(onRequestImpresso).not.toHaveBeenCalled();
     });
 
     it("sends the next message after the kept turn without resending it", async () => {
@@ -667,7 +693,7 @@ describe("StationScreen", () => {
 
       await user.type(screen.getByTestId("message-input"), "Exame normal.");
       await user.click(screen.getByTestId("send-button"));
-      await screen.findByTestId("turn-retry-notice");
+      await screen.findByTestId("message-examiner");
 
       await user.type(screen.getByTestId("message-input"), "Tem alergias?");
       await user.click(screen.getByTestId("send-button"));
@@ -675,7 +701,9 @@ describe("StationScreen", () => {
       expect(await screen.findByText("Entendi, doutor.")).toBeInTheDocument();
       expect(screen.getByText("Exame normal.")).toBeInTheDocument();
       expect(screen.getByText("Tem alergias?")).toBeInTheDocument();
+      expect(onSend).toHaveBeenCalledTimes(2);
       expect(onSend).toHaveBeenNthCalledWith(2, "Tem alergias?");
+      expect(screen.getAllByTestId("message-examiner")).toHaveLength(1);
       expect(
         screen.queryByTestId("turn-retry-notice"),
       ).not.toBeInTheDocument();

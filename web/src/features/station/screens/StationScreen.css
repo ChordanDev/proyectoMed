@@ -107,6 +107,15 @@
   border-bottom-left-radius: 4px;
 }
 
+/* Display-only examiner entries: centered and outlined, unlike either party. */
+.station-message--examiner {
+  align-self: center;
+  background: #fffbeb;
+  color: #78350f;
+  border: 1px dashed #d97706;
+  font-style: italic;
+}
+
 .station-message__play-button {
   display: block;
   margin-top: 6px;
