@@ -141,6 +141,20 @@ if config_env() != :test do
   end
 end
 
+# Active station (issue #238): `ACTIVE_STATION_ID` names the station directory
+# under `priv/stations` that the Station Loader loads at boot, for example
+# `acute-appendicitis`. Unset or blank keeps the default from `config.exs`
+# (`chest-pain-initial-assessment`). The loader rejects anything but a plain
+# directory name (`[a-z0-9-]+`) and fails the boot, naming the id, when the id is
+# malformed, unknown, or its package is invalid. `:test` reads none of it, so the
+# suite always starts from the default station.
+if config_env() != :test do
+  case System.get_env("ACTIVE_STATION_ID", "") |> String.trim() do
+    "" -> :ok
+    station_id -> config :backend, :active_station_id, station_id
+  end
+end
+
 # E2E-only: bypasses Jev verification with a deterministic approving adapter.
 # The harness boots Phoenix under `:dev`, so the variable is honored only there:
 # `:test` keeps its injected adapters and `:prod` never compiles this module.
