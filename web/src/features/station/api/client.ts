@@ -1,8 +1,15 @@
+/** Learner-facing "cenário de atuação" and the ordered station tasks. */
+export interface CandidateBrief {
+  scenario: string;
+  tasks: string[];
+}
+
 export interface ActiveStation {
   station_id: string;
   version: string;
   display_title: string;
   language: string;
+  candidate_brief: CandidateBrief;
 }
 
 export interface StartSessionRequest {
@@ -183,6 +190,15 @@ const stringList = (body: JsonObject, key: string, label: string): string[] => {
     : invalid(label);
 };
 
+const decodeCandidateBrief = (value: unknown): CandidateBrief => {
+  const body = objectValue(value, "candidate brief");
+  const tasks = stringList(body, "tasks", "candidate brief");
+  return {
+    scenario: stringValue(body, "scenario", "candidate brief"),
+    tasks: tasks.length > 0 ? tasks : invalid("candidate brief"),
+  };
+};
+
 const decodeActiveStation = (value: unknown): ActiveStation => {
   const body = objectValue(value, "active station");
   return {
@@ -190,6 +206,7 @@ const decodeActiveStation = (value: unknown): ActiveStation => {
     version: stringValue(body, "version", "active station"),
     display_title: stringValue(body, "display_title", "active station"),
     language: stringValue(body, "language", "active station"),
+    candidate_brief: decodeCandidateBrief(body.candidate_brief),
   };
 };
 

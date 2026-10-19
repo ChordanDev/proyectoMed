@@ -67,5 +67,6 @@
   "impressoModalCancel": "Cancelar",
   "impressoDrawerToggle": "Documentos liberados",
   "impressoDrawerEmpty": "Nenhum documento liberado ainda.",
+  "briefUnavailable": "Não foi possível carregar o cenário e as tarefas da estação.",
   "discardError": "Não foi possível encerrar a sessão no servidor. Tente novamente."
 }

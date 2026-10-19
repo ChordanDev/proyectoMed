@@ -19,12 +19,40 @@ const blobResponse = (blob: Blob, status = 200) =>
   }) as unknown as Response;
 
 describe("station API client", () => {
+  it.each([
+    ["missing", undefined],
+    ["without tasks", { scenario: "Cenário." }],
+    ["with an empty task list", { scenario: "Cenário.", tasks: [] }],
+    ["with a non-string task", { scenario: "Cenário.", tasks: [1] }],
+    ["without a scenario", { tasks: ["Anamnese."] }],
+  ])("rejects an active station whose brief is %s", async (_label, brief) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        station_id: "station-1",
+        version: "2.0.0",
+        display_title: "Dor torácica",
+        language: "pt-BR",
+        candidate_brief: brief,
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.getActiveStation()).rejects.toMatchObject({
+      name: "ApiError",
+      code: "invalid_response",
+    });
+  });
+
   it("models every station flow request and decodes its response", async () => {
     const activeStation = {
       station_id: "station-1",
       version: "1.0.0",
       display_title: "Dor torácica",
       language: "pt-BR",
+      candidate_brief: {
+        scenario: "Você é o médico de plantão.",
+        tasks: ["Obter anamnese dirigida.", "Indicar a conduta inicial."],
+      },
     };
     const session = {
       session_id: "session-1",

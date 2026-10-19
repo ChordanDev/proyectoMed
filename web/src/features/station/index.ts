@@ -12,6 +12,7 @@ export {
   type DiscardSessionOptions,
   ApiError,
   type ActiveStation,
+  type CandidateBrief,
   type StartSessionRequest,
   type Session,
   type SessionStatus,
@@ -39,6 +40,11 @@ export {
   type StationStatus,
   type StationApi,
 } from "./hooks/useStation";
+
+export {
+  useActiveStation,
+  type ActiveStationState,
+} from "./hooks/useActiveStation";
 
 export {
   NoticeScreen,
