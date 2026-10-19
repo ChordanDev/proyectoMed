@@ -62,7 +62,7 @@ const unknownErrorMessage =
 // Create-message failures after which the session stays active, mapped to the
 // pt-BR notice offering a retry. The single seam deciding which turn failures
 // keep the station running. A reply_verification_failed carrying the kept
-// learner turn is reported by `keptLearnerTurnNotice` instead.
+// learner turn is recognised by `isKeptLearnerTurn` instead.
 const recoverableTurnNotices: Readonly<Record<string, string>> = {
   reply_verification_failed: strings.replyVerificationFailedNotice,
   timeout: strings.turnUnavailableNotice,
@@ -84,18 +84,18 @@ export const recoverableTurnNotice = (cause: unknown): string | null => {
 };
 
 /**
- * Returns the pt-BR notice for a refused patient reply whose learner turn the
- * backend kept (the error carries `learnerTurn`), or null otherwise. Such a
- * turn stays in the transcript: it must not be resent.
+ * Whether a create-message failure is a refused patient reply whose learner
+ * turn the backend kept (the error carries `learnerTurn`). Such a turn stays in
+ * the transcript and must not be resent.
  */
-export const keptLearnerTurnNotice = (cause: unknown): string | null => {
-  if (typeof cause !== "object" || cause === null) return null;
+export const isKeptLearnerTurn = (cause: unknown): boolean => {
+  if (typeof cause !== "object" || cause === null) return false;
   const { code, learnerTurn } = cause as { code?: unknown; learnerTurn?: unknown };
-  return code === "reply_verification_failed" &&
+  return (
+    code === "reply_verification_failed" &&
     typeof learnerTurn === "object" &&
     learnerTurn !== null
-    ? strings.learnerTurnKeptNotice
-    : null;
+  );
 };
 
 const unknownImpressoErrorMessage =
