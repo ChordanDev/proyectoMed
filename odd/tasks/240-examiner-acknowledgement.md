@@ -54,10 +54,14 @@ was a plain system string.
 
 | Task | Commit | RED | GREEN |
 | --- | --- | --- | --- |
-| T1 | see git log (`feat(web): acknowledge kept learner turns as the examiner`) | 6 of 198 failed (hook rename + 2 screen tests) | 198 passed; typecheck and lint clean |
-| T2 | see git log (`feat(web): show impresso releases as examiner entries`) | 2 of 201 failed (release entry, stale notice) | full web suite 216 passed; typecheck and lint clean |
+| T1 | `afa5faa` | 6 of 198 failed (hook rename + 2 screen tests) | 198 passed; typecheck and lint clean |
+| T2 | `12023e1` | 2 of 201 failed (release entry, stale notice) | full web suite 216 passed; typecheck and lint clean |
+
+Local CI (mirror of `pr-validation.yml`): LOCAL CI PASSED; web 212 unit + 4
+integration tests passed, backend 1122 passed, typecheck/lint/format clean.
+GitHub Actions is blocked by billing.
 
 ## Next step
 
-Local CI, then PR against `feat/237-clinician-demo-readiness`.
+PR against `feat/237-clinician-demo-readiness`.
 Examiner entries are not restored after a refresh (display-only by design).
