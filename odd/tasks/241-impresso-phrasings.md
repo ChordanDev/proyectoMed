@@ -21,7 +21,7 @@ Each acute-appendicitis impresso has one keyword phrase, and `impresso-4-receitu
 
 - [x] T1 — Matcher: a keyword matches only when it starts at a word boundary, so short abbreviations (`EAS`, `TC`, `USG`, `sódio`) can be authored without matching inside "áreas", "etc" or "episódio". Tests in `impressos_test.exs`; authoring guide updated.
 - [x] T2 — Acute-appendicitis keyword variants for every impresso, including `impresso-4-receituario` (prescription-style request). Reproduction test with the issue's phrasings plus over-release guards. Package mapping and clinical review checklist updated.
-- [ ] T3 — Chest-pain keyword variants (exam, labs, X-ray) with tests and guards.
+- [x] T3 — Chest-pain keyword variants (exam, labs, X-ray) with tests and guards.
 
 ## Routing
 
@@ -40,6 +40,9 @@ All tasks inline in this bounded writer: one module, two JSON packages, tests an
 - T1 commit: `c4045c1`.
 - T2: RED 22 of 33 failing in the new `impresso_phrasings_test.exs` (the over-release guards already passed). GREEN 33/33 after authoring keyword variants; `mix test test/backend/stations` 776 passed. Docs: keyword table and gaps G5–G8 in `package-mapping.md`, checklist keyword and gap rows regenerated from the package (`content_review_records_test.exs` keeps them in step). Qualification cases `modality-gap-02`, `-05`, `-06` now release their impresso; their pending `proposed_expected` notes describe the old gaps and are left for the adjudicator (the harness is not edited). Commit: T2 commit `feat(stations): recognize common phrasings for appendicitis impressos`.
 
+- T2 commit: `659967b`.
+- T3: RED 15 of 52 failing (chest-pain phrasings). GREEN 52/52; full backend `mix test` 1176 passed. The chest-pain lab handout carries sodium and potassium, so "eletrólitos", "sódio" and "potássio" release it there; "eletro" is deliberately not authored so it cannot release the ECG on "eletrólitos". No chest-pain keyword docs exist to update. Commit: T3 commit `feat(stations): recognize common phrasings for chest-pain impressos`.
+
 ## Next step
 
-T3.
+Local CI, push, child PR to `feat/237-clinician-demo-readiness`.

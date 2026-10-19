@@ -84,4 +84,45 @@ defmodule Backend.Stations.ImpressoPhrasingsTest do
       end
     end
   end
+
+  @chest_pain_phrasings [
+    {"Solicito o exame físico.", ["exame-fisico-geral"]},
+    {"Vou examinar o paciente.", ["exame-fisico-geral"]},
+    {"Faço o exame do tórax.", ["exame-fisico-geral"]},
+    {"Exame cardiovascular, por favor.", ["exame-fisico-geral"]},
+    {"Faço a ausculta.", ["exame-fisico-geral"]},
+    {"Solicito troponina.", ["laboratorio-sangue-enzimas"]},
+    {"Peço marcadores de necrose miocárdica.", ["laboratorio-sangue-enzimas"]},
+    {"Peço marcadores cardíacos.", ["laboratorio-sangue-enzimas"]},
+    {"Solicito CKMB.", ["laboratorio-sangue-enzimas"]},
+    {"Solicito função renal.", ["laboratorio-sangue-enzimas"]},
+    {"Solicito eletrólitos.", ["laboratorio-sangue-enzimas"]},
+    {"Peço sódio e potássio.", ["laboratorio-sangue-enzimas"]},
+    {"Solicito exames de sangue.", ["laboratorio-sangue-enzimas"]},
+    {"Solicito raio x de tórax.", ["imagem-radiografia-torax"]},
+    {"Peço um RX do tórax.", ["imagem-radiografia-torax"]},
+    {"Peço um raio-x.", ["imagem-radiografia-torax"]},
+    {"Solicito ECG de 12 derivações.", ["laudo-eletrocardiograma"]},
+    {"Solicito eletrocardiografia.", ["laudo-eletrocardiograma"]}
+  ]
+
+  describe "chest-pain-initial-assessment" do
+    for {text, expected} <- @chest_pain_phrasings do
+      test "#{inspect(text)} releases #{Enum.join(expected, ", ")}" do
+        assert matched("chest-pain-initial-assessment", unquote(text)) == unquote(expected)
+      end
+    end
+
+    test "a generic or unrelated request releases nothing" do
+      for text <- [
+            "exame",
+            "Solicito um exame.",
+            "Quero os exames.",
+            "Bom dia, tudo bem?",
+            "A dor piorou num episódio, etc."
+          ] do
+        assert matched("chest-pain-initial-assessment", text) == [], text
+      end
+    end
+  end
 end
