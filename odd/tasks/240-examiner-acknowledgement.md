@@ -57,8 +57,9 @@ was a plain system string.
 | T1 | `afa5faa` | 6 of 198 failed (hook rename + 2 screen tests) | 198 passed; typecheck and lint clean |
 | T2 | `12023e1` | 2 of 201 failed (release entry, stale notice) | full web suite 216 passed; typecheck and lint clean |
 
-Local CI (mirror of `pr-validation.yml`): LOCAL CI PASSED; web 212 unit + 4
-integration tests passed, backend 1122 passed, typecheck/lint/format clean.
+Local CI (mirror of `pr-validation.yml`): LOCAL CI PASSED; web unit 212 passed,
+backend ExUnit 1122 passed, process-level E2E 4 passed. `npm run typecheck` and
+`npm run lint` were run separately and are clean.
 GitHub Actions is blocked by billing.
 
 ## Next step
