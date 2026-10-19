@@ -341,7 +341,20 @@ export function StationScreen({
     setSubmittingImpresso(false);
 
     if (response) {
-      setImpressoFeedback(response.feedback_message);
+      if (response.decision === "released" && response.newly_released.length > 0) {
+        // The examiner hands the impresso over: show it in the transcript as a
+        // display-only examiner entry (titles only), next to the drawer.
+        const titles = response.newly_released
+          .map((impresso) => impresso.title)
+          .join(", ");
+        setMessages((previous) => [
+          ...previous,
+          { role: "examiner", text: `${strings.examinerHandsOver} ${titles}` },
+        ]);
+        setImpressoFeedback(null);
+      } else {
+        setImpressoFeedback(response.feedback_message);
+      }
       setImpressoRequestText("");
       setImpressoModalOpen(false);
     }

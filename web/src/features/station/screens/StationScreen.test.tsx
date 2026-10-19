@@ -985,15 +985,133 @@ describe("StationScreen impresso requests", () => {
     expect(screen.getByLabelText(strings.impressoModalLabel)).toBeInTheDocument();
   });
 
-  it("requests an impresso, shows the feedback message, and closes the modal", async () => {
+  const requestThroughModal = async (
+    user: ReturnType<typeof userEvent.setup>,
+    text: string,
+  ) => {
+    await user.click(screen.getByTestId("impresso-request-button"));
+    await user.type(screen.getByLabelText(strings.impressoModalLabel), text);
+    await user.click(screen.getByTestId("impresso-modal-submit"));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  };
+
+  it("shows a released impresso as an examiner entry in the transcript and closes the modal", async () => {
     const user = userEvent.setup();
+    const abdominalExam = {
+      id: "abdominal-exam",
+      title: "Exame físico abdominal",
+      category: "Exame físico",
+      content: "Dor à palpação no ponto de McBurney.",
+    };
+    const onSend = vi.fn().mockResolvedValue("Dói aqui embaixo, doutor.");
     const onRequestImpresso = vi.fn().mockResolvedValue({
       request_id: "req-1",
       decision: "released",
-      released_impressos: [chestXray],
-      newly_released: [chestXray],
-      feedback_message: "Impresso liberado: Radiografia de tórax",
+      released_impressos: [chestXray, abdominalExam],
+      newly_released: [chestXray, abdominalExam],
+      feedback_message:
+        "Impresso liberado: Radiografia de tórax, Exame físico abdominal",
     });
+    render(
+      <StationScreen
+        {...defaultProps}
+        onSend={onSend}
+        onRequestImpresso={onRequestImpresso}
+        impressos={[chestXray, abdominalExam]}
+      />,
+    );
+
+    await user.type(screen.getByTestId("message-input"), "Onde dói?");
+    await user.click(screen.getByTestId("send-button"));
+    await screen.findByText("Dói aqui embaixo, doutor.");
+
+    await requestThroughModal(user, "Solicito exame físico");
+
+    expect(onRequestImpresso).toHaveBeenCalledWith("Solicito exame físico");
+    const entry = await screen.findByTestId("message-examiner");
+    const handOver = "Entrega: Radiografia de tórax, Exame físico abdominal";
+    expect(strings.examinerHandsOver).toBe("Entrega:");
+    expect(entry).toHaveTextContent(strings.roleExaminer);
+    expect(entry).toHaveTextContent(handOver);
+    expect(entry).toHaveAttribute("role", "note");
+    expect(entry).toHaveAccessibleName(`Examinador: ${handOver}`);
+    expect(entry).not.toHaveTextContent(abdominalExam.content);
+
+    const entries = within(screen.getByTestId("message-list")).getAllByTestId(
+      /^message-/,
+    );
+    expect(entries.map((item) => item.dataset.testid)).toEqual([
+      "message-learner",
+      "message-patient",
+      "message-examiner",
+    ]);
+    expect(screen.queryByTestId("impresso-feedback")).not.toBeInTheDocument();
+
+    // The drawer keeps listing the released impressos.
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+    expect(
+      screen.getByTestId(`impresso-item-${abdominalExam.id}`),
+    ).toBeInTheDocument();
+
+    // Display-only: the hand-over is never sent as a turn.
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["unavailable", "Exame não disponível nesta estação", []],
+    ["already_released", "Impresso já liberado: Radiografia de tórax", []],
+  ] as const)(
+    "keeps the plain feedback notice for a %s decision",
+    async (decision, feedback, newlyReleased) => {
+      const user = userEvent.setup();
+      const onRequestImpresso = vi.fn().mockResolvedValue({
+        request_id: "req-1",
+        decision,
+        released_impressos: [chestXray],
+        newly_released: newlyReleased,
+        feedback_message: feedback,
+      });
+      render(
+        <StationScreen
+          {...defaultProps}
+          onRequestImpresso={onRequestImpresso}
+          impressos={[chestXray]}
+        />,
+      );
+
+      await requestThroughModal(user, "Solicito tomografia");
+
+      expect(screen.getByTestId("impresso-feedback")).toHaveAttribute(
+        "role",
+        "status",
+      );
+      expect(screen.getByTestId("impresso-feedback")).toHaveTextContent(
+        feedback,
+      );
+      expect(screen.queryByTestId("message-examiner")).not.toBeInTheDocument();
+    },
+  );
+
+  it("replaces a stale feedback notice once an impresso is released", async () => {
+    const user = userEvent.setup();
+    const onRequestImpresso = vi
+      .fn()
+      .mockResolvedValueOnce({
+        request_id: "req-1",
+        decision: "unavailable",
+        released_impressos: [],
+        newly_released: [],
+        feedback_message: "Exame não disponível nesta estação",
+      })
+      .mockResolvedValueOnce({
+        request_id: "req-2",
+        decision: "released",
+        released_impressos: [chestXray],
+        newly_released: [chestXray],
+        feedback_message: "Impresso liberado: Radiografia de tórax",
+      });
     render(
       <StationScreen
         {...defaultProps}
@@ -1002,27 +1120,15 @@ describe("StationScreen impresso requests", () => {
       />,
     );
 
-    await user.click(screen.getByTestId("impresso-request-button"));
-    await user.type(
-      screen.getByLabelText(strings.impressoModalLabel),
-      "Solicito radiografia de tórax",
-    );
-    await user.click(screen.getByTestId("impresso-modal-submit"));
+    await requestThroughModal(user, "Solicito tomografia");
+    expect(screen.getByTestId("impresso-feedback")).toBeInTheDocument();
 
-    expect(onRequestImpresso).toHaveBeenCalledWith(
-      "Solicito radiografia de tórax",
-    );
+    await requestThroughModal(user, "Solicito radiografia de tórax");
 
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    });
-    expect(screen.getByTestId("impresso-feedback")).toHaveAttribute(
-      "role",
-      "status",
+    expect(await screen.findByTestId("message-examiner")).toHaveTextContent(
+      "Entrega: Radiografia de tórax",
     );
-    expect(
-      screen.getByText("Impresso liberado: Radiografia de tórax"),
-    ).toBeInTheDocument();
+    expect(screen.queryByTestId("impresso-feedback")).not.toBeInTheDocument();
   });
 
   it("closes the modal via the cancel button", async () => {

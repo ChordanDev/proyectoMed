@@ -32,7 +32,7 @@ was a plain system string.
 - [x] T1 Kept-turn refusal shows an examiner acknowledgement in the transcript
   instead of the system notice; the hook exposes `isKeptLearnerTurn`.
   Route: inline (station feature only: hook, screen, i18n, CSS, tests).
-- [ ] T2 Impresso releases appear as examiner entries in the transcript; the
+- [x] T2 Impresso releases appear as examiner entries in the transcript; the
   plain feedback notice stays only for unavailable/already-released decisions.
   Route: inline (StationScreen and its tests).
 
@@ -55,7 +55,9 @@ was a plain system string.
 | Task | Commit | RED | GREEN |
 | --- | --- | --- | --- |
 | T1 | see git log (`feat(web): acknowledge kept learner turns as the examiner`) | 6 of 198 failed (hook rename + 2 screen tests) | 198 passed; typecheck and lint clean |
+| T2 | see git log (`feat(web): show impresso releases as examiner entries`) | 2 of 201 failed (release entry, stale notice) | full web suite 216 passed; typecheck and lint clean |
 
 ## Next step
 
-T2.
+Local CI, then PR against `feat/237-clinician-demo-readiness`.
+Examiner entries are not restored after a refresh (display-only by design).
