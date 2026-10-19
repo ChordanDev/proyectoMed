@@ -139,6 +139,7 @@ How release works (`impressos:42`): the learner's text is lower-cased and stripp
 - A keyword cannot tell a request from a mention, or a pertinent request from an impertinent one.
 - A keyword never starts inside a word, so short abbreviations are safe to author (`eas` does not match "áreas", `sódio` does not match "episódio"). It may end inside one: `radiografia` matches "radiografias", and `eletro` would match "eletrólitos".
 - Never author a generic word such as `exame` alone: it would release the impresso on almost every request. Author each common clinical phrasing as its own keyword instead.
+- An impresso whose content is the expected answer (for example a receituário listing the conduct a rubric scores) must keep `keywords: []`. The learner verbalizes the conduct; the handout is never released.
 - One impresso is one unit. To release results test by test, author one impresso per test.
 - There is no "ask which tests" step. A request that matches no keyword is answered as unavailable.
 

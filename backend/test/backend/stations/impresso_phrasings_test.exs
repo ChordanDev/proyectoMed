@@ -48,11 +48,21 @@ defmodule Backend.Stations.ImpressoPhrasingsTest do
     {"Solicito uma TC de abdome.", ["impresso-3-exame-de-imagem"]},
     {"Peço tomografia de abdome.", ["impresso-3-exame-de-imagem"]},
     {"Solicito tomografia computadorizada de abdome e pelve.", ["impresso-3-exame-de-imagem"]},
-    {"Solicito um exame de imagem.", ["impresso-3-exame-de-imagem"]},
-    {"Prescrevo dipirona e ondansetrona.", ["impresso-4-receituario"]},
-    {"Quero fazer a prescrição.", ["impresso-4-receituario"]},
-    {"Vou preencher o receituário.", ["impresso-4-receituario"]},
-    {"Registro a conduta inicial.", ["impresso-4-receituario"]}
+    {"Solicito um exame de imagem.", ["impresso-3-exame-de-imagem"]}
+  ]
+
+  # The receituário holds the expected initial conduct (rubric items 9 and 10),
+  # so it is intentionally never released: the candidate verbalizes the conduct.
+  @answer_key_impresso "impresso-4-receituario"
+
+  @prescription_requests [
+    "Prescrevo dipirona e ondansetrona.",
+    "Quero prescrever.",
+    "Quero fazer a prescrição.",
+    "Me dá a receita.",
+    "Vou preencher o receituário.",
+    "Registro a conduta inicial.",
+    "Quais são as medidas de suporte?"
   ]
 
   describe "acute-appendicitis" do
@@ -62,11 +72,30 @@ defmodule Backend.Stations.ImpressoPhrasingsTest do
       end
     end
 
-    test "every impresso, including the receituário, is releasable by some phrasing" do
+    test "every impresso except the answer-key receituário is releasable by some phrasing" do
       released = @appendicitis_phrasings |> Enum.flat_map(&elem(&1, 1)) |> MapSet.new()
-      authored = impressos("acute-appendicitis") |> Enum.map(& &1["id"]) |> MapSet.new()
+
+      authored =
+        impressos("acute-appendicitis")
+        |> Enum.map(& &1["id"])
+        |> MapSet.new()
+        |> MapSet.delete(@answer_key_impresso)
 
       assert released == authored
+    end
+
+    test "a prescription-style request releases nothing" do
+      for text <- @prescription_requests do
+        assert matched("acute-appendicitis", text) == [], text
+      end
+    end
+
+    test "the receituário is never released by any listed phrasing" do
+      phrasings = Enum.map(@appendicitis_phrasings, &elem(&1, 0)) ++ @prescription_requests
+
+      for text <- phrasings do
+        refute @answer_key_impresso in matched("acute-appendicitis", text), text
+      end
     end
 
     test "a generic or unrelated request releases nothing" do
