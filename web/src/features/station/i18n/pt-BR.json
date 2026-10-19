@@ -67,6 +67,16 @@
   "impressoModalCancel": "Cancelar",
   "impressoDrawerToggle": "Documentos liberados",
   "impressoDrawerEmpty": "Nenhum documento liberado ainda.",
+  "briefScreenHeading": "Antes de entrar na estação",
+  "briefScenarioHeading": "Cenário de atuação",
+  "briefTasksHeading": "Tarefas",
+  "briefFictionalNote": "Caso clínico fictício, criado para treino educacional. Não corresponde a um paciente real.",
+  "briefTimerNote": "O tempo da estação começa a contar quando você entrar.",
+  "briefEnterButton": "Entrar na estação",
+  "briefLoading": "Carregando cenário e tarefas...",
+  "briefOpenButton": "Cenário e tarefas",
+  "briefDialogTitle": "Cenário e tarefas da estação",
+  "briefCloseButton": "Voltar à estação",
   "briefUnavailable": "Não foi possível carregar o cenário e as tarefas da estação.",
   "discardError": "Não foi possível encerrar a sessão no servidor. Tente novamente."
 }

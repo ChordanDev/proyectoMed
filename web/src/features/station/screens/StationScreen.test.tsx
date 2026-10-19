@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import strings from "../i18n/pt-BR.json";
@@ -101,6 +101,62 @@ describe("StationScreen", () => {
     render(<StationScreen {...defaultProps} title="Dor torácica" />);
 
     expect(screen.getByText("Dor torácica")).toBeInTheDocument();
+  });
+
+  describe("candidate brief during the station (#239)", () => {
+    const brief = {
+      scenario: "Você é o médico de plantão em um pronto-socorro.",
+      tasks: ["Obter anamnese dirigida.", "Indicar a conduta inicial."],
+    };
+
+    it("hides the brief button when no brief is provided", () => {
+      render(<StationScreen {...defaultProps} />);
+
+      expect(
+        screen.queryByRole("button", { name: strings.briefOpenButton }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("opens and closes the brief without stopping the countdown", async () => {
+      const user = userEvent.setup();
+      const onFinish = vi.fn();
+      const { rerender } = render(
+        <StationScreen
+          {...defaultProps}
+          onFinish={onFinish}
+          brief={brief}
+          remainingMs={9 * 60 * 1000}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: strings.briefOpenButton }));
+
+      const dialog = screen.getByRole("dialog", { name: strings.briefDialogTitle });
+      expect(within(dialog).getByText(brief.scenario)).toBeInTheDocument();
+      expect(
+        within(dialog)
+          .getAllByRole("listitem")
+          .map((item) => item.textContent),
+      ).toEqual(brief.tasks);
+      expect(within(dialog).getByText(strings.briefFictionalNote)).toBeInTheDocument();
+
+      rerender(
+        <StationScreen
+          {...defaultProps}
+          onFinish={onFinish}
+          brief={brief}
+          remainingMs={8 * 60 * 1000 + 59 * 1000}
+        />,
+      );
+      expect(screen.getByRole("timer")).toHaveTextContent("08:59");
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+      await user.click(
+        within(dialog).getByRole("button", { name: strings.briefCloseButton }),
+      );
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(onFinish).not.toHaveBeenCalled();
+    });
   });
 
   it("disables send button when input is empty", () => {

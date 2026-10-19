@@ -51,6 +51,8 @@ export {
   type NoticeScreenProps,
 } from "./screens/NoticeScreen";
 
+export { BriefScreen, type BriefScreenProps } from "./screens/BriefScreen";
+
 export {
   StationScreen,
   type StationScreenProps,

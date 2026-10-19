@@ -1,8 +1,10 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useState } from "react";
 import {
+  BriefScreen,
   NoticeScreen,
   StationScreen,
   ResultScreen,
+  useActiveStation,
   useStation,
   type ResultScreenStatus,
 } from "./features/station";
@@ -11,13 +13,16 @@ import "./index.css";
 
 export default function App(): React.JSX.Element {
   const station = useStation();
+  const activeStation = useActiveStation();
+  // Consent given on the notice; the brief screen shows until the learner enters.
+  const [pendingConsent, setPendingConsent] = useState<boolean | null>(null);
+  const title = activeStation.station?.display_title;
+  const brief = activeStation.station?.candidate_brief ?? null;
 
-  const handleStart = useCallback(
-    (consent: boolean) => {
-      void station.start(consent);
-    },
-    [station],
-  );
+  const handleEnter = useCallback(() => {
+    if (pendingConsent === null) return;
+    void station.start(pendingConsent);
+  }, [station, pendingConsent]);
 
   const sendMessage = useCallback(
     async (
@@ -50,16 +55,24 @@ export default function App(): React.JSX.Element {
 
   const handleRestart = useCallback(async () => {
     await station.reset();
+    setPendingConsent(null);
   }, [station]);
 
-  // Flow: notice → station → result
+  // Flow: notice → brief → station → result
   if (station.status === "idle" || station.status === "loading") {
     return (
       <main className="app-root">
         {station.status === "loading" ? (
           <p role="status">{strings.loadingStation}</p>
+        ) : pendingConsent === null ? (
+          <NoticeScreen onStart={setPendingConsent} voiceSupport />
         ) : (
-          <NoticeScreen onStart={handleStart} voiceSupport />
+          <BriefScreen
+            title={title}
+            brief={brief}
+            error={activeStation.error}
+            onEnter={handleEnter}
+          />
         )}
       </main>
     );
@@ -100,6 +113,8 @@ export default function App(): React.JSX.Element {
   return (
     <main className="app-root">
       <StationScreen
+        title={title}
+        brief={brief}
         onSend={handleSend}
         onFinish={handleFinish}
         audioConsent={station.audioConsent}

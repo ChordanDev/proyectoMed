@@ -1,10 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { Impresso, RequestImpressoResponse } from "../api/client";
+import type {
+  CandidateBrief,
+  Impresso,
+  RequestImpressoResponse,
+} from "../api/client";
 import {
   keptLearnerTurnNotice,
   recoverableTurnNotice,
 } from "../hooks/useStation";
 import strings from "../i18n/pt-BR.json";
+import { StationBrief } from "./StationBrief";
 import "./StationScreen.css";
 
 export interface DisplayMessage {
@@ -27,6 +32,8 @@ export interface StationScreenProps {
   onSynthesize?: (text: string) => Promise<Blob | null>;
   /** Optional station title for the header. */
   title?: string;
+  /** Candidate brief the learner can reopen during the station (timer keeps running). */
+  brief?: CandidateBrief | null;
   /** External error message to display. */
   error?: string | null;
   /** Whether the send/finish controls are disabled (e.g. finishing in progress). */
@@ -63,6 +70,7 @@ export function StationScreen({
   onSendVoice,
   onSynthesize,
   title,
+  brief = null,
   error = null,
   disabled = false,
   remainingMs = null,
@@ -95,6 +103,7 @@ export function StationScreen({
     null,
   );
   const [impressoDrawerOpen, setImpressoDrawerOpen] = useState(false);
+  const [briefOpen, setBriefOpen] = useState(false);
   const [selectedImpressoId, setSelectedImpressoId] = useState<string | null>(
     null,
   );
@@ -461,6 +470,17 @@ export function StationScreen({
             {formatCountdown(remainingMs)}
           </div>
         )}
+        {brief && (
+          <button
+            type="button"
+            className="station-header__brief-button"
+            onClick={() => setBriefOpen(true)}
+            aria-haspopup="dialog"
+            data-testid="brief-open-button"
+          >
+            {strings.briefOpenButton}
+          </button>
+        )}
         <button
           type="button"
           className="station-header__finish-button"
@@ -655,6 +675,30 @@ export function StationScreen({
           </div>
         )}
       </div>
+
+      {brief && briefOpen && (
+        <div className="impresso-modal-backdrop">
+          <div
+            className="impresso-modal station-brief-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="station-brief-modal-title"
+            data-testid="brief-modal"
+          >
+            <h2 id="station-brief-modal-title">{strings.briefDialogTitle}</h2>
+            <StationBrief brief={brief} />
+            <div className="impresso-modal__actions">
+              <button
+                type="button"
+                onClick={() => setBriefOpen(false)}
+                data-testid="brief-close-button"
+              >
+                {strings.briefCloseButton}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {impressoModalOpen && (
         <div className="impresso-modal-backdrop">
