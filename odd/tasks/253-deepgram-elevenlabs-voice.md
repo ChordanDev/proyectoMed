@@ -32,11 +32,11 @@ and ElevenLabs keys already exist from the real-time voice prototype (#116).
 
 ## Tasks
 
-- [ ] T1 Deepgram transcription provider behind `:voice_provider` (route: inline, one
+- [x] T1 Deepgram transcription provider behind `:voice_provider` (route: inline, one
   new module + one edited module; tests in `backend/test/backend/transcription_test.exs`).
-- [ ] T2 ElevenLabs speech provider behind `:voice_provider` (route: inline, one new
+- [x] T2 ElevenLabs speech provider behind `:voice_provider` (route: inline, one new
   module + one edited module; tests in `backend/test/backend/tts_test.exs`).
-- [ ] T3 Runtime configuration (`VOICE_PROVIDER`, `DEEPGRAM_*`, `ELEVENLABS_*`) and README
+- [x] T3 Runtime configuration (`VOICE_PROVIDER`, `DEEPGRAM_*`, `ELEVENLABS_*`) and README
   documentation (route: inline, config + docs only).
 - [ ] T4 Live check on acute-appendicitis with real keys (maintainer; pending).
 
@@ -57,8 +57,27 @@ and ElevenLabs keys already exist from the real-time voice prototype (#116).
 
 ## Progress
 
-(updated per task)
+- T1 `fdfc8e7` feat(voice): Deepgram transcription. RED: 4 of 19 transcription tests
+  failed (request shape, configured model/content types, transcript mapping, empty
+  result); the timeout, HTTP error, malformed body and missing key tests already
+  passed through the OpenAI path, which maps them to the same outcome. GREEN: 19/19,
+  plus 8/8 transcription controller tests.
+- T2 `e47d550` feat(voice): ElevenLabs speech. RED: 3 of 19 TTS tests failed (request
+  shape, configured model/voice, missing ElevenLabs key or voice id); the failure
+  mappings already passed through the OpenAI path. GREEN: 19/19, plus 7/7 TTS
+  controller tests.
+- T3 runtime configuration and README (config + docs, no runnable RED). Structural
+  check: `Config.Reader.read!("config/runtime.exs", env: :dev)` with the variables
+  set yields `voice_provider: :deepgram_elevenlabs`, the key and the trimmed voice id;
+  a blank variable is ignored; `env: :test` reads none of them.
+- Provider docs checked on 2026-10-19: Deepgram `/v1/listen` (`Authorization: Token`,
+  `model`, `language`, `smart_format`, `results.channels[].alternatives[].transcript`,
+  `metadata.duration`); ElevenLabs `/v1/text-to-speech/{voice_id}` (`xi-api-key`,
+  `text`, `model_id`, `output_format` default `mp3_44100_128`). The raw-audio body
+  for Deepgram follows the reference branch and Deepgram's documented binary upload
+  (the reference page only shows the URL form).
+- T4 pending: live check needs the maintainer's keys.
 
 ## Next step
 
-T1.
+Maintainer live check (T4) on acute-appendicitis with real Deepgram and ElevenLabs keys.
