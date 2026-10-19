@@ -33,6 +33,11 @@ defmodule Backend.Stations.LearnerFeedback do
       a transient failure retries on the next fetch. A cache read or write that
       exits (timeout, process gone) degrades to no cache; the texts are still
       returned for this response.
+    * **Single-flight (issue #229).** One fetch per session generates
+      (`Backend.Stations.Conversation.claim_learner_feedback/2`); concurrent
+      fetches for the same session wait for it, bounded by the deadline, and
+      then read the cache without calling the provider. Criteria the
+      generation did not produce keep the authored text for them.
 
   The provider is selected with `:learner_feedback_adapter` (a
   `Backend.Stations.LearnerFeedback.Adapter`). `config/config.exs` sets it to
@@ -66,10 +71,7 @@ defmodule Backend.Stations.LearnerFeedback do
   def attach(%{criteria: criteria} = assessment, package, session_id) do
     authored = Map.new(rubric(package), &{&1["id"], &1})
     eligible = Enum.filter(criteria, &(&1.status == :assessed and Map.has_key?(authored, &1.id)))
-    cached = cached_texts(session_id, eligible)
-    pending = Enum.reject(eligible, &Map.has_key?(cached, &1.id))
-    generated = generate(pending, authored, package, session_id)
-    texts = Map.merge(cached, generated)
+    texts = feedback_texts(eligible, authored, package, session_id)
 
     %{
       assessment
@@ -81,6 +83,58 @@ defmodule Backend.Stations.LearnerFeedback do
             end
           end)
     }
+  end
+
+  defp feedback_texts(eligible, authored, package, session_id) do
+    cached = cached_texts(session_id, eligible)
+
+    case Enum.reject(eligible, &Map.has_key?(cached, &1.id)) do
+      [] ->
+        cached
+
+      pending ->
+        Map.merge(cached, single_flight(pending, eligible, authored, package, session_id))
+    end
+  end
+
+  # Generates only when this fetch owns the session's generation. A waiter
+  # reads what the owner cached. An unreachable or missing session generates
+  # without the guard, as before; a wait that outlives its bound keeps the
+  # authored text.
+  defp single_flight(pending, eligible, authored, package, session_id) do
+    case claim(session_id) do
+      :generate -> generate_as_owner(pending, authored, package, session_id)
+      :settled -> cached_texts(session_id, eligible)
+      :timeout -> %{}
+      :unguarded -> generate_and_store(pending, authored, package, session_id)
+    end
+  end
+
+  defp claim(session_id) do
+    case Conversation.claim_learner_feedback(session_id, deadline_ms() + 1_000) do
+      :generate -> :generate
+      :settled -> :settled
+      {:error, _reason} -> :unguarded
+    end
+  catch
+    :exit, {:timeout, _call} -> :timeout
+    :exit, _reason -> :unguarded
+  end
+
+  defp generate_as_owner(pending, authored, package, session_id) do
+    generated = generate(pending, authored, package)
+    settle(session_id, pending, generated)
+    generated
+  catch
+    kind, reason ->
+      settle(session_id, pending, %{})
+      :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
+  defp generate_and_store(pending, authored, package, session_id) do
+    generated = generate(pending, authored, package)
+    store(session_id, pending, generated)
+    generated
   end
 
   defp cached_texts(session_id, eligible) do
@@ -101,9 +155,7 @@ defmodule Backend.Stations.LearnerFeedback do
         do: {criterion.id, text}
   end
 
-  defp generate([], _authored, _package, _session_id), do: %{}
-
-  defp generate(pending, authored, package, session_id) do
+  defp generate(pending, authored, package) do
     request = %{
       language: package["language"],
       criteria: Enum.map(pending, &request_criterion(&1, Map.fetch!(authored, &1.id)))
@@ -127,7 +179,6 @@ defmodule Backend.Stations.LearnerFeedback do
             "#{map_size(valid)} texts for #{length(pending)} criteria"
         )
 
-        store(session_id, pending, valid)
         valid
 
       {:ok, _malformed} ->
@@ -153,17 +204,24 @@ defmodule Backend.Stations.LearnerFeedback do
   defp store(_session_id, _pending, valid) when map_size(valid) == 0, do: :ok
 
   defp store(session_id, pending, valid) do
-    entries =
-      for criterion <- pending, Map.has_key?(valid, criterion.id), into: %{} do
-        {criterion.id,
-         %{fingerprint: fingerprint(criterion), text: Map.fetch!(valid, criterion.id)}}
-      end
+    _ = Conversation.put_learner_feedback(session_id, cache_entries(pending, valid))
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
 
-    try do
-      _ = Conversation.put_learner_feedback(session_id, entries)
-      :ok
-    catch
-      :exit, _reason -> :ok
+  # Caches the generated texts and releases this fetch's generation.
+  defp settle(session_id, pending, valid) do
+    _ = Conversation.settle_learner_feedback(session_id, cache_entries(pending, valid))
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp cache_entries(pending, valid) do
+    for criterion <- pending, Map.has_key?(valid, criterion.id), into: %{} do
+      {criterion.id,
+       %{fingerprint: fingerprint(criterion), text: Map.fetch!(valid, criterion.id)}}
     end
   end
 
@@ -236,9 +294,7 @@ defmodule Backend.Stations.LearnerFeedback do
 
   defp run_with_deadline(request) do
     adapter = Application.get_env(:backend, :learner_feedback_adapter, DisabledAdapter)
-
-    deadline_ms =
-      Application.get_env(:backend, :learner_feedback_deadline_ms, @default_deadline_ms)
+    deadline_ms = deadline_ms()
 
     task =
       Task.async(fn ->
@@ -260,6 +316,9 @@ defmodule Backend.Stations.LearnerFeedback do
       nil -> {:error, :timeout}
     end
   end
+
+  defp deadline_ms,
+    do: Application.get_env(:backend, :learner_feedback_deadline_ms, @default_deadline_ms)
 
   defp failure_kind(reason) when is_atom(reason), do: reason
   defp failure_kind(_reason), do: :provider_error

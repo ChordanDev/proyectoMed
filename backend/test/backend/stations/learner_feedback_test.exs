@@ -491,6 +491,130 @@ defmodule Backend.Stations.LearnerFeedbackTest do
     end
   end
 
+  describe "single-flight" do
+    # Answers each provider call only when the test sends `{:release, reply}` to
+    # the generating process, which is reported as `{:generating, pid}`.
+    defp gate_provider do
+      test_pid = self()
+
+      respond_with(fn _request ->
+        send(test_pid, {:generating, self()})
+
+        receive do
+          {:release, reply} -> reply
+        end
+      end)
+    end
+
+    defp wait_for_waiters(session_id, count, attempts \\ 200)
+
+    defp wait_for_waiters(session_id, count, 0) do
+      flunk("expected #{count} feedback waiters for #{session_id}")
+    end
+
+    defp wait_for_waiters(session_id, count, attempts) do
+      state = :sys.get_state(Backend.Stations.Conversation)
+
+      case state |> Map.get(:feedback_flights, %{}) |> Map.get(session_id) do
+        %{waiters: waiters} when length(waiters) == count ->
+          :ok
+
+        _other ->
+          Process.sleep(5)
+          wait_for_waiters(session_id, count, attempts - 1)
+      end
+    end
+
+    test "a concurrent fetch waits for the running generation", %{session_id: id} do
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      send(generator, {:release, {:ok, @generated}})
+      results = Task.await_many([first, second])
+
+      assert [result, result] = results
+      assert recommendations(result)["history"] == @generated["history"]
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+      refute_received {:generating, _}
+    end
+
+    test "a waiter gets the authored text when the generation fails", %{session_id: id} do
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      send(generator, {:release, {:error, :unavailable}})
+      Enum.each(Task.await_many([first, second]), &assert_authored/1)
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+    end
+
+    test "a waiter gets the authored text within the deadline when the generation times out",
+         %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_deadline_ms, 100)
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, _generator}
+      {elapsed_us, second} = :timer.tc(fn -> attach(id) end)
+
+      assert_authored(second)
+      assert elapsed_us < 600_000
+      assert_authored(Task.await(first))
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+    end
+
+    test "a waiter gets the authored text when the generating process dies", %{session_id: id} do
+      gate_provider()
+      owner = spawn(fn -> attach(id) end)
+      assert_receive {:generating, _generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      Process.exit(owner, :kill)
+      assert_authored(Task.await(second))
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+    end
+
+    test "discarding the session releases its waiters", %{session_id: id} do
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      :ok = Stations.discard_session(id)
+      assert_authored(Task.await(second))
+      send(generator, {:release, {:ok, @generated}})
+      assert recommendations(Task.await(first))["history"] == @generated["history"]
+    end
+
+    test "different sessions generate independently", %{session_id: id} do
+      other = Stations.create_session(audio_consent: false)
+      {:ok, _} = Stations.complete_session(other.session_id)
+      on_exit(fn -> Stations.discard_session(other.session_id) end)
+
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      second = Task.async(fn -> attach(other.session_id) end)
+      assert_receive {:generating, generator_a}
+      assert_receive {:generating, generator_b}
+
+      send(generator_a, {:release, {:ok, @generated}})
+      send(generator_b, {:release, {:ok, @generated}})
+      Task.await_many([first, second])
+      assert_received {:feedback_request, _}
+      assert_received {:feedback_request, _}
+    end
+  end
+
   describe "config/runtime.exs" do
     @runtime_config Path.expand("../../../config/runtime.exs", __DIR__)
     @deadline_var "LEARNER_FEEDBACK_DEADLINE_MS"

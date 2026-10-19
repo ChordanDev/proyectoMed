@@ -171,6 +171,63 @@ defmodule BackendWeb.EducationalResultTest do
     refute_received {:feedback_request, _}
   end
 
+  defmodule GatedFeedbackDouble do
+    @behaviour Backend.Stations.LearnerFeedback.Adapter
+
+    @impl true
+    def write_feedback(request) do
+      send(Application.fetch_env!(:backend, __MODULE__), {:generating, self(), request})
+
+      receive do
+        :release -> {:ok, Map.new(request.criteria, &{&1.id, "Feedback for #{&1.id}."})}
+      end
+    end
+  end
+
+  test "concurrent result fetches for one session make a single feedback call", %{
+    session_id: id
+  } do
+    previous = Application.fetch_env(:backend, :learner_feedback_adapter)
+    Application.put_env(:backend, :learner_feedback_adapter, GatedFeedbackDouble)
+    Application.put_env(:backend, GatedFeedbackDouble, self())
+
+    on_exit(fn ->
+      Application.delete_env(:backend, GatedFeedbackDouble)
+
+      case previous do
+        {:ok, value} -> Application.put_env(:backend, :learner_feedback_adapter, value)
+        :error -> Application.delete_env(:backend, :learner_feedback_adapter)
+      end
+    end)
+
+    first = Task.async(fn -> Stations.get_educational_result(id) end)
+    assert_receive {:generating, generator, _request}
+    second = Task.async(fn -> Stations.get_educational_result(id) end)
+    wait_for_feedback_waiter(id)
+
+    send(generator, :release)
+    assert [{:ok, result}, {:ok, result}] = Task.await_many([first, second])
+    assert [assessed, _uncertain] = result.criteria
+    assert assessed.recommendation == "Feedback for criterion-a."
+    refute_received {:generating, _, _}
+  end
+
+  defp wait_for_feedback_waiter(session_id, attempts \\ 200)
+  defp wait_for_feedback_waiter(_session_id, 0), do: flunk("no feedback waiter")
+
+  defp wait_for_feedback_waiter(session_id, attempts) do
+    case :sys.get_state(Backend.Stations.Conversation)
+         |> Map.get(:feedback_flights, %{})
+         |> Map.get(session_id) do
+      %{waiters: [_waiter]} ->
+        :ok
+
+      _other ->
+        Process.sleep(5)
+        wait_for_feedback_waiter(session_id, attempts - 1)
+    end
+  end
+
   test "provider transport errors expose only an invalid attempt, never diagnostics or partial points",
        %{conn: conn, session_id: id} do
     Application.put_env(:backend, :jev_decision_adapter, TechnicalFailureDouble)
