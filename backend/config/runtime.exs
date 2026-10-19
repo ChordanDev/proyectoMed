@@ -109,16 +109,54 @@ if config_env() != :test do
   end
 end
 
+# Text provider (issue #252): `LLM_PROVIDER=anthropic` serves the three text
+# seams (simulated patient, rubric resolver, learner feedback) from Claude's
+# Messages API. Unset, or any other value, keeps OpenAI exactly as before. Jev
+# (TypeSafe) and voice are not affected. `ANTHROPIC_API_KEY`,
+# `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` (default `claude-opus-5-5`) are
+# written to `Backend.Stations.StationAI.AnthropicClient`; the adapters never
+# read the operating system environment. Selecting Claude without a key boots
+# normally and every call fails as a technical failure (`:missing_credentials`),
+# which each seam already handles. `:test` reads none of it.
+anthropic_selected? = System.get_env("LLM_PROVIDER") == "anthropic"
+
+if config_env() != :test do
+  for {variable, key} <- [
+        {"ANTHROPIC_API_KEY", :api_key},
+        {"ANTHROPIC_BASE_URL", :base_url},
+        {"ANTHROPIC_MODEL", :model}
+      ],
+      value = System.get_env(variable) do
+    config :backend, Backend.Stations.StationAI.AnthropicClient, [{key, value}]
+  end
+
+  if anthropic_selected? do
+    config :backend, :station_ai_adapter, Backend.Stations.StationAI.AnthropicAdapter
+
+    config :backend,
+           :learner_feedback_adapter,
+           Backend.Stations.LearnerFeedback.AnthropicAdapter
+  end
+end
+
 # Rubric resolver (issue #214): an LLM that decides only the rubric actions Jev
-# left undecided. Off unless `RUBRIC_RESOLVER=openai` asks for it: without the
-# variable the default `DisabledAdapter` leaves those actions uncertain. It reuses
-# the OpenAI key and base URL configured above; `RUBRIC_RESOLVER_MODEL` picks its
-# model, which otherwise falls back to `OPENAI_MODEL`. `:test` reads none of it.
+# left undecided. Off unless `RUBRIC_RESOLVER` turns it on (`openai`, kept for
+# compatibility, or `on`): without the variable the default `DisabledAdapter`
+# leaves those actions uncertain. `LLM_PROVIDER` picks who serves it: Claude
+# with `LLM_PROVIDER=anthropic` (configured above), OpenAI otherwise. On OpenAI
+# it reuses the OpenAI key and base URL configured above, and
+# `RUBRIC_RESOLVER_MODEL` picks its model, which otherwise falls back to
+# `OPENAI_MODEL`; on Claude `ANTHROPIC_MODEL` applies. `:test` reads none of it.
 if config_env() != :test do
   resolver_adapter = Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter
 
-  if System.get_env("RUBRIC_RESOLVER") == "openai" do
-    config :backend, :rubric_resolver_adapter, resolver_adapter
+  if System.get_env("RUBRIC_RESOLVER") in ["openai", "on"] do
+    selected_resolver =
+      if anthropic_selected?,
+        do: Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter,
+        else: resolver_adapter
+
+    config :backend, :rubric_resolver_adapter, selected_resolver
   end
 
   if model = System.get_env("RUBRIC_RESOLVER_MODEL") do

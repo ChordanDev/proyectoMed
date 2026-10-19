@@ -254,6 +254,36 @@ the items above the yes threshold, and leaves the criterion level to the
 authored rules (see `docs/design/jev-prototype.md`). Single rubric decisions and
 enumeration questions return a technical failure.
 
+### Text provider (OpenAI or Claude)
+
+Three text seams call an LLM: the simulated patient, the rubric resolver and
+learner feedback. They use OpenAI unless `LLM_PROVIDER=anthropic` moves all
+three to Anthropic's Claude Messages API (issue #252). Jev stays on TypeSafe and
+voice is not affected.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `LLM_PROVIDER` | `anthropic` serves the three text seams from Claude (`dev` and `prod`; ignored in `test`). Unset, or any other value, keeps OpenAI unchanged. | unset |
+| `ANTHROPIC_API_KEY` | Claude API key. Without it every Claude call is a technical failure: the patient turn takes its existing technical-failure path, the resolver leaves actions uncertain and feedback keeps the authored texts. | unset |
+| `ANTHROPIC_MODEL` | Model for the three seams. | `claude-opus-5-5` |
+| `ANTHROPIC_BASE_URL` | API base URL. | `https://api.anthropic.com` |
+| `RUBRIC_RESOLVER` | `on` (or `openai`, kept for compatibility) turns the rubric resolver on; `LLM_PROVIDER` picks who serves it. Unset keeps it off. | unset |
+| `RUBRIC_RESOLVER_MODEL` | OpenAI model of the resolver; ignored on Claude, where `ANTHROPIC_MODEL` applies. | `OPENAI_MODEL` |
+
+So `LLM_PROVIDER=anthropic RUBRIC_RESOLVER=on` runs the patient, the resolver
+and feedback on Claude; `LLM_PROVIDER=anthropic` alone leaves the resolver off.
+The OpenAI variables (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`) keep
+working as before and still drive the voice endpoints.
+
+On Claude the patient runs at effort `low` for latency, and the resolver and
+feedback at `medium` with structured outputs (a JSON schema); thinking stays at
+the model's adaptive default. Each request opts into server-side refusal
+fallbacks. A refusal that remains, an HTTP error, a timeout or a truncated
+answer is a technical failure of the seam, handled by its existing fallback;
+the provider text is never returned or logged. The resolver and feedback keep
+their deadlines (`RUBRIC_RESOLVER_DEADLINE_MS`, `LEARNER_FEEDBACK_DEADLINE_MS`):
+the HTTP receive timeout stays just below them.
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.
