@@ -76,7 +76,7 @@ defmodule Backend.Stations.StationAI.OpenAIAdapter do
   defp build_payload(package, context, model) do
     system_msg = %{
       "role" => "system",
-      "content" => StationAI.system_prompt(package)
+      "content" => StationAI.system_prompt(package, context)
     }
 
     history =

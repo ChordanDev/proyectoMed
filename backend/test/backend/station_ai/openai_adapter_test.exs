@@ -69,6 +69,38 @@ defmodule Backend.StationAI.OpenAIAdapterTest do
       assert patient == %{"role" => "assistant", "content" => "Há duas horas."}
     end
 
+    test "carries withheld fact ids from the context into the system prompt (issue #242)" do
+      test_pid = self()
+
+      package =
+        Map.put(@package, "revealable_facts", [
+          %{
+            "id" => "fact-appetite",
+            "topic" => "appetite",
+            "content" => "Perdeu o apetite.",
+            "disclosure_condition" => "on_request"
+          }
+        ])
+
+      Req.Test.stub(WithheldStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:payload, Jason.decode!(body)})
+        Req.Test.json(conn, %{"choices" => [%{"message" => %{"content" => "ok"}}]})
+      end)
+
+      context = %{conversation: [], language: "pt-BR", withheld_fact_ids: ["fact-appetite"]}
+
+      assert {:ok, %{text: "ok"}} =
+               OpenAIAdapter.next_reply(package, context,
+                 api_key: "sk-test-secret-key",
+                 plug: {Req.Test, WithheldStub}
+               )
+
+      assert_receive {:payload, %{"messages" => [sys]}}
+      assert sys["content"] == StationAI.system_prompt(package, context)
+      assert sys["content"] =~ "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR"
+    end
+
     test "allows custom base_url and custom model overrides" do
       test_pid = self()
 

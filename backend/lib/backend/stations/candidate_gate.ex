@@ -27,6 +27,12 @@ defmodule Backend.Stations.CandidateGate do
        A candidate refused for `:semantic_refusal` or `:low_confidence` permits at most
        one regeneration within the remaining monotonic deadline budget.
        The regenerated candidate undergoes the full recheck (deny -> template -> Jev).
+       When Jev reports `unasked_fact_ids` (on-request facts stated without being
+       asked, issue #242), the regeneration is targeted: an arity-4 generator
+       `(package, conversation, remaining_ms, guidance)` receives
+       `%{withheld_fact_ids: ids}`, and the default generator puts the same ids in
+       the StationAI context. Every other refusal passes `withheld_fact_ids: []`, so
+       the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
        If the second candidate fails for any reason, no text is released and
        `{:error, {:refused, status}}` or `{:error, reason}` is returned.
 
@@ -277,8 +283,16 @@ defmodule Backend.Stations.CandidateGate do
         {:ok, %{status: :verified}} ->
           {:ok, candidate_text}
 
-        {:ok, %{status: status}} when status in [:semantic_refusal, :low_confidence] ->
-          handle_refusal(status, package, conversation, deadline_at, opts)
+        {:ok, %{status: status} = decision}
+        when status in [:semantic_refusal, :low_confidence] ->
+          handle_refusal(
+            status,
+            regeneration_guidance(decision),
+            package,
+            conversation,
+            deadline_at,
+            opts
+          )
 
         {:error, reason} ->
           # Technical failures (:timeout, {:adapter_disabled, _}, {:upstream_5xx, _}, etc.)
@@ -288,21 +302,31 @@ defmodule Backend.Stations.CandidateGate do
     end
   end
 
-  defp handle_refusal(status, package, conversation, deadline_at, opts) do
+  # The guidance names facts only by the authored ids Jev reported as stated
+  # without being asked (issue #242); it never carries Jev or candidate text.
+  defp regeneration_guidance(decision) do
+    case Map.get(decision, :unasked_fact_ids) do
+      ids when is_list(ids) -> %{withheld_fact_ids: Enum.filter(ids, &is_binary/1)}
+      _ -> %{withheld_fact_ids: []}
+    end
+  end
+
+  defp handle_refusal(status, guidance, package, conversation, deadline_at, opts) do
     retry_count = Keyword.get(opts, :retry_count, 0)
     can_retry? = Keyword.get(opts, :can_retry?, true)
 
     if can_retry? and retry_count == 0 do
-      attempt_regeneration(package, conversation, deadline_at, opts)
+      attempt_regeneration(guidance, package, conversation, deadline_at, opts)
     else
       {:error, {:refused, status}}
     end
   end
 
-  defp attempt_regeneration(package, conversation, deadline_at, opts) do
+  defp attempt_regeneration(guidance, package, conversation, deadline_at, opts) do
     with :ok <- check_regeneration_budget(deadline_at),
          generator = opts[:generator],
-         {:ok, regen_text} <- invoke_generator(generator, package, conversation, deadline_at),
+         {:ok, regen_text} <-
+           invoke_generator(generator, guidance, package, conversation, deadline_at),
          :ok <- check_regeneration_budget(deadline_at) do
       recheck_regenerated(regen_text, package, conversation, deadline_at, opts)
     end
@@ -357,7 +381,7 @@ defmodule Backend.Stations.CandidateGate do
 
   defp eval_recheck_jev_result({:error, reason}, _text), do: {:error, reason}
 
-  defp invoke_generator(generator, package, conversation, deadline_at) do
+  defp invoke_generator(generator, guidance, package, conversation, deadline_at) do
     remaining_ms = JevDecision.remaining_budget_ms(deadline_at)
 
     if remaining_ms <= 0 do
@@ -378,12 +402,16 @@ defmodule Backend.Stations.CandidateGate do
             is_function(generator, 3) ->
               generator.(package, conversation, remaining_ms)
 
+            is_function(generator, 4) ->
+              generator.(package, conversation, remaining_ms, guidance)
+
             is_nil(generator) ->
               language = package["language"] || package[:language] || "pt-BR"
 
               Backend.Stations.StationAI.next_reply(package, %{
                 conversation: conversation,
-                language: language
+                language: language,
+                withheld_fact_ids: guidance.withheld_fact_ids
               })
 
             true ->
