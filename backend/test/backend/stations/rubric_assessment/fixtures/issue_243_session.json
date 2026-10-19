@@ -1,0 +1,233 @@
+{
+  "description": "Learner turns of the 2026-10-19 live acute-appendicitis attempt (issue #243), in order and verbatim. Patient replies are paraphrased; the learner turns kept after a refused or missing patient reply (pain-modifiers-associated, exam-authorization, exam-verbalization) have none. Impressos requests are placed where the learner opened them. The recorded TypeSafe answers leave some actions of items 7 and 10 undecided on the turn that performs them and answer no for every other turn; the recorded resolver cites the opener (chief-complaint) next to, or instead of, the performing turn.",
+  "turns": [
+    {
+      "key": "greeting",
+      "role": "learner",
+      "modality": "text",
+      "text": "Olá, boa tarde. Eu sou o Dr. Vicenzo, médico que vai atendê-lo hoje. Qual é o seu nome completo?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Boa tarde, doutor. Rafael Souza."
+    },
+    {
+      "key": "chief-complaint",
+      "role": "learner",
+      "modality": "text",
+      "text": "O que o trouxe aqui hoje? Onde começou a dor?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Estou com dor na barriga desde ontem. Começou em volta do umbigo e depois foi para o lado direito, embaixo."
+    },
+    {
+      "key": "pain-character",
+      "role": "learner",
+      "modality": "text",
+      "text": "Como é essa dor: em pontada, cólica ou contínua? Ela foi piorando com o tempo? De 0 a 10, qual a intensidade?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "É contínua e foi piorando. Agora está uns oito."
+    },
+    {
+      "key": "pain-modifiers-associated",
+      "role": "learner",
+      "modality": "text",
+      "text": "Alguma coisa piora ou melhora a dor, como andar, tossir ou ficar parado? Teve febre, náuseas ou vômitos?"
+    },
+    {
+      "key": "pain-modifiers",
+      "role": "learner",
+      "modality": "text",
+      "text": "Alguma coisa piora a dor, como andar ou tossir?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Piora quando eu ando e quando tusso."
+    },
+    {
+      "key": "fever-appetite",
+      "role": "learner",
+      "modality": "text",
+      "text": "Teve febre? E como está o seu apetite?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Tive febre baixa e perdi o apetite."
+    },
+    {
+      "key": "bowel-urinary",
+      "role": "learner",
+      "modality": "text",
+      "text": "Como está o seu intestino? Está evacuando e eliminando gases normalmente? Tem ardor ao urinar ou alguma alteração na urina?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "O intestino está normal e a urina também."
+    },
+    {
+      "key": "past-history",
+      "role": "learner",
+      "modality": "text",
+      "text": "Tem alguma doença crônica, como diabetes ou hipertensão? Já fez alguma cirurgia ou foi internado antes?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Não tenho nenhuma doença e nunca operei."
+    },
+    {
+      "key": "medications",
+      "role": "learner",
+      "modality": "text",
+      "text": "Usa algum medicamento? Tomou algum antibiótico ou anticoagulante recentemente? Tem alergia a algum medicamento?"
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Não uso nada e não tenho alergia."
+    },
+    {
+      "key": "exam-authorization",
+      "role": "learner",
+      "modality": "text",
+      "text": "Vou examinar seu abdome agora. Posso? Por favor, deite-se de barriga para cima."
+    },
+    {
+      "key": "request-physical-exam",
+      "role": "learner",
+      "modality": "impressos",
+      "text": "Solicito o exame físico."
+    },
+    {
+      "key": "exam-verbalization",
+      "role": "learner",
+      "modality": "text",
+      "text": "Na palpação profunda há dor acentuada na fossa ilíaca direita, no ponto de McBurney. A descompressão brusca é dolorosa, sinal de Blumberg positivo, indicando irritação peritoneal. O sinal de Rovsing é positivo; psoas e obturador são negativos."
+    },
+    {
+      "key": "request-labs",
+      "role": "learner",
+      "modality": "impressos",
+      "text": "Solicito hemograma, PCR, urina tipo 1, eletrólitos, ureia e creatinina."
+    },
+    {
+      "key": "lab-interpretation",
+      "role": "learner",
+      "modality": "text",
+      "text": "O hemograma mostra leucocitose de 15.800 com neutrofilia e desvio à esquerda. A PCR está elevada, 86 mg/L. A urina tipo 1 não mostra sinais de infecção urinária. A função renal e os eletrólitos estão preservados."
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Isso é grave, doutor?"
+    },
+    {
+      "key": "request-imaging",
+      "role": "learner",
+      "modality": "impressos",
+      "text": "Solicito ultrassonografia de abdome e pelve."
+    },
+    {
+      "key": "imaging-hypothesis",
+      "role": "learner",
+      "modality": "text",
+      "text": "A ultrassonografia mostra apêndice dilatado, com espessamento parietal e inflamação periapendicular, sem abscesso ou perfuração. Minha hipótese diagnóstica é apendicite aguda."
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "E o que vai ser feito agora?"
+    },
+    {
+      "key": "surgery-antibiotic",
+      "role": "learner",
+      "modality": "text",
+      "text": "Vou manter jejum oral, puncionar acesso venoso com soro cristaloide e reavaliar, prescrever analgesia e antiemético, e monitorar sinais vitais. Vou solicitar avaliação imediata da cirurgia geral e iniciar antibiótico intravenoso, ceftriaxona com metronidazol, sem atrasar a avaliação cirúrgica."
+    },
+    {
+      "role": "patient",
+      "modality": "text",
+      "text": "Vou precisar operar? Quanto tempo fico internado?"
+    },
+    {
+      "key": "patient-doubts",
+      "role": "learner",
+      "modality": "text",
+      "text": "Rafael, seu quadro e os exames indicam apendicite aguda. O tratamento habitual é a cirurgia para retirar o apêndice, a apendicectomia; antibiótico isolado não é a opção padrão para todos os casos, e a equipe cirúrgica vai avaliar a conduta definitiva com você. O tempo de internação e o retorno ao trabalho dependem da sua evolução e da técnica usada; em casos sem complicação costuma ser curto. Antes do procedimento a equipe vai explicar tudo e pedir seu consentimento."
+    }
+  ],
+  "recorded": {
+    "typesafe_default_noul": 0.05,
+    "typesafe_noul": {
+      "item-07": {
+        "criterio-1": {
+          "lab-interpretation": 0.95
+        },
+        "criterio-2": {
+          "lab-interpretation": 0.95
+        },
+        "criterio-3": {
+          "lab-interpretation": 0.95
+        },
+        "criterio-4": {
+          "lab-interpretation": 0.6
+        }
+      },
+      "item-10": {
+        "criterio-1": {
+          "surgery-antibiotic": 0.95
+        },
+        "criterio-2": {
+          "surgery-antibiotic": 0.6
+        },
+        "criterio-3": {
+          "surgery-antibiotic": 0.6
+        }
+      }
+    },
+    "resolver": {
+      "opener_beside_performing_turn": {
+        "item-07": {
+          "criterio-4": [
+            "chief-complaint",
+            "lab-interpretation"
+          ]
+        },
+        "item-10": {
+          "criterio-2": [
+            "chief-complaint",
+            "surgery-antibiotic"
+          ],
+          "criterio-3": [
+            "chief-complaint",
+            "surgery-antibiotic"
+          ]
+        }
+      },
+      "opener_only": {
+        "item-07": {
+          "criterio-4": [
+            "chief-complaint"
+          ]
+        },
+        "item-10": {
+          "criterio-2": [
+            "chief-complaint"
+          ],
+          "criterio-3": [
+            "chief-complaint"
+          ]
+        }
+      }
+    }
+  }
+}

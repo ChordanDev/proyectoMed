@@ -42,7 +42,7 @@ sub-action classifications. Sub-actions are not presented as credited actions.
 
 ## How a criterion is graded (issue #228)
 
-Grading follows what the learner actually did. Three rules keep a criterion's
+Grading follows what the learner actually did. Four rules keep a criterion's
 outcome tied to the transcript:
 
 - **Action context.** Each rubric action is asked of the classifier (Jev)
@@ -61,6 +61,13 @@ outcome tied to the transcript:
   `assessment_unresolved`, not assessed at `"0"`. A zero that Jev's own
   answers or a deterministic rule decide stays assessed. The resolver request
   runs at `temperature` 0.
+- **Related citations only (issue #243).** For each action Jev leaves
+  undecided, it also reports the learner items it could neither confirm nor
+  rule out for that action. The rubric resolver may cite only those items: a
+  citation of an item Jev answered "no" for that action (such as the opening
+  question cited for lab interpretation) is dropped, and an action left with
+  no related citation stays undecided, so an unrelated citation never raises a
+  level. These candidate items are never reported as evidence.
 
 Every point value is a shortest exact **decimal string**, not a JSON number:
 `"0"`, `"0.025"`, `"0.125"`, `"0.4"`, `"1.125"`, etc. A value has at most three
