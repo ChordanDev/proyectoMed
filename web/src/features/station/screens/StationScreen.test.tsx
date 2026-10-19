@@ -962,7 +962,7 @@ describe("StationScreen impresso requests", () => {
   const chestXray = {
     id: "chest-xray",
     title: "Radiografia de tórax",
-    category: "Exame de imagem",
+    category: "imaging",
     content: "Sem sinais de consolidação.",
   };
 
@@ -1002,7 +1002,7 @@ describe("StationScreen impresso requests", () => {
     const abdominalExam = {
       id: "abdominal-exam",
       title: "Exame físico abdominal",
-      category: "Exame físico",
+      category: "physical_exam",
       content: "Dor à palpação no ponto de McBurney.",
     };
     const onSend = vi.fn().mockResolvedValue("Dói aqui embaixo, doutor.");
@@ -1270,12 +1270,31 @@ describe("StationScreen impresso requests", () => {
     await user.click(screen.getByTestId("impresso-drawer-toggle"));
 
     expect(screen.getByText(chestXray.title)).toBeInTheDocument();
-    expect(screen.getByText(chestXray.category)).toBeInTheDocument();
+    expect(screen.getByText("Exame de imagem")).toBeInTheDocument();
+    expect(screen.queryByText(chestXray.category)).not.toBeInTheDocument();
     expect(screen.queryByText(chestXray.content)).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId(`impresso-item-${chestXray.id}`));
 
     expect(screen.getByText(chestXray.content)).toBeInTheDocument();
+  });
+
+  it("shows no category label for an unknown impresso category", async () => {
+    const user = userEvent.setup();
+    const oddImpresso = { ...chestXray, category: "unknown_category" };
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[oddImpresso]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+
+    const item = screen.getByTestId(`impresso-item-${oddImpresso.id}`);
+    expect(item).toHaveTextContent(oddImpresso.title);
+    expect(item).not.toHaveTextContent("unknown_category");
   });
 
   it("renders selected impresso Markdown as formatted text in the drawer", async () => {

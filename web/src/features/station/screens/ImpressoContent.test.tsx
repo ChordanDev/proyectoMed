@@ -46,7 +46,9 @@ describe("ImpressoContent", () => {
   it("renders ### lines as headings without the hash markers", () => {
     render(
       <ImpressoContent
-        content={"### SINAIS VITAIS:\n- PA: 150/90 mmHg\n\n### EXAME FÍSICO:\n- Geral: bom estado."}
+        content={
+          "### SINAIS VITAIS:\n- PA: 150/90 mmHg\n\n### EXAME FÍSICO:\n- Geral: bom estado."
+        }
       />,
     );
 
@@ -70,7 +72,9 @@ describe("ImpressoContent", () => {
   });
 
   it("renders an unclosed bold marker as literal text", () => {
-    const { container } = render(<ImpressoContent content={"Valor **sem fim"} />);
+    const { container } = render(
+      <ImpressoContent content={"Valor **sem fim"} />,
+    );
 
     expect(container.querySelector("strong")).toBeNull();
     expect(container).toHaveTextContent("Valor **sem fim");

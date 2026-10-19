@@ -362,6 +362,14 @@
   text-align: left;
   font-size: 13px;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.impresso-drawer__category {
+  color: #6b7280;
+  font-size: 12px;
 }
 
 .impresso-drawer__viewer {

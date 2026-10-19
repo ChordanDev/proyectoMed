@@ -7,6 +7,7 @@ import type {
 import { isKeptLearnerTurn, recoverableTurnNotice } from "../hooks/useStation";
 import strings from "../i18n/pt-BR.json";
 import { ImpressoContent } from "./ImpressoContent";
+import { impressoCategoryLabel } from "./impressoCategory";
 import { StationBrief } from "./StationBrief";
 import "./StationScreen.css";
 
@@ -682,18 +683,25 @@ export function StationScreen({
             {impressos.length === 0 ? (
               <p>{strings.impressoDrawerEmpty}</p>
             ) : (
-              impressos.map((impresso) => (
-                <button
-                  key={impresso.id}
-                  type="button"
-                  className="impresso-drawer__item"
-                  onClick={() => setSelectedImpressoId(impresso.id)}
-                  data-testid={`impresso-item-${impresso.id}`}
-                >
-                  <span>{impresso.title}</span>
-                  <span>{impresso.category}</span>
-                </button>
-              ))
+              impressos.map((impresso) => {
+                const categoryLabel = impressoCategoryLabel(impresso.category);
+                return (
+                  <button
+                    key={impresso.id}
+                    type="button"
+                    className="impresso-drawer__item"
+                    onClick={() => setSelectedImpressoId(impresso.id)}
+                    data-testid={`impresso-item-${impresso.id}`}
+                  >
+                    <span>{impresso.title}</span>
+                    {categoryLabel && (
+                      <span className="impresso-drawer__category">
+                        {categoryLabel}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
             )}
             {selectedImpresso && (
               <div
