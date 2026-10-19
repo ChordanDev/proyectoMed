@@ -40,7 +40,7 @@ In the 2026-10-19 Claude rehearsal the verbalized exam findings failed twice wit
 - 2026-10-19: T2 commit `1ac9900`.
 - 2026-10-19: T3 done (route: inline). RED: 1/1 new log test failing (no `patient_generation` lines). GREEN: 22/22 in the contract file; full backend 1249 passed; credo and warnings-as-errors clean. `Stations` logs `[Stations] patient_generation latency_ms=N outcome=ok|error` and `JevDecision` logs `[JevDecision] patient_verification latency_ms=N outcome=<status>|error`, both at debug, with no text.
 - 2026-10-19: T3 commit `21ad514`. Local CI (mirror of `pr-validation.yml`) passed at `21ad514`: web unit 213 passed, backend `mix test` 1249 passed, process E2E 4 passed; format, warnings-as-errors and credo clean. GitHub Actions is blocked by billing.
-- Pending: T4 live check (no key available to the writer). The first patient generation runs before the Jev deadline starts, so only the regeneration shares the 3 s budget; the debug latencies will show whether `JEV_DECISION_DEFAULT_DEADLINE_MS` needs tuning.
+- Pending: T4 live check (no key available to the writer). The first patient generation runs before the Jev deadline starts, so only the regeneration shares the 3 s budget; the debug latencies will show whether `:jev_decision_default_deadline_ms` (3 s, `config/config.exs`, no environment override yet) needs tuning.
 
 ## Next step
 
