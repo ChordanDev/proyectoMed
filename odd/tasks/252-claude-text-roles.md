@@ -38,8 +38,13 @@ The maintainer chose Claude for the clinician demo (#237) on 2026-10-19 (provide
 ## Progress
 
 - 2026-10-19: exploration done; plan above.
-- 2026-10-19: T1 done (route: inline). RED: 14/14 new tests failing (`AnthropicAdapter` undefined). GREEN: 14/14. `mix format`, `mix compile --warnings-as-errors`, `mix credo --strict` clean.
+- 2026-10-19: T1 done (route: inline). RED: 14/14 new tests failing (`AnthropicAdapter` undefined). GREEN: 14/14. `mix format`, `mix compile --warnings-as-errors`, `mix credo --strict` clean. Commit `24d601f`.
+- 2026-10-19: T2 done (route: inline). RED: 8/8 new tests failing (`Resolver.AnthropicAdapter` undefined). GREEN: 8/8; `test/backend/stations/rubric_assessment/` 197 passed. The OpenAI resolver answer decoder is now public (`decode_answer/1`) and shared, so both providers apply the same strict decoding. Commit `53aa475`.
+- 2026-10-19: T3 done (route: inline). RED: 10/10 new tests failing (`LearnerFeedback.AnthropicAdapter` undefined). GREEN: 10/10; feedback tests 54 passed. Structured outputs need closed objects, so the answer is a list of `{criterion_id, text}` entries mapped to the seam map. Commit `9701a63`.
+- 2026-10-19: T4 done (route: inline). RED: 3/7 new runtime-config tests failing (the 4 unchanged-behavior tests already passed). GREEN: 7/7. `LLM_PROVIDER=anthropic` selects the three Claude adapters; `RUBRIC_RESOLVER` (`on`, or `openai` for compatibility) still turns the resolver on and `LLM_PROVIDER` picks its provider. README section and design-doc note added. Commit `8b6ec7c`.
+- 2026-10-19: local CI (mirror of `pr-validation.yml`) passed at `8b6ec7c`: web unit 213 passed, backend `mix test` 1222 passed, process E2E 4 passed; format, warnings-as-errors and credo clean. GitHub Actions is blocked by billing.
+- Pending: T5 live check (no key available to the writer). Open risk: the resolver deadline is 10 s; Opus 5.5 at `medium` effort may need `RUBRIC_RESOLVER_DEADLINE_MS` raised, to be measured in T5.
 
 ## Next step
 
-T1.
+T5 (live check, user-run, needs `ANTHROPIC_API_KEY`): `LLM_PROVIDER=anthropic RUBRIC_RESOLVER=on JEV_ADAPTER=typesafe ACTIVE_STATION_ID=acute-appendicitis`.
