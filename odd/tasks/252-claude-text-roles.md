@@ -26,7 +26,7 @@ The maintainer chose Claude for the clinician demo (#237) on 2026-10-19 (provide
 
 - [x] T1 — Shared Messages client (`StationAI.AnthropicClient`) + patient adapter (`StationAI.AnthropicAdapter`) with Req.Test tests: request shape, valid reply, refusal, timeout, HTTP error, missing key. Route: inline (single writer; this worker is the delegated writer).
 - [x] T2 — Resolver adapter (`RubricAssessment.Resolver.AnthropicAdapter`), structured output reusing the OpenAI resolver prompt/schema/parsing, receive timeout from the resolver deadline. Route: inline.
-- [ ] T3 — Learner feedback adapter (`LearnerFeedback.AnthropicAdapter`), structured output (array of `{criterion_id, text}` mapped to the seam's map), receive timeout from the feedback deadline. Route: inline.
+- [x] T3 — Learner feedback adapter (`LearnerFeedback.AnthropicAdapter`), structured output (array of `{criterion_id, text}` mapped to the seam's map), receive timeout from the feedback deadline. Route: inline.
 - [ ] T4 — `config/runtime.exs` selection (`LLM_PROVIDER`, `ANTHROPIC_*`) with tests that read the runtime config with and without the setting; README section. Route: inline.
 - [ ] T5 — Live check on acute-appendicitis with `JEV_ADAPTER=typesafe` and Claude (user-run; needs keys). Pending.
 
