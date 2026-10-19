@@ -29,10 +29,15 @@ defmodule Backend.Stations.LearnerFeedback do
       (`Backend.Stations.Conversation.put_learner_feedback/2`), each bound to
       the fingerprint of its graded outcome (id, status, level, points, sorted
       evidence ids and sorted sub-action id/classification pairs). A changed
-      outcome regenerates only that criterion. Fallbacks are never cached, so
-      a transient failure retries on the next fetch. A cache read or write that
+      outcome regenerates only that criterion. A cache read or write that
       exits (timeout, process gone) degrades to no cache; the texts are still
       returned for this response.
+    * **Failure cooldown (issue #229).** A criterion the generation did not
+      produce (timeout, error, crash, malformed or invalid text) is cached as
+      a failure bound to the same fingerprint for
+      `:learner_feedback_cooldown_ms` (default 30 000 ms, 0 in tests). Within
+      it, fetches keep the authored text without a provider call; after it,
+      or once the outcome changes, the criterion is generated again.
     * **Single-flight (issue #229).** One fetch per session generates
       (`Backend.Stations.Conversation.claim_learner_feedback/2`); concurrent
       fetches for the same session wait for it, bounded by the deadline, and
@@ -53,6 +58,7 @@ defmodule Backend.Stations.LearnerFeedback do
   alias Backend.Stations.RubricAssessment.Points
 
   @default_deadline_ms 60_000
+  @default_cooldown_ms 30_000
   @max_characters 400
   @performed "performed"
   @not_performed "not_performed"
@@ -86,9 +92,9 @@ defmodule Backend.Stations.LearnerFeedback do
   end
 
   defp feedback_texts(eligible, authored, package, session_id) do
-    cached = cached_texts(session_id, eligible)
+    {cached, cooling} = lookup(session_id, eligible)
 
-    case Enum.reject(eligible, &Map.has_key?(cached, &1.id)) do
+    case Enum.reject(eligible, &(Map.has_key?(cached, &1.id) or MapSet.member?(cooling, &1.id))) do
       [] ->
         cached
 
@@ -104,7 +110,7 @@ defmodule Backend.Stations.LearnerFeedback do
   defp single_flight(pending, eligible, authored, package, session_id) do
     case claim(session_id) do
       :generate -> generate_as_owner(pending, authored, package, session_id)
-      :settled -> cached_texts(session_id, eligible)
+      :settled -> session_id |> lookup(eligible) |> elem(0)
       :timeout -> %{}
       :unguarded -> generate_and_store(pending, authored, package, session_id)
     end
@@ -137,22 +143,35 @@ defmodule Backend.Stations.LearnerFeedback do
     generated
   end
 
-  defp cached_texts(session_id, eligible) do
-    cache =
-      try do
-        case Conversation.learner_feedback(session_id) do
-          {:ok, cache} -> cache
-          {:error, _reason} -> %{}
-        end
-      catch
-        :exit, _reason -> %{}
-      end
+  # The cached texts of `eligible` criteria, and the ids of those whose last
+  # generation failed within the cooldown, both for their current outcome.
+  defp lookup(session_id, eligible) do
+    cache = read_cache(session_id)
+    now = System.monotonic_time(:millisecond)
 
-    for criterion <- eligible,
-        %{fingerprint: fingerprint, text: text} <- [Map.get(cache, criterion.id)],
-        fingerprint == fingerprint(criterion),
-        into: %{},
-        do: {criterion.id, text}
+    Enum.reduce(eligible, {%{}, MapSet.new()}, fn criterion, {texts, cooling} ->
+      fingerprint = fingerprint(criterion)
+
+      case Map.get(cache, criterion.id) do
+        %{fingerprint: ^fingerprint, text: text} ->
+          {Map.put(texts, criterion.id, text), cooling}
+
+        %{fingerprint: ^fingerprint, retry_after: retry_after} when retry_after > now ->
+          {texts, MapSet.put(cooling, criterion.id)}
+
+        _stale_or_missing ->
+          {texts, cooling}
+      end
+    end)
+  end
+
+  defp read_cache(session_id) do
+    case Conversation.learner_feedback(session_id) do
+      {:ok, cache} -> cache
+      {:error, _reason} -> %{}
+    end
+  catch
+    :exit, _reason -> %{}
   end
 
   defp generate(pending, authored, package) do
@@ -201,10 +220,12 @@ defmodule Backend.Stations.LearnerFeedback do
     end
   end
 
-  defp store(_session_id, _pending, valid) when map_size(valid) == 0, do: :ok
-
   defp store(session_id, pending, valid) do
-    _ = Conversation.put_learner_feedback(session_id, cache_entries(pending, valid))
+    case cache_entries(pending, valid) do
+      entries when map_size(entries) == 0 -> :ok
+      entries -> _ = Conversation.put_learner_feedback(session_id, entries)
+    end
+
     :ok
   catch
     :exit, _reason -> :ok
@@ -218,11 +239,21 @@ defmodule Backend.Stations.LearnerFeedback do
     :exit, _reason -> :ok
   end
 
+  # A generated text for each valid criterion and, while a cooldown is
+  # configured, a failure for each other pending criterion.
   defp cache_entries(pending, valid) do
-    for criterion <- pending, Map.has_key?(valid, criterion.id), into: %{} do
-      {criterion.id,
-       %{fingerprint: fingerprint(criterion), text: Map.fetch!(valid, criterion.id)}}
-    end
+    retry_after = System.monotonic_time(:millisecond) + cooldown_ms()
+
+    for criterion <- pending,
+        entry <- cache_entry(Map.fetch(valid, criterion.id), retry_after),
+        into: %{},
+        do: {criterion.id, Map.put(entry, :fingerprint, fingerprint(criterion))}
+  end
+
+  defp cache_entry({:ok, text}, _retry_after), do: [%{text: text}]
+
+  defp cache_entry(:error, retry_after) do
+    if cooldown_ms() > 0, do: [%{retry_after: retry_after}], else: []
   end
 
   defp fingerprint(criterion) do
@@ -319,6 +350,9 @@ defmodule Backend.Stations.LearnerFeedback do
 
   defp deadline_ms,
     do: Application.get_env(:backend, :learner_feedback_deadline_ms, @default_deadline_ms)
+
+  defp cooldown_ms,
+    do: Application.get_env(:backend, :learner_feedback_cooldown_ms, @default_cooldown_ms)
 
   defp failure_kind(reason) when is_atom(reason), do: reason
   defp failure_kind(_reason), do: :provider_error

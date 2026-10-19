@@ -53,10 +53,15 @@ defmodule Backend.Stations.Conversation do
         }
 
   @typedoc """
-  Generated learner feedback by criterion id, each entry bound to the
-  fingerprint of the graded outcome it was written for.
+  Learner feedback by criterion id, each entry bound to the fingerprint of the
+  graded outcome it was generated for: either the generated `text`, or a
+  failed generation not to retry before the monotonic `retry_after` (ms).
   """
-  @type learner_feedback :: %{String.t() => %{fingerprint: term(), text: String.t()}}
+  @type learner_feedback :: %{
+          String.t() =>
+            %{fingerprint: term(), text: String.t()}
+            | %{fingerprint: term(), retry_after: integer()}
+        }
 
   @type turn_token :: reference()
 

@@ -25,7 +25,7 @@ Concurrent result fetches for the same session make at most one learner feedback
 ## Tasks
 
 - [x] T1 — Single-flight. `Conversation.claim_learner_feedback/2` and `settle_learner_feedback/2`: the first claimer generates; later claimers for the same session wait (bounded by the deadline) until it settles, then re-read the cache; a crashed or exited owner releases its waiters (monitor); discard releases waiters. Tests: two concurrent `Stations.get_educational_result/2` calls with a slow gated adapter make one adapter call and return the same recommendations; a waiter whose owner fails, times out or crashes gets the authored text within the deadline. Route: inline (two coupled files, already mapped; one writer).
-- [ ] T2 — Failure cooldown. Failed or invalid criteria are stored as `%{fingerprint, retry_after}` entries; within the cooldown they keep the authored text without a call, after it they are retried; changed outcome still regenerates only that criterion. Config `:learner_feedback_cooldown_ms` (30 s default, 0 in test env, tests override). Docs in `docs/educational-result-api.md`. Route: inline.
+- [x] T2 — Failure cooldown. Failed or invalid criteria are stored as `%{fingerprint, retry_after}` entries; within the cooldown they keep the authored text without a call, after it they are retried; changed outcome still regenerates only that criterion. Config `:learner_feedback_cooldown_ms` (30 s default, 0 in test env, tests override). Docs in `docs/educational-result-api.md`. Route: inline.
 
 ## Acceptance criteria
 
@@ -45,6 +45,10 @@ Concurrent result fetches for the same session make at most one learner feedback
 
 - T1 (route: inline; two coupled files already mapped, no delegation trigger fired): RED observed first — 6 of 46 focused tests failing (`concurrent result fetches ... single feedback call`, and 5 `single-flight` tests: concurrent wait, waiter on failure, waiter on timeout, owner killed, discard releases waiters); `different sessions generate independently` passed before and after, as expected. GREEN: 46/46, stable over 5 repeated runs. `mix compile --warnings-as-errors --force` clean; `mix credo --strict` no issues. The only test warning (`unused require Logger` in `learner_feedback_test.exs`) is pre-existing on `develop`.
 
+- T1 commit: `069cabb`.
+- T2 (route: inline): RED observed first — 6 of 45 `learner_feedback_test.exs` tests failing (default/test cooldown config, within-cooldown no call, timeout cools down, invalid criterion cools down, changed outcome regenerates only the cooling criterion, waiter reads the cooldown). `a fetch after the cooldown calls the provider again` and `discarding the session drops its cooldown` passed before and after, as expected (they pin retry behavior). The two existing retry tests now set the cooldown to 0 explicitly. GREEN: 54/54 focused tests.
+- Closure: local CI script printed `LOCAL CI PASSED` — web unit 192/192 (7 files), backend ExUnit 1101 passed, process-level E2E 4/4, typecheck, lint, format, compile (`--warnings-as-errors`), credo strict and dialyzer clean. GitHub Actions is blocked by billing.
+
 ## Next step
 
-T2 RED.
+Open the PR to `develop` (`Closes #229`); merge is a human decision.
