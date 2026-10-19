@@ -36,7 +36,9 @@ defmodule Backend.Stations.LearnerFeedback do
 
   The provider is selected with `:learner_feedback_adapter` (a
   `Backend.Stations.LearnerFeedback.Adapter`). `config/config.exs` sets it to
-  `Backend.Stations.LearnerFeedback.OpenAIAdapter` for dev and prod, and
+  `Backend.Stations.LearnerFeedback.OpenAIAdapter` for dev and prod
+  (`LLM_PROVIDER=anthropic` swaps in
+  `Backend.Stations.LearnerFeedback.AnthropicAdapter` at boot), and
   `config/test.exs` keeps the `Backend.Stations.LearnerFeedback.DisabledAdapter`,
   which is also the fallback when the key is unset.
   """
