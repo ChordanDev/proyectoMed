@@ -1094,6 +1094,54 @@ describe("StationScreen impresso requests", () => {
     },
   );
 
+  it("keeps an examiner hand-over released mid-turn when the in-flight learner turn is rolled back", async () => {
+    const user = userEvent.setup();
+    let reject!: (cause: unknown) => void;
+    const onSend = vi.fn(
+      () =>
+        new Promise<string | null>((_resolve, r) => {
+          reject = r;
+        }),
+    );
+    const onRequestImpresso = vi.fn().mockResolvedValue({
+      request_id: "req-race",
+      decision: "released",
+      released_impressos: [chestXray],
+      newly_released: [chestXray],
+      feedback_message: "Impresso liberado: Radiografia de tórax",
+    });
+    render(
+      <StationScreen
+        {...defaultProps}
+        onSend={onSend}
+        onRequestImpresso={onRequestImpresso}
+        impressos={[chestXray]}
+      />,
+    );
+
+    await user.type(screen.getByTestId("message-input"), "Pergunta pendente");
+    await user.click(screen.getByTestId("send-button"));
+    expect(screen.getByText("Pergunta pendente")).toBeInTheDocument();
+
+    // The impresso release resolves while the learner turn is still in flight.
+    await requestThroughModal(user, "Solicito radiografia");
+    const handOver = "Entrega: Radiografia de tórax";
+    expect(await screen.findByTestId("message-examiner")).toHaveTextContent(
+      handOver,
+    );
+
+    reject(
+      Object.assign(new Error("O tempo da estação se esgotou."), {
+        code: "station_time_elapsed",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Pergunta pendente")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("message-examiner")).toHaveTextContent(handOver);
+  });
+
   it("replaces a stale feedback notice once an impresso is released", async () => {
     const user = userEvent.setup();
     const onRequestImpresso = vi

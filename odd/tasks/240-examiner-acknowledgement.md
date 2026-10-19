@@ -35,6 +35,9 @@ was a plain system string.
 - [x] T2 Impresso releases appear as examiner entries in the transcript; the
   plain feedback notice stays only for unavailable/already-released decisions.
   Route: inline (StationScreen and its tests).
+- [x] T3 Review fix (Jorge C1/TR-1): a failed in-flight turn rolls back its own
+  learner bubble by identity, so an examiner hand-over appended mid-turn survives.
+  Route: inline (StationScreen sendTurn rollbacks and one test).
 
 ## Acceptance criteria
 
@@ -56,6 +59,7 @@ was a plain system string.
 | --- | --- | --- | --- |
 | T1 | `afa5faa` | 6 of 198 failed (hook rename + 2 screen tests) | 198 passed; typecheck and lint clean |
 | T2 | `12023e1` | 2 of 201 failed (release entry, stale notice) | full web suite 216 passed; typecheck and lint clean |
+| T3 | see PR comment | 1 of 55 failed (hand-over released mid-turn) | StationScreen 55 passed; local CI below |
 
 Local CI (mirror of `pr-validation.yml`): LOCAL CI PASSED; web unit 212 passed,
 backend ExUnit 1122 passed, process-level E2E 4 passed. `npm run typecheck` and

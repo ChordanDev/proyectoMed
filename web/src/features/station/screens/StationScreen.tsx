@@ -296,13 +296,17 @@ export function StationScreen({
           // The station's deadline elapsed while this turn was in flight:
           // it was never accepted, so it must not linger in the transcript.
           if (mountedRef.current) {
-            setMessages((previous) => previous.slice(0, -1));
+            setMessages((previous) =>
+              previous.filter((message) => message !== learnerMessage),
+            );
           }
         } else if (retryNotice !== null) {
           // The backend rolled this turn back and the station is still
           // active: drop the learner bubble and hand the text back for a retry.
           if (mountedRef.current) {
-            setMessages((previous) => previous.slice(0, -1));
+            setMessages((previous) =>
+              previous.filter((message) => message !== learnerMessage),
+            );
             setInputValue(text);
             setTurnRetryNotice(retryNotice);
           }
