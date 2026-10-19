@@ -1,5 +1,5 @@
 {
-  "station_id": "invalid-levels", "version": "2.0.0", "language": "pt-BR", "display_title": "Invalid fixture", "placeholder": true,
+  "station_id": "invalid-levels", "version": "2.0.0", "language": "pt-BR", "display_title": "Invalid fixture", "candidate_brief": {"scenario": "Você atende um paciente fictício em um serviço de urgência.", "tasks": ["Obter anamnese dirigida.", "Indicar a conduta inicial."]}, "placeholder": true,
   "patient_profile": {"persona": "Synthetic patient", "age": 30, "presenting_context": "Synthetic context", "tone": "Neutral"},
   "revealable_facts": [], "response_rules": [], "expected_actions": [],
   "rubric": [{"id": "criterion", "description": "Criterion", "evidence_questions": [], "practice_recommendation": "Practice", "levels": [{"label": "adequado", "points": 1, "description": "Adequate"}, {"label": "adequado", "points": 0.5, "description": "Also adequate"}], "actions": [], "order": null, "count_cap": null, "first_n": null, "veto": false, "exclusion": false, "modality_requirement": null}]

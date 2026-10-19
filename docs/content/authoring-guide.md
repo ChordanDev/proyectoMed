@@ -48,8 +48,9 @@ A package is one JSON file at `backend/priv/stations/<station_id>/package.json`.
 | `rubric` | List of criteria. Ids unique. | `validator:206`–`233` |
 | `approved_templates` | Optional: `null` or a list. | `validator:605` |
 | `impressos` | Optional: `null` or a list. | `validator:662` |
+| `candidate_brief` | Object with exactly `scenario` (non-empty string) and `tasks` (non-empty ordered list of non-empty strings). Returned to the learner's client and shown before and during the station. | `validate_candidate_brief` |
 
-There is no field for text shown to the learner before the station (scenario, tasks, available resources). `patient_profile` feeds the simulated patient, not the learner.
+`candidate_brief` is the only text shown to the learner before the station. `patient_profile` feeds the simulated patient, not the learner, and is never shown. Write the brief in the candidate's voice ("Você é…"), and keep out anything the learner must obtain in the station: facts the patient reveals on request, impresso contents (including vital signs when an impresso carries them), rubric wording and examiner answer keys. Available resources and the station duration have no field yet.
 
 ## Facts and disclosure conditions
 

@@ -3,6 +3,13 @@
   "version": "2.0.0",
   "language": "pt-BR",
   "display_title": "Regras de rubrica fictícias",
+  "candidate_brief": {
+    "scenario": "Você atende um paciente fictício em um serviço de urgência.",
+    "tasks": [
+      "Obter anamnese dirigida.",
+      "Indicar a conduta inicial."
+    ]
+  },
   "placeholder": true,
   "patient_profile": {
     "persona": "Paciente fictício e colaborativo",
