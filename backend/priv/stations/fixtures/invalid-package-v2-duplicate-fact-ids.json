@@ -1,5 +1,5 @@
 {
-  "station_id": "invalid-duplicate-facts", "version": "2.0.0", "language": "pt-BR", "display_title": "Invalid fixture", "placeholder": true,
+  "station_id": "invalid-duplicate-facts", "version": "2.0.0", "language": "pt-BR", "display_title": "Invalid fixture", "candidate_brief": {"scenario": "Você atende um paciente fictício em um serviço de urgência.", "tasks": ["Obter anamnese dirigida.", "Indicar a conduta inicial."]}, "placeholder": true,
   "patient_profile": {"persona": "Synthetic patient", "age": 30, "presenting_context": "Synthetic context", "tone": "Neutral"},
   "revealable_facts": [
     {"id": "fact", "topic": "first", "content": "First fact", "disclosure_condition": "on_request"},

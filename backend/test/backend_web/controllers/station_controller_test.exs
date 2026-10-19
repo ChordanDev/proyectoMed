@@ -86,12 +86,37 @@ defmodule BackendWeb.StationControllerTest do
     test "returns active station metadata", %{conn: conn} do
       conn = get(conn, ~p"/api/stations/active")
 
+      package = Stations.get_active_package()
+
       assert json_response(conn, 200) == %{
                "station_id" => "chest-pain-initial-assessment",
                "version" => "2.0.0",
                "language" => "pt-BR",
-               "display_title" => "Avaliação inicial de dor torácica"
+               "display_title" => "Avaliação inicial de dor torácica",
+               "candidate_brief" => package["candidate_brief"]
              }
+    end
+
+    test "returns the brief and nothing examiner-only (#239)", %{conn: conn} do
+      conn = get(conn, ~p"/api/stations/active")
+
+      body = json_response(conn, 200)
+      assert %{"scenario" => scenario, "tasks" => [_ | _]} = body["candidate_brief"]
+      assert is_binary(scenario) and scenario != ""
+
+      raw = Jason.encode!(body)
+      package = Stations.get_active_package()
+
+      hidden =
+        ["rubric", "expected_actions", "impressos", "patient_profile", "revealable_facts"] ++
+          Enum.map(package["rubric"], & &1["id"]) ++
+          Enum.map(package["expected_actions"], & &1["id"]) ++
+          Enum.flat_map(package["impressos"] || [], &[&1["id"], &1["title"]]) ++
+          [package["patient_profile"]["presenting_context"]]
+
+      for secret <- hidden do
+        refute String.contains?(raw, secret), "active station exposes: #{secret}"
+      end
     end
 
     test "returns the boot-loaded active version", %{conn: conn} do

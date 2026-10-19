@@ -3,6 +3,16 @@
   "version": "2.0.0",
   "language": "pt-BR",
   "display_title": "Abdome agudo inflamatório — apendicite aguda",
+  "candidate_brief": {
+    "scenario": "Você é o médico ou a médica de plantão em um pronto-socorro de hospital geral. Rafael Nogueira, 27 anos, auxiliar administrativo, chega sem acompanhante e procura atendimento por dor abdominal.",
+    "tasks": [
+      "Apresentar-se, confirmar a identificação do paciente e obter anamnese dirigida.",
+      "Solicitar e interpretar o exame físico abdominal e as manobras pertinentes.",
+      "Solicitar e interpretar exames laboratoriais e de imagem adequados ao caso.",
+      "Formular a hipótese diagnóstica principal e indicar medidas de suporte e tratamento inicial.",
+      "Explicar a necessidade de avaliação cirúrgica e tratamento definitivo, respondendo às dúvidas do paciente."
+    ]
+  },
   "placeholder": true,
   "patient_profile": {
     "persona": "Rafael está sentado na maca, um pouco curvado e com expressão de desconforto. Responde às perguntas, mas evita movimentar o tronco por causa da dor. Não está agitado nem confuso. Demonstra preocupação com a possibilidade de cirurgia e com o tempo de recuperação.",

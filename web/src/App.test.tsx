@@ -28,6 +28,22 @@ let mockStationState = {
   reset: mockReset,
 };
 
+const activeStation = {
+  station_id: "acute-appendicitis",
+  version: "2.0.0",
+  display_title: "Abdome agudo inflamatório — apendicite aguda",
+  language: "pt-BR",
+  candidate_brief: {
+    scenario: "Você é o médico de plantão em um pronto-socorro.",
+    tasks: ["Obter anamnese dirigida.", "Indicar a conduta inicial."],
+  },
+};
+
+let mockActiveStationState = {
+  station: activeStation as typeof activeStation | null,
+  error: null as string | null,
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -37,12 +53,14 @@ vi.mock("./features/station", async (importOriginal) => {
   return {
     ...actual,
     useStation: () => mockStationState,
+    useActiveStation: () => mockActiveStationState,
   };
 });
 
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockActiveStationState = { station: activeStation, error: null };
     mockStationState = {
       status: "idle",
       result: null,
@@ -73,7 +91,50 @@ describe("App", () => {
     await user.click(screen.getByRole("checkbox"));
     await user.click(startButton);
 
+    // The brief comes between the notice and the timer start (#239).
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("heading", { level: 1, name: activeStation.display_title }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(activeStation.candidate_brief.scenario)).toBeInTheDocument();
+    for (const task of activeStation.candidate_brief.tasks) {
+      expect(screen.getByText(task)).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole("button", { name: strings.briefEnterButton }));
+
     expect(mockStart).toHaveBeenCalledWith(true);
+  });
+
+  it("lets the learner start from the brief when the brief failed to load", async () => {
+    const user = userEvent.setup();
+    mockActiveStationState = { station: null, error: strings.briefUnavailable };
+    render(<App />);
+
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: strings.noticeButton }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(strings.briefUnavailable);
+    await user.click(screen.getByRole("button", { name: strings.briefEnterButton }));
+    expect(mockStart).toHaveBeenCalledWith(true);
+  });
+
+  it("shows the station title and keeps the brief reachable during the station", async () => {
+    const user = userEvent.setup();
+    mockStationState.status = "active";
+    mockStationState.remainingMs = 9 * 60 * 1000;
+    render(<App />);
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: activeStation.display_title }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: strings.briefOpenButton }));
+
+    expect(
+      screen.getByRole("dialog", { name: strings.briefDialogTitle }),
+    ).toHaveTextContent(activeStation.candidate_brief.scenario);
+    expect(screen.getByRole("timer")).toHaveTextContent("09:00");
   });
 
   it("renders loading message when station status is loading", () => {

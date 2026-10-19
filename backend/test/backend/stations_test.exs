@@ -151,6 +151,18 @@ defmodule Backend.StationsTest do
              } = station
     end
 
+    test "get_active_station/0 projects the brief to scenario and tasks only (#239)" do
+      station = Stations.get_active_station()
+
+      assert Map.keys(station) |> Enum.sort() ==
+               ~w(candidate_brief display_title language station_id version)
+
+      assert %{"scenario" => scenario, "tasks" => tasks} = station["candidate_brief"]
+      assert map_size(station["candidate_brief"]) == 2
+      assert is_binary(scenario)
+      assert [_ | _] = tasks
+    end
+
     test "get_active_package/0 returns full package" do
       package = Stations.get_active_package()
       assert is_map(package)

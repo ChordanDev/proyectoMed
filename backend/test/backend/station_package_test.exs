@@ -1099,6 +1099,97 @@ defmodule Backend.StationPackageTest do
     end
   end
 
+  describe "candidate_brief (issue #239)" do
+    @brief_error_object "candidate_brief must be an object with scenario and tasks"
+    @brief_error_scenario "candidate_brief.scenario must be a non-empty string"
+    @brief_error_tasks "candidate_brief.tasks must be a non-empty list of non-empty strings"
+    @brief_error_keys "candidate_brief allows only scenario and tasks"
+
+    test "rejects a package without a brief" do
+      package = Map.delete(fixture("valid-package.json"), "candidate_brief")
+
+      assert {:error, errors} = StationPackage.validate(package)
+      assert @brief_error_object in errors
+    end
+
+    test "rejects malformed briefs with their exact errors" do
+      base = fixture("valid-package.json")
+
+      cases = [
+        {"not an object", @brief_error_object},
+        {%{"tasks" => ["Anamnese."]}, @brief_error_scenario},
+        {%{"scenario" => "  ", "tasks" => ["Anamnese."]}, @brief_error_scenario},
+        {%{"scenario" => "Cenário.", "tasks" => []}, @brief_error_tasks},
+        {%{"scenario" => "Cenário.", "tasks" => ["Anamnese.", ""]}, @brief_error_tasks},
+        {%{"scenario" => "Cenário.", "tasks" => [%{"id" => "tarefa-1"}]}, @brief_error_tasks},
+        {%{"scenario" => "Cenário."}, @brief_error_tasks},
+        {%{"scenario" => "Cenário.", "tasks" => ["Anamnese."], "answer" => "x"},
+         @brief_error_keys}
+      ]
+
+      Enum.each(cases, fn {brief, expected_error} ->
+        package = Map.put(base, "candidate_brief", brief)
+        assert {:error, errors} = StationPackage.validate(package)
+        assert expected_error in errors, "#{inspect(brief)} -> #{inspect(errors)}"
+      end)
+    end
+
+    test "every valid fixture carries a brief" do
+      for name <- ~w(valid-package.json valid-package-v2.json valid-package-v1.json) do
+        brief = fixture(name)["candidate_brief"]
+        assert is_binary(brief["scenario"]), name
+        assert [_ | _] = brief["tasks"]
+      end
+    end
+
+    test "the schema requires a closed brief object" do
+      schema = json_file(@schema_path)
+
+      assert "candidate_brief" in schema["required"]
+      brief = schema["properties"]["candidate_brief"]
+      assert brief["required"] == ["scenario", "tasks"]
+      assert brief["additionalProperties"] == false
+      assert brief["properties"]["tasks"]["minItems"] == 1
+    end
+
+    for station_id <- ~w(acute-appendicitis chest-pain-initial-assessment) do
+      test "#{station_id} ships a learner-facing brief that reveals no examiner content" do
+        package =
+          Path.expand("../../priv/stations/#{unquote(station_id)}/package.json", __DIR__)
+          |> json_file()
+
+        assert {:ok, _} = StationPackage.validate(package)
+
+        brief = package["candidate_brief"]
+        text = Enum.join([brief["scenario"] | brief["tasks"]], "\n")
+
+        refute String.contains?(text, package["patient_profile"]["presenting_context"])
+
+        hidden =
+          Enum.map(package["revealable_facts"], & &1["content"]) ++
+            Enum.flat_map(package["impressos"] || [], &[&1["id"], impresso_text(&1)]) ++
+            Enum.flat_map(package["rubric"], &[&1["id"], &1["description"]]) ++
+            for(
+              action <- package["expected_actions"],
+              not String.starts_with?(action["id"], "tarefa-"),
+              do: action["description"]
+            )
+
+        for secret <- hidden, is_binary(secret) do
+          refute String.contains?(text, secret), "brief reveals: #{secret}"
+        end
+
+        # Vital signs and timing are examiner or impresso content.
+        for marker <- ["mmHg", "bpm", "irpm", "°C", "SpO", "horas"] do
+          refute String.contains?(text, marker), "brief reveals: #{marker}"
+        end
+      end
+    end
+  end
+
+  defp impresso_text(%{"content" => content}) when is_binary(content), do: content
+  defp impresso_text(%{"content" => content}), do: Jason.encode!(content)
+
   defp fixture(name) do
     @fixtures_path
     |> Path.join(name)

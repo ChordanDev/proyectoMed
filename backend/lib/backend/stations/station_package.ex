@@ -19,6 +19,11 @@ defmodule Backend.Stations.StationPackage do
   `actions[].impresso_ids` is optional too (issue #228): a non-empty list of the
   authored impresso ids whose release means the learner requested what the
   action asks. It is not allowed on a `first_n` criterion.
+
+  `candidate_brief` is required (issue #239): the learner-facing "cenário de
+  atuação" (`scenario`) and the ordered task list (`tasks`) shown before and
+  during the station. It holds only those two keys, so examiner-only content
+  cannot ride along with it to the learner's client.
   """
 
   alias Backend.Stations.RubricAssessment.Points
@@ -67,6 +72,7 @@ defmodule Backend.Stations.StationPackage do
       |> validate_rubric(package)
       |> validate_approved_templates(package)
       |> validate_impressos(package)
+      |> validate_candidate_brief(package)
 
     case errors do
       [] -> {:ok, package}
@@ -751,6 +757,41 @@ defmodule Backend.Stations.StationPackage do
   end
 
   defp non_empty_string?(value), do: is_binary(value) and value != ""
+
+  @candidate_brief_keys ["scenario", "tasks"]
+
+  defp validate_candidate_brief(errors, %{"candidate_brief" => brief}) when is_map(brief) do
+    errors
+    |> validate_candidate_brief_keys(brief)
+    |> validate_candidate_brief_scenario(brief)
+    |> validate_candidate_brief_tasks(brief)
+  end
+
+  defp validate_candidate_brief(errors, _package),
+    do: ["candidate_brief must be an object with scenario and tasks" | errors]
+
+  defp validate_candidate_brief_keys(errors, brief) do
+    if Enum.all?(Map.keys(brief), &(&1 in @candidate_brief_keys)),
+      do: errors,
+      else: ["candidate_brief allows only scenario and tasks" | errors]
+  end
+
+  defp validate_candidate_brief_scenario(errors, brief) do
+    if blank?(brief["scenario"]),
+      do: ["candidate_brief.scenario must be a non-empty string" | errors],
+      else: errors
+  end
+
+  defp validate_candidate_brief_tasks(errors, %{"tasks" => [_ | _] = tasks}) do
+    if Enum.any?(tasks, &blank?/1),
+      do: ["candidate_brief.tasks must be a non-empty list of non-empty strings" | errors],
+      else: errors
+  end
+
+  defp validate_candidate_brief_tasks(errors, _brief),
+    do: ["candidate_brief.tasks must be a non-empty list of non-empty strings" | errors]
+
+  defp blank?(value), do: not (is_binary(value) and String.trim(value) != "")
 
   defp validate_impressos(errors, %{"impressos" => impressos}) when is_list(impressos) do
     errors
