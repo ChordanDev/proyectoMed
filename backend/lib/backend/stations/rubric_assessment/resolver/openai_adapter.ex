@@ -208,7 +208,19 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
        do: {:error, :refused}
 
   defp parse(%{"choices" => [%{"message" => %{"content" => content}} | _]})
-       when is_binary(content) do
+       when is_binary(content),
+       do: decode_answer(content)
+
+  defp parse(_body), do: {:error, :malformed_response}
+
+  @doc """
+  Decodes the provider's JSON answer (the `schema/0` shape) into decisions.
+  Shared with `Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter`.
+  """
+  @spec decode_answer(String.t()) ::
+          {:ok, %{actions: [Backend.Stations.RubricAssessment.Resolver.decision()]}}
+          | {:error, :malformed_response}
+  def decode_answer(content) when is_binary(content) do
     with {:ok, %{"actions" => actions}} when is_list(actions) <- Jason.decode(content),
          decisions when is_list(decisions) <- decisions(actions) do
       {:ok, %{actions: decisions}}
@@ -216,8 +228,6 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
       _malformed -> {:error, :malformed_response}
     end
   end
-
-  defp parse(_body), do: {:error, :malformed_response}
 
   defp decisions(actions) do
     Enum.reduce_while(actions, [], fn action, acc ->
