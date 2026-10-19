@@ -87,7 +87,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 1 — EXAME FÍSICO SEGMENTAR | [ ] | [ ] | | |
 | `category` | physical_exam | [ ] | [ ] | | |
-| `keywords` | `exame físico` | [ ] | [ ] | | |
+| `keywords` | `exame físico`, `exame segmentar`, `exame do abdome`, `exame abdominal`, `examinar o abdome`, `examinar a barriga`, `examinar o paciente`, `palpação abdominal`, `palpação do abdome`, `palpar o abdome`, `palpar a barriga`, `sinais vitais` | [ ] | [ ] | | |
 | `content, line 1` | - **Estado geral:** regular, consciente, orientado, fácies de dor; hidratado, sem cianose ou icterícia. | [ ] | [ ] | | |
 | `content, line 2` | - **Sinais vitais no exame:** PA 126/78 mmHg; FC 102 bpm; FR 18 irpm; temperatura 38,1 °C; SpO₂ 98% em ar ambiente. | [ ] | [ ] | | |
 | `content, line 3` | - **Aparelho cardiovascular:** bulhas normofonéticas, ritmo regular, sem sopros. | [ ] | [ ] | | |
@@ -107,7 +107,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 2 — EXAMES LABORATORIAIS — Hemograma completo | [ ] | [ ] | | |
 | `category` | laboratory | [ ] | [ ] | | |
-| `keywords` | `hemograma` | [ ] | [ ] | | |
+| `keywords` | `hemograma`, `leucograma` | [ ] | [ ] | | |
 | `content, line 1` | **Hemograma completo:** | [ ] | [ ] | | |
 | `content, line 2` | - Hemoglobina: 14,6 g/dL. Referência adulto masculino: 13,0–17,0 g/dL. | [ ] | [ ] | | |
 | `content, line 3` | - Hematócrito: 43%. Referência adulto masculino: 40–52%. | [ ] | [ ] | | |
@@ -121,7 +121,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 2 — EXAMES LABORATORIAIS — PCR | [ ] | [ ] | | |
 | `category` | laboratory | [ ] | [ ] | | |
-| `keywords` | `PCR`, `proteína C-reativa` | [ ] | [ ] | | |
+| `keywords` | `PCR`, `proteína C-reativa`, `proteína C reativa` | [ ] | [ ] | | |
 | `content, line 1` | **Inflamação e função renal/metabólica:** | [ ] | [ ] | | |
 | `content, line 2` | - PCR: 86 mg/L. Referência: inferior a 5 mg/L. | [ ] | [ ] | | |
 
@@ -131,7 +131,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 2 — EXAMES LABORATORIAIS — Sódio, Potássio | [ ] | [ ] | | |
 | `category` | laboratory | [ ] | [ ] | | |
-| `keywords` | `eletrólitos` | [ ] | [ ] | | |
+| `keywords` | `eletrólitos`, `sódio`, `potássio`, `ionograma` | [ ] | [ ] | | |
 | `content, line 1` | **Inflamação e função renal/metabólica:** | [ ] | [ ] | | |
 | `content, line 2` | - Sódio: 138 mmol/L. Referência: 135–145 mmol/L. | [ ] | [ ] | | |
 | `content, line 3` | - Potássio: 4,1 mmol/L. Referência: 3,5–5,1 mmol/L. | [ ] | [ ] | | |
@@ -142,7 +142,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 2 — EXAMES LABORATORIAIS — Ureia | [ ] | [ ] | | |
 | `category` | laboratory | [ ] | [ ] | | |
-| `keywords` | `ureia` | [ ] | [ ] | | |
+| `keywords` | `ureia`, `função renal` | [ ] | [ ] | | |
 | `content, line 1` | **Inflamação e função renal/metabólica:** | [ ] | [ ] | | |
 | `content, line 2` | - Ureia: 28 mg/dL. Referência: 15–45 mg/dL. | [ ] | [ ] | | |
 
@@ -152,7 +152,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 2 — EXAMES LABORATORIAIS — Creatinina | [ ] | [ ] | | |
 | `category` | laboratory | [ ] | [ ] | | |
-| `keywords` | `creatinina` | [ ] | [ ] | | |
+| `keywords` | `creatinina`, `função renal` | [ ] | [ ] | | |
 | `content, line 1` | **Inflamação e função renal/metabólica:** | [ ] | [ ] | | |
 | `content, line 2` | - Creatinina: 0,9 mg/dL. Referência adulto masculino: 0,7–1,3 mg/dL. | [ ] | [ ] | | |
 
@@ -162,7 +162,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 2 — EXAMES LABORATORIAIS — Glicemia | [ ] | [ ] | | |
 | `category` | laboratory | [ ] | [ ] | | |
-| `keywords` | `glicemia` | [ ] | [ ] | | |
+| `keywords` | `glicemia`, `glicose` | [ ] | [ ] | | |
 | `content, line 1` | **Inflamação e função renal/metabólica:** | [ ] | [ ] | | |
 | `content, line 2` | - Glicemia: 104 mg/dL. Referência em jejum: 70–99 mg/dL. | [ ] | [ ] | | |
 
@@ -172,7 +172,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 2 — EXAMES LABORATORIAIS — Urina tipo 1 (EAS) | [ ] | [ ] | | |
 | `category` | laboratory | [ ] | [ ] | | |
-| `keywords` | `urina tipo 1` | [ ] | [ ] | | |
+| `keywords` | `urina tipo 1`, `urina tipo I`, `urina 1`, `EAS`, `exame de urina`, `sumário de urina`, `parcial de urina`, `urinálise` | [ ] | [ ] | | |
 | `content, line 1` | **Urina tipo 1 (EAS):** | [ ] | [ ] | | |
 | `content, line 2` | - Densidade: 1,020; pH: 6,0. | [ ] | [ ] | | |
 | `content, line 3` | - Nitrito negativo; esterase leucocitária negativa. | [ ] | [ ] | | |
@@ -185,7 +185,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 3 — EXAME DE IMAGEM | [ ] | [ ] | | |
 | `category` | imaging | [ ] | [ ] | | |
-| `keywords` | `ultrassonografia de abdome e pelve`, `tomografia computadorizada de abdome e pelve` | [ ] | [ ] | | |
+| `keywords` | `ultrassonografia de abdome e pelve`, `tomografia computadorizada de abdome e pelve`, `ultrassonografia`, `ultrassom`, `USG`, `ecografia`, `TC de abdome`, `TC do abdome`, `TC abdominal`, `tomografia de abdome`, `tomografia do abdome`, `tomografia abdominal`, `tomografia computadorizada de abdome`, `tomografia computadorizada do abdome`, `exame de imagem` | [ ] | [ ] | | |
 | `content, line 1` | **Tomografia computadorizada de abdome e pelve com contraste intravenoso:** | [ ] | [ ] | | |
 | `content, line 2` | - Apêndice cecal em posição habitual, com diâmetro externo máximo de 10 mm, espessamento parietal e realce mucoso. | [ ] | [ ] | | |
 | `content, line 3` | - Presença de densificação da gordura periapendicular e pequena quantidade de líquido adjacente. | [ ] | [ ] | | |
@@ -201,7 +201,7 @@ The package authors no approved template, so there is no applicability predicate
 |---|---|---|---|---|---|
 | `title` | IMPRESSO 4 — RECEITUÁRIO/REGISTRO DE CONDUTA INICIAL | [ ] | [ ] | | |
 | `category` | report | [ ] | [ ] | | |
-| `keywords` | none (`[]`) | [ ] | [ ] | | |
+| `keywords` | `prescrev`, `prescrição`, `receita`, `receituário`, `conduta inicial`, `medidas de suporte` | [ ] | [ ] | | |
 | `content, line 1` | Para adulto sem alergia conhecida e função renal preservada, são opções adequadas: | [ ] | [ ] | | |
 | `content, line 2` | - Jejum oral. | [ ] | [ ] | | |
 | `content, line 3` | - Acesso venoso periférico e cristaloide intravenoso conforme estado de hidratação e resposta clínica; por exemplo, Ringer lactato ou cloreto de sódio 0,9%, com reavaliação. | [ ] | [ ] | | |
@@ -585,10 +585,10 @@ Copied from the mapping record, which has the full description of each gap.
 | G2b | The criterion 4 text, verbatim. The level sentences reach the classifier in the criterion description. | **Possibly higher.** If appendicitis is named but not as the main hypothesis and the classifier marks criterion 4 performed, the package scores 0.7 or more where the source says 0. | Whether criterion 4 should say "principal". | [ ] | | |
 | G3 | Fifth action, `forbidden`, `veto: true`. | **Equal.** | Confirm the action text (D14). | [ ] | | |
 | G4 | One action per numbered criterion, verbatim. The classifier judges the inner condition from the text. | **Equal** at the threshold level; the inner condition is not verified in code. | Whether any compound criterion should be split. | [ ] | | |
-| G5 | Seven impressos, one per named test (sodium and potassium together). A generic request matches nothing and returns "unavailable". | **Lower.** Requests worded as "função renal", "sódio", "potássio" or "EAS" release nothing, which limits Item 7. | The split, the grouping of sodium and potassium under "eletrólitos", and the keywords. | [ ] | | |
-| G6 | One impresso with two full-phrase keywords. An ultrasound request releases the CT report, as in the source. | **Lower.** "TC de abdome", "ultrassom" and similar wordings release nothing, which limits Item 8 criteria 2 and 3. | The keywords, whether "de abdome e pelve" applies to the ultrasound, and whether an ultrasound request should get a CT report. | [ ] | | |
-| G7 | No keywords: the impresso is in the package and is never released. | **Lower or equal.** Items 9 and 10 are scored from what the learner says. | Whether and how this impresso is shown. | [ ] | | |
-| G8 | Keyword `exame físico`. | **Lower** for other wordings ("vou examinar o abdome"). Any mention of the phrase releases it, including a negated one. | The keywords. | [ ] | | |
+| G5 | Seven impressos, one per named test (sodium and potassium together), each with its common phrasings (#241): "função renal" releases urea and creatinine, "sódio"/"potássio" the electrolytes, "EAS" and "urina 1" the urinalysis. A generic request ("exames laboratoriais") matches nothing and returns "unavailable". | **Lower** only for wordings not authored and for the generic request, which gets no "which tests?" question. | The split, the grouping of sodium and potassium under "eletrólitos", and the keywords. | [ ] | | |
+| G6 | One impresso. Full phrases plus common abdominal phrasings (#241): "TC de abdome", "tomografia de abdome", "USG", "ultrassom", "exame de imagem". An ultrasound request releases the CT report, as in the source. | **Lower** only for wordings not authored. A CT request that does not name the abdomen releases nothing. | The keywords, whether "de abdome e pelve" applies to the ultrasound, and whether an ultrasound request should get a CT report. | [ ] | | |
+| G7 | Prescription-style keywords (#241): "prescrevo", "prescrição", "receita", "receituário", "conduta inicial", "medidas de suporte". Recording support measures without one of these words does not release it. | **Lower or equal.** Items 9 and 10 are scored from what the learner says. | Whether and how this impresso is shown. | [ ] | | |
+| G8 | `exame físico` plus common phrasings (#241): "exame do abdome", "examinar o abdome", "palpação abdominal", "sinais vitais". "Exame" alone releases nothing. | **Lower** only for wordings not authored. Any mention of a phrase releases it, including a negated one. | The keywords. | [ ] | | |
 | G9 | All 19 answers `on_request`; the source heading is kept in `topic`. | No scoring rule depends on it. The patient prompt lists every fact without its condition (`backend/lib/backend/stations/station_ai.ex:176`); the condition is only forwarded to the decision model. | Whether the distinction must be enforced. | [ ] | | |
 | G10 | Two `timed` facts holding the quoted questions. No approved template, because a turn count would be invented. | **Lower.** If the patient never asks, Item 11 criterion 3 cannot be met; "Adequado" stays reachable through criteria 1, 2 and 4. | How and when the questions are asked. | [ ] | | |
 | G11 | One response rule, verbatim. | None on scoring. | Whether this behaviour is needed in a voice or text station. | [ ] | | |

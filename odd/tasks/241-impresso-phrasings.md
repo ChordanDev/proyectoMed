@@ -20,7 +20,7 @@ Each acute-appendicitis impresso has one keyword phrase, and `impresso-4-receitu
 ## Tasks
 
 - [x] T1 — Matcher: a keyword matches only when it starts at a word boundary, so short abbreviations (`EAS`, `TC`, `USG`, `sódio`) can be authored without matching inside "áreas", "etc" or "episódio". Tests in `impressos_test.exs`; authoring guide updated.
-- [ ] T2 — Acute-appendicitis keyword variants for every impresso, including `impresso-4-receituario` (prescription-style request). Reproduction test with the issue's phrasings plus over-release guards. Package mapping and clinical review checklist updated.
+- [x] T2 — Acute-appendicitis keyword variants for every impresso, including `impresso-4-receituario` (prescription-style request). Reproduction test with the issue's phrasings plus over-release guards. Package mapping and clinical review checklist updated.
 - [ ] T3 — Chest-pain keyword variants (exam, labs, X-ray) with tests and guards.
 
 ## Routing
@@ -37,6 +37,9 @@ All tasks inline in this bounded writer: one module, two JSON packages, tests an
 - Worktree created from `origin/feat/237-clinician-demo-readiness` at `efc2f30`.
 - T1: RED 1 failing test (`dor em outras áreas` matched `EAS`), 9/10 passing. GREEN 10/10 in `impressos_test.exs`; full backend `mix test` 1124 passed. Matcher change justified: `EAS`, `TC`, `sódio` cannot be authored as substring keywords without matching inside "áreas", "etc", "episódio" (the reason they were left out before). Commit: see `git log` (T1 commit `fix(stations): match impresso keywords from a word start`).
 
+- T1 commit: `c4045c1`.
+- T2: RED 22 of 33 failing in the new `impresso_phrasings_test.exs` (the over-release guards already passed). GREEN 33/33 after authoring keyword variants; `mix test test/backend/stations` 776 passed. Docs: keyword table and gaps G5–G8 in `package-mapping.md`, checklist keyword and gap rows regenerated from the package (`content_review_records_test.exs` keeps them in step). Qualification cases `modality-gap-02`, `-05`, `-06` now release their impresso; their pending `proposed_expected` notes describe the old gaps and are left for the adjudicator (the harness is not edited). Commit: T2 commit `feat(stations): recognize common phrasings for appendicitis impressos`.
+
 ## Next step
 
-T2.
+T3.
