@@ -1,17 +1,23 @@
 defmodule Backend.Stations.Transcription do
   @moduledoc """
-  Single point of contact between the backend and OpenAI's audio transcription API.
+  Single point of contact between the backend and the speech-to-text provider.
+
+  OpenAI's audio transcription API is the default. When `:voice_provider` is
+  `:deepgram_elevenlabs`, the audio goes to Deepgram instead
+  (`Backend.Stations.Transcription.Deepgram`); validation, consent and session checks,
+  the result shape and the error outcomes are the same for both providers.
 
   Audio bytes are streamed in, transcribed and discarded: nothing is persisted
   server-side and audio content is never logged.
 
   ## Retry policy
 
-  None. On any OpenAI failure the error is surfaced as `{:error, :openai_unavailable}`
+  None. On any provider failure the error is surfaced as `{:error, :openai_unavailable}`
   and the client decides the fallback policy.
   """
 
   alias Backend.Stations.Conversation
+  alias Backend.Stations.Transcription.Deepgram
 
   @allowed_formats ~w(m4a wav webm)
   @default_model "whisper-1"
@@ -33,7 +39,20 @@ defmodule Backend.Stations.Transcription do
     with :ok <- validate_audio(audio, format),
          {:ok, session} <- fetch_session(session_id),
          :ok <- validate_consent(session),
-         {:ok, body} <- request(audio, format, config(opts)) do
+         {:ok, transcript} <- provider_transcribe(audio, format, opts) do
+      {:ok, Map.put(transcript, :transcribed_at, DateTime.utc_now())}
+    end
+  end
+
+  defp provider_transcribe(audio, format, opts) do
+    case Application.get_env(:backend, :voice_provider, :openai) do
+      :deepgram_elevenlabs -> Deepgram.transcribe(audio, format, opts)
+      _openai -> openai_transcribe(audio, format, opts)
+    end
+  end
+
+  defp openai_transcribe(audio, format, opts) do
+    with {:ok, body} <- request(audio, format, config(opts)) do
       parse(body)
     end
   end
@@ -89,12 +108,7 @@ defmodule Backend.Stations.Transcription do
   end
 
   defp parse(%{"text" => text} = body) when is_binary(text) do
-    {:ok,
-     %{
-       text: text,
-       duration_seconds: body["duration"],
-       transcribed_at: DateTime.utc_now()
-     }}
+    {:ok, %{text: text, duration_seconds: body["duration"]}}
   end
 
   defp parse(_body), do: {:error, :openai_unavailable}

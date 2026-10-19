@@ -212,6 +212,46 @@ switch it.
 fails validation stops the boot with an error that names the id. Check the
 result with `curl http://localhost:4000/api/stations/active`.
 
+### Turn-based voice providers (Deepgram and ElevenLabs)
+
+The station's turn-based voice ("Usar voz" / "Ouvir resposta") transcribes the
+learner through `POST /api/stations/active/sessions/:id/transcribe` and speaks the
+patient reply through `POST /api/stations/active/sessions/:id/synthesize`. By
+default both use OpenAI (`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`,
+`OPENAI_TRANSCRIPTION_MODEL` = `whisper-1`, `OPENAI_TTS_MODEL` = `tts-1`,
+`OPENAI_TTS_VOICE` = `alloy`); that path is unchanged. `VOICE_PROVIDER` switches
+both endpoints to Deepgram (speech-to-text, pt-BR) and ElevenLabs (patient voice).
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `VOICE_PROVIDER` | `deepgram_elevenlabs` selects Deepgram and ElevenLabs for voice (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps OpenAI. | unset |
+| `DEEPGRAM_API_KEY` | Deepgram key, sent as `Authorization: Token <key>` to the pre-recorded `/v1/listen` API with `language=pt-BR`. | unset |
+| `DEEPGRAM_MODEL` | Deepgram model. | `nova-3` |
+| `ELEVENLABS_API_KEY` | ElevenLabs key, sent as `xi-api-key`. | unset |
+| `ELEVENLABS_VOICE_ID` | Voice used for the patient. It must be a voice the key may use. | unset |
+| `ELEVENLABS_MODEL` | Multilingual text-to-speech model. | `eleven_flash_v2_5` (low latency, pt-BR) |
+
+`backend/config/runtime.exs` reads these variables once, at boot. The web is
+unchanged: transcription returns the same JSON, and ElevenLabs is asked for mp3
+(`output_format=mp3_44100_128`), served as `audio/mpeg` like the OpenAI audio.
+The patient always speaks with `ELEVENLABS_VOICE_ID`; an OpenAI voice name sent by
+a client is still validated but not used. Without the selected provider's key (or
+without the voice id), voice is unavailable exactly as it is without an OpenAI
+key: the endpoints answer `502` and the learner continues by text. Neither
+provider is retried, and audio, transcripts and synthesized text are never
+logged or stored.
+
+Check it with the acute-appendicitis station:
+
+```sh
+cd backend && ACTIVE_STATION_ID=acute-appendicitis VOICE_PROVIDER=deepgram_elevenlabs \
+  DEEPGRAM_API_KEY=<key> ELEVENLABS_API_KEY=<key> ELEVENLABS_VOICE_ID=<voice-id> \
+  mix phx.server
+```
+
+Then, in the web station, use "Usar voz" to ask a question in Portuguese and
+"Ouvir resposta" to hear the patient's reply.
+
 ### Live Jev adapter (TypeSafe)
 
 `Backend.Stations.JevDecision.TypesafeAdapter` verifies a candidate patient reply

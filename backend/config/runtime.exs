@@ -193,6 +193,30 @@ if config_env() != :test do
   end
 end
 
+# Turn-based voice providers (issue #253). Off unless
+# `VOICE_PROVIDER=deepgram_elevenlabs` asks for it: without the variable both voice
+# endpoints keep the OpenAI configuration above. Deepgram transcribes the learner
+# (pt-BR) and ElevenLabs speaks the patient. Without the selected provider's key, or
+# without `ELEVENLABS_VOICE_ID`, voice is unavailable, as it is without an OpenAI
+# key. `:test` reads none of it.
+if config_env() != :test do
+  if System.get_env("VOICE_PROVIDER") == "deepgram_elevenlabs" do
+    config :backend, :voice_provider, :deepgram_elevenlabs
+  end
+
+  for {variable, key} <- [
+        {"DEEPGRAM_API_KEY", :deepgram_api_key},
+        {"DEEPGRAM_MODEL", :deepgram_model},
+        {"ELEVENLABS_API_KEY", :elevenlabs_api_key},
+        {"ELEVENLABS_VOICE_ID", :elevenlabs_voice_id},
+        {"ELEVENLABS_MODEL", :elevenlabs_model}
+      ],
+      value = System.get_env(variable),
+      String.trim(value) != "" do
+    config :backend, key, String.trim(value)
+  end
+end
+
 # E2E-only: bypasses Jev verification with a deterministic approving adapter.
 # The harness boots Phoenix under `:dev`, so the variable is honored only there:
 # `:test` keeps its injected adapters and `:prod` never compiles this module.
