@@ -72,6 +72,9 @@ npm --prefix web run dev
 
 # Backend — boots the JSON API on http://localhost:4000.
 ( cd backend && mix phx.server )
+
+# Backend with another active station (see "Active station" below).
+( cd backend && ACTIVE_STATION_ID=acute-appendicitis mix phx.server )
 ```
 
 The backend exposes health and Station HTTP routes. Representative responses:
@@ -190,6 +193,20 @@ prove the result contract, not the quality of any assessment.
   harness runs; in `test` and `prod` it is ignored and the default adapter stays
   in place.
 - Do not set the variable outside the E2E suite.
+
+### Active station
+
+The backend serves one active station, chosen at boot. No code edit is needed to
+switch it.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `ACTIVE_STATION_ID` | Station directory under `backend/priv/stations` to load at boot, for example `acute-appendicitis` (`dev` and `prod`; ignored in `test`). Unset or blank keeps the default. | `chest-pain-initial-assessment` |
+
+`backend/config/runtime.exs` reads it once, at boot. Only a plain directory name
+(`[a-z0-9-]+`) is accepted. A malformed id, an unknown id, or a package that
+fails validation stops the boot with an error that names the id. Check the
+result with `curl http://localhost:4000/api/stations/active`.
 
 ### Live Jev adapter (TypeSafe)
 

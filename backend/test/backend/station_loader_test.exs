@@ -24,11 +24,12 @@ defmodule Backend.StationLoaderTest do
     with_canonical_package(nil, fn ->
       assert capture_log(fn ->
                assert_raise RuntimeError,
-                            "Falha ao carregar o pacote ativo da estação: arquivo não encontrado.",
+                            "Falha ao carregar o pacote ativo da estação \"chest-pain-initial-assessment\": arquivo não encontrado.",
                             fn ->
                               StationLoader.load_active()
                             end
-             end) =~ "Falha ao carregar o pacote ativo da estação: arquivo não encontrado."
+             end) =~
+               "Falha ao carregar o pacote ativo da estação \"chest-pain-initial-assessment\": arquivo não encontrado."
     end)
   end
 
@@ -36,11 +37,12 @@ defmodule Backend.StationLoaderTest do
     with_canonical_package("{invalid", fn ->
       assert capture_log(fn ->
                assert_raise RuntimeError,
-                            "Falha ao carregar o pacote ativo da estação: JSON inválido.",
+                            "Falha ao carregar o pacote ativo da estação \"chest-pain-initial-assessment\": JSON inválido.",
                             fn ->
                               StationLoader.load_active()
                             end
-             end) =~ "Falha ao carregar o pacote ativo da estação: JSON inválido."
+             end) =~
+               "Falha ao carregar o pacote ativo da estação \"chest-pain-initial-assessment\": JSON inválido."
     end)
   end
 
@@ -48,12 +50,12 @@ defmodule Backend.StationLoaderTest do
     with_canonical_package(~s({"version": "1.0.0"}), fn ->
       assert capture_log(fn ->
                assert_raise RuntimeError,
-                            "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório.",
+                            "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório.",
                             fn ->
                               StationLoader.load_active()
                             end
              end) =~
-               "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."
+               "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório."
     end)
   end
 
@@ -64,12 +66,12 @@ defmodule Backend.StationLoaderTest do
     with_canonical_package(wrong_language_package, fn ->
       assert capture_log(fn ->
                assert_raise RuntimeError,
-                            "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório.",
+                            "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório.",
                             fn ->
                               StationLoader.load_active()
                             end
              end) =~
-               "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."
+               "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório."
     end)
   end
 
@@ -82,14 +84,14 @@ defmodule Backend.StationLoaderTest do
       log =
         capture_log(fn ->
           assert_raise RuntimeError,
-                       "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório.",
+                       "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório.",
                        fn ->
                          StationLoader.load_active()
                        end
         end)
 
       assert log =~
-               "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."
+               "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório."
 
       assert log =~ "applicability"
     end)
@@ -102,12 +104,12 @@ defmodule Backend.StationLoaderTest do
     with_canonical_package(malformed_impressos_package, fn ->
       assert capture_log(fn ->
                assert_raise RuntimeError,
-                            "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório.",
+                            "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório.",
                             fn ->
                               StationLoader.load_active()
                             end
              end) =~
-               "Falha ao validar o pacote ativo da estação: o conteúdo não atende ao contrato obrigatório."
+               "Falha ao validar o pacote ativo da estação \"chest-pain-initial-assessment\": o conteúdo não atende ao contrato obrigatório."
     end)
   end
 
