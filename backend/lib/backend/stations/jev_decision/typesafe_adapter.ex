@@ -866,7 +866,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   # Each action is performed when an item is a yes (citing every yes item),
   # not performed when every item is a no or there is no item, and uncertain
-  # otherwise. The criterion is always uncertain, so authored rules decide its level.
+  # otherwise. An uncertain action offers the items left undecided for it as its
+  # candidates: the rubric resolver may cite only those, never an item answered no
+  # for that action (issue #243), and they are never reported as evidence. The
+  # criterion is always uncertain, so authored rules decide its level.
   defp rubric_decisions(questions, plans, nouls, thresholds) do
     by_criterion = Enum.group_by(plans, & &1.criterion_id)
 
@@ -887,14 +890,15 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   defp action_decision(plan, nouls, thresholds) do
     answers = Enum.map(plan.asks, fn {id, item} -> {classify(nouls[id], thresholds), item.id} end)
     cited = for {:yes, evidence_id} <- answers, do: evidence_id
+    undecided = for {:undecided, evidence_id} <- answers, do: evidence_id
 
-    classification =
+    {classification, evidence_ids} =
       cond do
-        cited != [] -> "performed"
-        Enum.all?(answers, &(elem(&1, 0) == :no)) -> "not_performed"
-        true -> "uncertain"
+        cited != [] -> {"performed", cited}
+        undecided == [] -> {"not_performed", []}
+        true -> {"uncertain", undecided}
       end
 
-    %{id: plan.action_id, classification: classification, evidence_ids: cited}
+    %{id: plan.action_id, classification: classification, evidence_ids: evidence_ids}
   end
 end
