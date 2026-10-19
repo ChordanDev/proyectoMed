@@ -59,7 +59,7 @@ Learner turns may reach generation as untrusted evidence. A rejected or otherwis
 | Outcome | Delivery | Next action |
 |---|---|---|
 | Verified | Yes | Phoenix may display it and pass the approved text to TTS. |
-| Semantic refusal | No | At most one regeneration and full verification within the total deadline; otherwise block/end under the contract. |
+| Semantic refusal | No | At most one regeneration and full verification within the total deadline; otherwise block/end under the contract. When the regeneration cannot finish or be verified in time, the original refusal stands and the learner turn is kept (issue #256). |
 | Low confidence | No | Same bounded single-regeneration path as semantic refusal; never silently accept. |
 | Deterministic known violation | No candidate delivery | Use an exact approved zero-clinical-content fallback only when its authored applicability passes; otherwise block/invalidate. |
 | Jev timeout | No | Technical failure; invalidate the attempt under existing policy. No regeneration fallback or clinical text. |

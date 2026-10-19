@@ -35,6 +35,10 @@ defmodule Backend.Stations.CandidateGate do
        the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
        If the second candidate fails for any reason, no text is released and
        `{:error, {:refused, status}}` or `{:error, reason}` is returned.
+       When the regeneration runs out of budget (before or during generation,
+       or while it is verified), the original `{:error, {:refused, status}}` is
+       returned instead of `{:error, :timeout}` (issue #256), so the learner
+       turn is kept (#235). A timeout before any refusal stays `{:error, :timeout}`.
 
   ## Security & No-Leak Invariants
 
@@ -316,11 +320,20 @@ defmodule Backend.Stations.CandidateGate do
     can_retry? = Keyword.get(opts, :can_retry?, true)
 
     if can_retry? and retry_count == 0 do
-      attempt_regeneration(guidance, package, conversation, deadline_at, opts)
+      guidance
+      |> attempt_regeneration(package, conversation, deadline_at, opts)
+      |> keep_refusal_on_timeout(status)
     else
       {:error, {:refused, status}}
     end
   end
+
+  # Issue #256: when the regeneration cannot finish inside the budget (before
+  # or during generation, or while it is verified), the turn ends with the
+  # original refusal, so the caller keeps the learner turn (#235). Nothing of
+  # the late candidate is returned. Any other regeneration failure is unchanged.
+  defp keep_refusal_on_timeout({:error, :timeout}, status), do: {:error, {:refused, status}}
+  defp keep_refusal_on_timeout(result, _status), do: result
 
   defp attempt_regeneration(guidance, package, conversation, deadline_at, opts) do
     with :ok <- check_regeneration_budget(deadline_at),

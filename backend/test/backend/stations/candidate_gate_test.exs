@@ -1128,7 +1128,9 @@ defmodule Backend.Stations.CandidateGateTest do
                )
     end
 
-    test "timeout during generator regeneration halts without releasing text" do
+    # Issue #256: a refused candidate whose regeneration cannot finish in time
+    # returns the original refusal, so the learner turn is kept (#235).
+    test "timeout during generator regeneration returns the original refusal, never the late text" do
       package = base_package()
       deadline_at = JevDecision.monotonic_now_ms() + 40
 
@@ -1138,7 +1140,7 @@ defmodule Backend.Stations.CandidateGateTest do
         {:ok, "regen_ok_too_late"}
       end
 
-      assert {:error, :timeout} =
+      assert {:error, {:refused, :semantic_refusal}} =
                CandidateGate.verify_and_deliver(
                  "ungrounded_hallucination",
                  package,
@@ -1146,6 +1148,45 @@ defmodule Backend.Stations.CandidateGateTest do
                  adapter: DoubleAdapter,
                  generator: generator,
                  deadline_at_monotonic_ms: deadline_at
+               )
+    end
+
+    test "a generator that reports a timeout returns the original refusal" do
+      generator = fn -> {:error, :timeout} end
+
+      assert {:error, {:refused, :low_confidence}} =
+               CandidateGate.verify_and_deliver(
+                 "low_confidence_text",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+    end
+
+    test "a regenerated candidate whose verification times out returns the original refusal" do
+      generator = fn -> {:ok, "adapter_timeout"} end
+
+      assert {:error, {:refused, :semantic_refusal}} =
+               CandidateGate.verify_and_deliver(
+                 "ungrounded_hallucination",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+    end
+
+    test "a regeneration that fails for a non-timeout reason keeps today's error" do
+      generator = fn -> {:error, {:upstream_5xx, 503}} end
+
+      assert {:error, {:upstream_5xx, 503}} =
+               CandidateGate.verify_and_deliver(
+                 "ungrounded_hallucination",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
                )
     end
 

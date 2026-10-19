@@ -75,6 +75,25 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  defmodule RefuseThenTimeoutJevDouble do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request) do
+      case Application.get_env(:backend, :refuse_then_verify_count, 0) do
+        0 ->
+          Application.put_env(:backend, :refuse_then_verify_count, 1)
+          {:ok, %{status: :low_confidence, rationale: "First candidate undecided"}}
+
+        _ ->
+          {:error, :timeout}
+      end
+    end
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   defmodule TimeoutJevDouble do
     @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -442,6 +461,68 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
 
       assert {:ok, fetched_after_http} = Stations.get_session(session.session_id)
       assert Enum.map(fetched_after_http.messages, & &1.role) == [:learner, :learner]
+    end
+
+    # Issue #256: the regeneration after a refusal cannot be verified in time.
+    # The learner turn is kept (#235) and no patient text is stored or returned.
+    test "a refusal whose regeneration verification times out keeps the learner turn, HTTP 502",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :jev_decision_adapter, RefuseThenTimeoutJevDouble)
+      refused_text = "Meu abdome está flácido e indolor à palpação."
+      Process.put(:custom_ai_reply, refused_text)
+
+      assert {:error, {:refused, :low_confidence, learner_turn}} =
+               Stations.create_message(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Examinador, quais os achados do exame abdominal?"
+               })
+
+      assert {:ok, fetched} = Stations.get_session(session.session_id)
+      assert fetched.messages == [learner_turn]
+
+      Application.put_env(:backend, :refuse_then_verify_count, 0)
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Examinador, quais os achados do exame abdominal?"
+        })
+
+      assert %{
+               "error" => "reply_verification_failed",
+               "learner_turn" => %{"role" => "learner", "text" => _}
+             } = json_response(conn, 502)
+
+      refute String.contains?(conn.resp_body, refused_text)
+
+      assert {:ok, fetched_after_http} = Stations.get_session(session.session_id)
+      assert Enum.map(fetched_after_http.messages, & &1.role) == [:learner, :learner]
+    end
+
+    test "a refusal whose regeneration outruns the deadline keeps the learner turn",
+         %{session: session} do
+      Application.put_env(:backend, :jev_decision_adapter, RefusingJevDouble)
+      Process.put(:custom_ai_reply, "Tenho dor do lado direito da barriga.")
+
+      slow_regeneration = fn ->
+        Process.sleep(80)
+        {:ok, %{text: "Resposta tardia que nunca deve aparecer.", used_facts: []}}
+      end
+
+      assert {:error, {:refused, :semantic_refusal, learner_turn}} =
+               Stations.create_message(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Examinador, e os exames laboratoriais?",
+                 deadline_ms: 50,
+                 generator: fn _pkg, _conv, _remaining_ms, _guidance -> slow_regeneration.() end
+               })
+
+      assert {:ok, fetched} = Stations.get_session(session.session_id)
+      assert fetched.messages == [learner_turn]
+      refute Enum.any?(fetched.messages, &(&1.role == :patient))
     end
 
     test "semantic refusal followed by successful retry delivers verified reply and HTTP 200",

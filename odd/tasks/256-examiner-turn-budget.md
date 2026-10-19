@@ -1,0 +1,41 @@
+# 256 — Keep examiner-addressed turns when the patient reply cannot be verified in time; serve the patient from Claude Sonnet 5.5
+
+Issue: #256 (parent tracker #237). Branch `fix/256-examiner-turn-budget` from `origin/feat/237-clinician-demo-readiness` (`f63395d`), worktree `../proyectoMed-worktrees/issue-256`. PR target `feat/237-clinician-demo-readiness`, `Refs #256`.
+
+## Objective
+
+A refused patient candidate whose single regeneration cannot finish inside the Jev budget keeps the learner turn (the #235 kept-turn path) instead of rolling it back with a 504. The patient runs on Claude Sonnet 5.5 (its own model setting) while the resolver and feedback stay on `ANTHROPIC_MODEL`. Patient generations and Jev verifications log their latency at debug level.
+
+## Why
+
+In the 2026-10-19 Claude rehearsal the verbalized exam findings failed twice with HTTP 504: the first candidate was refused, the regeneration on Opus 5.5 did not fit the 3 s Jev budget, and the `{:error, :timeout}` rolled the learner turn back. The maintainer chose Sonnet 5.5 for the patient on 2026-10-19 for latency.
+
+## Constraints
+
+- #235/#224: refused or unverified patient text is never stored, returned or logged.
+- A timeout with no prior refusal keeps today's rollback (HTTP 504).
+- Sonnet 5.5 request rules: no `temperature`/`top_p`; thinking off is `thinking: {type: "between_tools"}` with no other thinking field, at effort `high` or below (`disabled` returns a 400; `between_tools` is a 400 on every other model). Patient effort `low`.
+- Opus 5.5 (resolver/feedback): no `thinking` field, effort `medium`.
+- `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) is accepted by both Opus 5.5 and Sonnet 5.5 on the Claude API, so it stays on both.
+- Latency logs carry only role, outcome category and milliseconds: no prompt, learner or patient text.
+- No live calls in tests (Req.Test / doubles).
+
+## Tasks
+
+- [ ] T1 — CandidateGate: when a refused candidate's regeneration runs out of budget (before or during regeneration, or its verification times out), return the original refusal so `Stations.create_message` keeps the learner turn; a timeout with no refusal still rolls back. Tests in `candidate_gate_test.exs` and `pre_delivery_gate_contract_test.exs`. Route: inline (delegated writer).
+- [ ] T2 — Patient model setting `ANTHROPIC_PATIENT_MODEL` (default `claude-sonnet-5-5`) and Sonnet 5.5 request fields (`thinking: between_tools`, effort `low`) in the shared client; resolver/feedback keep `ANTHROPIC_MODEL`. Runtime config, README. Route: inline.
+- [ ] T3 — Debug latency logs for each patient generation and each Jev patient verification, without text. Route: inline.
+- [ ] T4 — Live check (user-run, needs keys): verbalized exam findings and lab interpretation produce a patient reply or "Examinador: Anotado.", never the retry notice. Pending.
+
+## Checks
+
+- Per task: focused `mix test <files>` RED then GREEN.
+- Closure: local CI script (format, warnings-as-errors, credo strict, `mix test`, web suite, process E2E).
+
+## Progress
+
+- 2026-10-19: exploration done; plan above.
+
+## Next step
+
+T1.

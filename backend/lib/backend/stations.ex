@@ -166,8 +166,10 @@ defmodule Backend.Stations do
 
   When Jev refuses the patient reply (`low_confidence` or `semantic_refusal`),
   the learner turn is kept without a patient reply and
-  `{:error, {:refused, reason, learner_turn}}` is returned. Technical failures
-  roll the learner turn back, so a retry does not duplicate it.
+  `{:error, {:refused, reason, learner_turn}}` is returned. This also applies
+  when the single regeneration after a refusal cannot be verified within the
+  deadline (issue #256). Technical failures, including a timeout with no prior
+  refusal, roll the learner turn back, so a retry does not duplicate it.
   """
   @spec create_message(String.t(), map()) ::
           {:ok, map()}
