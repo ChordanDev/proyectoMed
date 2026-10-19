@@ -100,9 +100,11 @@ defmodule Backend.Stations.StationAI do
   Builds the system prompt that constrains the adapter to the package.
 
   The prompt embeds the patient profile, the canonical `revealable_facts`
-  list, every `response_rule`, the refusal text used when the student asks
-  something out of scope, and four absolute restrictions that adapters must
-  honour.
+  list (each fact with its authored id), every `response_rule`, an instruction
+  to answer only what the last learner message asked (a multi-part question is
+  answered part by part without adjacent facts, issue #242), the refusal text
+  used when the student asks something out of scope, and four absolute
+  restrictions that adapters must honour.
 
   `presenting_context` is authored for the examiner in the second person, so
   the prompt tells the patient it is the person described there and may state
@@ -151,6 +153,11 @@ defmodule Backend.Stations.StationAI do
 
     REGRAS DE RESPOSTA
     #{format_rules(package["response_rules"] || [])}
+
+    COMO RESPONDER
+    Responda somente ao que o estudante perguntou na última mensagem.
+    Se a pergunta tiver várias partes, responda a cada parte e a nada além delas.
+    Não acrescente fatos relacionados que não foram perguntados, mesmo que pareçam ligados ao assunto: espere o estudante perguntar.
 
     RESTRIÇÕES ABSOLUTAS
     1. Você SÓ pode afirmar fatos listados acima, exceto a sua própria identidade descrita em QUEM VOCÊ É. Se o estudante perguntar algo fora da lista, responda EXATAMENTE: "#{refusal_text()}"
@@ -221,8 +228,12 @@ defmodule Backend.Stations.StationAI do
   defp format_facts([]), do: "  (nenhum)"
 
   defp format_facts(facts) when is_list(facts) do
-    Enum.map_join(facts, "\n", fn %{"topic" => topic, "content" => content} ->
-      "  - [#{topic}] #{content}"
+    Enum.map_join(facts, "\n", fn
+      %{"id" => id, "topic" => topic, "content" => content} when is_binary(id) and id != "" ->
+        "  - (#{id}) [#{topic}] #{content}"
+
+      %{"topic" => topic, "content" => content} ->
+        "  - [#{topic}] #{content}"
     end)
   end
 

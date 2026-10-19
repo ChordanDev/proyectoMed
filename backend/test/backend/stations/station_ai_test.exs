@@ -46,6 +46,31 @@ defmodule Backend.StationAI.SystemPromptTest do
     end
   end
 
+  describe "system_prompt/1 answers only what was asked (issue #242)" do
+    test "a multi-part question is answered part by part without pulling adjacent facts",
+         %{prompt: prompt} do
+      assert prompt =~ "COMO RESPONDER"
+
+      assert prompt =~
+               "Responda somente ao que o estudante perguntou na última mensagem."
+
+      assert prompt =~
+               "Se a pergunta tiver várias partes, responda a cada parte e a nada além delas."
+
+      assert prompt =~
+               "Não acrescente fatos relacionados que não foram perguntados, mesmo que pareçam ligados ao assunto: espere o estudante perguntar."
+    end
+
+    test "lists every revealable fact with its authored id", %{prompt: prompt} do
+      package = @package_path |> File.read!() |> Jason.decode!()
+
+      for %{"id" => id, "content" => content} <- package["revealable_facts"] do
+        assert prompt =~ "(#{id})"
+        assert prompt =~ content
+      end
+    end
+  end
+
   describe "system_prompt/1 patient identity" do
     test "keeps the examiner-facing context and says the patient is the person it describes",
          %{prompt: prompt} do
