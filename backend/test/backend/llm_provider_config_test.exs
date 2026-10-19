@@ -7,7 +7,7 @@ defmodule Backend.LLMProviderConfigTest do
   alias Backend.Stations.StationAI
 
   @runtime_config Path.expand("../../config/runtime.exs", __DIR__)
-  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL)
+  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_PATIENT_MODEL)
 
   setup do
     previous = Map.new(@variables, &{&1, System.get_env(&1)})
@@ -64,7 +64,8 @@ defmodule Backend.LLMProviderConfigTest do
           "RUBRIC_RESOLVER" => "on",
           "ANTHROPIC_API_KEY" => "sk-ant-boot",
           "ANTHROPIC_BASE_URL" => "https://anthropic.example.test",
-          "ANTHROPIC_MODEL" => "claude-sonnet-5-5"
+          "ANTHROPIC_MODEL" => "claude-opus-5-5",
+          "ANTHROPIC_PATIENT_MODEL" => "claude-sonnet-5-5"
         })
 
       assert backend[:station_ai_adapter] == StationAI.AnthropicAdapter
@@ -74,7 +75,8 @@ defmodule Backend.LLMProviderConfigTest do
       assert backend[StationAI.AnthropicClient] == [
                api_key: "sk-ant-boot",
                base_url: "https://anthropic.example.test",
-               model: "claude-sonnet-5-5"
+               model: "claude-opus-5-5",
+               patient_model: "claude-sonnet-5-5"
              ]
     end
 

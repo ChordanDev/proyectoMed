@@ -14,20 +14,31 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   Every request sends `x-api-key`, `anthropic-version: 2023-06-01` and the
   `server-side-fallback-2026-07-01` beta with `fallbacks: "default"`, so a
   safety-classifier decline is retried server-side on the model Anthropic
-  recommends for that category. Thinking is left at the model default
-  (adaptive), and no `thinking`, `temperature`, `top_p` or `budget_tokens`
-  is ever sent; `output_config.effort` is the latency control. A JSON schema,
-  when given, becomes `output_config.format` (structured outputs).
+  recommends for that category (both Claude Opus 5.5 and Claude Sonnet 5.5
+  accept the `"default"` form on the Claude API). No `temperature`, `top_p` or
+  `budget_tokens` is ever sent; `output_config.effort` is the latency control.
+  A JSON schema, when given, becomes `output_config.format` (structured
+  outputs).
+
+  Thinking is left at the model default (adaptive) unless a seam asks for the
+  lowest setting (`thinking: :lowest`, the patient, issue #256). On Claude
+  Sonnet 5.5 that is `thinking: {type: "between_tools"}` with no other
+  thinking field (`{type: "disabled"}` is a 400 there); every other model
+  rejects `between_tools`, so it gets no `thinking` field at all. The patient's
+  effort (`low`) stays within the `high`-or-below limit of `between_tools`.
 
   ## Configuration
 
   `config :backend, Backend.Stations.StationAI.AnthropicClient` holds
   `:api_key`, `:base_url` (default `https://api.anthropic.com`), `:model`
-  (default `claude-opus-5-5`) and `:req_options`; `config/runtime.exs` writes
-  them from `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL`.
-  Call options (`:api_key`, `:base_url`, `:model`, `:effort`, `:plug`,
-  `:retry`, `:req_options`) override it. The operating system environment is
-  never read here.
+  (default `claude-opus-5-5`, the resolver and feedback), `:patient_model`
+  (default `claude-sonnet-5-5`, the patient) and `:req_options`;
+  `config/runtime.exs` writes them from `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` and `ANTHROPIC_PATIENT_MODEL`.
+  A seam picks its model setting with the `:model_key` default. Call options
+  (`:api_key`, `:base_url`, `:model`, `:effort`, `:plug`, `:retry`,
+  `:req_options`) override it. The operating system environment is never
+  read here.
 
   ## Outcomes
 
@@ -48,7 +59,8 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   """
 
   @default_base_url "https://api.anthropic.com"
-  @default_model "claude-opus-5-5"
+  @default_models %{model: "claude-opus-5-5", patient_model: "claude-sonnet-5-5"}
+  @between_tools_models ["claude-sonnet-5-5"]
   @default_effort "medium"
   @anthropic_version "2023-06-01"
   @fallback_beta "server-side-fallback-2026-07-01"
@@ -59,6 +71,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
           base_url: String.t(),
           model: String.t(),
           effort: String.t(),
+          thinking: :default | :lowest,
           req_options: keyword()
         }
 
@@ -81,8 +94,10 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   Builds the request configuration from call options, then the application
   configuration, then the defaults.
 
-  `defaults` carries a seam's own `:effort` and `:receive_timeout`; the call
-  options and the configured `:req_options` still win over them.
+  `defaults` carries a seam's own `:effort`, `:receive_timeout`, `:model_key`
+  (`:model`, the default, or `:patient_model`) and `:thinking` (`:default`,
+  or `:lowest`); the call options and the configured `:req_options` still win
+  over them.
   """
   @spec config(keyword(), keyword()) :: config()
   def config(opts, defaults \\ []) do
@@ -103,11 +118,14 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
           req_options
       end
 
+    model_key = Keyword.get(defaults, :model_key, :model)
+
     %{
       api_key: Keyword.get(opts, :api_key, app[:api_key]),
       base_url: opts[:base_url] || app[:base_url] || @default_base_url,
-      model: opts[:model] || app[:model] || @default_model,
+      model: opts[:model] || app[model_key] || Map.fetch!(@default_models, model_key),
       effort: opts[:effort] || defaults[:effort] || @default_effort,
+      thinking: Keyword.get(defaults, :thinking, :default),
       req_options: req_options
     }
   end
@@ -141,7 +159,15 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
       "output_config" => output_config,
       "fallbacks" => "default"
     }
+    |> put_thinking(config)
   end
+
+  # `between_tools` is valid only on Claude Sonnet 5.5, alone in `thinking`.
+  defp put_thinking(body, %{thinking: :lowest, model: model})
+       when model in @between_tools_models,
+       do: Map.put(body, "thinking", %{"type" => "between_tools"})
+
+  defp put_thinking(body, _config), do: body
 
   defp validate_credentials(key) when is_binary(key) do
     if String.trim(key) == "", do: {:error, :missing_credentials}, else: :ok

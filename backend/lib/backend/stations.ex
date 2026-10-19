@@ -10,6 +10,8 @@ defmodule Backend.Stations do
   directly by `BackendWeb` controllers.
   """
 
+  require Logger
+
   alias Backend.Stations.CandidateGate
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
@@ -166,8 +168,10 @@ defmodule Backend.Stations do
 
   When Jev refuses the patient reply (`low_confidence` or `semantic_refusal`),
   the learner turn is kept without a patient reply and
-  `{:error, {:refused, reason, learner_turn}}` is returned. Technical failures
-  roll the learner turn back, so a retry does not duplicate it.
+  `{:error, {:refused, reason, learner_turn}}` is returned. This also applies
+  when the single regeneration after a refusal cannot be verified within the
+  deadline (issue #256). Technical failures, including a timeout with no prior
+  refusal, roll the learner turn back, so a retry does not duplicate it.
   """
   @spec create_message(String.t(), map()) ::
           {:ok, map()}
@@ -749,7 +753,23 @@ defmodule Backend.Stations do
 
   defp regenerate(package, context, _guidance), do: generate_patient_reply(package, context)
 
+  # Every patient generation (the first candidate and the gate's regeneration)
+  # logs its latency at debug level so live runs can tune the Jev budget
+  # (issue #256). Only the outcome category and milliseconds are logged:
+  # never the prompt, the learner text or the patient text.
   defp generate_patient_reply(package, context) do
+    started_at = JevDecision.monotonic_now_ms()
+    result = run_patient_adapter(package, context)
+    outcome = if match?({:ok, _}, result), do: "ok", else: "error"
+
+    Logger.debug(
+      "[Stations] patient_generation latency_ms=#{JevDecision.monotonic_now_ms() - started_at} outcome=#{outcome}"
+    )
+
+    result
+  end
+
+  defp run_patient_adapter(package, context) do
     adapter = resolve_station_ai_adapter()
 
     case adapter.next_reply(package, context) do

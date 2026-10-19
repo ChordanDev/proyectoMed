@@ -84,6 +84,39 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
       end
     end
 
+    test "uses the shared model setting, never the patient model (issue #256)" do
+      previous = Application.fetch_env(:backend, Backend.Stations.StationAI.AnthropicClient)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} ->
+            Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient, value)
+
+          :error ->
+            Application.delete_env(:backend, Backend.Stations.StationAI.AnthropicClient)
+        end
+      end)
+
+      Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient,
+        model: "claude-opus-5-5",
+        patient_model: "claude-sonnet-5-5"
+      )
+
+      test_pid = self()
+
+      Req.Test.stub(ClaudeResolverModelStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:payload, Jason.decode!(body)})
+        Req.Test.json(conn, json_message(%{"actions" => [@decision]}))
+      end)
+
+      assert {:ok, _} = resolve(ClaudeResolverModelStub)
+      assert_receive {:payload, payload}
+      assert payload["model"] == "claude-opus-5-5"
+      assert payload["output_config"]["effort"] == "medium"
+      refute Map.has_key?(payload, "thinking")
+    end
+
     test "the receive timeout follows the resolver deadline" do
       previous = Application.fetch_env(:backend, :rubric_resolver_deadline_ms)
 
