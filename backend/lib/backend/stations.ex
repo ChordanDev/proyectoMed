@@ -30,12 +30,17 @@ defmodule Backend.Stations do
   # ============================================================================
 
   @doc """
-  Returns the active station public metadata (`station_id`, `version`, `language`, `display_title`).
+  Returns the active station public metadata (`station_id`, `version`, `language`,
+  `display_title`) and the learner-facing `candidate_brief`, projected to its
+  `scenario` and `tasks` so nothing examiner-only reaches the learner's client.
   """
   @spec get_active_station() :: map()
   def get_active_station do
     package = get_active_package()
-    Map.take(package, ["station_id", "version", "language", "display_title"])
+
+    package
+    |> Map.take(["station_id", "version", "language", "display_title"])
+    |> Map.put("candidate_brief", Map.take(package["candidate_brief"], ["scenario", "tasks"]))
   end
 
   @doc """

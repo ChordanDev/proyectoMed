@@ -90,8 +90,12 @@ $ curl -i http://localhost:4000/api/stations/active
 HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
 
-{"station_id":"chest-pain-initial-assessment","version":"1.0.0","language":"pt-BR","display_title":"Avaliação inicial de dor torácica"}
+{"station_id":"chest-pain-initial-assessment","version":"2.0.0","language":"pt-BR","display_title":"Avaliação inicial de dor torácica","candidate_brief":{"scenario":"Você é o médico ou a médica de plantão…","tasks":["Apresentar-se ao paciente…","…"]}}
 ```
+
+`candidate_brief` is the learner-facing "cenário de atuação" and the ordered
+tasks. The web client shows it before the timer starts and keeps it reachable
+during the station. It never carries rubric, answer-key or impresso content.
 
 During local development, Vite proxies `/api` requests to the Phoenix backend
 at `http://localhost:4000`, avoiding a separate CORS dependency. Set
