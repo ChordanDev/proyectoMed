@@ -36,14 +36,15 @@ With Claude as the patient (#252), replies begin with stage directions. In the
     test passes by construction.
   - GREEN: `mix test test/backend/tts_test.exs test/backend_web/controllers/tts_controller_test.exs`
     -> 31 passed.
-  - Commit: see git log (`fix(tts): do not read the patient's stage directions aloud`).
+  - Commit: `ba6b460` (`fix(tts): do not read the patient's stage directions aloud`).
 
 ## Checks
 - `mix test test/backend/tts_test.exs` (focused).
 - Local CI (`local_ci.sh`), mirroring `.github/workflows/pr-validation.yml`.
 
 ## Progress
-- T1 done. Local CI result recorded in the PR body.
+- T1 done. Local CI passed: web 213 tests (9 files), backend 1244 tests, runner 4 tests,
+  dialyzer 0 errors.
 
 ## Next step
 - Human live check with ElevenLabs: "Ouvir resposta" must not read the actions.
