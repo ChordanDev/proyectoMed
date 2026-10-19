@@ -28,14 +28,14 @@ mistake because it carried no information about why the first candidate failed.
 
 ## Tasks
 
-- [ ] T1 Jev reports the on-request facts it refused as unasked (`unasked_fact_ids`,
+- [x] T1 Jev reports the on-request facts it refused as unasked (`unasked_fact_ids`,
   authored ids, validated at the `JevDecision` seam).
   Route: inline (2 files plus tests, already understood).
-- [ ] T2 `CandidateGate` targeted regeneration: arity-4 generator receives
+- [x] T2 `CandidateGate` targeted regeneration: arity-4 generator receives
   `%{withheld_fact_ids: ids}`; the default `Stations` generator and `StationAI`
   carry the ids into the system prompt.
   Route: inline (bounded, understood seams).
-- [ ] T3 Patient prompt answers only what was asked (multi-part questions do not
+- [x] T3 Patient prompt answers only what was asked (multi-part questions do not
   pull adjacent facts); prompt lists authored fact ids. Docs updated.
   Route: inline.
 
@@ -54,8 +54,21 @@ mistake because it carried no information about why the first candidate failed.
 
 ## Progress
 
-(none yet)
+| Task | Commit | RED | GREEN |
+| --- | --- | --- | --- |
+| T1 | `42a9a7d` | 6 of 141 failed (typesafe + seam tests) | 141 passed |
+| T2 | `516b378` | 7 of 144 failed (gate, stations, prompt, OpenAI payload) | 144 passed; full backend 1112 passed |
+| T3 | `23de031` | 2 of 8 failed (station_ai prompt tests) | 8 passed; full backend 1114 passed |
+
+Checks: local CI (mirror of `pr-validation.yml`) passed: backend 1114 tests,
+web 192 tests (7 files), extra suite 4 tests. GitHub Actions is blocked by billing.
+
+Native review: not run by this bounded writer (left to the orchestrator under RDD).
+
+Pending: live check on acute-appendicitis with `JEV_ADAPTER=typesafe` (needs the
+maintainer's keys).
 
 ## Next step
 
-T1.
+Maintainer live check of the question from the issue; then review and merge the
+child PR into `feat/237-clinician-demo-readiness`.
