@@ -1278,6 +1278,32 @@ describe("StationScreen impresso requests", () => {
     expect(screen.getByText(chestXray.content)).toBeInTheDocument();
   });
 
+  it("renders selected impresso Markdown as formatted text in the drawer", async () => {
+    const user = userEvent.setup();
+    const physicalExam = {
+      id: "impresso-1",
+      title: "IMPRESSO 1 — EXAME FÍSICO SEGMENTAR",
+      category: "physical_exam",
+      content:
+        "- **Estado geral:** regular, consciente.\n- **Ausculta:** ruídos presentes.",
+    };
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[physicalExam]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+    await user.click(screen.getByTestId(`impresso-item-${physicalExam.id}`));
+
+    const viewer = screen.getByTestId("impresso-content");
+    expect(within(viewer).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(viewer).getByText("Estado geral:").tagName).toBe("STRONG");
+    expect(viewer.textContent).not.toContain("**");
+  });
+
   it("keeps the impressos drawer available while the station is disabled", async () => {
     const user = userEvent.setup();
     render(

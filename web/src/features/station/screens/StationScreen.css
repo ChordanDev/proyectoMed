@@ -370,5 +370,26 @@
   border-radius: 8px;
   padding: 12px;
   font-size: 13px;
-  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.impresso-content > * {
+  margin: 0;
+}
+
+.impresso-content > * + * {
+  margin-top: 8px;
+}
+
+.impresso-content__heading {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.impresso-content__list {
+  padding-left: 20px;
+}
+
+.impresso-content__list li + li {
+  margin-top: 2px;
 }

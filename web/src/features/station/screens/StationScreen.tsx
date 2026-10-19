@@ -6,6 +6,7 @@ import type {
 } from "../api/client";
 import { isKeptLearnerTurn, recoverableTurnNotice } from "../hooks/useStation";
 import strings from "../i18n/pt-BR.json";
+import { ImpressoContent } from "./ImpressoContent";
 import { StationBrief } from "./StationBrief";
 import "./StationScreen.css";
 
@@ -699,7 +700,7 @@ export function StationScreen({
                 className="impresso-drawer__viewer"
                 data-testid="impresso-content"
               >
-                {selectedImpresso.content}
+                <ImpressoContent content={selectedImpresso.content} />
               </div>
             )}
           </div>
