@@ -22,8 +22,8 @@ In the 2026-10-19 Claude rehearsal the verbalized exam findings failed twice wit
 
 ## Tasks
 
-- [ ] T1 — CandidateGate: when a refused candidate's regeneration runs out of budget (before or during regeneration, or its verification times out), return the original refusal so `Stations.create_message` keeps the learner turn; a timeout with no refusal still rolls back. Tests in `candidate_gate_test.exs` and `pre_delivery_gate_contract_test.exs`. Route: inline (delegated writer).
-- [ ] T2 — Patient model setting `ANTHROPIC_PATIENT_MODEL` (default `claude-sonnet-5-5`) and Sonnet 5.5 request fields (`thinking: between_tools`, effort `low`) in the shared client; resolver/feedback keep `ANTHROPIC_MODEL`. Runtime config, README. Route: inline.
+- [x] T1 — CandidateGate: when a refused candidate's regeneration runs out of budget (before or during regeneration, or its verification times out), return the original refusal so `Stations.create_message` keeps the learner turn; a timeout with no refusal still rolls back. Tests in `candidate_gate_test.exs` and `pre_delivery_gate_contract_test.exs`. Route: inline (delegated writer).
+- [x] T2 — Patient model setting `ANTHROPIC_PATIENT_MODEL` (default `claude-sonnet-5-5`) and Sonnet 5.5 request fields (`thinking: between_tools`, effort `low`) in the shared client; resolver/feedback keep `ANTHROPIC_MODEL`. Runtime config, README. Route: inline.
 - [ ] T3 — Debug latency logs for each patient generation and each Jev patient verification, without text. Route: inline.
 - [ ] T4 — Live check (user-run, needs keys): verbalized exam findings and lab interpretation produce a patient reply or "Examinador: Anotado.", never the retry notice. Pending.
 
@@ -35,7 +35,9 @@ In the 2026-10-19 Claude rehearsal the verbalized exam findings failed twice wit
 ## Progress
 
 - 2026-10-19: exploration done; plan above.
+- 2026-10-19: T1 done (route: inline). RED: 3 changed/new gate tests failing (`{:error, :timeout}` instead of the refusal) plus 2/2 new Stations/HTTP contract tests; the non-timeout regeneration guard already passed. GREEN: 91/91 in the two files; full backend 1244 passed; format and credo clean. The no-refusal timeout rollback (HTTP 504) stays covered by the existing contract test. Commit `9f90ea7`.
+- 2026-10-19: T2 done (route: inline). RED: 4 failing (patient payload model/thinking, patient ignores `:model`, `:patient_model` from config, runtime config writes `ANTHROPIC_PATIENT_MODEL`); 4 guards already passed (non-Sonnet patient gets no thinking; resolver and feedback keep `:model`, effort `medium`, no thinking). GREEN: 43/43; full backend 1248 passed; credo and warnings-as-errors clean. `fallbacks: "default"` stays on both models (the reference lists it for Opus 5.5 and Sonnet 5.5 on the Claude API).
 
 ## Next step
 
-T1.
+T3.

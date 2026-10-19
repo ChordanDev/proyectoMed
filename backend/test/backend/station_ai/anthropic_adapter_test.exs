@@ -48,7 +48,7 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
   end
 
   describe "request" do
-    test "posts a Messages request with the safety prompt, roles, low effort and fallbacks" do
+    test "posts a Sonnet 5.5 Messages request with the safety prompt, roles, low effort, thinking off and fallbacks" do
       test_pid = self()
 
       Req.Test.stub(PatientInspectStub, fn conn ->
@@ -73,13 +73,16 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       assert headers["anthropic-beta"] == "server-side-fallback-2026-07-01"
       refute Map.has_key?(headers, "authorization")
 
-      assert payload["model"] == "claude-opus-5-5"
+      # Issue #256: the patient defaults to Sonnet 5.5, where `disabled`
+      # thinking is a 400 and `between_tools` (alone) is the lowest setting.
+      assert payload["model"] == "claude-sonnet-5-5"
+      assert payload["thinking"] == %{"type" => "between_tools"}
       assert payload["system"] == StationAI.system_prompt(@package, @context)
       assert payload["output_config"] == %{"effort" => "low"}
       assert payload["fallbacks"] == "default"
       assert is_integer(payload["max_tokens"]) and payload["max_tokens"] > 0
 
-      for forbidden <- ["thinking", "temperature", "top_p", "top_k", "response_format"] do
+      for forbidden <- ["temperature", "top_p", "top_k", "response_format"] do
         refute Map.has_key?(payload, forbidden)
       end
 
@@ -127,6 +130,22 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
                       %{"effort" => "medium"}}
     end
 
+    test "a patient model other than Sonnet 5.5 gets no thinking field" do
+      test_pid = self()
+
+      Req.Test.stub(PatientOpusStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:payload, Jason.decode!(body)})
+        Req.Test.json(conn, message([%{"type" => "text", "text" => "Sim."}]))
+      end)
+
+      assert {:ok, _} = reply(PatientOpusStub, model: "claude-opus-5-5")
+      assert_receive {:payload, payload}
+      assert payload["model"] == "claude-opus-5-5"
+      refute Map.has_key?(payload, "thinking")
+      assert payload["output_config"] == %{"effort" => "low"}
+    end
+
     test "reads key, base url and model from the application configuration" do
       previous = Application.fetch_env(:backend, Backend.Stations.StationAI.AnthropicClient)
 
@@ -140,9 +159,11 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
         end
       end)
 
+      # `:model` serves the resolver and feedback; the patient reads `:patient_model`.
       Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient,
         api_key: "sk-ant-from-config",
-        model: "claude-haiku-5-5"
+        model: "claude-opus-5-5",
+        patient_model: "claude-haiku-5-5"
       )
 
       test_pid = self()
@@ -164,6 +185,42 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
                )
 
       assert_receive {:req, ["sk-ant-from-config"], "claude-haiku-5-5"}
+    end
+
+    test "the patient ignores the shared model setting and defaults to Sonnet 5.5" do
+      previous = Application.fetch_env(:backend, Backend.Stations.StationAI.AnthropicClient)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} ->
+            Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient, value)
+
+          :error ->
+            Application.delete_env(:backend, Backend.Stations.StationAI.AnthropicClient)
+        end
+      end)
+
+      Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient,
+        api_key: "sk-ant-from-config",
+        model: "claude-opus-5-5"
+      )
+
+      test_pid = self()
+
+      Req.Test.stub(PatientDefaultModelStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:payload, Jason.decode!(body)})
+        Req.Test.json(conn, message([%{"type" => "text", "text" => "Sim."}]))
+      end)
+
+      assert {:ok, _} =
+               AnthropicAdapter.next_reply(@package, @context,
+                 plug: {Req.Test, PatientDefaultModelStub}
+               )
+
+      assert_receive {:payload, payload}
+      assert payload["model"] == "claude-sonnet-5-5"
+      assert payload["thinking"] == %{"type" => "between_tools"}
     end
   end
 

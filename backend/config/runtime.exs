@@ -113,7 +113,9 @@ end
 # seams (simulated patient, rubric resolver, learner feedback) from Claude's
 # Messages API. Unset, or any other value, keeps OpenAI exactly as before. Jev
 # (TypeSafe) and voice are not affected. `ANTHROPIC_API_KEY`,
-# `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` (default `claude-opus-5-5`) are
+# `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (resolver and feedback, default
+# `claude-opus-5-5`) and `ANTHROPIC_PATIENT_MODEL` (patient, default
+# `claude-sonnet-5-5`, issue #256) are
 # written to `Backend.Stations.StationAI.AnthropicClient`; the adapters never
 # read the operating system environment. Selecting Claude without a key boots
 # normally and every call fails as a technical failure (`:missing_credentials`),
@@ -124,7 +126,8 @@ if config_env() != :test do
   for {variable, key} <- [
         {"ANTHROPIC_API_KEY", :api_key},
         {"ANTHROPIC_BASE_URL", :base_url},
-        {"ANTHROPIC_MODEL", :model}
+        {"ANTHROPIC_MODEL", :model},
+        {"ANTHROPIC_PATIENT_MODEL", :patient_model}
       ],
       value = System.get_env(variable) do
     config :backend, Backend.Stations.StationAI.AnthropicClient, [{key, value}]

@@ -305,7 +305,8 @@ voice is not affected.
 |---|---|---|
 | `LLM_PROVIDER` | `anthropic` serves the three text seams from Claude (`dev` and `prod`; ignored in `test`). Unset, or any other value, keeps OpenAI unchanged. | unset |
 | `ANTHROPIC_API_KEY` | Claude API key. Without it every Claude call is a technical failure: the patient turn takes its existing technical-failure path, the resolver leaves actions uncertain and feedback keeps the authored texts. | unset |
-| `ANTHROPIC_MODEL` | Model for the three seams. | `claude-opus-5-5` |
+| `ANTHROPIC_MODEL` | Model for the rubric resolver and learner feedback (effort `medium`, model-default thinking). | `claude-opus-5-5` |
+| `ANTHROPIC_PATIENT_MODEL` | Model for the simulated patient (issue #256, chosen for latency). Effort `low`; on Sonnet 5.5 thinking is turned off with `between_tools`, and any other model gets no thinking field. | `claude-sonnet-5-5` |
 | `ANTHROPIC_BASE_URL` | API base URL. | `https://api.anthropic.com` |
 | `RUBRIC_RESOLVER` | `on` (or `openai`, kept for compatibility) turns the rubric resolver on; `LLM_PROVIDER` picks who serves it. Unset keeps it off. | unset |
 | `RUBRIC_RESOLVER_MODEL` | OpenAI model of the resolver; ignored on Claude, where `ANTHROPIC_MODEL` applies. | `OPENAI_MODEL` |

@@ -9,7 +9,10 @@ defmodule Backend.Stations.StationAI.AnthropicAdapter do
   (patient) messages. The reply is a plain text candidate: the caller still
   bounds it (`BoundedReply`) and the CandidateGate and Jev still verify it.
 
-  The patient runs at `output_config.effort` `low` for latency. Like the
+  The patient runs on its own model setting (`:patient_model`, default
+  `claude-sonnet-5-5`, issue #256) at `output_config.effort` `low` with
+  thinking at its lowest setting (`between_tools` on Sonnet 5.5) for
+  latency. Like the
   OpenAI patient adapter it sets no receive timeout of its own (Req's default
   applies). Errors are the client's vocabulary (see
   `Backend.Stations.StationAI.AnthropicClient`); a refusal is
@@ -31,7 +34,8 @@ defmodule Backend.Stations.StationAI.AnthropicAdapter do
   @spec next_reply(StationAI.package(), StationAI.context(), keyword()) ::
           {:ok, %{text: String.t()}} | {:error, AnthropicClient.error()}
   def next_reply(package, context, opts) do
-    config = AnthropicClient.config(opts, effort: @effort)
+    config =
+      AnthropicClient.config(opts, effort: @effort, model_key: :patient_model, thinking: :lowest)
 
     request = %{
       system: StationAI.system_prompt(package, context),
