@@ -241,6 +241,15 @@ key: the endpoints answer `502` and the learner continues by text. Neither
 provider is retried, and audio, transcripts and synthesized text are never
 logged or stored.
 
+Both providers speak only the patient's words. Before synthesis the backend removes
+stage directions from the text: every `*…*` span (for example
+`*(curvado, com a mão na barriga)*`), a parenthesized action at the start of the
+reply, and a parenthesized action at the end when it stands alone after the last
+sentence. Parentheses inside a sentence are kept, and the transcript on screen is
+unchanged. A reply made only of stage directions is not sent to the provider: the
+endpoint answers `400` (nothing to synthesize). The rule lives in
+`Backend.Stations.TTS.StageDirections`.
+
 Check it with the acute-appendicitis station:
 
 ```sh

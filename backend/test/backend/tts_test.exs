@@ -175,6 +175,131 @@ defmodule Backend.TTSTest do
     assert_receive {:path, "/v1/audio/speech"}
   end
 
+  describe "stage directions" do
+    defp inspect_input(stub) do
+      test_pid = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        send(test_pid, {:spoken, decoded["input"] || decoded["text"]})
+        Plug.Conn.send_resp(conn, 200, @audio)
+      end)
+
+      [plug: {Req.Test, stub}]
+    end
+
+    defp refuse_calls(stub) do
+      test_pid = self()
+
+      Req.Test.stub(stub, fn conn ->
+        send(test_pid, :provider_called)
+        Plug.Conn.send_resp(conn, 200, @audio)
+      end)
+
+      [plug: {Req.Test, stub}]
+    end
+
+    test "a leading *(…)* action is not sent to the provider" do
+      session = consented_session()
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "*(curvado, com a mão na barriga)* Vim por causa de uma dor na barriga.",
+                 "alloy",
+                 inspect_input(StageLeadingStub)
+               )
+
+      assert_receive {:spoken, "Vim por causa de uma dor na barriga."}
+    end
+
+    test "*…* spans anywhere and a leading or closing parenthesized action are removed" do
+      session = consented_session()
+      opts = inspect_input(StageSpansStub)
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "Dói aqui *(aponta para o lado direito)*, doutor. *suspira*",
+                 "alloy",
+                 opts
+               )
+
+      assert_receive {:spoken, "Dói aqui, doutor."}
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "(evitando mexer o tronco) Começou ontem. (geme baixinho)",
+                 "alloy",
+                 opts
+               )
+
+      assert_receive {:spoken, "Começou ontem."}
+    end
+
+    test "text without stage directions is unchanged, including in-sentence parentheses" do
+      session = consented_session()
+      opts = inspect_input(StagePlainStub)
+
+      for text <- [
+            @text,
+            "Tomei dipirona (500 mg) ontem à noite.",
+            "Começou há dois dias (talvez três) e piorou.",
+            "Tomo um remédio para pressão (losartana)"
+          ] do
+        assert {:ok, _} = TTS.synthesize(session.session_id, text, "alloy", opts)
+        assert_receive {:spoken, ^text}
+      end
+    end
+
+    test "a reply made only of a stage direction makes no provider call" do
+      session = consented_session()
+      opts = refuse_calls(StageOnlyStub)
+
+      for text <- ["*(curvado, com a mão na barriga)*", "(fica em silêncio)", " *suspira* "] do
+        assert {:error, :invalid_text} = TTS.synthesize(session.session_id, text, "alloy", opts)
+      end
+
+      refute_received :provider_called
+    end
+
+    test "ElevenLabs receives the text without stage directions" do
+      Application.put_env(:backend, :voice_provider, :deepgram_elevenlabs)
+      Application.put_env(:backend, :elevenlabs_api_key, "el-test-secret-key")
+      Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :voice_provider)
+        Application.delete_env(:backend, :elevenlabs_api_key)
+        Application.delete_env(:backend, :elevenlabs_voice_id)
+      end)
+
+      session = consented_session()
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "*(curvado, com a mão na barriga)* Vim por causa de uma dor na barriga.",
+                 nil,
+                 inspect_input(StageElevenStub)
+               )
+
+      assert_receive {:spoken, "Vim por causa de uma dor na barriga."}
+
+      assert {:error, :invalid_text} =
+               TTS.synthesize(
+                 session.session_id,
+                 "*(evitando mexer o tronco)*",
+                 nil,
+                 refuse_calls(StageElevenOnlyStub)
+               )
+
+      refute_received :provider_called
+    end
+  end
+
   describe "with the ElevenLabs voice provider" do
     setup do
       Application.put_env(:backend, :voice_provider, :deepgram_elevenlabs)
