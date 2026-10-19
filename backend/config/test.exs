@@ -17,6 +17,8 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix,
   sort_verified_routes_query_params: true
 
-# Learner feedback never calls a provider in tests unless a test swaps in a double.
+# Learner feedback never calls a provider in tests unless a test swaps in a double,
+# and a failed generation has no cooldown unless a test configures one.
 config :backend,
-  learner_feedback_adapter: Backend.Stations.LearnerFeedback.DisabledAdapter
+  learner_feedback_adapter: Backend.Stations.LearnerFeedback.DisabledAdapter,
+  learner_feedback_cooldown_ms: 0

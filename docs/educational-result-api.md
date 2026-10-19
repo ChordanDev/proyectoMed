@@ -31,7 +31,12 @@ up to about a minute. Learner feedback has a 60 s deadline by default;
 overrides it, and any other value keeps the default. The override is capped at
 65 s, so the resolver (10 s) plus feedback stay inside the web client's 80 s
 wait. Each call logs its latency,
-never the texts. Later fetches reuse the cached feedback. The web client waits
+never the texts. Later fetches reuse the cached feedback. Generation is
+single-flight per session (issue #229): a fetch that arrives while another one is
+generating waits for it instead of calling the provider again, and gets the
+authored text if that generation fails or times out. A failed criterion is not
+retried for 30 s (`:learner_feedback_cooldown_ms`); fetches within that cooldown
+return the authored text without a provider call. The web client waits
 up to 80 s for this request only and shows a waiting message meanwhile; every
 other request keeps its 15 s timeout.
 

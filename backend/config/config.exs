@@ -20,6 +20,7 @@ config :backend,
   jev_decision_max_rubric_context_characters: 120_000,
   learner_feedback_adapter: Backend.Stations.LearnerFeedback.OpenAIAdapter,
   learner_feedback_deadline_ms: 60_000,
+  learner_feedback_cooldown_ms: 30_000,
   rubric_resolver_adapter: Backend.Stations.RubricAssessment.Resolver.DisabledAdapter,
   rubric_resolver_deadline_ms: 10_000,
   learner_message_max_characters: 2_000
