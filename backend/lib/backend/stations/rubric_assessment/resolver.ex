@@ -22,12 +22,22 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
       `Backend.Stations.RubricAssessment.Evidence.validate/3` as learner
       evidence for the criterion's requirement; otherwise the action stays
       `"uncertain"`;
+    * a citation must also be related to the action (issue #243): when Jev
+      left the action uncertain with candidate items in its `evidence_ids`
+      (the items it could neither confirm nor rule out for that action), a
+      citation outside them is dropped, and an action left with no related
+      citation stays `"uncertain"`. An unrelated citation alone never credits
+      an action. An undecided action without candidates accepts any valid
+      citation;
     * `"not_performed"` is taken without evidence, and `"uncertain"` changes
       nothing. The rubric assessment never lets such answers alone ground a
       zero-point level (`Backend.Stations.RubricAssessment`, step 4).
 
   A technical failure (an error, malformed output, a raise or the deadline)
   never invalidates the attempt: every undecided action stays `"uncertain"`.
+
+  Candidates are consumed here and never reported: every action still
+  `"uncertain"` after this step carries no evidence, whatever the outcome.
   The resolver has its own deadline, `:rubric_resolver_deadline_ms` (default
   10000 ms), independent of Jev's.
 
@@ -92,18 +102,22 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   def resolve(decisions, asked, pool, opts) when is_map(decisions) and is_list(opts) do
     asked = Enum.filter(asked, &(decidable_ids(decisions[&1.id]) != []))
 
-    if asked == [] do
-      decisions
-    else
-      request = %{
-        criteria: Enum.map(asked, &criterion(&1, decisions[&1.id])),
-        evidence_pool: learner_pool(pool)
-      }
+    decisions
+    |> decide(asked, pool, opts)
+    |> without_candidates()
+  end
 
-      case run(adapter(opts), request, opts) do
-        {:ok, resolved} -> merge(decisions, asked, pool, resolved)
-        {:error, _reason} -> decisions
-      end
+  defp decide(decisions, [], _pool, _opts), do: decisions
+
+  defp decide(decisions, asked, pool, opts) do
+    request = %{
+      criteria: Enum.map(asked, &criterion(&1, decisions[&1.id])),
+      evidence_pool: learner_pool(pool)
+    }
+
+    case run(adapter(opts), request, opts) do
+      {:ok, resolved} -> merge(decisions, asked, pool, resolved)
+      {:error, _reason} -> decisions
     end
   end
 
@@ -289,16 +303,35 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
          pool,
          requirement
        ) do
-    case Evidence.validate(pool, ids, requirement) do
-      {:ok, evidence} ->
-        %{action | classification: @performed, evidence_ids: Evidence.ids(evidence)}
-
-      {:error, _rejection} ->
-        action
+    with {:ok, evidence} <- Evidence.validate(pool, ids, requirement),
+         [_ | _] = related <- related(Evidence.ids(evidence), action.evidence_ids) do
+      %{action | classification: @performed, evidence_ids: related}
+    else
+      _invalid_or_unrelated -> action
     end
   end
 
   defp apply_decision(action, _uncertain_or_unsupported, _pool, _requirement), do: action
+
+  # The cited ids among the action's candidates, in pool order; every cited id
+  # when Jev offered no candidates.
+  defp related(cited, []), do: cited
+  defp related(cited, candidates), do: Enum.filter(cited, &(&1 in candidates))
+
+  defp without_candidates(decisions) do
+    Map.new(decisions, fn
+      {id, %{actions: actions} = decision} when is_list(actions) ->
+        {id, %{decision | actions: Enum.map(actions, &without_candidate/1)}}
+
+      entry ->
+        entry
+    end)
+  end
+
+  defp without_candidate(%{classification: @uncertain} = action),
+    do: %{action | evidence_ids: []}
+
+  defp without_candidate(action), do: action
 
   defp list(map, key) do
     case Map.get(map, key) do

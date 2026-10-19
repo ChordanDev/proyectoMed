@@ -157,7 +157,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
       assert actions(first)["act-onset"].evidence_ids == ["turn-2", "turn-4"]
     end
 
-    test "an action with an undecided item and no yes is uncertain, without citations" do
+    test "an action with an undecided item and no yes is uncertain, offering its undecided items" do
       answer = fn action, text ->
         if action == @fever_action.description and text == @asks_onset, do: 0.5, else: 0.1
       end
@@ -168,7 +168,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterRubricBatchTest do
       assert actions(first)["act-fever"] == %{
                id: "act-fever",
                classification: "uncertain",
-               evidence_ids: []
+               evidence_ids: ["turn-2"]
              }
     end
 

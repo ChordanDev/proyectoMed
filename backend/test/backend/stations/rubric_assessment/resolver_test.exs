@@ -298,6 +298,81 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
   end
 
   # ============================================================================
+  # Citations related to the action (issue #243)
+  # ============================================================================
+
+  # Jev hands an undecided action the items it could not rule out for it (its
+  # candidates). A resolver citation outside them is unrelated to the action.
+  describe "a resolver citation must be an item Jev left undecided for the action" do
+    defp with_candidates(candidate_ids) do
+      jev_answers(
+        List.replace_at(history_actions(), 2, %{
+          id: "ask-intensity",
+          classification: "uncertain",
+          evidence_ids: candidate_ids
+        })
+      )
+    end
+
+    test "an unrelated citation is dropped and the supported one is kept" do
+      result =
+        assess(resolved([llm("ask-intensity", "performed", ["turn-1", "turn-3"])]),
+          answers: with_candidates(["turn-3"])
+        )
+        |> history()
+
+      assert %{status: :assessed, level: "adequado", points: 40} = result
+      assert action(result, "ask-intensity") == performed("ask-intensity", ["turn-3"])
+    end
+
+    test "an unrelated citation alone never raises the level" do
+      assess(resolved([llm("ask-intensity", "performed", ["turn-1"])]),
+        answers: with_candidates(["turn-3"])
+      )
+      |> assert_still_uncertain()
+    end
+
+    test "an action Jev offered no candidates for keeps any valid citation" do
+      result =
+        assess(resolved([llm("ask-intensity", "performed", ["turn-1"])]),
+          answers: with_candidates([])
+        )
+        |> history()
+
+      assert %{status: :assessed, level: "adequado"} = result
+      assert action(result, "ask-intensity") == performed("ask-intensity", ["turn-1"])
+    end
+
+    test "candidates are never reported as evidence of an action left uncertain" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-1"]),
+        %{id: "ask-intensity", classification: "uncertain", evidence_ids: ["turn-3"]},
+        performed("ask-relief", ["turn-1"])
+      ]
+
+      result = assess(resolved([]), answers: jev_answers(actions)) |> history()
+
+      assert %{status: :assessed, level: "adequado", evidence_ids: ["turn-1"]} = result
+      assert action(result, "ask-intensity") == uncertain("ask-intensity")
+    end
+
+    test "candidates are dropped when the resolver fails" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-1"]),
+        %{id: "ask-intensity", classification: "uncertain", evidence_ids: ["turn-3"]},
+        performed("ask-relief", ["turn-1"])
+      ]
+
+      result = assess({:error, :upstream_error}, answers: jev_answers(actions)) |> history()
+
+      assert %{status: :assessed, evidence_ids: ["turn-1"]} = result
+      assert action(result, "ask-intensity") == uncertain("ask-intensity")
+    end
+  end
+
+  # ============================================================================
   # Failures
   # ============================================================================
 
