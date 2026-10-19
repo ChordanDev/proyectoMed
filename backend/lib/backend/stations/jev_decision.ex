@@ -107,12 +107,32 @@ defmodule Backend.Stations.JevDecision do
     with {:ok, validated_request} <- validate_patient_request(request, opts) do
       adapter = resolve_adapter(opts)
       deadline_ms = validated_request.deadline_ms
+      started_at = monotonic_now_ms()
 
       result =
-        execute_adapter(adapter, :decide_patient, validated_request, deadline_ms, opts)
+        adapter
+        |> execute_adapter(:decide_patient, validated_request, deadline_ms, opts)
+        |> validate_patient_output(validated_request.package)
 
-      validate_patient_output(result, validated_request.package)
+      log_patient_latency(monotonic_now_ms() - started_at, result)
+      result
     end
+  end
+
+  # Debug-level latency of each patient verification, so live runs can tune
+  # the budget (issue #256). Only the decision status or "error" and the
+  # milliseconds are logged, never candidate, learner or rationale text.
+  defp log_patient_latency(latency_ms, result) do
+    outcome =
+      case result do
+        {:ok, %{status: status}} when is_atom(status) -> Atom.to_string(status)
+        _other -> "error"
+      end
+
+    log_privacy_safe(
+      :debug,
+      "patient_verification latency_ms=#{latency_ms} outcome=#{outcome}"
+    )
   end
 
   @doc """

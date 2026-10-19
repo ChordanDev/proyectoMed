@@ -677,6 +677,46 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
   end
 
   # ============================================================================
+  # Issue #256: latency logs for tuning the budget, without any text
+  # ============================================================================
+
+  describe "latency logs (issue #256)" do
+    setup do
+      level = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: level) end)
+    end
+
+    test "each patient generation and each Jev verification logs its latency, never text",
+         %{session: session} do
+      Application.put_env(:backend, :jev_decision_adapter, RefuseThenVerifyJevDouble)
+      patient_text = "Sinto uma dor forte do lado direito da barriga."
+      learner_text = "Examinador, quais os achados do exame físico?"
+      Process.put(:custom_ai_reply, patient_text)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          assert {:ok, _reply} =
+                   Stations.create_message(session.session_id, %{
+                     role: :learner,
+                     modality: :text,
+                     text: learner_text
+                   })
+        end)
+
+      assert [_, _] = Regex.scan(~r/patient_generation latency_ms=\d+ outcome=ok/, log)
+
+      assert Regex.scan(~r/patient_verification latency_ms=\d+ outcome=(\w+)/, log,
+               capture: :all_but_first
+             ) == [["semantic_refusal"], ["verified"]]
+
+      refute log =~ patient_text
+      refute log =~ learner_text
+      refute log =~ "Sinto"
+    end
+  end
+
+  # ============================================================================
   # Requirement 4(e): Stale / cancelled decisions
   # ============================================================================
 
