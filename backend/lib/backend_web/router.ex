@@ -35,6 +35,20 @@ defmodule BackendWeb.Router do
     post "/active/sessions/:id/synthesize",
          TTSController,
          :create
+
+    post "/active/sessions/:id/voice",
+         VoiceSessionController,
+         :create
+  end
+
+  # Server-to-server API for the Python voice worker (#118, #119); bearer-secret auth
+  # lives in the controller.
+  scope "/api/internal/voice", BackendWeb do
+    pipe_through :api
+
+    get "/sessions/:id", VoiceWorkerController, :show
+    post "/sessions/:id/transcripts", VoiceWorkerController, :create_transcript
+    post "/sessions/:id/cancel", VoiceWorkerController, :cancel
   end
 
   scope "/api/v2/stations", BackendWeb do
