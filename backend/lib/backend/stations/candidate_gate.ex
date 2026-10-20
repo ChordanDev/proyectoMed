@@ -69,6 +69,7 @@ defmodule Backend.Stations.CandidateGate do
   require Logger
 
   alias Backend.Stations.JevDecision
+  alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.BoundedReply
   alias Backend.Stations.TemplateApplicability
 
@@ -187,7 +188,7 @@ defmodule Backend.Stations.CandidateGate do
   """
   @spec no_information_answer?(term()) :: boolean()
   def no_information_answer?(candidate_text) when is_binary(candidate_text) do
-    String.trim(candidate_text) === Backend.Stations.StationAI.refusal_text()
+    String.trim(candidate_text) === StationAI.refusal_text()
   end
 
   def no_information_answer?(_candidate_text), do: false
@@ -570,7 +571,7 @@ defmodule Backend.Stations.CandidateGate do
             is_nil(generator) ->
               language = package["language"] || package[:language] || "pt-BR"
 
-              Backend.Stations.StationAI.next_reply(package, %{
+              StationAI.next_reply(package, %{
                 conversation: conversation,
                 language: language,
                 withheld_fact_ids: guidance.withheld_fact_ids
