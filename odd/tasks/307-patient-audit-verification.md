@@ -68,7 +68,7 @@ points by itself.
 | T1 | `99c5f68` | 6 of 8 failed (mode/0 undefined, no runtime parsing) | 8 passed; backend 1700 passed |
 | T2 | `37aad8c` | 8 of 8 failed (`patient_audits/1` undefined, gate still blocking) | 8 passed; backend 1708 passed |
 | T3 | `909bec9` | 6 of 6 failed (voice paths still blocking) | 6 passed; backend 1714 passed |
-| T4 | this commit | n/a (docs and live check) | live: 10/10 answered, mean 1738 ms vs 2716 ms blocking |
+| T4 | `1676f1d` | n/a (docs and live check) | live: 10/10 answered, mean 1738 ms vs 2716 ms blocking |
 
 ## Live check (2026-10-20)
 
@@ -80,6 +80,10 @@ delivered; no adjudicator call.
 
 ADR-011 amendment posted on #123 (issuecomment-6301180103).
 
+Refactor `646fe5e` (shared bounded check, credo nesting finding).
+Local CI at closure: LOCAL CI PASSED (web 337 + 4 tests, backend 1714 tests, credo
+strict clean). GitHub Actions is blocked by billing.
+
 ## Next step
 
-PR into `feat/237-clinician-demo-readiness`; local CI at closure.
+PR into `feat/237-clinician-demo-readiness`.
