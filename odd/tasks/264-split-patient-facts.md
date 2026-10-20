@@ -33,7 +33,7 @@ evidence. `hda-02` bundles character, progression and intensity the same way.
 - [x] T2 Split the item-3/4 bundles: `antecedentes-01` (comorbidities vs prior
   hospitalizations and surgeries) and `pergunta-explicita-02` (recent
   anti-inflammatories vs recent antibiotics or anticoagulants). Route: inline.
-- [ ] T3 Confirm the patient prompt and Jev per-fact questions work at the new
+- [x] T3 Confirm the patient prompt and Jev per-fact questions work at the new
   granularity (no code change expected). Route: inline.
 
 ### Reviewed and kept whole
@@ -60,8 +60,24 @@ evidence. `hda-02` bundles character, progression and intensity the same way.
 | Task | Commit | RED | GREEN |
 | --- | --- | --- | --- |
 | T1 | `0dd7a56` | 2 of 11 failed (`acute_appendicitis_package_test.exs`); then the checklist test failed on the new ids (14 of 15) | 15 of 15; full backend 1256 passed; `mix format --check-formatted` clean |
-| T2 | this commit (see `git log`) | 1 of 12 failed (`each item-4 characteristic is a separate on-request fact`) | 12 of 12; full backend 1257 passed; format clean |
+| T2 | `e4b747f` | 1 of 12 failed (`each item-4 characteristic is a separate on-request fact`) | 12 of 12; full backend 1257 passed; format clean |
+| T3 | this commit (see `git log`) | n/a: no behavior change (review only) | n/a |
+
+## T3 findings (no code change)
+
+- Patient prompt (`StationAI.base_prompt/1`) lists every fact with its authored id and
+  already tells the model to answer only what was asked (#242); finer facts need no
+  prompt change.
+- Jev (`TypesafeAdapter.plan_facts/1`) asks one `fact_stated:<n>` and one
+  `fact_asked:<n>` per on-request fact by position, so each split fact gets its own
+  questions. The dialogue request grows by 12 questions (6 new on-request facts); no
+  per-call question cap applies to the dialogue gate.
+- Open risk for the live check: `patient_profile.presenting_context` still carries
+  "dor abdominal iniciada há cerca de 18 horas" and "dor atual de intensidade 7/10".
+  The prompt marks the other clinical data of the context as not revealable, but the
+  live check should confirm the model does not answer duration or intensity from it.
+  Changing that field is outside this issue's surface.
 
 ## Next step
 
-T3.
+Local CI, push, PR. Live check pending (needs the maintainer's keys).
