@@ -20,6 +20,11 @@ defmodule Backend.Stations.StationPackage do
   authored impresso ids whose release means the learner requested what the
   action asks. It is not allowed on a `first_n` criterion.
 
+  `actions[].interprets_impresso_ids` is optional (issue #265): a non-empty list
+  of the authored impresso ids the action interprets. Only learner turns sent
+  after one of them was released count as its evidence. An action authors at
+  most one of `impresso_ids` and `interprets_impresso_ids`.
+
   `candidate_brief` is required (issue #239): the learner-facing "cenário de
   atuação" (`scenario`) and the ordered task list (`tasks`) shown before and
   during the station. It holds only those two keys, so examiner-only content
@@ -515,23 +520,30 @@ defmodule Backend.Stations.StationPackage do
 
   defp validate_action_impresso_ids(errors, %{"actions" => actions} = criterion, authored)
        when is_list(actions) do
-    with_ids = Enum.filter(maps(actions), &Map.has_key?(&1, "impresso_ids"))
+    actions = maps(actions)
+    with_ids = Enum.filter(actions, &Map.has_key?(&1, "impresso_ids"))
 
     errors =
-      Enum.reduce(with_ids, errors, fn %{"impresso_ids" => ids}, errors ->
-        validate_impresso_id_list(errors, ids, authored)
-      end)
+      for key <- ["impresso_ids", "interprets_impresso_ids"],
+          %{^key => ids} <- actions,
+          reduce: errors do
+        errors -> validate_impresso_id_list(errors, key, ids, authored)
+      end
 
-    add_error_if(
-      errors,
+    errors
+    |> add_error_if(
       with_ids != [] and is_integer(criterion["first_n"]),
       "rubric criteria with first_n must not author action impresso_ids"
+    )
+    |> add_error_if(
+      Enum.any?(with_ids, &Map.has_key?(&1, "interprets_impresso_ids")),
+      "rubric actions must not author both impresso_ids and interprets_impresso_ids"
     )
   end
 
   defp validate_action_impresso_ids(errors, _criterion, _authored), do: errors
 
-  defp validate_impresso_id_list(errors, [_ | _] = ids, authored) do
+  defp validate_impresso_id_list(errors, key, [_ | _] = ids, authored) do
     if Enum.all?(ids, &non_empty_string?/1) do
       case Enum.reject(ids, &(&1 in authored)) do
         [] ->
@@ -539,17 +551,17 @@ defmodule Backend.Stations.StationPackage do
 
         unknown ->
           [
-            "rubric actions impresso_ids must name authored impressos: #{Enum.join(unknown, ", ")}"
+            "rubric actions #{key} must name authored impressos: #{Enum.join(unknown, ", ")}"
             | errors
           ]
       end
     else
-      ["rubric actions impresso_ids must be a non-empty list of strings" | errors]
+      ["rubric actions #{key} must be a non-empty list of strings" | errors]
     end
   end
 
-  defp validate_impresso_id_list(errors, _ids, _authored),
-    do: ["rubric actions impresso_ids must be a non-empty list of strings" | errors]
+  defp validate_impresso_id_list(errors, key, _ids, _authored),
+    do: ["rubric actions #{key} must be a non-empty list of strings" | errors]
 
   defp authored_impresso_ids(%{"impressos" => impressos}) when is_list(impressos) do
     for %{"id" => id} <- impressos, non_empty_string?(id), do: id

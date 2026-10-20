@@ -465,15 +465,24 @@
         },
         {
           "id": "criterio-2",
-          "description": "verbaliza dor à palpação profunda no ponto de McBurney/fossa ilíaca direita"
+          "description": "verbaliza dor à palpação profunda no ponto de McBurney/fossa ilíaca direita",
+          "interprets_impresso_ids": [
+            "impresso-1-exame-fisico"
+          ]
         },
         {
           "id": "criterio-3",
-          "description": "pesquisa e interpreta o sinal de Blumberg"
+          "description": "pesquisa e interpreta o sinal de Blumberg",
+          "interprets_impresso_ids": [
+            "impresso-1-exame-fisico"
+          ]
         },
         {
           "id": "criterio-4",
-          "description": "pesquisa ao menos uma manobra entre Rovsing, psoas e obturador"
+          "description": "pesquisa ao menos uma manobra entre Rovsing, psoas e obturador",
+          "interprets_impresso_ids": [
+            "impresso-1-exame-fisico"
+          ]
         }
       ],
       "order": null,
@@ -577,19 +586,33 @@
       "actions": [
         {
           "id": "criterio-1",
-          "description": "Identifica leucocitose com neutrofilia e desvio à esquerda"
+          "description": "Identifica leucocitose com neutrofilia e desvio à esquerda",
+          "interprets_impresso_ids": [
+            "impresso-2-hemograma"
+          ]
         },
         {
           "id": "criterio-2",
-          "description": "reconhece PCR elevada"
+          "description": "reconhece PCR elevada",
+          "interprets_impresso_ids": [
+            "impresso-2-pcr"
+          ]
         },
         {
           "id": "criterio-3",
-          "description": "interpreta EAS sem evidências de infecção urinária"
+          "description": "interpreta EAS sem evidências de infecção urinária",
+          "interprets_impresso_ids": [
+            "impresso-2-urina-tipo-1"
+          ]
         },
         {
           "id": "criterio-4",
-          "description": "considera função renal e eletrólitos preservados"
+          "description": "considera função renal e eletrólitos preservados",
+          "interprets_impresso_ids": [
+            "impresso-2-ureia",
+            "impresso-2-creatinina",
+            "impresso-2-eletrolitos"
+          ]
         },
         {
           "id": "atribuicao-a-infeccao-urinaria",
@@ -640,16 +663,25 @@
         },
         {
           "id": "criterio-2",
-          "description": "identifica apêndice dilatado, espessamento parietal e inflamação periapendicular"
+          "description": "identifica apêndice dilatado, espessamento parietal e inflamação periapendicular",
+          "interprets_impresso_ids": [
+            "impresso-3-exame-de-imagem"
+          ]
         },
         {
           "id": "criterio-3",
-          "description": "reconhece ausência de abscesso ou perfuração"
+          "description": "reconhece ausência de abscesso ou perfuração",
+          "interprets_impresso_ids": [
+            "impresso-3-exame-de-imagem"
+          ]
         },
         {
           "id": "criterio-4",
           "description": "formula a hipótese de apendicite aguda",
-          "role": "mandatory"
+          "role": "mandatory",
+          "interprets_impresso_ids": [
+            "impresso-3-exame-de-imagem"
+          ]
         }
       ],
       "order": null,

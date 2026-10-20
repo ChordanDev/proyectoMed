@@ -130,6 +130,34 @@ defmodule Backend.Stations.AcuteAppendicitisPackageTest do
            ]
   end
 
+  # Issue #265: a learner cannot interpret an exam before receiving it. The
+  # verbalized exam findings, the lab interpretation, and the imaging
+  # interpretation and hypothesis name the impresso they read.
+  test "authors interprets_impresso_ids on the interpretation actions" do
+    authored =
+      for criterion <- package()["rubric"],
+          %{"interprets_impresso_ids" => ids} = action <- criterion["actions"] do
+        {criterion["id"], action["id"], ids}
+      end
+
+    exam = ["impresso-1-exame-fisico"]
+    imaging = ["impresso-3-exame-de-imagem"]
+
+    assert authored == [
+             {"item-05", "criterio-2", exam},
+             {"item-05", "criterio-3", exam},
+             {"item-05", "criterio-4", exam},
+             {"item-07", "criterio-1", ["impresso-2-hemograma"]},
+             {"item-07", "criterio-2", ["impresso-2-pcr"]},
+             {"item-07", "criterio-3", ["impresso-2-urina-tipo-1"]},
+             {"item-07", "criterio-4",
+              ["impresso-2-ureia", "impresso-2-creatinina", "impresso-2-eletrolitos"]},
+             {"item-08", "criterio-2", imaging},
+             {"item-08", "criterio-3", imaging},
+             {"item-08", "criterio-4", imaging}
+           ]
+  end
+
   # Issue #264: one on-request fact per rubric characteristic, so a reply to one
   # question cannot volunteer the answer to another criterion.
   @item_2_facts [

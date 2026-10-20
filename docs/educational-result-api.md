@@ -42,7 +42,7 @@ sub-action classifications. Sub-actions are not presented as credited actions.
 
 ## How a criterion is graded (issue #228)
 
-Grading follows what the learner actually did. Four rules keep a criterion's
+Grading follows what the learner actually did. Five rules keep a criterion's
 outcome tied to the transcript:
 
 - **Action context.** Each rubric action is asked of the classifier (Jev)
@@ -68,6 +68,13 @@ outcome tied to the transcript:
   question cited for lab interpretation) is dropped, and an action left with
   no related citation stays undecided, so an unrelated citation never raises a
   level. These candidate items are never reported as evidence.
+- **Interpretation after release (issue #265).** A learner cannot interpret an
+  exam before receiving it. An action authored with `interprets_impresso_ids`
+  (`docs/content/authoring-guide.md`) accepts as evidence only learner turns
+  sent after a verified Impressos request released one of those impressos, in
+  session order. The rule applies to Jev's citations and the resolver's alike:
+  an earlier turn is dropped, and a performed action left with no citation is
+  `not_performed`, so an earlier turn never raises a level.
 
 Every point value is a shortest exact **decimal string**, not a JSON number:
 `"0"`, `"0.025"`, `"0.125"`, `"0.4"`, `"1.125"`, etc. A value has at most three
