@@ -31,8 +31,10 @@ defmodule Backend.Stations.CandidateGate do
        asked, issue #242), the regeneration is targeted: an arity-4 generator
        `(package, conversation, remaining_ms, guidance)` receives
        `%{withheld_fact_ids: ids}`, and the default generator puts the same ids in
-       the StationAI context. Every other refusal passes `withheld_fact_ids: []`, so
-       the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
+       the StationAI context. A `:low_confidence` refusal that Jev reports with
+       `undecided_fact_ids` (on-request facts it could not tell were stated while the
+       learner did not ask, issue #273) is targeted the same way with those ids.
+       Every other refusal passes `withheld_fact_ids: []`, so the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
        If the second candidate fails for any reason, no text is released and
        `{:error, {:refused, status}}` or `{:error, reason}` is returned.
        When the regeneration runs out of budget (before or during generation,
@@ -306,10 +308,18 @@ defmodule Backend.Stations.CandidateGate do
     end
   end
 
-  # The guidance names facts only by the authored ids Jev reported as stated
-  # without being asked (issue #242); it never carries Jev or candidate text.
+  # The guidance names facts only by authored ids: those Jev reported as stated
+  # without being asked (issue #242), or, on a low-confidence decision, those it
+  # could not tell were stated while the learner did not ask (issue #273). It
+  # never carries Jev or candidate text.
   defp regeneration_guidance(decision) do
-    case Map.get(decision, :unasked_fact_ids) do
+    key =
+      case decision.status do
+        :semantic_refusal -> :unasked_fact_ids
+        :low_confidence -> :undecided_fact_ids
+      end
+
+    case Map.get(decision, key) do
       ids when is_list(ids) -> %{withheld_fact_ids: Enum.filter(ids, &is_binary/1)}
       _ -> %{withheld_fact_ids: []}
     end

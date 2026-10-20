@@ -57,6 +57,18 @@ defmodule Backend.Stations.JevDecisionTest do
       {:ok, %{status: :semantic_refusal, unasked_fact_ids: "fact-1"}}
     end
 
+    defp decide_text("undecided_fact", _req) do
+      {:ok, %{status: :low_confidence, used_fact_ids: [], undecided_fact_ids: ["fact-1"]}}
+    end
+
+    defp decide_text("undecided_unknown_fact", _req) do
+      {:ok, %{status: :low_confidence, undecided_fact_ids: ["nonexistent-fact-99"]}}
+    end
+
+    defp decide_text("undecided_not_a_list", _req) do
+      {:ok, %{status: :low_confidence, undecided_fact_ids: "fact-1"}}
+    end
+
     defp decide_text("nonexistent_fact", _req) do
       {:ok, %{status: :verified, used_fact_ids: ["nonexistent-fact-99"]}}
     end
@@ -374,6 +386,30 @@ defmodule Backend.Stations.JevDecisionTest do
 
     test "rejects unasked fact ids that are not canonical package fact ids" do
       for text <- ["unasked_unknown_fact", "unasked_not_a_list"] do
+        request = %{
+          candidate_text: text,
+          package: sample_package(),
+          conversation: sample_conversation()
+        }
+
+        assert {:error, {:invalid_response, _reason}} =
+                 JevDecision.decide_patient(request, adapter: DeterministicDouble)
+      end
+    end
+
+    test "passes canonical undecided fact ids of a low-confidence decision through" do
+      request = %{
+        candidate_text: "undecided_fact",
+        package: sample_package(),
+        conversation: sample_conversation()
+      }
+
+      assert {:ok, %{status: :low_confidence, undecided_fact_ids: ["fact-1"]}} =
+               JevDecision.decide_patient(request, adapter: DeterministicDouble)
+    end
+
+    test "rejects undecided fact ids that are not canonical package fact ids" do
+      for text <- ["undecided_unknown_fact", "undecided_not_a_list"] do
         request = %{
           candidate_text: text,
           package: sample_package(),

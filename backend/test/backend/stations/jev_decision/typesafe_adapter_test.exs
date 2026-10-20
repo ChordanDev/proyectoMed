@@ -317,7 +317,53 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       nouls = nouls(%{@stated_allergy => 0.5, @asked_allergy => 0.03})
 
       assert decide(UnsureStatedStub, nouls) ==
-               {:ok, %{status: :low_confidence, used_fact_ids: []}}
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: [],
+                  undecided_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "names the undecided unasked facts only when they are the sole open answer" do
+      # Issue #273: the asked fact is stated and every risk is a clear no.
+      nouls =
+        nouls(%{
+          @stated_onset => 0.97,
+          @asked_onset => 0.95,
+          @stated_allergy => 0.31,
+          @asked_allergy => 0.03
+        })
+
+      assert decide(SoleUndecidedStub, nouls) ==
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: ["fact-onset"],
+                  undecided_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "names no undecided fact when another answer keeps the verdict open or refuses" do
+      undecided_stated = %{@stated_allergy => 0.31, @asked_allergy => 0.03}
+
+      cases = [
+        # A risk is also undecided.
+        {UndecidedWithRiskStub, Map.put(undecided_stated, @risk_unsupported, 0.5)},
+        # It is unclear whether the learner asked.
+        {UndecidedAskedStub, %{@stated_allergy => 0.31, @asked_allergy => 0.5}},
+        # Another fact is a clear disclosure violation.
+        {UndecidedWithViolationStub,
+         Map.merge(undecided_stated, %{@stated_onset => 0.96, @asked_onset => 0.03})},
+        # A risk is a clear yes.
+        {UndecidedWithRiskYesStub, Map.put(undecided_stated, @risk_contradicts_facts, 0.9)}
+      ]
+
+      for {stub, overrides} <- cases do
+        assert {:ok, decision} = decide(stub, nouls(overrides))
+        assert decision.status in [:low_confidence, :semantic_refusal]
+        refute Map.has_key?(decision, :undecided_fact_ids)
+      end
     end
 
     test "an unclear stated answer is harmless when the fact was asked for or is not on_request" do
@@ -1249,6 +1295,23 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                   status: :semantic_refusal,
                   used_fact_ids: ["fact-allergy"],
                   unasked_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "passes the undecided unasked fact ids of a low-confidence verdict through the seam" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            SeamUndecidedStub,
+            nouls(%{@stated_allergy => 0.3, @asked_allergy => 0.03})
+          )
+
+      assert JevDecision.decide_patient(seam_request(), opts) ==
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: [],
+                  undecided_fact_ids: ["fact-allergy"]
                 }}
     end
 

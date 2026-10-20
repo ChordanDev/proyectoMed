@@ -45,6 +45,15 @@ defmodule Backend.Stations.CandidateGateTest do
       {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-1"], unasked_fact_ids: ["fact-1"]}}
     end
 
+    defp decide_candidate("undecided_unasked_fact", _req) do
+      {:ok, %{status: :low_confidence, used_fact_ids: [], undecided_fact_ids: ["fact-1"]}}
+    end
+
+    # Defense in depth: a semantic refusal never targets undecided facts.
+    defp decide_candidate("refused_with_undecided_fact", _req) do
+      {:ok, %{status: :semantic_refusal, undecided_fact_ids: ["fact-1"]}}
+    end
+
     defp decide_candidate("low_confidence_text", _req) do
       {:ok, %{status: :low_confidence, rationale: "Uncertain clinical grounding"}}
     end
@@ -1068,6 +1077,62 @@ defmodule Backend.Stations.CandidateGateTest do
         assert_received {:guidance, %{withheld_fact_ids: []}}
         refute_received {:guidance, _}
       end
+    end
+
+    test "an undecided unasked fact gets one regeneration that withholds it (#273)" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_without_undecided_fact"}
+      end
+
+      assert {:ok, "regen_ok_without_undecided_fact"} =
+               CandidateGate.verify_and_deliver(
+                 "undecided_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+
+      assert_received {:guidance, %{withheld_fact_ids: ["fact-1"]}}
+      refute_received {:guidance, _}
+    end
+
+    test "a second undecided refusal releases no text and keeps the low-confidence refusal" do
+      generator = fn _pkg, _conv, _remaining_ms, _guidance ->
+        {:ok, "regen_low_confidence_again"}
+      end
+
+      assert {:error, {:refused, :low_confidence}} =
+               CandidateGate.verify_and_deliver(
+                 "undecided_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+    end
+
+    test "a semantic refusal never withholds undecided facts" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_plain"}
+      end
+
+      assert {:ok, "regen_ok_plain"} =
+               CandidateGate.verify_and_deliver(
+                 "refused_with_undecided_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+
+      assert_received {:guidance, %{withheld_fact_ids: []}}
     end
 
     test "older generator arities keep working on a targeted refusal" do
