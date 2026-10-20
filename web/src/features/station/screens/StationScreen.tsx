@@ -3,12 +3,21 @@ import type {
   CandidateBrief,
   Impresso,
   RequestImpressoResponse,
+  SessionMessage,
 } from "../api/client";
 import { isKeptLearnerTurn, recoverableTurnNotice } from "../hooks/useStation";
+import type { VoiceRoom, VoiceSessionApi } from "../hooks/useVoiceSession";
+import type { VoiceTranscriptEvent } from "../hooks/voiceTranscriptEvents";
 import strings from "../i18n/pt-BR.json";
 import { ImpressoContent } from "./ImpressoContent";
 import { impressoCategoryLabel } from "./impressoCategory";
 import { StationBrief } from "./StationBrief";
+import { VoicePanel } from "./VoicePanel";
+import {
+  addVoiceLearnerTurn,
+  resolveVoiceTurn,
+  storedReplyFor,
+} from "./voiceTranscript";
 import "./StationScreen.css";
 
 /**
@@ -19,6 +28,8 @@ import "./StationScreen.css";
 export interface DisplayMessage {
   role: "learner" | "patient" | "examiner";
   text: string;
+  /** Worker turn id of a real-time voice entry (#270); absent for text turns. */
+  voiceTurnId?: number;
 }
 
 const roleLabels: Readonly<Record<DisplayMessage["role"], string>> = {
@@ -26,6 +37,13 @@ const roleLabels: Readonly<Record<DisplayMessage["role"], string>> = {
   patient: strings.rolePatient,
   examiner: strings.roleExaminer,
 };
+
+/** The real-time (LiveKit) voice session hosted by the station screen (#270). */
+export interface RealtimeVoiceOptions {
+  sessionId: string | null;
+  api?: VoiceSessionApi;
+  createRoom?: () => VoiceRoom;
+}
 
 export interface StationScreenProps {
   /** Send a text turn and receive the AI reply text. Returns null on failure. */
@@ -58,6 +76,14 @@ export interface StationScreenProps {
   impressos?: Impresso[];
   /** Error message from the most recent failed impresso request. */
   impressoError?: string | null;
+  /**
+   * Real-time voice (VOICE_MODE=realtime, #270): hosts the voice panel and
+   * feeds spoken turns into the transcript. The turn-based record and play
+   * buttons are not offered while it is set.
+   */
+  realtimeVoice?: RealtimeVoiceOptions;
+  /** Reads the stored session transcript, to show a spoken reply as stored. */
+  onFetchTranscript?: () => Promise<SessionMessage[] | null>;
 }
 
 const isStationTimeElapsedError = (cause: unknown): boolean =>
@@ -88,6 +114,8 @@ export function StationScreen({
   onRequestImpresso,
   impressos = [],
   impressoError = null,
+  realtimeVoice,
+  onFetchTranscript,
 }: StationScreenProps): React.JSX.Element {
   const [messages, setMessages] = useState<DisplayMessage[]>(
     () => initialMessages ?? [],
@@ -125,6 +153,13 @@ export function StationScreen({
   const audioUrlsRef = useRef<Map<number, string>>(new Map());
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const playTokenRef = useRef<object | null>(null);
+  // Real-time voice: the live caption is never stored in the transcript.
+  const [voiceCaption, setVoiceCaption] = useState<string | null>(null);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const voiceLearnerTextsRef = useRef<Map<number, string>>(new Map());
+  const voiceResolvingRef = useRef<Set<number>>(new Set());
+  const voiceResolvedRef = useRef<Set<number>>(new Set());
+  const realtime = realtimeVoice !== undefined;
 
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -242,7 +277,8 @@ export function StationScreen({
   const browserVoiceSupported =
     typeof MediaRecorder !== "undefined" &&
     typeof navigator.mediaDevices?.getUserMedia === "function";
-  const voiceRequested = audioConsent && Boolean(onTranscribe && onSendVoice);
+  const voiceRequested =
+    !realtime && audioConsent && Boolean(onTranscribe && onSendVoice);
 
   useEffect(() => {
     if (voiceRequested && !browserVoiceSupported) {
@@ -320,6 +356,94 @@ export function StationScreen({
       }
     },
     [pauseCurrentAudio],
+  );
+
+  // The patient entry shows the stored reply (the full verified text, as on
+  // the text path); the spoken text, without stage directions, is the fallback.
+  const resolveVoiceReply = useCallback(
+    async (turnId: number, spokenText: string | null) => {
+      if (
+        voiceResolvingRef.current.has(turnId) ||
+        voiceResolvedRef.current.has(turnId)
+      ) {
+        return;
+      }
+      voiceResolvingRef.current.add(turnId);
+      let replyText: string | null = null;
+      try {
+        const stored = await onFetchTranscript?.();
+        replyText = storedReplyFor(
+          stored ?? [],
+          voiceLearnerTextsRef.current.get(turnId),
+        );
+      } catch {
+        replyText = null;
+      }
+      replyText ??= spokenText;
+      if (!mountedRef.current) return;
+      if (replyText === null) {
+        voiceResolvingRef.current.delete(turnId);
+        setVoiceNotice(strings.voiceTextDeliveryFailed);
+        return;
+      }
+      const text = replyText;
+      voiceResolvingRef.current.delete(turnId);
+      voiceResolvedRef.current.add(turnId);
+      setMessages((previous) =>
+        resolveVoiceTurn(
+          previous,
+          turnId,
+          { role: "patient", text },
+          voiceResolvingRef.current,
+        ),
+      );
+    },
+    [onFetchTranscript],
+  );
+
+  const handleVoiceEvent = useCallback(
+    (event: VoiceTranscriptEvent) => {
+      switch (event.type) {
+        case "learner":
+          if (!event.final) {
+            setVoiceCaption(event.text.trim() || null);
+            return;
+          }
+          setVoiceCaption(null);
+          voiceLearnerTextsRef.current.set(event.turnId, event.text);
+          setMessages((previous) =>
+            addVoiceLearnerTurn(previous, event.turnId, event.text),
+          );
+          return;
+        case "patient":
+          setVoiceNotice(null);
+          void resolveVoiceReply(event.turnId, event.text);
+          return;
+        case "examiner-kept":
+          setVoiceNotice(null);
+          setMessages((previous) =>
+            resolveVoiceTurn(
+              previous,
+              event.turnId,
+              { role: "examiner", text: strings.examinerAcknowledgement },
+              voiceResolvingRef.current,
+            ),
+          );
+          return;
+        case "turn-failure":
+          if (event.failure === "text_delivery_failed") {
+            void resolveVoiceReply(event.turnId, null);
+          } else {
+            setVoiceNotice(strings.voicePatientAudioFailed);
+          }
+          return;
+        case "fatal":
+          setVoiceCaption(null);
+          setVoiceNotice(strings.voiceRealtimeStopped);
+          return;
+      }
+    },
+    [resolveVoiceReply],
   );
 
   const handleSend = useCallback(async () => {
@@ -524,6 +648,16 @@ export function StationScreen({
         </button>
       </header>
 
+      {realtimeVoice && (
+        <VoicePanel
+          sessionId={realtimeVoice.sessionId}
+          active={!disabled}
+          api={realtimeVoice.api}
+          createRoom={realtimeVoice.createRoom}
+          onTranscriptEvent={handleVoiceEvent}
+        />
+      )}
+
       <div
         className="station-messages"
         role="log"
@@ -532,6 +666,7 @@ export function StationScreen({
       >
         {messages.map((message, index) => {
           const canPlay =
+            !realtime &&
             message.role === "patient" &&
             audioConsent &&
             Boolean(onSynthesize) &&
@@ -579,6 +714,16 @@ export function StationScreen({
         <div ref={messagesEndRef} />
       </div>
 
+      {voiceCaption && (
+        <div
+          className="station-voice-caption"
+          aria-label={strings.voiceCaptionLabel}
+          data-testid="voice-caption"
+        >
+          {voiceCaption}
+        </div>
+      )}
+
       {busy && (
         <div className="station-typing" role="status" data-testid="typing-indicator">
           {transcribing ? strings.transcribingVoice : strings.sendingMessage}
@@ -592,6 +737,16 @@ export function StationScreen({
           data-testid="voice-fallback"
         >
           {strings.voiceFallbackNotice}
+        </div>
+      )}
+
+      {voiceNotice && (
+        <div
+          className="station-voice-fallback"
+          role="status"
+          data-testid="voice-notice"
+        >
+          {voiceNotice}
         </div>
       )}
 

@@ -401,3 +401,59 @@
 .impresso-content__list li + li {
   margin-top: 2px;
 }
+
+/* ---- Real-time voice (#270) ---- */
+
+.station-screen .voice-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 14px;
+  color: #374151;
+  flex-shrink: 0;
+}
+
+.station-screen .voice-panel p {
+  margin: 0;
+}
+
+.station-screen .voice-panel [data-testid="voice-mic-indicator"] {
+  color: #047857;
+  font-weight: 600;
+}
+
+.station-screen .voice-panel [data-testid="voice-error"] {
+  flex-basis: 100%;
+  color: #b91c1c;
+}
+
+.station-screen .voice-panel button {
+  margin-left: auto;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.station-screen .voice-panel button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.station-voice-caption {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px dashed #93c5fd;
+  border-radius: 12px;
+  font-size: 14px;
+  font-style: italic;
+  color: #1e40af;
+}
