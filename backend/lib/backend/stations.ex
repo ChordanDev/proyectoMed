@@ -400,20 +400,28 @@ defmodule Backend.Stations do
   # `audit` and `off` (#307): the reply is delivered once BoundedReply passes;
   # in `audit` Jev verifies it after delivery, which never changes it.
   defp deliver_bounded_turn(session_id, token, package, current_session, context, ai_reply) do
-    candidate_text = extract_reply_text(ai_reply)
-
-    case PatientVerification.check_delivery(candidate_text, package, fn ->
-           bounded_regeneration(package, context)
-         end) do
-      {:ok, text} ->
-        reply = if text == candidate_text, do: ai_reply, else: %{text: text, used_facts: []}
-
+    case check_bounded_reply(package, context, ai_reply) do
+      {:ok, reply} ->
         commit_patient_reply(session_id, token, reply, [], fn session ->
           audit_delivered_reply(session_id, session, package, current_session)
         end)
 
       {:error, {:refused, refusal}} ->
         keep_learner_turn(session_id, token, refusal)
+    end
+  end
+
+  # The reply to deliver in `audit` and `off`: `ai_reply` when BoundedReply
+  # passes, else its single regeneration, else `{:error, {:refused, _}}`.
+  defp check_bounded_reply(package, context, ai_reply) do
+    candidate_text = extract_reply_text(ai_reply)
+
+    case PatientVerification.check_delivery(candidate_text, package, fn ->
+           bounded_regeneration(package, context)
+         end) do
+      {:ok, ^candidate_text} -> {:ok, ai_reply}
+      {:ok, text} -> {:ok, %{text: text, used_facts: []}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1307,15 +1315,8 @@ defmodule Backend.Stations do
         verify_candidate(package, ai_reply, verify_opts)
 
       _audit_or_off ->
-        candidate_text = extract_reply_text(ai_reply)
-
-        case PatientVerification.check_delivery(candidate_text, package, fn ->
-               bounded_regeneration(package, context)
-             end) do
-          {:ok, ^candidate_text} -> {:ok, ai_reply, []}
-          {:ok, text} -> {:ok, %{text: text, used_facts: []}, []}
-          {:error, reason} -> {:error, reason}
-        end
+        with {:ok, reply} <- check_bounded_reply(package, context, ai_reply),
+             do: {:ok, reply, []}
     end
   end
 
