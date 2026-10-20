@@ -626,6 +626,7 @@ These were derived by the transcriber and are not partner-authored.
 | D19 | `impressos[].keywords` | Every keyword (table below). | [ ] | [ ] | | |
 | D20 | `approved_templates` | `null`. The source authors no template. | [ ] | [ ] | | |
 | D21 | `rubric[].actions[].impresso_ids` on `item-06` `criterio-1`–`4` and `item-08` `criterio-1` (issue #228) | Each lab group names the Impresso 2 parts that answer it (`criterio-4`: `-ureia`, `-creatinina`, `-eletrolitos`); the imaging request names `impresso-3-exame-de-imagem`. A verified request that releases one of them grades the action performed without a provider. `item-05` names none. | [ ] | [ ] | | |
+| D22 | `rubric[].actions[].interprets_impresso_ids` on `item-05` `criterio-2`–`4`, `item-07` `criterio-1`–`4` and `item-08` `criterio-2`–`4` (issue #265) | A learner cannot interpret an exam before receiving it: these actions accept only learner turns sent after the named impresso was released. Item 5 findings name `impresso-1-exame-fisico`; each item 7 action names the Impresso 2 parts it reads (`criterio-4`: `-ureia`, `-creatinina`, `-eletrolitos`); item 8 interpretation and hypothesis (`criterio-4`, mandatory) name `impresso-3-exame-de-imagem`, so a hypothesis stated only before the imaging release does not count. `item-05` `criterio-1` (authorization) and the `item-07` forbidden attribution name none. | [ ] | [ ] | | |
 
 ## 9. Sign-off
 

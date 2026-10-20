@@ -1,5 +1,5 @@
 {
-  "description": "Learner turns of the 2026-10-19 live acute-appendicitis attempt (issue #243), in order and verbatim. Patient replies are paraphrased; the learner turns kept after a refused or missing patient reply (pain-modifiers-associated, exam-authorization, exam-verbalization) have none. Impressos requests are placed where the learner opened them. The recorded TypeSafe answers leave some actions of items 7 and 10 undecided on the turn that performs them and answer no for every other turn; the recorded resolver cites the opener (chief-complaint) next to, or instead of, the performing turn.",
+  "description": "Learner turns of the 2026-10-19 live acute-appendicitis attempt (issue #243), in order and verbatim. Patient replies are paraphrased; the learner turns kept after a refused or missing patient reply (pain-modifiers-associated, exam-authorization, exam-verbalization) have none. Impressos requests are placed where the learner opened them. The recorded TypeSafe answers leave some actions of items 7 and 10 undecided on the turn that performs them and answer no for every other turn; the recorded resolver cites the opener (chief-complaint) next to, or instead of, the performing turn. typesafe_noul_issue_265 records the second reading of the same rehearsal (issue #265): TypeSafe itself answers yes for item 7 on the opener and on the exam-authorization turn, both sent before any lab impresso was released, beside the lab-interpretation turn.",
   "turns": [
     {
       "key": "greeting",
@@ -194,7 +194,26 @@
         }
       }
     },
+    "typesafe_noul_issue_265": {
+      "item-07": {
+        "criterio-1": {
+          "chief-complaint": 0.9,
+          "lab-interpretation": 0.95
+        },
+        "criterio-2": {
+          "exam-authorization": 0.9,
+          "lab-interpretation": 0.95
+        },
+        "criterio-3": {
+          "lab-interpretation": 0.95
+        },
+        "criterio-4": {
+          "lab-interpretation": 0.95
+        }
+      }
+    },
     "resolver": {
+      "none": {},
       "opener_beside_performing_turn": {
         "item-07": {
           "criterio-4": [

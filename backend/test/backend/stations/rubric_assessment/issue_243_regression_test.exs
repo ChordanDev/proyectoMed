@@ -13,6 +13,12 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
   the opener, and the resolver cites the opener beside, or instead of, the
   performing turn. A TypeSafe yes for the opener itself would be a per-item
   provider error this harness does not cover.
+
+  Issue #265 extends it with that per-item error, seen in a second reading of
+  the same rehearsal: TypeSafe itself answers yes for item 7 on the opener and on
+  "Vou examinar seu abdome agora. Posso?…", both sent before any lab impresso
+  was released (`typesafe_noul_issue_265`). Item 7's actions declare the lab
+  impressos they interpret, so those turns are dropped.
   """
   use ExUnit.Case, async: true
 
@@ -28,6 +34,7 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
                   __DIR__
                 )
   @opener "O que o trouxe aqui hoje? Onde começou a dor?"
+  @exam_authorization "Vou examinar seu abdome agora. Posso? Por favor, deite-se de barriga para cima."
   @labs "item-07"
   @antibiotic "item-10"
 
@@ -76,14 +83,24 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
 
   defp package, do: @package_path |> File.read!() |> Jason.decode!()
 
+  # The package as it was before issue #265, with no declared dependency.
+  defp package_without_dependencies do
+    Map.update!(package(), "rubric", fn rubric ->
+      Enum.map(rubric, fn criterion ->
+        Map.update!(criterion, "actions", fn actions ->
+          Enum.map(actions, &Map.delete(&1, "interprets_impresso_ids"))
+        end)
+      end)
+    end)
+  end
+
   defp texts(fixture),
     do: Map.new(for(%{"key" => k, "text" => t} <- fixture["turns"], do: {k, t}))
 
-  # Runs the assessment with the recorded TypeSafe answers and the resolver
-  # citations recorded under `scenario`.
-  defp assess(scenario, stub_name) do
+  # Runs the assessment with the TypeSafe answers recorded under `noul_key` and
+  # the resolver citations recorded under `scenario`.
+  defp assess(scenario, stub_name, noul_key \\ "typesafe_noul", package \\ package()) do
     fixture = fixture()
-    package = package()
 
     opts =
       [
@@ -93,7 +110,7 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
           citations: fixture["recorded"]["resolver"][scenario],
           texts: texts(fixture)
         ]
-      ] ++ stub_typesafe(stub_name, fixture, package)
+      ] ++ stub_typesafe(stub_name, fixture, package, noul_key)
 
     session = Qualification.session(fixture["turns"], package)
     {:ok, assessment} = RubricAssessment.assess(package, session, opts)
@@ -101,9 +118,9 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
   end
 
   # A `Req.Test` stub of the TypeSafe API answering every noul question from the
-  # recorded `typesafe_noul` map (`criterion_id => action_id => turn key =>
-  # noul`), with `typesafe_default_noul` for any pair not recorded.
-  defp stub_typesafe(name, fixture, package) do
+  # recorded `noul_key` map (`criterion_id => action_id => turn key => noul`),
+  # with `typesafe_default_noul` for any pair not recorded.
+  defp stub_typesafe(name, fixture, package, noul_key) do
     recorded = fixture["recorded"]
     actions = actions_by_description(package)
     keys = Map.new(texts(fixture), fn {key, text} -> {text, key} end)
@@ -119,7 +136,7 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
           key = Map.fetch!(keys, Map.fetch!(texts, instructions["item"]))
 
           noul =
-            get_in(recorded, ["typesafe_noul", criterion_id, action_id, key]) ||
+            get_in(recorded, [noul_key, criterion_id, action_id, key]) ||
               recorded["typesafe_default_noul"]
 
           {id, %{"type" => "noul", "noul" => noul}}
@@ -227,6 +244,42 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
 
       assert %{classification: "uncertain", evidence_ids: []} =
                Enum.find(result.sub_actions, &(&1.id == "criterio-4"))
+    end
+  end
+
+  # ============================================================================
+  # TypeSafe cites turns sent before the lab impressos were released (#265)
+  # ============================================================================
+
+  describe "TypeSafe citing the opener and the exam authorization for item 7" do
+    test "item 7 cites only the lab interpretation turn and keeps its level" do
+      {assessment, session} = assess("none", Issue265Stub, "typesafe_noul_issue_265")
+      labs = turn_id(session, fixture_text("lab-interpretation"))
+      result = criterion(assessment, @labs)
+
+      assert %{status: :assessed, level: "adequado", points: 32, evidence_ids: [^labs]} = result
+      assert cited_ids(result) == [labs]
+
+      for action_id <- ["criterio-1", "criterio-2", "criterio-3", "criterio-4"] do
+        assert %{classification: "performed", evidence_ids: [^labs]} =
+                 Enum.find(result.sub_actions, &(&1.id == action_id))
+      end
+    end
+
+    # The control: before #265 the same answers cited both early turns.
+    test "without the declared dependencies, item 7 cites both early turns" do
+      {assessment, session} =
+        assess(
+          "none",
+          Issue265ControlStub,
+          "typesafe_noul_issue_265",
+          package_without_dependencies()
+        )
+
+      cited = cited_ids(criterion(assessment, @labs))
+
+      assert turn_id(session, @opener) in cited
+      assert turn_id(session, @exam_authorization) in cited
     end
   end
 
