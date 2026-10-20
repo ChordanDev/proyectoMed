@@ -23,12 +23,12 @@ Today a refused voice reply fails the generation as `station_ai_unavailable` (50
 ## Tasks
 
 - [x] T1 — Feature document. Route: inline.
-- [ ] T2 — Phoenix: a refused voice reply (and a refused-then-timed-out regeneration) keeps the learner turn, stores no patient text and returns a kept-turn result; the controller answers `201 {status: "kept"}` without text. Route: inline (single writer).
-- [ ] T3 — Phoenix: verification for voice and text turns receives one explicit, shared deadline budget. Route: inline.
-- [ ] T4 — Phoenix: the voice `reply_text` has no stage directions; a reply with nothing speakable keeps the learner turn. Route: inline.
-- [ ] T5 — Worker: a `kept` reply is accepted, speaks nothing, and publishes an examiner acknowledgement (not a failure) on the data channel. Route: inline.
-- [ ] T6 — Worker: the transcript POST timeout covers the server budget and is configurable; only a connection failure is retried. Docs. Route: inline.
-- [ ] T7 — Local CI, worker unittest, push, PR. Route: inline.
+- [x] T2 — Phoenix: a refused voice reply (and a refused-then-timed-out regeneration) keeps the learner turn, stores no patient text and returns a kept-turn result; the controller answers `201 {status: "kept"}` without text. Route: inline (single writer).
+- [x] T3 — Phoenix: verification for voice and text turns receives one explicit, shared deadline budget. Route: inline.
+- [x] T4 — Phoenix: the voice `reply_text` has no stage directions; a reply with nothing speakable keeps the learner turn. Route: inline.
+- [x] T5 — Worker: a `kept` reply is accepted, speaks nothing, and publishes an examiner acknowledgement (not a failure) on the data channel. Route: inline.
+- [x] T6 — Worker: the transcript POST timeout covers the server budget and is configurable; only a connection failure is retried. Docs. Route: inline.
+- [x] T7 — Local CI, worker unittest, push, PR. Route: inline.
 
 ## Acceptance criteria
 
@@ -46,8 +46,21 @@ Today a refused voice reply fails the generation as `station_ai_unavailable` (50
 
 ## Progress
 
-- (none yet)
+- T1: 7e428a2 feature document.
+- T2: 47e8ba9. `Conversation.resolve_patient_reply/3` accepts `:keep_learner_turn` (same atom as the text path's `resolve_turn/3`) and settles the generation without a patient message; `process_voice_turn/3` returns `{:ok, {:kept, %{turn_id, generation_id, refusal}}}`; the controller answers `201 {status: "kept"}`. RED: 5 failures (4 Stations, 1 controller); GREEN: 133/133 in the two files, then 1009 across stations/controllers.
+- T3: a04bd0d. One explicit verification budget (`JevDecision.default_deadline_ms/0`) passed to text and voice. RED not observable: both paths already fell back to the same default, so the new test passed before the change (characterization). GREEN: 229 tests.
+- T4: 3539f01. Voice `reply_text` is `TTS.StageDirections.strip/1` of the verified reply; the transcript keeps the full reply; a gesture-only reply is kept with reason `:unspeakable`. RED: 3 failures; GREEN: 232 tests.
+- T5: 5a7fa16. Worker accepts a generation-bound `kept` receipt, speaks nothing, publishes `{role: "examiner", status: "kept"}` and releases cancel ownership. RED: 2 failures + 1 error; GREEN: worker 124 tests OK.
+- T6: bc9a486. Transcript POST waits `DEFAULT_TURN_TIMEOUT_S` = 15 + 3 + 15 + 2 = 35 s (configurable `PHOENIX_TURN_TIMEOUT_S`, `PHOENIX_TURN_RETRIES`); context/cancel keep 5 s; EOF wait = timeout x attempts + 5 s. README updated. RED: 3 import/attribute errors; GREEN: worker 130 tests OK.
+- T7: local CI PASSED — web 259 + e2e 4, backend 1457 ExUnit, typecheck, lint, format, credo (no issues), dialyzer 0 errors. Worker `uv run python -m unittest`: 130 OK.
+
+## Pending / follow-ups
+
+- Live check (no LiveKit/Deepgram/ElevenLabs/Claude keys here): spoken exam finding produces "Anotado.", and no stage direction is spoken. Pending.
+- The web does not render voice room events yet (#270): the kept-turn event must be shown as "Anotado." there.
+- A retry of a kept turn returns `duplicate` (no replay of the kept outcome); with the 35 s budget a retry only follows a transport failure.
+- A transcript POST that still times out after all attempts ends the voice job (unchanged behavior).
 
 ## Next step
 
-T2.
+Push and open the PR to `feat/237-clinician-demo-readiness`.
