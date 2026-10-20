@@ -43,3 +43,11 @@ Constraints from the session brief:
   - `ProyectoMedEditor` Mac Development: build succeeded.
   - `ProyectoMed` (game) Mac Development: compiles and links with SpeechAnimationSolver, MetaHumanCoreTech and LiveKit, and copies both dylibs to `Binaries/Mac`. Only the known Xcode 27 `.app` finalize step fails (#262). The packaged run is not verified.
   - Stage-one publisher `scripts/spike-189/publish-test-voice.sh` verified against `livekit-server --dev`. `lk` publishes the track under its file path, so the component's empty `TrackName` attaches the publisher's first audio track.
+- L6 (2026-10-20) RDD reviewed both work-unit commits (`b8f9682` with the risk and resilience lenses, `155a2f9` with the risk lens). Both were approved and acknowledged. The stop hook keeps proposing a base of `06542d6` (main), which is stale for this worktree; that is a known false positive.
+- L7 (2026-10-20) Stage 1, observed in editor PIE (MCP over HTTP; the actor carries `UPatientVoiceComponent`, with an empty `TrackName`):
+  - Connected in 74 ms. The first frame was 48000 Hz, mono, 480 samples (10 ms).
+  - The solver runs on NNERuntimeORTCpu with 81 curves and 80 ms lookahead, about 50 mouth frames/s, and 3.2-5.0 ms per solve.
+  - Audio backlog was 9-33 ms, plus 43 ms of device buffer.
+  - Estimated mouth-minus-audio: +9 to +32 ms (the mouth trails the audio).
+  - When the publisher loop restarted, the track was resubscribed and PCM kept flowing.
+  - Human (2026-10-20): "sí, se escucha bien". The voice is audible in PIE. Not yet observed: the MetaHuman face (no MetaHuman yet).

@@ -31,5 +31,6 @@ echo "Publishing $WORK/patient-voice.ogg as voice-worker in a loop (Ctrl+C to st
 
 while true; do
   lk room join --url "$URL" --api-key "$KEY" --api-secret "$SECRET" \
-    --identity voice-worker --publish "$WORK/patient-voice.ogg" --exit-after-publish "$ROOM"
+    --identity voice-worker --publish "$WORK/patient-voice.ogg" --exit-after-publish "$ROOM" \
+    || { echo "lk exited with an error; retrying in 1 s" >&2; sleep 1; }
 done
