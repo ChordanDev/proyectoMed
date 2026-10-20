@@ -339,9 +339,9 @@ defmodule Backend.Stations do
     params = Map.put_new(params, :deadline_ms, patient_reply_deadline_ms())
     verify_opts = build_verify_opts(package, current_session, context, params)
 
-    case verify_patient_reply(package, ai_reply, verify_opts) do
-      {:ok, verified_reply} ->
-        commit_patient_reply(session_id, token, verified_reply)
+    case verify_candidate(package, ai_reply, verify_opts) do
+      {:ok, verified_reply, verified_fact_ids} ->
+        commit_patient_reply(session_id, token, verified_reply, verified_fact_ids)
 
       {:error, {:refused, refusal}} ->
         keep_learner_turn(session_id, token, refusal)
@@ -364,10 +364,18 @@ defmodule Backend.Stations do
     end
   end
 
-  defp commit_patient_reply(session_id, token, verified_reply) do
+  # The verdict's facts are stored on the patient message (issue #286), so the
+  # session remembers what its verified patient turns disclosed.
+  defp commit_patient_reply(session_id, token, verified_reply, verified_fact_ids) do
     verified_text = extract_reply_text(verified_reply)
     used_facts = extract_used_facts(verified_reply)
-    patient_message = %{role: :patient, modality: :text, text: verified_text}
+
+    patient_message = %{
+      role: :patient,
+      modality: :text,
+      text: verified_text,
+      verified_fact_ids: verified_fact_ids
+    }
 
     case Conversation.resolve_turn(session_id, token, {:ok, patient_message}) do
       {:ok, _session} ->
@@ -801,7 +809,7 @@ defmodule Backend.Stations do
     7. Failing closed on technical failures: a reply that is denied, unverifiable,
        or left without usable text fails the generation as
        `:station_ai_unavailable` and commits no patient content.
-    8. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
+    8. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/4`.
     9. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
        solely on success. `reply_text` is what the worker speaks: the verified
        reply without stage directions (`Backend.Stations.TTS.StageDirections`,
@@ -979,6 +987,14 @@ defmodule Backend.Stations do
   @spec verify_patient_reply(map(), map() | String.t(), keyword()) ::
           {:ok, map() | String.t()} | {:error, term()}
   def verify_patient_reply(package, reply, opts \\ []) do
+    with {:ok, verified_reply, _verified_fact_ids} <- verify_candidate(package, reply, opts) do
+      {:ok, verified_reply}
+    end
+  end
+
+  # `verify_patient_reply/3` plus the authored ids of the facts the verdict that
+  # verified the delivered text found stated (issue #286).
+  defp verify_candidate(package, reply, opts) do
     candidate_text = extract_reply_text(reply)
     conversation = Keyword.get(opts, :conversation, [])
 
@@ -989,18 +1005,18 @@ defmodule Backend.Stations do
       |> Keyword.put_new(:version, package["version"] || package[:version])
       |> Keyword.put_new(:case_state, project_case_state(conversation))
 
-    case CandidateGate.verify_and_deliver(candidate_text, package, conversation, gate_opts) do
-      {:ok, verified_text} ->
+    case CandidateGate.verify(candidate_text, package, conversation, gate_opts) do
+      {:ok, %{text: verified_text, used_fact_ids: verified_fact_ids}} ->
         cond do
           verified_text != candidate_text and is_map(reply) ->
             reply = update_reply_text(reply, verified_text)
-            {:ok, put_used_facts(reply, [])}
+            {:ok, put_used_facts(reply, []), verified_fact_ids}
 
           is_map(reply) ->
-            {:ok, update_reply_text(reply, verified_text)}
+            {:ok, update_reply_text(reply, verified_text), verified_fact_ids}
 
           true ->
-            {:ok, verified_text}
+            {:ok, verified_text, verified_fact_ids}
         end
 
       {:error, reason} ->
@@ -1082,7 +1098,7 @@ defmodule Backend.Stations do
            }),
          {:ok, result} <-
            package
-           |> verify_patient_reply(ai_reply, verify_opts)
+           |> verify_candidate(ai_reply, verify_opts)
            |> resolve_voice_reply(session_id, turn_id, generation_id) do
       {:ok, result}
     else
@@ -1130,7 +1146,7 @@ defmodule Backend.Stations do
          :patient <- turn_addressee(session_id, :voice, %{}) do
       context = format_context(session, package)
 
-      %{outcome: outcome, delivered: delivered, acc: acc} =
+      %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
         SentenceStream.run(
           generate: &stream_patient_reply(package, context, &1),
           verify: &verify_voice_sentence(package, session, context, &1, &2),
@@ -1147,7 +1163,8 @@ defmodule Backend.Stations do
           acc: acc
         )
 
-      {resolve_streamed_reply(session_id, turn_id, generation_id, outcome, delivered), acc}
+      {resolve_streamed_reply(session_id, turn_id, generation_id, outcome, {delivered, fact_ids}),
+       acc}
     else
       # Classified before the stream starts (#274): nothing is handed over.
       :examiner -> {keep_examiner_voice_turn(session_id, turn_id, generation_id), acc}
@@ -1162,11 +1179,18 @@ defmodule Backend.Stations do
     params = if index > 0, do: Map.put(params, :verify_opts, can_retry?: false), else: params
     opts = build_verify_opts(package, session, context, params)
 
-    case verify_patient_reply(package, candidate, opts) do
-      {:ok, ^candidate} -> :verified
-      {:ok, regenerated} when is_binary(regenerated) -> {:regenerated, regenerated}
-      {:error, {:refused, refusal}} -> {:refused, refusal}
-      {:error, reason} -> {:error, reason}
+    case verify_candidate(package, candidate, opts) do
+      {:ok, ^candidate, fact_ids} ->
+        {:verified, fact_ids}
+
+      {:ok, regenerated, fact_ids} when is_binary(regenerated) ->
+        {:regenerated, regenerated, fact_ids}
+
+      {:error, {:refused, refusal}} ->
+        {:refused, refusal}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1188,7 +1212,7 @@ defmodule Backend.Stations do
     end
   end
 
-  defp resolve_streamed_reply(session_id, turn_id, generation_id, outcome, delivered) do
+  defp resolve_streamed_reply(session_id, turn_id, generation_id, outcome, {delivered, fact_ids}) do
     spoken =
       delivered
       |> Enum.map(&StageDirections.strip/1)
@@ -1199,7 +1223,12 @@ defmodule Backend.Stations do
         stored_text = delivered |> Enum.join() |> String.trim()
 
         with {:ok, _session} <-
-               Conversation.resolve_patient_reply(session_id, generation_id, stored_text) do
+               Conversation.resolve_patient_reply(
+                 session_id,
+                 generation_id,
+                 stored_text,
+                 fact_ids
+               ) do
           {:ok,
            %{
              reply_text: Enum.join(spoken, " "),
@@ -1239,7 +1268,12 @@ defmodule Backend.Stations do
   # with the rule the text path's speech uses (#257, #269); the transcript keeps
   # the full verified reply. A reply with nothing speakable left keeps the
   # learner turn instead of storing a reply nobody hears.
-  defp resolve_voice_reply({:ok, verified_reply}, session_id, turn_id, generation_id) do
+  defp resolve_voice_reply(
+         {:ok, verified_reply, verified_fact_ids},
+         session_id,
+         turn_id,
+         generation_id
+       ) do
     verified_text = extract_reply_text(verified_reply)
 
     case speakable_text(verified_text) do
@@ -1248,7 +1282,12 @@ defmodule Backend.Stations do
 
       spoken_text ->
         with {:ok, _session} <-
-               Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
+               Conversation.resolve_patient_reply(
+                 session_id,
+                 generation_id,
+                 verified_text,
+                 verified_fact_ids
+               ) do
           {:ok,
            %{
              reply_text: spoken_text,
@@ -1309,7 +1348,8 @@ defmodule Backend.Stations do
       package_version: package["version"] || package[:version],
       deadline_at_monotonic_ms: deadline_at,
       generator: generator,
-      case_state: project_case_state(session.messages)
+      case_state: project_case_state(session.messages),
+      disclosed_fact_ids: Conversation.disclosed_fact_ids(session)
     ]
 
     base_opts = maybe_put_adapter_opt(base_opts, params)

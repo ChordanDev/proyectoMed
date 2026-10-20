@@ -94,16 +94,55 @@ defmodule Backend.Stations.CandidateGate do
           {:ok, String.t()} | {:error, candidate_error()}
   def verify_and_deliver(candidate_text, package, conversation \\ [], opts \\ [])
       when is_list(opts) do
+    with {:ok, %{text: text}} <- verify(candidate_text, package, conversation, opts) do
+      {:ok, text}
+    end
+  end
+
+  @doc """
+  Verifies a candidate like `verify_and_deliver/4` and also returns the facts the
+  delivered text states (issue #286): `{:ok, %{text: text, used_fact_ids: ids}}`.
+
+  `used_fact_ids` are the authored ids of the Jev verdict that verified `text`
+  (the regeneration's verdict when the regeneration is delivered), and `[]` for
+  an approved-template bypass. `opts[:disclosed_fact_ids]`, the facts earlier
+  verified patient turns of the session disclosed, is passed to every Jev
+  request.
+  """
+  @spec verify(term(), map(), list(), keyword()) ::
+          {:ok, %{text: String.t(), used_fact_ids: [String.t()]}}
+          | {:error, candidate_error()}
+  def verify(candidate_text, package, conversation \\ [], opts \\ []) when is_list(opts) do
     conversation = conversation || []
     deadline_at = resolve_monotonic_deadline(opts)
 
     with :ok <- BoundedReply.check_violations(candidate_text, package) do
       if template_bypass?(candidate_text, package, opts) do
-        {:ok, candidate_text}
+        {:ok, delivered(candidate_text, %{})}
       else
         verify_with_jev(candidate_text, package, conversation, deadline_at, opts)
       end
     end
+  end
+
+  defp delivered(text, decision) do
+    ids =
+      case Map.get(decision, :used_fact_ids) do
+        ids when is_list(ids) -> Enum.filter(ids, &is_binary/1)
+        _ -> []
+      end
+
+    %{text: text, used_fact_ids: ids}
+  end
+
+  defp patient_jev_request(candidate_text, package, conversation, deadline_at, opts) do
+    %{
+      candidate_text: candidate_text,
+      package: package,
+      conversation: conversation,
+      deadline_at_monotonic_ms: deadline_at,
+      disclosed_fact_ids: Keyword.get(opts, :disclosed_fact_ids, [])
+    }
   end
 
   @doc """
@@ -307,18 +346,14 @@ defmodule Backend.Stations.CandidateGate do
     if JevDecision.remaining_budget_ms(deadline_at) <= 0 do
       {:error, :timeout}
     else
-      jev_request = %{
-        candidate_text: candidate_text,
-        package: package,
-        conversation: conversation,
-        deadline_at_monotonic_ms: deadline_at
-      }
+      jev_request =
+        patient_jev_request(candidate_text, package, conversation, deadline_at, opts)
 
       jev_opts = Keyword.put(opts, :deadline_at_monotonic_ms, deadline_at)
 
       case jev_request |> JevDecision.decide_patient(jev_opts) |> count_cause() do
-        {:ok, %{status: :verified}} ->
-          {:ok, candidate_text}
+        {:ok, %{status: :verified} = decision} ->
+          {:ok, delivered(candidate_text, decision)}
 
         {:ok, %{status: status} = decision}
         when status in [:semantic_refusal, :low_confidence] ->
@@ -408,7 +443,7 @@ defmodule Backend.Stations.CandidateGate do
 
   defp recheck_candidate_dispatch(regen_text, package, conversation, deadline_at, recheck_opts) do
     if template_bypass?(regen_text, package, recheck_opts) do
-      {:ok, regen_text}
+      {:ok, delivered(regen_text, %{})}
     else
       recheck_with_jev(regen_text, package, conversation, deadline_at, recheck_opts)
     end
@@ -416,14 +451,8 @@ defmodule Backend.Stations.CandidateGate do
 
   defp recheck_with_jev(regen_text, package, conversation, deadline_at, recheck_opts) do
     with :ok <- check_regeneration_budget(deadline_at) do
-      jev_request = %{
-        candidate_text: regen_text,
-        package: package,
-        conversation: conversation,
-        deadline_at_monotonic_ms: deadline_at
-      }
-
-      jev_request
+      regen_text
+      |> patient_jev_request(package, conversation, deadline_at, recheck_opts)
       |> JevDecision.decide_patient(recheck_opts)
       |> count_cause()
       |> eval_recheck_jev_result(regen_text)
@@ -485,7 +514,8 @@ defmodule Backend.Stations.CandidateGate do
     end
   end
 
-  defp eval_recheck_jev_result({:ok, %{status: :verified}}, regen_text), do: {:ok, regen_text}
+  defp eval_recheck_jev_result({:ok, %{status: :verified} = decision}, regen_text),
+    do: {:ok, delivered(regen_text, decision)}
 
   defp eval_recheck_jev_result({:ok, %{status: status}}, _text)
        when status in [:semantic_refusal, :low_confidence],

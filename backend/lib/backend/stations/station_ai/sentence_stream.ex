@@ -12,11 +12,13 @@ defmodule Backend.Stations.StationAI.SentenceStream do
 
     * `:generate` - `fn on_text -> {:ok, text} | {:error, reason} end`, called in
       the task; `on_text` takes each piece as it is generated.
-    * `:verify` - `fn candidate, index -> :verified | {:regenerated, text} |
-      {:refused, reason} | {:error, reason} end`. `candidate` is the whole reply
-      so far (the verified sentences plus the new one, trimmed), so the verifier
-      judges the new sentence with everything already said. `{:regenerated, text}`
-      is a whole replacement reply that is already verified.
+    * `:verify` - `fn candidate, index -> :verified | {:verified, fact_ids} |
+      {:regenerated, text} | {:regenerated, text, fact_ids} | {:refused, reason} |
+      {:error, reason} end`. `candidate` is the whole reply so far (the verified
+      sentences plus the new one, trimmed), so the verifier judges the new
+      sentence with everything already said. `{:regenerated, text}` is a whole
+      replacement reply that is already verified. `fact_ids` are the facts the
+      verification found stated (issue #286); without them it is `[]`.
     * `:deliver` - `fn sentence, index, acc -> {:cont, acc} | {:halt, acc} end`,
       called once per verified sentence, in order, with the raw sentence.
     * `:acc` - the initial accumulator; `:idle_timeout_ms` - the longest wait for
@@ -24,8 +26,10 @@ defmodule Backend.Stations.StationAI.SentenceStream do
 
   ## Outcome
 
-  `run/1` returns `%{outcome: outcome, delivered: sentences, acc: acc}` where
-  `delivered` are the raw verified sentences `deliver` accepted, in order, and
+  `run/1` returns `%{outcome: outcome, delivered: sentences, fact_ids: ids, acc: acc}`
+  where `delivered` are the raw verified sentences `deliver` accepted, in order,
+  `fact_ids` the union, in order, of the fact ids of the verifications whose
+  sentences were all accepted, and
   `outcome` is `:complete`, `{:refused, reason}` (the first refused sentence
   stops the reply), `{:error, reason}` (generation or verification failed) or
   `:halted` (`deliver` halted). Text after the stopping point, including an
@@ -47,7 +51,12 @@ defmodule Backend.Stations.StationAI.SentenceStream do
 
   @type outcome :: :complete | :halted | {:refused, term()} | {:error, term()}
 
-  @spec run(keyword()) :: %{outcome: outcome(), delivered: [String.t()], acc: term()}
+  @spec run(keyword()) :: %{
+          outcome: outcome(),
+          delivered: [String.t()],
+          fact_ids: [String.t()],
+          acc: term()
+        }
   def run(opts) do
     generate = Keyword.fetch!(opts, :generate)
     parent = self()
@@ -74,13 +83,20 @@ defmodule Backend.Stations.StationAI.SentenceStream do
       buffer: "",
       prefix: "",
       delivered: [],
+      fact_ids: [],
       index: 0,
       segment_started: now_ms()
     }
 
     {outcome, state} = loop(state)
     stop_generation(state)
-    %{outcome: outcome, delivered: Enum.reverse(state.delivered), acc: state.acc}
+
+    %{
+      outcome: outcome,
+      delivered: Enum.reverse(state.delivered),
+      fact_ids: state.fact_ids,
+      acc: state.acc
+    }
   end
 
   defp loop(%{task: %{ref: task_ref}, ref: ref} = state) do
@@ -137,12 +153,23 @@ defmodule Backend.Stations.StationAI.SentenceStream do
     state = %{state | segment_started: found_at}
 
     case result do
-      :verified -> deliver(sentence, state)
-      {:regenerated, text} -> deliver_regenerated(text, state)
+      :verified -> deliver(sentence, state, [])
+      {:verified, fact_ids} -> deliver(sentence, state, fact_ids)
+      {:regenerated, text} -> deliver_regenerated(text, state, [])
+      {:regenerated, text, fact_ids} -> deliver_regenerated(text, state, fact_ids)
       {:refused, reason} -> {:stop, {:refused, reason}, state}
       {:error, reason} -> {:stop, {:error, reason}, state}
     end
   end
+
+  defp deliver(sentence, state, fact_ids) do
+    with {:cont, state} <- deliver(sentence, state) do
+      {:cont, add_fact_ids(state, fact_ids)}
+    end
+  end
+
+  defp add_fact_ids(state, fact_ids),
+    do: %{state | fact_ids: Enum.uniq(state.fact_ids ++ List.wrap(fact_ids))}
 
   defp deliver(sentence, state) do
     case state.deliver.(sentence, state.index, state.acc) do
@@ -163,7 +190,7 @@ defmodule Backend.Stations.StationAI.SentenceStream do
 
   # The whole regenerated reply is already verified: the stream it replaces
   # stops and the regeneration is handed over sentence by sentence.
-  defp deliver_regenerated(text, state) do
+  defp deliver_regenerated(text, state, fact_ids) do
     stop_generation(state)
     {sentences, rest} = Sentences.split(text)
     pieces = if String.trim(rest) == "", do: sentences, else: sentences ++ [rest]
@@ -175,6 +202,10 @@ defmodule Backend.Stations.StationAI.SentenceStream do
         {:stop, _outcome, _state} = stop -> {:halt, stop}
       end
     end)
+    |> case do
+      {:stop, :complete, state} -> {:stop, :complete, add_fact_ids(state, fact_ids)}
+      stop -> stop
+    end
   end
 
   defp stop_generation(%{task: nil}), do: :ok
@@ -200,7 +231,9 @@ defmodule Backend.Stations.StationAI.SentenceStream do
   end
 
   defp outcome_name(:verified), do: "verified"
+  defp outcome_name({:verified, _fact_ids}), do: "verified"
   defp outcome_name({:regenerated, _text}), do: "regenerated"
+  defp outcome_name({:regenerated, _text, _fact_ids}), do: "regenerated"
   defp outcome_name({:refused, _reason}), do: "refused"
   defp outcome_name({:error, _reason}), do: "error"
 
