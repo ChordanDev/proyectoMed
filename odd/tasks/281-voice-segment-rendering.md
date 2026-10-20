@@ -35,7 +35,7 @@ was stored. The worker publishes no end-of-turn signal for a streamed reply.
 ## Checklist
 
 - [x] T1 — Worker: end-of-turn event `{"session_id", "turn_id", "generation_id", "role": "patient", "status": "complete"}` after a streamed reply settles; README event table. Route: inline (worker files already mapped). Checks: `uv run python -m unittest`.
-- [ ] T2 — Web: parse `segment` and the end event; one growing bubble per turn; reconcile on the end event; delivery failure keeps the learner line. Route: inline (station feature files already mapped). Checks: `npm --prefix web test`, typecheck.
+- [x] T2 — Web: parse `segment` and the end event; one growing bubble per turn; reconcile on the end event; delivery failure keeps the learner line. Route: inline (station feature files already mapped). Checks: `npm --prefix web test`, typecheck.
 - [ ] T3 — Local CI (`local_ci.sh`) and PR.
 
 ## Acceptance criteria
@@ -52,9 +52,19 @@ was stored. The worker publishes no end-of-turn signal for a streamed reply.
 - T1: `PatientVoice.on_turn_end` publishes the end event; `TurnManager`/`process_speech_stream`
   take `on_turn_end`, called only when a streamed reply is accepted. A rejected end event is
   logged content-free (no failure event: the sentences were delivered). RED: 3 of the 5 new
-  tests failed (149 run). GREEN: 149/149 `uv run python -m unittest`. Commit: see git log
-  (`feat(voice-worker): announce the end of a streamed reply`).
+  tests failed (149 run). GREEN: 149/149 `uv run python -m unittest`. Commit: `51a2af0`.
+
+- T2: the parser reads `segment` (non-negative integer, else the event is dropped) and the
+  `status: "complete"` end event. `showVoiceReplySoFar` keeps one partial patient entry per
+  turn (`voicePartial`), rebuilt from the segments in index order, so duplicates and
+  out-of-order sentences are harmless; `resolveVoiceTurn` replaces it with the stored reply
+  (or the joined sentences when the transcript cannot be read) only on the end event. A
+  `text_delivery_failed` for a streamed turn waits for the end event. A turn whose reply
+  cannot be shown is kept in `voiceUndeliveredRef`, so its learner line is no longer
+  dropped as a barge-in (#280 C2). RED: 13 of 301 station tests failed. GREEN: 301/301;
+  `typecheck` and `lint` clean. Commit: see git log
+  (`feat(web): render sentence-streamed voice replies as one growing bubble`).
 
 ## Next step
 
-T2.
+T3.

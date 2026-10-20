@@ -15,7 +15,9 @@ import { StationBrief } from "./StationBrief";
 import { VoicePanel } from "./VoicePanel";
 import {
   addVoiceLearnerTurn,
+  joinVoiceSegments,
   resolveVoiceTurn,
+  showVoiceReplySoFar,
   storedReplyFor,
 } from "./voiceTranscript";
 import "./StationScreen.css";
@@ -30,6 +32,8 @@ export interface DisplayMessage {
   text: string;
   /** Worker turn id of a real-time voice entry (#270); absent for text turns. */
   voiceTurnId?: number;
+  /** A streamed voice reply still growing sentence by sentence (#281). */
+  voicePartial?: boolean;
 }
 
 const roleLabels: Readonly<Record<DisplayMessage["role"], string>> = {
@@ -159,6 +163,10 @@ export function StationScreen({
   const voiceLearnerTextsRef = useRef<Map<number, string>>(new Map());
   const voiceResolvingRef = useRef<Set<number>>(new Set());
   const voiceResolvedRef = useRef<Set<number>>(new Set());
+  // Sentences of each streamed reply by `segment` index (#281).
+  const voiceSegmentsRef = useRef<Map<number, Map<number, string>>>(new Map());
+  // Turns whose reply could not be shown: their learner line stays (#280 C2).
+  const voiceUndeliveredRef = useRef<Set<number>>(new Set());
   const realtime = realtimeVoice !== undefined;
 
   const stopStream = useCallback(() => {
@@ -358,8 +366,16 @@ export function StationScreen({
     [pauseCurrentAudio],
   );
 
+  // Learner voice turns that stay without an outcome: never dropped as barge-in.
+  const keptVoiceTurns = useCallback(
+    (): ReadonlySet<number> =>
+      new Set([...voiceResolvingRef.current, ...voiceUndeliveredRef.current]),
+    [],
+  );
+
   // The patient entry shows the stored reply (the full verified text, as on
   // the text path); the spoken text, without stage directions, is the fallback.
+  // A streamed reply is resolved only once its turn has ended (#281).
   const resolveVoiceReply = useCallback(
     async (turnId: number, spokenText: string | null) => {
       if (
@@ -381,24 +397,35 @@ export function StationScreen({
       }
       replyText ??= spokenText;
       if (!mountedRef.current) return;
+      voiceResolvingRef.current.delete(turnId);
       if (replyText === null) {
-        voiceResolvingRef.current.delete(turnId);
+        voiceUndeliveredRef.current.add(turnId);
         setVoiceNotice(strings.voiceTextDeliveryFailed);
         return;
       }
       const text = replyText;
-      voiceResolvingRef.current.delete(turnId);
+      voiceUndeliveredRef.current.delete(turnId);
       voiceResolvedRef.current.add(turnId);
+      voiceSegmentsRef.current.delete(turnId);
       setMessages((previous) =>
-        resolveVoiceTurn(
-          previous,
-          turnId,
-          { role: "patient", text },
-          voiceResolvingRef.current,
-        ),
+        resolveVoiceTurn(previous, turnId, { role: "patient", text }, keptVoiceTurns()),
       );
     },
-    [onFetchTranscript],
+    [keptVoiceTurns, onFetchTranscript],
+  );
+
+  const showVoiceSegment = useCallback(
+    (turnId: number, segment: number, text: string) => {
+      if (voiceResolvedRef.current.has(turnId)) return;
+      const segments = voiceSegmentsRef.current.get(turnId) ?? new Map();
+      segments.set(segment, text);
+      voiceSegmentsRef.current.set(turnId, segments);
+      const soFar = joinVoiceSegments(segments);
+      setMessages((previous) =>
+        showVoiceReplySoFar(previous, turnId, soFar, keptVoiceTurns()),
+      );
+    },
+    [keptVoiceTurns],
   );
 
   const handleVoiceEvent = useCallback(
@@ -417,8 +444,20 @@ export function StationScreen({
           return;
         case "patient":
           setVoiceNotice(null);
-          void resolveVoiceReply(event.turnId, event.text);
+          if (event.segment === undefined) {
+            void resolveVoiceReply(event.turnId, event.text);
+          } else {
+            showVoiceSegment(event.turnId, event.segment, event.text);
+          }
           return;
+        case "patient-complete": {
+          const segments = voiceSegmentsRef.current.get(event.turnId);
+          void resolveVoiceReply(
+            event.turnId,
+            segments ? joinVoiceSegments(segments) : null,
+          );
+          return;
+        }
         case "examiner-kept":
           setVoiceNotice(null);
           setMessages((previous) =>
@@ -426,13 +465,16 @@ export function StationScreen({
               previous,
               event.turnId,
               { role: "examiner", text: strings.examinerAcknowledgement },
-              voiceResolvingRef.current,
+              keptVoiceTurns(),
             ),
           );
           return;
         case "turn-failure":
           if (event.failure === "text_delivery_failed") {
-            void resolveVoiceReply(event.turnId, null);
+            // A streamed reply is read once its end event arrives (#281).
+            if (!voiceSegmentsRef.current.has(event.turnId)) {
+              void resolveVoiceReply(event.turnId, null);
+            }
           } else {
             setVoiceNotice(strings.voicePatientAudioFailed);
           }
@@ -443,7 +485,7 @@ export function StationScreen({
           return;
       }
     },
-    [resolveVoiceReply],
+    [keptVoiceTurns, resolveVoiceReply, showVoiceSegment],
   );
 
   const handleSend = useCallback(async () => {
