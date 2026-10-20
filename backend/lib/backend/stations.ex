@@ -24,6 +24,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
+  alias Backend.Stations.StationAI.Addressee
   alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
   alias Backend.Stations.SttKeyterms
@@ -1367,7 +1368,8 @@ defmodule Backend.Stations do
       %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
         SentenceStream.run(
           gate: fn -> addressee_gate(addressee) end,
-          generate: &stream_patient_reply(package, context, &1),
+          generate:
+            &stream_patient_reply(package, context, &1, fn _addressee, _source -> :ok end),
           verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
           deliver: fn sentence, index, acc ->
             deliver_voice_sentence(
@@ -1737,26 +1739,31 @@ defmodule Backend.Stations do
   end
 
   # Streams the patient generation (#271). An adapter without `stream_reply/3`
-  # is streamed as one piece once its whole reply is ready. Logs only the
+  # is streamed as one piece once its whole reply is ready. The addressee
+  # marker (#309) is decided from the first pieces and never handed to
+  # `on_text`; `on_addressee` gets the decision first, once. Logs only the
   # outcome and latency, like `generate_patient_reply/2`.
-  defp stream_patient_reply(package, context, on_text) do
+  defp stream_patient_reply(package, context, on_text, on_addressee) do
     started_at = JevDecision.monotonic_now_ms()
     adapter = resolve_station_ai_adapter()
+    {filter, finish} = Addressee.stream(on_text, on_addressee)
 
     result =
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :stream_reply, 3) do
-        case adapter.stream_reply(package, context, on_text) do
+        case adapter.stream_reply(package, context, filter) do
           {:ok, %{text: text}} when is_binary(text) -> {:ok, text}
           {:ok, text} when is_binary(text) -> {:ok, text}
           {:error, reason} -> {:error, reason}
           other -> {:error, {:invalid_adapter_output, other}}
         end
       else
-        with {:ok, %{text: text}} when is_binary(text) <- run_patient_adapter(package, context) do
-          on_text.(text)
+        with {:ok, %{text: text}} <- adapter_reply_text(adapter, package, context) do
+          filter.(text)
           {:ok, text}
         end
       end
+
+    if match?({:ok, _}, result), do: finish.()
 
     outcome = if match?({:ok, _}, result), do: "ok", else: "error"
 
@@ -1767,18 +1774,21 @@ defmodule Backend.Stations do
     result
   end
 
+  # The addressee marker the reply starts with (#309) is stripped here, before
+  # anything checks, verifies, stores or speaks the text, and returned as
+  # `addressee` with its `addressee_source`.
   defp run_patient_adapter(package, context) do
     adapter = resolve_station_ai_adapter()
 
     case adapter.next_reply(package, context) do
-      {:ok, %{text: text, used_facts: used_facts}} when is_list(used_facts) ->
-        {:ok, %{text: text, used_facts: used_facts}}
+      {:ok, %{text: text, used_facts: used_facts}} when is_binary(text) and is_list(used_facts) ->
+        {:ok, marked_reply(text, used_facts)}
 
-      {:ok, %{text: text}} ->
-        {:ok, %{text: text, used_facts: []}}
+      {:ok, %{text: text}} when is_binary(text) ->
+        {:ok, marked_reply(text, [])}
 
       {:ok, text} when is_binary(text) ->
-        {:ok, %{text: text, used_facts: []}}
+        {:ok, marked_reply(text, [])}
 
       {:error, reason} ->
         {:error, reason}
@@ -1786,6 +1796,22 @@ defmodule Backend.Stations do
       other ->
         {:error, {:invalid_adapter_output, other}}
     end
+  end
+
+  # The unmarked reply of an adapter without `stream_reply/3`, for the stream
+  # to read the marker from.
+  defp adapter_reply_text(adapter, package, context) do
+    case adapter.next_reply(package, context) do
+      {:ok, %{text: text}} when is_binary(text) -> {:ok, %{text: text}}
+      {:ok, text} when is_binary(text) -> {:ok, %{text: text}}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:invalid_adapter_output, other}}
+    end
+  end
+
+  defp marked_reply(marked_text, used_facts) do
+    {addressee, source, text} = Addressee.split(marked_text)
+    %{text: text, used_facts: used_facts, addressee: addressee, addressee_source: source}
   end
 
   defp timer_finish_allowed?(session) do

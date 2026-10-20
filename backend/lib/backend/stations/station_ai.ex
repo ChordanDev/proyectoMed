@@ -27,7 +27,7 @@ defmodule Backend.Stations.StationAI do
   @type response_rule :: %{required(String.t()) => String.t()}
   @type response_rules :: [response_rule()]
 
-  alias Backend.Stations.StationAI.BoundedReply
+  alias Backend.Stations.StationAI.{Addressee, BoundedReply}
 
   @type package :: %{required(String.t()) => term()}
 
@@ -78,8 +78,11 @@ defmodule Backend.Stations.StationAI do
   @doc """
   Generates the next patient reply for the given package and context.
 
-  Delegates to the configured adapter, normalizes the returned reply to
-  `%{text, used_facts}`, runs the text through
+  Delegates to the configured adapter, strips the addressee marker the reply
+  starts with (`Backend.Stations.StationAI.Addressee`, issue #309; this
+  boundary is the CandidateGate's regeneration, which is always
+  patient-addressed), normalizes the returned reply to `%{text, used_facts}`,
+  runs the text through
   `Backend.Stations.StationAI.BoundedReply` to enforce the bounded policy, and
   resets `used_facts` to `[]` whenever the adapter's text is replaced by
   the canonical refusal. When the adapter does not supply `used_facts`,
@@ -89,12 +92,14 @@ defmodule Backend.Stations.StationAI do
   @spec next_reply(package(), context()) :: {:ok, reply()} | {:error, term()}
   def next_reply(package, context) do
     case resolve_adapter().next_reply(package, context) do
-      {:ok, %{text: text, used_facts: used_facts}} when is_list(used_facts) ->
+      {:ok, %{text: marked, used_facts: used_facts}} when is_list(used_facts) ->
+        {_addressee, _source, text} = Addressee.split(marked)
         bounded = BoundedReply.bound(text, package)
         used_facts = if bounded == text, do: used_facts, else: []
         {:ok, %{text: bounded, used_facts: used_facts}}
 
-      {:ok, %{text: text}} ->
+      {:ok, %{text: marked}} ->
+        {_addressee, _source, text} = Addressee.split(marked)
         bounded = BoundedReply.bound(text, package)
 
         used_facts =
@@ -129,6 +134,12 @@ defmodule Backend.Stations.StationAI do
   instructions (`SEU PAPEL`), never speak as an AI, examiner or clinician, and
   give no diagnosis or treatment. Everything from `COMO RESPONDER` on is
   station-agnostic: identical for every package.
+
+  Issue #309: the prompt ends with `MARCAÇÃO DO DESTINATÁRIO`, which asks the
+  model to start every reply with `[PACIENTE]` or `[EXAMINADOR]` (and nothing
+  after an examiner marker), so the generation also decides who the learner
+  turn is addressed to. The marker is stripped in code
+  (`Backend.Stations.StationAI.Addressee`) and never reaches the learner.
 
   `presenting_context` is authored for the examiner in the second person, so
   the prompt tells the patient it is the person described there and may state
@@ -221,6 +232,13 @@ defmodule Backend.Stations.StationAI do
     4. Você NÃO pode dar conselhos médicos reais.
     5. Você NÃO pode falar como uma inteligência artificial, um assistente, um examinador ou um profissional de saúde.
     6. Você NÃO pode dar diagnósticos nem indicar tratamentos, exames ou remédios.
+
+    MARCAÇÃO DO DESTINATÁRIO
+    Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE] ou [EXAMINADOR].
+    Use [EXAMINADOR] quando a última mensagem do estudante for dirigida ao examinador e não a você: quando ele pede um exame, um resultado, uma manobra ou o exame físico, ou conta ao examinador o que fez, o que encontrou, o diagnóstico ou a conduta. Depois de [EXAMINADOR] não escreva mais nada.
+    Use [PACIENTE] quando a mensagem for dirigida a você e escreva a sua resposta logo depois da marcação.
+    Na dúvida, use [PACIENTE].
+    A marcação não faz parte da resposta: as regras acima valem para o que vem depois dela.
     """
   end
 

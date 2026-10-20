@@ -25,8 +25,8 @@ rehearsal) and runs beside a generation that is thrown away on examiner turns
 
 ## Tasks
 
-- [ ] T1 `StationAI.Addressee`: marker parser (whole text and streamed prefix) + unit tests.
-- [ ] T2 Prompt asks for the marker; `StationAI.next_reply/2` strips it before BoundedReply.
+- [x] T1 `StationAI.Addressee`: marker parser (whole text and streamed prefix) + unit tests.
+- [x] T2 Prompt asks for the marker; `StationAI.next_reply/2` strips it before BoundedReply.
 - [ ] T3 Text and non-streamed voice paths decide from the marker / impresso match; no Jev addressee call.
 - [ ] T4 Streamed voice path decides from the streamed marker / impresso match; no Jev addressee call.
 - [ ] T5 Delete `JevDecision.decide_addressee` (adapters, config, tests); update `docs/design/turn-addressee.md`.
@@ -43,8 +43,10 @@ All tasks: delegated direct (this worker is the bounded writer); inline within t
 
 ## Progress
 
-(updated per task)
+- T1 `40d2a2d`: RED 16/16 failing (module missing) -> GREEN 16 passed (`station_ai_addressee_test.exs`).
+- T2 (this commit): RED 5 failing (prompt + `next_reply` strip) and 3/3 failing in `addressee_marker_turn_test.exs`
+  -> GREEN 26 + 3 passed; full backend suite 1745 passed. The `next_reply/2` boundary keeps `%{text, used_facts}`.
 
 ## Next step
 
-T1.
+T3.
