@@ -155,7 +155,8 @@ end
 # (TypeSafe) and voice are not affected. `ANTHROPIC_API_KEY`,
 # `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (resolver and feedback, default
 # `claude-opus-5-5`) and `ANTHROPIC_PATIENT_MODEL` (patient, default
-# `claude-sonnet-5-5`, issue #256) are
+# `claude-sonnet-5-5`, issue #256) and `ANTHROPIC_ADJUDICATOR_MODEL`
+# (undecided-verdict adjudicator, default `claude-haiku-5-5`, issue #290) are
 # written to `Backend.Stations.StationAI.AnthropicClient`; the adapters never
 # read the operating system environment. Selecting Claude without a key boots
 # normally and every call fails as a technical failure (`:missing_credentials`),
@@ -167,7 +168,8 @@ if config_env() != :test do
         {"ANTHROPIC_API_KEY", :api_key},
         {"ANTHROPIC_BASE_URL", :base_url},
         {"ANTHROPIC_MODEL", :model},
-        {"ANTHROPIC_PATIENT_MODEL", :patient_model}
+        {"ANTHROPIC_PATIENT_MODEL", :patient_model},
+        {"ANTHROPIC_ADJUDICATOR_MODEL", :adjudicator_model}
       ],
       value = System.get_env(variable) do
     config :backend, Backend.Stations.StationAI.AnthropicClient, [{key, value}]
@@ -179,6 +181,24 @@ if config_env() != :test do
     config :backend,
            :learner_feedback_adapter,
            Backend.Stations.LearnerFeedback.AnthropicAdapter
+
+    # Undecided-verdict adjudicator (issue #290): with Claude selected, a
+    # low-confidence Jev verdict gets one call to `ANTHROPIC_ADJUDICATOR_MODEL`
+    # (default `claude-haiku-5-5`). `PATIENT_ADJUDICATOR=off` keeps today's
+    # refusal path.
+    if System.get_env("PATIENT_ADJUDICATOR") != "off" do
+      config :backend,
+             :patient_adjudicator_adapter,
+             Backend.Stations.PatientAdjudicator.AnthropicAdapter
+    end
+  end
+
+  # `PATIENT_ADJUDICATOR_DEADLINE_MS` overrides the adjudicator's own deadline
+  # (1.5 s); the turn's verification budget still caps it. Anything but a
+  # positive integer keeps the default.
+  with raw when is_binary(raw) <- System.get_env("PATIENT_ADJUDICATOR_DEADLINE_MS"),
+       {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
+    config :backend, :patient_adjudicator_deadline_ms, deadline_ms
   end
 end
 

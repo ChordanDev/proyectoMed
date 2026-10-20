@@ -4,14 +4,17 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   the three text seams that can run on Claude (issue #252): the simulated
   patient (`Backend.Stations.StationAI.AnthropicAdapter`), the rubric resolver
   (`Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter`) and learner
-  feedback (`Backend.Stations.LearnerFeedback.AnthropicAdapter`).
+  feedback (`Backend.Stations.LearnerFeedback.AnthropicAdapter`), plus the
+  undecided-verdict adjudicator
+  (`Backend.Stations.PatientAdjudicator.AnthropicAdapter`, issue #290).
 
   Elixir has no official Anthropic SDK, so this speaks raw HTTP with Req. It
   never goes through an OpenAI-compatibility layer.
 
   ## Request
 
-  Every request sends `x-api-key`, `anthropic-version: 2023-06-01` and the
+  Every request sends `x-api-key`, `anthropic-version: 2023-06-01` and (except
+  on Claude Haiku 5.5, see below) the
   `server-side-fallback-2026-07-01` beta with `fallbacks: "default"`, so a
   safety-classifier decline is retried server-side on the model Anthropic
   recommends for that category (both Claude Opus 5.5 and Claude Sonnet 5.5
@@ -33,11 +36,16 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   breakpoint at the end of the whole stable prefix keeps it as long as
   possible.
 
+  Claude Haiku 5.5 has no server-side fallback (issue #290): its requests carry
+  neither the beta nor `fallbacks`.
+
   Thinking is left at the model default (adaptive) unless a seam asks for the
-  lowest setting (`thinking: :lowest`, the patient, issue #256). On Claude
-  Sonnet 5.5 that is `thinking: {type: "between_tools"}` with no other
-  thinking field (`{type: "disabled"}` is a 400 there); every other model
-  rejects `between_tools`, so it gets no `thinking` field at all. The patient's
+  lowest setting (`thinking: :lowest`, the patient, issue #256, and the
+  undecided-verdict adjudicator, issue #290). On Claude Sonnet 5.5 that is
+  `thinking: {type: "between_tools"}` with no other thinking field
+  (`{type: "disabled"}` is a 400 there); on Claude Haiku 5.5 it is
+  `thinking: {type: "disabled"}` (accepted at effort `high` or below); every
+  other model gets no `thinking` field at all. The patient's
   effort (`low`) stays within the `high`-or-below limit of `between_tools`.
 
   ## Configuration
@@ -45,9 +53,11 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   `config :backend, Backend.Stations.StationAI.AnthropicClient` holds
   `:api_key`, `:base_url` (default `https://api.anthropic.com`), `:model`
   (default `claude-opus-5-5`, the resolver and feedback), `:patient_model`
-  (default `claude-sonnet-5-5`, the patient) and `:req_options`;
-  `config/runtime.exs` writes them from `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` and `ANTHROPIC_PATIENT_MODEL`.
+  (default `claude-sonnet-5-5`, the patient), `:adjudicator_model` (default
+  `claude-haiku-5-5`, the undecided-verdict adjudicator, issue #290) and
+  `:req_options`; `config/runtime.exs` writes them from `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_PATIENT_MODEL` and
+  `ANTHROPIC_ADJUDICATOR_MODEL`.
   A seam picks its model setting with the `:model_key` default. Call options
   (`:api_key`, `:base_url`, `:model`, `:effort`, `:plug`, `:retry`,
   `:req_options`) override it. The operating system environment is never
@@ -81,8 +91,16 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   require Logger
 
   @default_base_url "https://api.anthropic.com"
-  @default_models %{model: "claude-opus-5-5", patient_model: "claude-sonnet-5-5"}
+  @default_models %{
+    model: "claude-opus-5-5",
+    patient_model: "claude-sonnet-5-5",
+    adjudicator_model: "claude-haiku-5-5"
+  }
   @between_tools_models ["claude-sonnet-5-5"]
+  # Claude Haiku 5.5 accepts `thinking: {type: "disabled"}` at effort `high` or
+  # below, and has no server-side fallback (issue #290).
+  @disabled_thinking_models ["claude-haiku-5-5"]
+  @no_fallback_models ["claude-haiku-5-5"]
   @default_effort "medium"
   @anthropic_version "2023-06-01"
   @fallback_beta "server-side-fallback-2026-07-01"
@@ -118,7 +136,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   configuration, then the defaults.
 
   `defaults` carries a seam's own `:effort`, `:receive_timeout`, `:model_key`
-  (`:model`, the default, or `:patient_model`) and `:thinking` (`:default`,
+  (`:model`, the default, `:patient_model` or `:adjudicator_model`) and `:thinking` (`:default`,
   or `:lowest`); the call options and the configured `:req_options` still win
   over them.
   """
@@ -203,11 +221,14 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
       "max_tokens" => request.max_tokens,
       "system" => system_blocks(request.system, request[:system_suffix]),
       "messages" => request.messages,
-      "output_config" => output_config,
-      "fallbacks" => "default"
+      "output_config" => output_config
     }
+    |> put_fallbacks(config)
     |> put_thinking(config)
   end
+
+  defp put_fallbacks(body, %{model: model}) when model in @no_fallback_models, do: body
+  defp put_fallbacks(body, _config), do: Map.put(body, "fallbacks", "default")
 
   # The stable prefix ends at the cached block; a per-turn suffix follows it.
   defp system_blocks(system, suffix) do
@@ -225,6 +246,10 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
        when model in @between_tools_models,
        do: Map.put(body, "thinking", %{"type" => "between_tools"})
 
+  defp put_thinking(body, %{thinking: :lowest, model: model})
+       when model in @disabled_thinking_models,
+       do: Map.put(body, "thinking", %{"type" => "disabled"})
+
   defp put_thinking(body, _config), do: body
 
   defp validate_credentials(key) when is_binary(key) do
@@ -234,11 +259,11 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   defp validate_credentials(_key), do: {:error, :missing_credentials}
 
   defp request_headers(config) do
-    [
-      {"x-api-key", config.api_key},
-      {"anthropic-version", @anthropic_version},
-      {"anthropic-beta", @fallback_beta}
-    ]
+    base = [{"x-api-key", config.api_key}, {"anthropic-version", @anthropic_version}]
+
+    if config.model in @no_fallback_models,
+      do: base,
+      else: base ++ [{"anthropic-beta", @fallback_beta}]
   end
 
   defp post(config, body) do

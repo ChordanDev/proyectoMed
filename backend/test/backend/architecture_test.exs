@@ -28,7 +28,8 @@ defmodule Backend.ArchitectureTest do
     Backend.Stations.StationPackage,
     Backend.Stations.LiveKit,
     Backend.Stations.MediaSession,
-    Backend.Stations.Impressos
+    Backend.Stations.Impressos,
+    Backend.Stations.PatientAdjudicator
   ]
 
   @web_dir Path.expand("../../lib/backend_web", __DIR__)
