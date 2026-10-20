@@ -13,7 +13,7 @@ concurrency:
 jobs:
   test:
     name: Test Web and Phoenix
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v7
 
@@ -32,7 +32,7 @@ jobs:
 
   lint:
     name: Lint and Typecheck
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v7
 
@@ -68,7 +68,7 @@ jobs:
 
   dialyzer:
     name: Dialyzer Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v7
 
