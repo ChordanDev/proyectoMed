@@ -33,7 +33,7 @@ the modal.
 - [x] T2 Web: after an examiner acknowledgement (text reply or voice event)
   refresh impressos; when new ones appear open the drawer and add the
   hands-over bubble instead of only "Anotado.".
-- [ ] T3 ADR-008 amendment comment on #104.
+- [x] T3 ADR-008 amendment comment on #104.
 
 ## Routing
 
@@ -65,6 +65,14 @@ the modal.
   requested from the parent. Until wired, the live voice path releases on the
   backend but the drawer only refreshes on resume.
 
+- T1 commit 8e3155d, T2 commit b6cc96e.
+- T3 done: amendment posted on #104 (issuecomment-6299656793).
+- Local CI: LOCAL CI PASSED (web 337 tests, backend 1666 tests, plus the
+  remaining CI steps). GitHub Actions is blocked by billing.
+- Pending: App.tsx wiring (approval), drawer screenshots after a spoken
+  request (desktop + mobile) need a live run.
+
 ## Next step
 
-T3, then App.tsx wiring if approved.
+Wire `onRefreshImpressos={station.refreshImpressos}` in `web/src/App.tsx` once
+approved; take the live screenshots.
