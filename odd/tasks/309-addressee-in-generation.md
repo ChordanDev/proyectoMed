@@ -30,6 +30,7 @@ rehearsal) and runs beside a generation that is thrown away on examiner turns
 - [x] T3 Text and non-streamed voice paths decide from the marker / impresso match; no Jev addressee call.
 - [x] T4 Streamed voice path decides from the streamed marker / impresso match; no Jev addressee call.
 - [x] T5 Delete `JevDecision.decide_addressee` (adapters, config, tests); update `docs/design/turn-addressee.md`.
+- [x] T6 (added after the live check) The generator context shows earlier patient replies with `[PACIENTE]`.
 
 ## Routing
 
@@ -65,6 +66,21 @@ All tasks: delegated direct (this worker is the bounded writer); inline within t
   Disabled/TypeSafe implementations and `jev_decision/addressee_test.exs`; rewrote
   `docs/design/turn-addressee.md`. `mix compile --warnings-as-errors` clean; full backend suite 1727 passed.
 
+- T5 `40baebc`.
+- Live check run 1 (Haiku 5.5, audit mode, after T5): markers on turns 1-2 only; turns 3-10 came back
+  without a marker (patient by default, so still answered). Cause observed: stored replies are unmarked,
+  and the model followed its unmarked history. Opened T6.
+- T6 (this commit): RED 1 failing (`is shown on the earlier patient replies the next generation reads`)
+  -> GREEN; `multiturn_verification_test` expectation updated; credo nesting fixed in
+  `Addressee.stream/2` and `generate_voice_reply/5`; full backend suite 1728 passed.
+- Live check run 2 (after T6), text: turns 1-10 `patient/marker`, "Minha hipótese diagnóstica é
+  apendicite aguda." `examiner/marker`, "O senhor está sentindo dor agora?" `patient/marker`; the three
+  required examiner turns ("Examinador, solicito hemograma e PCR", "Gostaria de realizar o exame
+  físico", "Vou examinar o abdome agora") `examiner/impresso` in 1-4 ms. Wall ms:
+  1461, 1412, 924, 907, 826, 2582, 2624, 1175, 1573, 988, 1319, 1024, 4, 2, 2.
+  Streamed voice: 893 (patient), 1133 (examiner/marker), 1732 (patient), 1, 0, 1 (impresso).
+  No Jev addressee request.
+
 ## Next step
 
-Local CI, live Haiku check, PR.
+Local CI, PR.

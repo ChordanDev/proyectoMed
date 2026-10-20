@@ -22,8 +22,9 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
     @behaviour Backend.Stations.StationAI
 
     @impl true
-    def next_reply(_package, _context) do
+    def next_reply(_package, context) do
       send(Application.fetch_env!(:backend, :marker_turn_test_pid), :patient_generation)
+      send(Application.fetch_env!(:backend, :marker_turn_test_pid), {:context, context})
       {:ok, %{text: Application.fetch_env!(:backend, :marker_turn_reply), used_facts: []}}
     end
 
@@ -115,6 +116,30 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
 
       {:ok, stored} = Stations.get_session(session.session_id)
       assert [%{role: :learner}, %{role: :patient, text: @reply}] = stored.messages
+    end
+
+    test "is shown on the earlier patient replies the next generation reads" do
+      reply("[PACIENTE] " <> @reply)
+      session = Stations.create_session(%{audio_consent: false})
+
+      {:ok, %{outcome: :patient_reply}} = send_text(session, @question)
+      {:ok, %{outcome: :patient_reply}} = send_text(session, "Quantos anos o senhor tem?")
+
+      assert_received {:context, %{conversation: [%{role: :student, text: @question}]}}
+
+      # The model keeps the marker when its own earlier replies show it (#309
+      # live check: without it, Haiku dropped the marker from the third turn).
+      assert_received {:context,
+                       %{
+                         conversation: [
+                           %{role: :student, text: @question},
+                           %{role: :patient, text: "[PACIENTE] " <> @reply},
+                           %{role: :student, text: "Quantos anos o senhor tem?"}
+                         ]
+                       }}
+
+      {:ok, stored} = Stations.get_session(session.session_id)
+      refute Enum.any?(stored.messages, &(&1.text =~ "[PACIENTE]"))
     end
 
     test "is stripped from a voice reply before TTS" do

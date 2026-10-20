@@ -158,7 +158,13 @@ defmodule Backend.Stations.MultiturnVerificationTest do
       assert {:ok, _} = ask(id, "Teve náusea ou vômito?")
 
       assert_received {:generation, %{conversation: generated}}
-      assert texts(generated) == ["Qual é seu nome?", @reply, "Teve náusea ou vômito?"]
+      # The patient's earlier reply shows the addressee marker it was given with (#309).
+      assert texts(generated) == [
+               "Qual é seu nome?",
+               "[PACIENTE] " <> @reply,
+               "Teve náusea ou vômito?"
+             ]
+
       assert Enum.map(generated, & &1.role) == [:student, :patient, :student]
     end
   end

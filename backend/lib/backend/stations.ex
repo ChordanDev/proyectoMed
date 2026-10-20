@@ -1297,19 +1297,35 @@ defmodule Backend.Stations do
           keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
 
         {:patient, ai_reply} ->
-          package
-          |> check_voice_reply(current_session, context, ai_reply)
-          |> resolve_voice_reply(session_id, turn_id, generation_id, fn session ->
-            audit_delivered_reply(session_id, session, package, current_session)
-          end)
-          |> case do
-            {:ok, result} -> {:ok, result}
-            {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
-          end
+          deliver_voice_reply(
+            package,
+            current_session,
+            context,
+            ai_reply,
+            {turn_id, generation_id}
+          )
       end
     else
       {:error, reason} ->
         fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
+
+  defp deliver_voice_reply(
+         package,
+         %{session_id: session_id} = session,
+         context,
+         ai_reply,
+         {turn_id, generation_id}
+       ) do
+    package
+    |> check_voice_reply(session, context, ai_reply)
+    |> resolve_voice_reply(session_id, turn_id, generation_id, fn stored ->
+      audit_delivered_reply(session_id, stored, package, session)
+    end)
+    |> case do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
     end
   end
 
@@ -1884,7 +1900,7 @@ defmodule Backend.Stations do
             _ -> :student
           end
 
-        %{role: role, text: msg.text}
+        %{role: role, text: generator_text(role, msg.text)}
       end)
       |> drop_unanswered_learner_turns()
 
@@ -1893,6 +1909,12 @@ defmodule Backend.Stations do
       language: package["language"] || "pt-BR"
     }
   end
+
+  # The generator sees its earlier replies with the addressee marker it wrote
+  # (#309): stored replies have it stripped, and a history without it led the
+  # live model to stop marking its replies after the second turn.
+  defp generator_text(:patient, text) when is_binary(text), do: "[PACIENTE] " <> text
+  defp generator_text(_role, text), do: text
 
   defp drop_unanswered_learner_turns(turns) do
     turns

@@ -89,20 +89,18 @@ defmodule Backend.Stations.StationAI.Addressee do
       :ok
     end
 
-    finish = fn ->
-      case Process.delete(key) do
-        {:pending, held} ->
-          on_decision.(:patient, :missing_marker)
-          if held != "", do: on_text.(held)
-          :patient
-
-        {:decided, addressee} ->
-          addressee
-      end
-    end
+    finish = fn -> finish(Process.delete(key), on_text, on_decision) end
 
     {filter, finish}
   end
+
+  defp finish({:pending, held}, on_text, on_decision) do
+    on_decision.(:patient, :missing_marker)
+    if held != "", do: on_text.(held)
+    :patient
+  end
+
+  defp finish({:decided, addressee}, _on_text, _on_decision), do: addressee
 
   defp take({:pending, held}, piece, on_text, on_decision) do
     case prefix(held <> piece) do
