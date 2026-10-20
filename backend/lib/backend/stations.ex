@@ -25,6 +25,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
+  alias Backend.Stations.SttKeyterms
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
   alias Backend.Stations.TTS.StageDirections
@@ -717,8 +718,9 @@ defmodule Backend.Stations do
   @doc """
   Context the voice worker needs before streaming a session's audio to the
   speech-to-text provider (#118). Only consented, active sessions qualify.
-  Keyterms come from the station package's optional `stt_keyterms`, so they
-  stay server-side.
+  Keyterms are derived from the station package (authored `stt_keyterms`,
+  eponyms, a shared clinical lexicon and impresso keywords, capped to
+  Deepgram's limit; see `SttKeyterms`, #292), so they stay server-side.
   `last_turn_id` is the committed learner cursor. `turn_id_floor` also covers
   cancelled turn IDs; a fresh worker must allocate strictly above this floor.
   """
@@ -742,7 +744,7 @@ defmodule Backend.Stations do
        %{
          session_id: session_id,
          language: package["language"] || "pt-BR",
-         keyterms: Enum.filter(List.wrap(package["stt_keyterms"]), &is_binary/1),
+         keyterms: SttKeyterms.for_package(package),
          last_turn_id: Map.get(session, :last_voice_turn_id, 0),
          turn_id_floor:
            max(

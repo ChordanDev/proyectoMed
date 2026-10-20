@@ -44,7 +44,7 @@ acute-appendicitis has no `stt_keyterms`, so the list sent to Deepgram was empty
   anchor nouns (sinal/ponto/manobra/...), shared pt-BR lexicon terms present in the
   package text, impresso keywords; case-insensitive dedupe; cap. Unit tests.
   Route: inline (one new module + one test file, already understood).
-- [ ] T2 — Wire into `Backend.Stations.voice_worker_context/1`; context test on the
+- [x] T2 — Wire into `Backend.Stations.voice_worker_context/1`; context test on the
   acute-appendicitis package; README voice section. Route: inline (mechanical).
 - [ ] T3 — Live check on the Deepgram prerecorded API with an ElevenLabs TTS clip,
   with and without keyterms; record both transcripts here. Route: inline (no source).
@@ -60,7 +60,10 @@ acute-appendicitis has no `stt_keyterms`, so the list sent to Deepgram was empty
   case-insensitive lexicon test; GREEN: 14/14. Checks: format, compile
   --warnings-as-errors, credo --strict on the new files. Derived lists: acute-appendicitis
   50 terms / 331 est. tokens; chest-pain 50 / 317 (authored 8 kept first).
+  Commit `69f4000`.
+- T2 done (inline). RED: voice context test for acute-appendicitis failed (1/2 passed,
+  keyterms empty); GREEN: 2/2. Full `mix test`: 1587 passed; credo --strict clean.
 
 ## Next step
 
-T2.
+T3 (live check), then local CI.
