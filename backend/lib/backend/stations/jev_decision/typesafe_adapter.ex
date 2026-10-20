@@ -83,7 +83,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   The verdict is computed in code from the answers and two thresholds. A value at or
   above `yes_threshold` is a yes, a value at or below `no_threshold` is a no, and a
-  value strictly between them is undecided.
+  value strictly between them is undecided. `risk:speaks_out_of_role` alone uses
+  `out_of_role_no_threshold` (default `0.5`) as its no threshold: with the full
+  acute-appendicitis package it scores plainly in-role replies 0.22-0.47 (issue
+  #284). Obvious out-of-role text is still caught deterministically by
+  `Backend.Stations.Conversation.BoundedReply` before Jev is asked.
 
     * `used_fact_ids` - the facts whose stated answer is a yes
     * `unasked_fact_ids` - present only when non-empty: the authored ids of the
@@ -111,7 +115,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `{:error, {:technical_failure, :invalid_thresholds}}` - thresholds outside
       `0 <= no_threshold <= 0.5 <= yes_threshold <= 1` with `no_threshold <
       yes_threshold`, so that a "no" never means a probability above one half and a
-      "yes" never means one below it
+      "yes" never means one below it; `out_of_role_no_threshold` obeys the same
+      bounds as `no_threshold`
     * `{:error, {:technical_failure, :invalid_base_url}}` - a base URL whose scheme is
       not exactly `https` or whose host is empty, so the key never travels in clear
     * `{:error, {:technical_failure, :invalid_disclosure_condition}}` - a fact with a
@@ -127,7 +132,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   ## Configuration
 
   Call options first, then `Application.get_env(:backend, __MODULE__)`: `:api_key`,
-  `:base_url`, `:model`, `:yes_threshold`, `:no_threshold`, `:max_request_tokens`
+  `:base_url`, `:model`, `:yes_threshold`, `:no_threshold`,
+  `:out_of_role_no_threshold` (patient decision only), `:max_request_tokens`
   (default `64_000`, rubric batch only). The operating system
   environment is never read here; `config/runtime.exs` copies the `TYPESAFE_*`
   variables into the application environment at boot.
@@ -153,6 +159,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @default_model "jev-1.13.0"
   @default_yes_threshold 0.8
   @default_no_threshold 0.2
+
+  # Issue #284: the one risk whose calibration drifts with the facts payload.
+  @out_of_role_risk "risk:speaks_out_of_role"
+  @default_out_of_role_no_threshold 0.5
 
   # The provider's per-request budget for one rubric request, in estimated tokens.
   @default_max_request_tokens 64_000
@@ -189,7 +199,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
        "the patient role."}
   ]
 
-  @type thresholds :: %{yes: number(), no: number()}
+  @type thresholds :: %{
+          required(:yes) => number(),
+          required(:no) => number(),
+          optional(:out_of_role_no) => number()
+        }
   @type fact_plan :: %{
           id: String.t(),
           topic: String.t(),
@@ -213,6 +227,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
     with :ok <- validate_credentials(config.api_key),
          {:ok, thresholds} <- validate_thresholds(config.yes_threshold, config.no_threshold),
+         {:ok, thresholds} <- validate_out_of_role(thresholds, config.out_of_role_no_threshold),
          :ok <- validate_base_url(config.base_url),
          {:ok, facts} <- plan_facts(request),
          {:ok, budget_ms} <- usable_budget(request),
@@ -236,7 +251,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
         |> Enum.sort()
         |> Enum.map_join(" ", fn {id, noul} ->
           rounded = :erlang.float_to_binary(noul / 1, decimals: 3)
-          "#{id}=#{rounded}:#{classify(noul, thresholds)}"
+          "#{id}=#{rounded}:#{classify(noul, question_thresholds(id, thresholds))}"
         end)
 
       "[TypesafeAdapter] patient verdict=#{status} #{answers}"
@@ -363,6 +378,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       model: opts[:model] || Keyword.get(app, :model) || @default_model,
       yes_threshold: threshold(opts, app, :yes_threshold, @default_yes_threshold),
       no_threshold: threshold(opts, app, :no_threshold, @default_no_threshold),
+      out_of_role_no_threshold: threshold(opts, app, :out_of_role_no_threshold, nil),
       max_request_tokens: threshold(opts, app, :max_request_tokens, @default_max_request_tokens),
       req_options:
         app
@@ -400,6 +416,23 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   end
 
   defp validate_thresholds(_yes, _no), do: {:error, {:technical_failure, :invalid_thresholds}}
+
+  # The out-of-role no threshold obeys the bounds of the global no threshold. Unset,
+  # it is `0.5`, or the global no threshold when the yes threshold is `0.5` itself.
+  defp validate_out_of_role(%{yes: yes, no: global_no} = thresholds, nil) do
+    default =
+      if yes > @default_out_of_role_no_threshold,
+        do: @default_out_of_role_no_threshold,
+        else: global_no
+
+    validate_out_of_role(thresholds, default)
+  end
+
+  defp validate_out_of_role(%{yes: yes} = thresholds, no) do
+    with {:ok, _} <- validate_thresholds(yes, no) do
+      {:ok, Map.put(thresholds, :out_of_role_no, no)}
+    end
+  end
 
   defp validate_max_request_tokens(max) when is_integer(max) and max > 0, do: {:ok, max}
 
@@ -741,7 +774,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
           optional(:undecided_fact_ids) => [String.t()]
         }
   def verdict(facts, risk_ids, nouls, thresholds) do
-    risks = Enum.map(risk_ids, &classify(nouls[&1], thresholds))
+    risks = Enum.map(risk_ids, &classify(nouls[&1], question_thresholds(&1, thresholds)))
     disclosures = Enum.map(facts, &disclosure(&1, nouls, thresholds))
 
     # Two facts may share an id; the id is reported once.
@@ -788,6 +821,14 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   end
 
   defp undecided_fact_ids(_status, _risks, _facts, _disclosures), do: []
+
+  # The thresholds one question is classified with: `risk:speaks_out_of_role` uses
+  # its own no threshold when one is set (issue #284), every other question the
+  # global ones.
+  defp question_thresholds(@out_of_role_risk, %{out_of_role_no: no} = thresholds),
+    do: %{thresholds | no: no}
+
+  defp question_thresholds(_id, thresholds), do: thresholds
 
   @doc "Classifies a noul against the thresholds; both thresholds are inclusive."
   @spec classify(number(), thresholds()) :: :yes | :no | :undecided

@@ -135,7 +135,8 @@ if config_env() != :test do
 
   for {variable, key} <- [
         {"TYPESAFE_YES_THRESHOLD", :yes_threshold},
-        {"TYPESAFE_NO_THRESHOLD", :no_threshold}
+        {"TYPESAFE_NO_THRESHOLD", :no_threshold},
+        {"TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD", :out_of_role_no_threshold}
       ],
       raw = System.get_env(variable) do
     threshold =
