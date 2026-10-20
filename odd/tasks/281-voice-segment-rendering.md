@@ -36,7 +36,7 @@ was stored. The worker publishes no end-of-turn signal for a streamed reply.
 
 - [x] T1 — Worker: end-of-turn event `{"session_id", "turn_id", "generation_id", "role": "patient", "status": "complete"}` after a streamed reply settles; README event table. Route: inline (worker files already mapped). Checks: `uv run python -m unittest`.
 - [x] T2 — Web: parse `segment` and the end event; one growing bubble per turn; reconcile on the end event; delivery failure keeps the learner line. Route: inline (station feature files already mapped). Checks: `npm --prefix web test`, typecheck.
-- [ ] T3 — Local CI (`local_ci.sh`) and PR.
+- [x] T3 — Local CI (`local_ci.sh`) and PR.
 
 ## Acceptance criteria
 
@@ -62,9 +62,14 @@ was stored. The worker publishes no end-of-turn signal for a streamed reply.
   `text_delivery_failed` for a streamed turn waits for the end event. A turn whose reply
   cannot be shown is kept in `voiceUndeliveredRef`, so its learner line is no longer
   dropped as a barge-in (#280 C2). RED: 13 of 301 station tests failed. GREEN: 301/301;
-  `typecheck` and `lint` clean. Commit: see git log
-  (`feat(web): render sentence-streamed voice replies as one growing bubble`).
+  `typecheck` and `lint` clean. Commit: `418556f`.
+
+- T3: `local_ci.sh` printed LOCAL CI PASSED: web 316/316 (16 files), backend 1519
+  passed, process-level E2E 4/4, typecheck, lint, format, compile, credo, dialyzer clean.
+  Worker: 149/149 `uv run python -m unittest` (not part of local CI). GitHub Actions is
+  blocked by billing.
 
 ## Next step
 
-T3.
+Live check during the spoken rehearsal (needs LiveKit, Deepgram, ElevenLabs and Jev
+credentials): multi-sentence replies grow in one bubble and end with the stored text.
