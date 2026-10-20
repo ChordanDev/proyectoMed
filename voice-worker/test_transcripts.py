@@ -11,6 +11,7 @@ from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError
 from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 
+import transcripts
 from transcripts import (
     PhoenixClient,
     TurnManager,
@@ -336,6 +337,61 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((reply.turn_id, reply.generation_id), (1, 1))
         self.assertIsNone(reply.reply_text)
         self.assertTrue(reply.is_kept_receipt())
+
+    async def test_commit_waits_for_the_server_budget_other_calls_stay_short(self):
+        # Issue #269: generation + verification + one regeneration, plus headroom.
+        self.assertGreaterEqual(
+            transcripts.DEFAULT_TURN_TIMEOUT_S,
+            2 * transcripts.PATIENT_GENERATION_TIMEOUT_S
+            + transcripts.VERIFICATION_DEADLINE_S,
+        )
+        timeouts = {}
+
+        def handler(request):
+            timeouts[request.url.path] = request.extensions["timeout"]["read"]
+            if request.url.path.endswith("/transcripts"):
+                return httpx.Response(
+                    201, json={"turn_id": 1, "status": "kept", "generation_id": 1}
+                )
+            return httpx.Response(200, json={"status": "cancelled", "last_turn_id": 0})
+
+        async with phoenix(handler) as client:
+            await client.context()
+            await client.commit(1, "oi")
+            await client.cancel(turn_id=1)
+
+        base = "/api/internal/voice/sessions/s1"
+        self.assertEqual(
+            timeouts,
+            {
+                base: transcripts.REQUEST_TIMEOUT_S,
+                base + "/transcripts": transcripts.DEFAULT_TURN_TIMEOUT_S,
+                base + "/cancel": transcripts.REQUEST_TIMEOUT_S,
+            },
+        )
+
+    async def test_turn_timeout_and_retries_are_configurable(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request.extensions["timeout"]["read"])
+            raise httpx.ConnectError("boom")
+
+        client = PhoenixClient(
+            "http://phoenix",
+            "secret",
+            "s1",
+            transport=httpx.MockTransport(handler),
+            turn_timeout=12.0,
+            turn_retries=2,
+        )
+        async with client:
+            with self.assertRaises(VoiceFailure) as ctx:
+                await client.commit(1, "oi")
+        self.assertEqual(ctx.exception.kind, "disconnected")
+        self.assertEqual(calls, [12.0, 12.0, 12.0])
+        # The end-of-stream wait covers every attempt plus drain headroom.
+        self.assertGreaterEqual(client.eof_timeout, 3 * 12.0)
 
     async def test_commit_retries_once_on_disconnect(self):
         calls = []

@@ -24,7 +24,7 @@ from test_transcripts import (
     event,
 )
 from transcripts import TurnTracker, VoiceTurnReply
-from worker import PatientVoice, build_tts, transcribe
+from worker import PatientVoice, build_tts, phoenix_turn_settings, transcribe
 
 REPLY_TEXT = "Resposta clinica confidencial"
 PROVIDER_SECRET = "sk-provider-secret"
@@ -519,3 +519,55 @@ class BuildTTSTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoenixTurnSettingsTest(unittest.TestCase):
+    def test_defaults_cover_the_server_budget(self):
+        import transcripts
+
+        self.assertEqual(
+            phoenix_turn_settings({}),
+            (transcripts.DEFAULT_TURN_TIMEOUT_S, transcripts.DEFAULT_TURN_RETRIES),
+        )
+
+    def test_reads_timeout_and_retries_from_the_environment(self):
+        env = {"PHOENIX_TURN_TIMEOUT_S": " 20.5 ", "PHOENIX_TURN_RETRIES": "0"}
+        self.assertEqual(phoenix_turn_settings(env), (20.5, 0))
+
+    def test_invalid_values_fall_back_to_the_defaults(self):
+        import transcripts
+
+        for env in (
+            {"PHOENIX_TURN_TIMEOUT_S": "abc", "PHOENIX_TURN_RETRIES": "-1"},
+            {"PHOENIX_TURN_TIMEOUT_S": "0", "PHOENIX_TURN_RETRIES": "1.5"},
+            {"PHOENIX_TURN_TIMEOUT_S": "nan", "PHOENIX_TURN_RETRIES": ""},
+        ):
+            with self.assertLogs("voice-worker", level="WARNING"):
+                self.assertEqual(
+                    phoenix_turn_settings(env),
+                    (
+                        transcripts.DEFAULT_TURN_TIMEOUT_S,
+                        transcripts.DEFAULT_TURN_RETRIES,
+                    ),
+                )
+
+
+class TranscribeEofBudgetTest(unittest.IsolatedAsyncioTestCase):
+    async def test_transcribe_waits_for_pending_turns_within_the_phoenix_budget(self):
+        client = ControllablePhoenixClient()
+        seen = {}
+
+        async def fake_process(*_args, **kwargs):
+            seen["eof_timeout"] = kwargs["eof_timeout"]
+
+        with patch.object(worker, "process_speech_stream", fake_process):
+            await transcribe(
+                MockRoom(),
+                learner=None,
+                context={"language": "pt-BR", "keyterms": []},
+                tracker=TurnTracker("s1", last_turn_id=0),
+                phoenix=client,
+                stt=MockSTT(MockStream(asyncio.Queue())),
+                audio=MockAudioStream(),
+            )
+        self.assertEqual(seen["eof_timeout"], client.eof_timeout)

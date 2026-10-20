@@ -12,6 +12,7 @@ never spoken (#269). Never logs transcript text, reply text or audio.
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 
@@ -20,6 +21,8 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, c
 from livekit.plugins import deepgram, elevenlabs
 from speech import SpeechPlayer
 from transcripts import (
+    DEFAULT_TURN_RETRIES,
+    DEFAULT_TURN_TIMEOUT_S,
     PhoenixClient,
     TurnTracker,
     VoiceFailure,
@@ -50,8 +53,13 @@ async def on_request(req: JobRequest) -> None:
 @server.rtc_session(on_request=on_request)
 async def entrypoint(ctx: JobContext) -> None:
     session_id = ctx.room.name.removeprefix(ROOM_PREFIX)
+    turn_timeout, turn_retries = phoenix_turn_settings(os.environ)
     phoenix = PhoenixClient(
-        os.environ["PHOENIX_URL"], os.environ["VOICE_WORKER_SECRET"], session_id
+        os.environ["PHOENIX_URL"],
+        os.environ["VOICE_WORKER_SECRET"],
+        session_id,
+        turn_timeout=turn_timeout,
+        turn_retries=turn_retries,
     )
     voice = None
     async with phoenix:
@@ -88,6 +96,37 @@ async def entrypoint(ctx: JobContext) -> None:
             if voice is not None:
                 await voice.aclose()
             ctx.shutdown()
+
+
+def phoenix_turn_settings(environ) -> tuple[float, int]:
+    """Transcript POST timeout (seconds) and retry count, from the environment.
+
+    `PHOENIX_TURN_TIMEOUT_S` must cover the server budget (see
+    `transcripts.DEFAULT_TURN_TIMEOUT_S`); `PHOENIX_TURN_RETRIES` is a non-negative
+    integer. A missing or invalid value keeps the default; only the variable name
+    is logged.
+    """
+    timeout = DEFAULT_TURN_TIMEOUT_S
+    raw_timeout = environ.get("PHOENIX_TURN_TIMEOUT_S", "").strip()
+    if raw_timeout:
+        try:
+            parsed = float(raw_timeout)
+        except ValueError:
+            parsed = math.nan
+        if math.isfinite(parsed) and parsed > 0:
+            timeout = parsed
+        else:
+            logger.warning("invalid PHOENIX_TURN_TIMEOUT_S; using the default")
+
+    retries = DEFAULT_TURN_RETRIES
+    raw_retries = environ.get("PHOENIX_TURN_RETRIES")
+    if raw_retries is not None:
+        stripped = raw_retries.strip()
+        if stripped.isdigit():
+            retries = int(stripped)
+        else:
+            logger.warning("invalid PHOENIX_TURN_RETRIES; using the default")
+    return timeout, retries
 
 
 def _required_setting(name: str) -> str:
@@ -343,6 +382,7 @@ async def transcribe(
             on_reply=on_reply,
             on_close=close_resources,
             cleanup_timeout=cleanup_timeout,
+            eof_timeout=phoenix.eof_timeout,
             on_cancel=voice.cancel_turn if voice is not None else None,
         )
     finally:

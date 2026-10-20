@@ -14,6 +14,24 @@ from livekit.agents.stt import SpeechEvent, SpeechEventType
 
 logger = logging.getLogger("voice-worker.transcripts")
 
+# Phoenix answers a transcript POST only after the patient reply is generated and
+# verified (#269). Worst case: the patient generation (Phoenix sets no timeout of
+# its own, so Req's 15 s receive timeout applies), the Jev verification budget
+# (`jev_decision_default_deadline_ms`, 3 s), one regeneration after a refusal
+# (another 15 s) and 2 s headroom: 15 + 3 + 15 + 2 = 35 s. Override with
+# PHOENIX_TURN_TIMEOUT_S when the server budget changes.
+PATIENT_GENERATION_TIMEOUT_S = 15.0
+VERIFICATION_DEADLINE_S = 3.0
+TURN_HEADROOM_S = 2.0
+DEFAULT_TURN_TIMEOUT_S = (
+    2 * PATIENT_GENERATION_TIMEOUT_S + VERIFICATION_DEADLINE_S + TURN_HEADROOM_S
+)
+DEFAULT_TURN_RETRIES = 1
+# Context and cancellation calls do no generation work.
+REQUEST_TIMEOUT_S = 5.0
+# Drain headroom on top of every transcript attempt at end of stream.
+EOF_HEADROOM_S = 5.0
+
 
 class VoiceFailure(Exception):
     """Typed failure. `kind` is one of: auth, timeout, disconnected, malformed, session_inactive, stale_generation,
@@ -231,12 +249,24 @@ class TurnTracker:
 class PhoenixClient:
     """Client for Phoenix's internal voice worker API (the transcript authority)."""
 
-    def __init__(self, base_url: str, secret: str, session_id: str, transport=None):
+    def __init__(
+        self,
+        base_url: str,
+        secret: str,
+        session_id: str,
+        transport=None,
+        turn_timeout: float = DEFAULT_TURN_TIMEOUT_S,
+        turn_retries: int = DEFAULT_TURN_RETRIES,
+    ):
         self._path = f"/api/internal/voice/sessions/{session_id}"
+        self._turn_timeout = turn_timeout
+        self._turn_retries = turn_retries
+        # End-of-stream wait for pending turns: every transcript attempt plus drain.
+        self.eof_timeout = turn_timeout * (turn_retries + 1) + EOF_HEADROOM_S
         self._http = httpx.AsyncClient(
             base_url=base_url,
             headers={"authorization": f"Bearer {secret}"},
-            timeout=5.0,
+            timeout=REQUEST_TIMEOUT_S,
             transport=transport,
         )
 
@@ -252,15 +282,23 @@ class PhoenixClient:
     async def commit(self, turn_id: int, text: str) -> VoiceTurnReply:
         """Commits a final transcript; returns typed VoiceTurnReply.
 
-        Retries once on a transport failure: `turn_id` makes the retry idempotent.
+        Each attempt waits for the server budget (`turn_timeout`, #269), and a
+        transport failure is retried `turn_retries` times: `turn_id` makes the retry
+        idempotent.
         """
         body = {"turn_id": turn_id, "text": text}
-        try:
-            result = await self._request("POST", self._path + "/transcripts", json=body)
-        except VoiceFailure as failure:
-            if failure.kind not in ("timeout", "disconnected"):
-                raise
-            result = await self._request("POST", self._path + "/transcripts", json=body)
+        path = self._path + "/transcripts"
+        attempts_left = self._turn_retries
+        while True:
+            try:
+                result = await self._request(
+                    "POST", path, json=body, timeout=self._turn_timeout
+                )
+                break
+            except VoiceFailure as failure:
+                if failure.kind not in ("timeout", "disconnected") or attempts_left <= 0:
+                    raise
+                attempts_left -= 1
 
         return VoiceTurnReply(
             turn_id=result.get("turn_id"),
@@ -609,7 +647,8 @@ class TurnManager:
 
     async def wait_pending(self, timeout: float = 15.0) -> None:
         # One EOF budget for all work, including admission waiting on ownership.
-        # The default allows two five-second HTTP attempts plus drain headroom.
+        # The worker passes PhoenixClient.eof_timeout (every transcript attempt
+        # plus drain headroom, #269); this default only serves direct callers.
         # asyncio.wait does not cancel dispatches on expiry: only cleanup may
         # abort local tasks, and expiry never releases ambiguous remote ownership.
         deadline = asyncio.get_running_loop().time() + timeout
