@@ -1,1 +1,35 @@
 *.pdf binary
+
+# ---------------------------------------------------------------------------
+# Unreal Engine project (unreal/) — binary content tracked through Git LFS.
+# Requires git-lfs on every machine: `git lfs install` once per user.
+# ---------------------------------------------------------------------------
+
+# Unreal assets and maps cannot be merged; `lockable` makes them read-only
+# until locked with `git lfs lock`, so two people never edit the same asset.
+unreal/**/*.uasset filter=lfs diff=lfs merge=lfs -text lockable
+unreal/**/*.umap filter=lfs diff=lfs merge=lfs -text lockable
+
+# Source art, audio, and video imported into the project.
+unreal/**/*.fbx filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.obj filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.abc filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.usd filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.usdz filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.glb filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.png filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.jpg filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.jpeg filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.tga filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.exr filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.hdr filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.psd filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.wav filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.mp3 filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.ogg filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.mov filter=lfs diff=lfs merge=lfs -text
+
+# Platform icons and other binaries kept with the project.
+unreal/**/*.ico filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.icns filter=lfs diff=lfs merge=lfs -text
