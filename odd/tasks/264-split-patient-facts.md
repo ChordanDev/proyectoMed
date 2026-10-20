@@ -30,7 +30,7 @@ evidence. `hda-02` bundles character, progression and intensity the same way.
   since onset; `hda-02` into character, progression and intensity. Update the mapping
   record, the clinical review checklist and the qualification notes that name
   `hda-01`. Route: inline (one content file plus docs; already understood).
-- [ ] T2 Split the item-3/4 bundles: `antecedentes-01` (comorbidities vs prior
+- [x] T2 Split the item-3/4 bundles: `antecedentes-01` (comorbidities vs prior
   hospitalizations and surgeries) and `pergunta-explicita-02` (recent
   anti-inflammatories vs recent antibiotics or anticoagulants). Route: inline.
 - [ ] T3 Confirm the patient prompt and Jev per-fact questions work at the new
@@ -59,8 +59,9 @@ evidence. `hda-02` bundles character, progression and intensity the same way.
 
 | Task | Commit | RED | GREEN |
 | --- | --- | --- | --- |
-| T1 | this commit (see `git log`) | 2 of 11 failed (`acute_appendicitis_package_test.exs`); then the checklist test failed on the new ids (14 of 15) | 15 of 15; full backend 1256 passed; `mix format --check-formatted` clean |
+| T1 | `0dd7a56` | 2 of 11 failed (`acute_appendicitis_package_test.exs`); then the checklist test failed on the new ids (14 of 15) | 15 of 15; full backend 1256 passed; `mix format --check-formatted` clean |
+| T2 | this commit (see `git log`) | 1 of 12 failed (`each item-4 characteristic is a separate on-request fact`) | 12 of 12; full backend 1257 passed; format clean |
 
 ## Next step
 
-T2.
+T3.

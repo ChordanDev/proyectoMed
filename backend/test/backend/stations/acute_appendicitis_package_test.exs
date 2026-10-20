@@ -162,6 +162,26 @@ defmodule Backend.Stations.AcuteAppendicitisPackageTest do
     refute Enum.any?(contents, &(&1 =~ "contínua" and &1 =~ "7/10"))
   end
 
+  @item_4_facts [
+    {"criterio-1", "antecedentes-01", "Nega doenças crônicas."},
+    {"criterio-2", "antecedentes-01-internacoes-cirurgias",
+     "Nega internações anteriores e cirurgias."},
+    {"criterio-3", "pergunta-explicita-02-anti-inflamatorios",
+     "Nega uso recente de anti-inflamatórios."},
+    {"criterio-5", "pergunta-explicita-02",
+     "Nega uso recente de antibióticos ou anticoagulantes."}
+  ]
+
+  test "each item-4 characteristic is a separate on-request fact" do
+    item_4 = Enum.find(package()["rubric"], &(&1["id"] == "item-04"))
+    action_ids = Enum.map(item_4["actions"], & &1["id"])
+
+    for {criterion, id, content} <- @item_4_facts do
+      assert criterion in action_ids
+      assert %{"content" => ^content, "disclosure_condition" => "on_request"} = fact(id)
+    end
+  end
+
   test "every criterion has rule fields the assessment can apply" do
     for criterion <- package()["rubric"] do
       assert AuthoredRules.check(criterion) == :ok
