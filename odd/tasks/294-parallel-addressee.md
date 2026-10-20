@@ -68,7 +68,10 @@ check on top of the generation.
   the acceptance criteria measure, is done; text and the non-streamed fallback
   stay sequential (documented in `docs/design/turn-addressee.md`).
 
+- Local CI PASSED: web 326/326, backend ExUnit 1573/1573, process E2E 4/4,
+  release build. GitHub Actions is blocked by billing. Live log check pending.
+
 ## Next step
 
-Local CI, push, PR. Follow-up: parallel addressee for text and non-streamed
+Push, PR. Follow-up: parallel addressee for text and non-streamed
 voice turns, with the test stubs made process-independent first.
