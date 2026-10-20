@@ -1258,7 +1258,13 @@ defmodule Backend.StationsTest do
         id = session.session_id
 
         assert {:ok, {:kept, kept}} = Stations.process_voice_turn(id, 1, "Quando a dor começou?")
-        assert kept == %{turn_id: 1, generation_id: 1, refusal: unquote(refusal)}
+
+        assert kept == %{
+                 turn_id: 1,
+                 generation_id: 1,
+                 refusal: unquote(refusal),
+                 addressee: :patient
+               }
 
         assert {:ok, stored} = Stations.get_session(id)
         assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages

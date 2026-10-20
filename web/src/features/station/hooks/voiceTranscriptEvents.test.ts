@@ -56,7 +56,19 @@ describe("parseVoiceTranscriptEvent", () => {
     ).toEqual({ type: "patient-complete", turnId: 3 });
   });
 
-  it("reads a kept turn as an examiner acknowledgement", () => {
+  it("reads an acknowledged turn as an examiner acknowledgement (#274)", () => {
+    expect(
+      parse({
+        session_id: "session-1",
+        turn_id: 4,
+        generation_id: 8,
+        role: "examiner",
+        status: "acknowledged",
+      }),
+    ).toEqual({ type: "examiner-acknowledged", turnId: 4 });
+  });
+
+  it("reads a kept turn as a patient who did not answer (#274)", () => {
     expect(
       parse({
         session_id: "session-1",
@@ -65,7 +77,7 @@ describe("parseVoiceTranscriptEvent", () => {
         role: "examiner",
         status: "kept",
       }),
-    ).toEqual({ type: "examiner-kept", turnId: 4 });
+    ).toEqual({ type: "patient-unanswered", turnId: 4 });
   });
 
   it("reads a turn failure and a fatal worker error", () => {

@@ -5,7 +5,11 @@ import type {
   RequestImpressoResponse,
   SessionMessage,
 } from "../api/client";
-import { isKeptLearnerTurn, recoverableTurnNotice } from "../hooks/useStation";
+import {
+  isExaminerAcknowledgement,
+  isKeptLearnerTurn,
+  recoverableTurnNotice,
+} from "../hooks/useStation";
 import type { VoiceRoom, VoiceSessionApi } from "../hooks/useVoiceSession";
 import type { VoiceTranscriptEvent } from "../hooks/voiceTranscriptEvents";
 import strings from "../i18n/pt-BR.json";
@@ -24,12 +28,13 @@ import {
 import "./StationScreen.css";
 
 /**
- * One transcript entry. `examiner` entries are display-only: they are built in
- * the browser, never sent to or stored by the server, never carry patient text
- * and never enter the rubric evidence pool.
+ * One transcript entry. `examiner` and `notice` entries are display-only: they
+ * are built in the browser, never sent to or stored by the server, never carry
+ * patient text and never enter the rubric evidence pool. A `notice` says that
+ * the patient did not answer a kept learner turn (#274).
  */
 export interface DisplayMessage {
-  role: "learner" | "patient" | "examiner";
+  role: "learner" | "patient" | "examiner" | "notice";
   text: string;
   /** Worker turn id of a real-time voice entry (#270); absent for text turns. */
   voiceTurnId?: number;
@@ -41,6 +46,7 @@ const roleLabels: Readonly<Record<DisplayMessage["role"], string>> = {
   learner: strings.roleLearner,
   patient: strings.rolePatient,
   examiner: strings.roleExaminer,
+  notice: strings.roleNotice,
 };
 
 /** The real-time (LiveKit) voice session hosted by the station screen (#270). */
@@ -331,14 +337,23 @@ export function StationScreen({
         }
       } catch (cause) {
         const retryNotice = recoverableTurnNotice(cause);
-        if (isKeptLearnerTurn(cause)) {
-          // The patient did not answer, but the backend recorded the learner
-          // turn (typically addressed to the examiner): keep the bubble, leave
-          // the input empty and let the examiner acknowledge it on screen only.
+        if (isExaminerAcknowledgement(cause)) {
+          // The turn was addressed to the examiner (#274): the backend kept it
+          // without asking the patient, and the examiner acknowledges it.
           if (mountedRef.current) {
             setMessages((previous) => [
               ...previous,
               { role: "examiner", text: strings.examinerAcknowledgement },
+            ]);
+          }
+        } else if (isKeptLearnerTurn(cause)) {
+          // The patient reply was refused, but the backend kept the learner
+          // turn: keep the bubble, leave the input empty and say neutrally
+          // that the patient did not answer (#274), never "Anotado.".
+          if (mountedRef.current) {
+            setMessages((previous) => [
+              ...previous,
+              { role: "notice", text: strings.patientDidNotAnswerNotice },
             ]);
           }
         } else if (isStationTimeElapsedError(cause)) {
@@ -484,13 +499,16 @@ export function StationScreen({
           );
           return;
         }
-        case "examiner-kept":
+        case "examiner-acknowledged":
+        case "patient-unanswered":
           setVoiceNotice(null);
           setMessages((previous) =>
             resolveVoiceTurn(
               previous,
               event.turnId,
-              { role: "examiner", text: strings.examinerAcknowledgement },
+              event.type === "examiner-acknowledged"
+                ? { role: "examiner", text: strings.examinerAcknowledgement }
+                : { role: "notice", text: strings.patientDidNotAnswerNotice },
               keptVoiceTurns(),
             ),
           );
@@ -742,7 +760,8 @@ export function StationScreen({
           const isLoadingAudio = loadingAudioIndex === index;
           const isPlaying = playingIndex === index;
           const roleLabel = roleLabels[message.role];
-          const isExaminer = message.role === "examiner";
+          const isExaminer =
+            message.role === "examiner" || message.role === "notice";
 
           return (
             <div

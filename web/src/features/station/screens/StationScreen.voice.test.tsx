@@ -138,16 +138,25 @@ describe("StationScreen real-time voice (#270)", () => {
         role: "patient",
         text: "No peito.",
       });
-      room.worker({ turn_id: 2, final: true, text: "Chame o examinador." });
-      room.worker({ turn_id: 2, generation_id: 2, role: "examiner", status: "kept" });
+      room.worker({ turn_id: 2, final: true, text: "Blumberg positivo." });
+      room.worker({
+        turn_id: 2,
+        generation_id: 2,
+        role: "examiner",
+        status: "acknowledged",
+      });
+      room.worker({ turn_id: 3, final: true, text: "Qual o seu nome?" });
+      room.worker({ turn_id: 3, generation_id: 3, role: "examiner", status: "kept" });
     });
 
     await waitFor(() =>
       expect(transcriptTexts()).toEqual([
         ["message-learner", "Onde dói?"],
         ["message-patient", "No peito. (leva a mão ao peito)"],
-        ["message-learner", "Chame o examinador."],
+        ["message-learner", "Blumberg positivo."],
         ["message-examiner", strings.examinerAcknowledgement],
+        ["message-learner", "Qual o seu nome?"],
+        ["message-notice", strings.patientDidNotAnswerNotice],
       ]),
     );
     expect(onFetchTranscript).toHaveBeenCalledTimes(1);
@@ -320,7 +329,7 @@ describe("StationScreen real-time voice (#270)", () => {
       act(() => {
         room.worker(sentence(3, "Late."));
         room.worker({ turn_id: 2, final: true, text: "Chame o examinador." });
-        room.worker({ turn_id: 2, generation_id: 2, role: "examiner", status: "kept" });
+        room.worker({ turn_id: 2, generation_id: 2, role: "examiner", status: "acknowledged" });
       });
       await waitFor(() =>
         expect(transcriptTexts()).toEqual([
@@ -399,6 +408,38 @@ describe("StationScreen real-time voice (#270)", () => {
         room.worker(sentence(1, "Ainda dói."));
       });
       expect(transcriptTexts()).toEqual([["message-learner", "Irradia?"]]);
+    });
+
+    it("prunes a superseded partial reply but keeps examiner and unanswered outcomes (#274)", async () => {
+      const { room, onFetchTranscript } = await renderRealtime();
+
+      act(() => {
+        room.worker({ turn_id: 1, final: true, text: "Desde quando?" });
+        room.worker(sentence(0, "Começou ontem."));
+        // Barge-in: turn 1 goes stale; turn 2 is addressed to the examiner.
+        room.worker({ turn_id: 2, final: true, text: "Chame o examinador." });
+        room.worker({ turn_id: 2, generation_id: 2, role: "examiner", status: "acknowledged" });
+      });
+      expect(transcriptTexts()).toEqual([
+        ["message-learner", "Chame o examinador."],
+        ["message-examiner", strings.examinerAcknowledgement],
+      ]);
+
+      act(() => {
+        room.worker({ turn_id: 3, final: true, text: "Qual seu nome?" });
+        room.worker({ turn_id: 3, generation_id: 3, role: "examiner", status: "kept" });
+        room.worker({ turn_id: 4, final: true, text: "Irradia?" });
+        room.worker(sentence(0, "Não.", 4));
+      });
+      expect(transcriptTexts()).toEqual([
+        ["message-learner", "Chame o examinador."],
+        ["message-examiner", strings.examinerAcknowledgement],
+        ["message-learner", "Qual seu nome?"],
+        ["message-notice", strings.patientDidNotAnswerNotice],
+        ["message-learner", "Irradia?"],
+        ["message-patient", "Não."],
+      ]);
+      expect(onFetchTranscript).not.toHaveBeenCalled();
     });
 
     it("keeps the learner line of a reply that could not be delivered", async () => {

@@ -393,7 +393,12 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
         |> post(transcripts_path(id), %{turn_id: 1, text: "Quando a dor começou?"})
         |> json_response(201)
 
-      assert resp == %{"turn_id" => 1, "status" => "kept", "generation_id" => 1}
+      assert resp == %{
+               "turn_id" => 1,
+               "status" => "kept",
+               "generation_id" => 1,
+               "addressee" => "patient"
+             }
 
       {:ok, stored} = Stations.get_session(id)
       assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
@@ -880,7 +885,8 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert json_response(conn, 201) == %{
                "turn_id" => 1,
                "status" => "kept",
-               "generation_id" => 1
+               "generation_id" => 1,
+               "addressee" => "patient"
              }
 
       conn = build_conn() |> put_req_header("authorization", "Bearer " <> @secret) |> ndjson()
@@ -931,6 +937,49 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     else
       Process.sleep(20)
       wait_until(fun, attempts - 1)
+    end
+  end
+
+  describe "examiner-addressed voice turns (#274)" do
+    defmodule ExaminerJevAdapter do
+      @behaviour Backend.Stations.JevDecision.Adapter
+
+      @impl true
+      def decide_addressee(_request), do: {:ok, %{addressee: :examiner}}
+
+      @impl true
+      def decide_patient(_request), do: raise("no patient verification on the examiner path")
+
+      @impl true
+      def decide_rubric(_request), do: {:error, :not_implemented}
+    end
+
+    for stream? <- [false, true] do
+      test "answers 201 kept with addressee examiner (streamed: #{stream?})", %{conn: conn} do
+        Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
+        Application.put_env(:backend, :jev_decision_adapter, ExaminerJevAdapter)
+        id = Stations.create_session(%{audio_consent: true}).session_id
+
+        conn =
+          if unquote(stream?),
+            do: put_req_header(conn, "accept", "application/x-ndjson, application/json"),
+            else: conn
+
+        resp =
+          conn
+          |> post(transcripts_path(id), %{turn_id: 1, text: "Blumberg positivo."})
+          |> json_response(201)
+
+        assert resp == %{
+                 "turn_id" => 1,
+                 "status" => "kept",
+                 "generation_id" => 1,
+                 "addressee" => "examiner"
+               }
+
+        {:ok, stored} = Stations.get_session(id)
+        assert [%{role: :learner, text: "Blumberg positivo."}] = stored.messages
+      end
     end
   end
 end

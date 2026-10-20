@@ -8,7 +8,9 @@ defmodule BackendWeb.VoiceWorkerController do
       transcript as a learner turn via `Backend.Stations.process_voice_turn/3`,
       returning only verified `reply_text` with `turn_id` and `generation_id` on success.
       A refused patient reply keeps the learner turn and answers `201` with
-      `status: "kept"` and no text (#269).
+      `status: "kept"`, `addressee: "patient"` and no text (#269). A turn Jev
+      decides is addressed to the examiner (#274) is kept before any generation
+      and answers `201` with `status: "kept"` and `addressee: "examiner"`.
       With `application/x-ndjson` in `Accept` (#271; the worker sends `application/x-ndjson, application/json`, since the API pipeline accepts JSON) the reply is streamed: the
       first verified sentence opens a `200` chunked NDJSON body, one line per
       verified sentence (`{"type":"sentence","turn_id","generation_id","index","text"}`,
@@ -95,8 +97,14 @@ defmodule BackendWeb.VoiceWorkerController do
             reply_text: reply_text
           }
 
-        {:ok, {:kept, %{generation_id: generation_id}}} ->
-          %{type: "result", turn_id: turn_id, status: "kept", generation_id: generation_id}
+        {:ok, {:kept, %{generation_id: generation_id} = kept}} ->
+          %{
+            type: "result",
+            turn_id: turn_id,
+            status: "kept",
+            generation_id: generation_id,
+            addressee: kept_addressee(kept)
+          }
 
         {:ok, :duplicate} ->
           %{type: "result", turn_id: turn_id, status: "duplicate"}
@@ -132,14 +140,24 @@ defmodule BackendWeb.VoiceWorkerController do
         })
 
       # A refused reply kept the learner turn (#269): no text to speak.
-      {:kept, %{turn_id: ^turn_id, generation_id: generation_id}} ->
+      {:kept, %{turn_id: ^turn_id, generation_id: generation_id} = kept} ->
         conn
         |> put_status(:created)
-        |> json(%{turn_id: turn_id, status: "kept", generation_id: generation_id})
+        |> json(%{
+          turn_id: turn_id,
+          status: "kept",
+          generation_id: generation_id,
+          addressee: kept_addressee(kept)
+        })
     end
   end
 
   defp render_transcript(conn, _turn_id, {:error, reason}), do: send_error(conn, reason)
+
+  # Who the kept turn was addressed to (#274): `examiner` (acknowledged, never
+  # sent to the patient) or `patient` (the patient reply was refused).
+  defp kept_addressee(%{addressee: :examiner}), do: "examiner"
+  defp kept_addressee(_kept), do: "patient"
 
   def cancel(conn, %{"id" => session_id} = params) do
     with {:ok, cancel_target} <- validate_cancel_params(params),

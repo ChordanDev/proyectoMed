@@ -7,6 +7,8 @@ defmodule Backend.Stations.JevDecision do
     2. Closed-set rubric criterion classification (`decide_rubric/2`).
     3. Batched classification of independent rubric questions over one shared
        evidence pool (`decide_rubric_batch/2`).
+    4. Whether a learner turn is addressed to the examiner or to the patient
+       (`decide_addressee/2`, issue #274).
 
   ## Safety & Reliability Invariants
 
@@ -45,6 +47,9 @@ defmodule Backend.Stations.JevDecision do
   alias Backend.Stations.JevDecision.RubricBatch
 
   @default_deadline_ms 3_000
+  # The addressee check (#274) runs before the patient reply budget starts; one
+  # TypeSafe question takes about 0.3 s.
+  @default_addressee_deadline_ms 1_000
   @default_max_context_turns 10
   @default_max_characters 2_000
   # Worst case of a validated session: candidate (2,000) + 10 bounded turns of at
@@ -211,6 +216,41 @@ defmodule Backend.Stations.JevDecision do
       |> execute_batch_adapter(adapter_request, opts)
       |> validate_batch_output(payload.questions)
     end
+  end
+
+  @doc """
+  Decides whether the latest learner turn of `request.conversation` is addressed
+  to the examiner or to the patient (issue #274).
+
+  The adapter receives only the trust-labelled latest learner turn and the
+  bounded recent conversation (no package content), under its own budget
+  (`deadline_ms`, default `addressee_deadline_ms/0`). Returns
+  `{:ok, :examiner | :patient | :undecided}` or `{:error, reason}`; an adapter
+  without the optional callback is `{:technical_failure, :addressee_unsupported}`.
+  The caller decides what a failure means.
+  """
+  @spec decide_addressee(map(), keyword()) ::
+          {:ok, :examiner | :patient | :undecided} | {:error, technical_failure()}
+  def decide_addressee(request, opts \\ []) when is_list(opts) do
+    with {:ok, validated} <- validate_addressee_request(request, opts) do
+      adapter = resolve_adapter(opts)
+
+      if Code.ensure_loaded?(adapter) and
+           (function_exported?(adapter, :decide_addressee, 1) or
+              function_exported?(adapter, :decide_addressee, 2)) do
+        adapter
+        |> run_with_deadline(:decide_addressee, validated, validated.deadline_ms, opts)
+        |> validate_addressee_output()
+      else
+        {:error, {:technical_failure, :addressee_unsupported}}
+      end
+    end
+  end
+
+  @doc "Returns the configured budget of one addressee decision, in milliseconds."
+  @spec addressee_deadline_ms() :: pos_integer()
+  def addressee_deadline_ms do
+    Application.get_env(:backend, :jev_addressee_deadline_ms, @default_addressee_deadline_ms)
   end
 
   @doc """
@@ -387,6 +427,65 @@ defmodule Backend.Stations.JevDecision do
   defp validate_patient_request(_not_a_map, _opts) do
     {:error, {:invalid_request, :expected_map}}
   end
+
+  # The addressee request carries conversation text only: the same labelling,
+  # bounding and total cap as the patient request, without any package content.
+  defp validate_addressee_request(request, opts) when is_map(request) do
+    conversation = Map.get(request, :conversation) || Map.get(request, "conversation") || []
+    request = Map.put_new(request, :deadline_ms, addressee_deadline_ms())
+
+    with :ok <- validate_conversation(conversation),
+         {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts),
+         labelled =
+           conversation
+           |> Enum.with_index(1)
+           |> Enum.map(fn {item, idx} -> minimize_and_label_turn(item, idx) end),
+         {:ok, latest} <- latest_learner_turn(labelled),
+         bounded = Enum.take(labelled, -(opts[:max_context_turns] || max_context_turns())),
+         max_chars = opts[:max_context_characters] || max_context_characters(),
+         :ok <- validate_context_size([latest.text | Enum.map(bounded, & &1.text)], max_chars) do
+      {:ok,
+       %{
+         conversation: bounded,
+         latest_learner_turn: latest,
+         deadline_ms: deadline_ms,
+         deadline_at_monotonic_ms: deadline_at
+       }}
+    end
+  end
+
+  defp validate_addressee_request(_not_a_map, _opts),
+    do: {:error, {:invalid_request, :expected_map}}
+
+  # The turn the addressee is decided for: the last learner turn, never blank.
+  defp latest_learner_turn(labelled_turns) do
+    latest = labelled_turns |> Enum.filter(&(&1.role == :student)) |> List.last()
+
+    if latest && String.trim(latest.text) != "",
+      do: {:ok, latest},
+      else: {:error, {:invalid_request, :missing_learner_turn}}
+  end
+
+  @addressees %{
+    :examiner => :examiner,
+    :patient => :patient,
+    :undecided => :undecided,
+    "examiner" => :examiner,
+    "patient" => :patient,
+    "undecided" => :undecided
+  }
+
+  defp validate_addressee_output({:ok, response}) when is_map(response) do
+    value = Map.get(response, :addressee) || Map.get(response, "addressee")
+
+    case Map.fetch(@addressees, value) do
+      {:ok, addressee} -> {:ok, addressee}
+      :error -> {:error, :malformed_output}
+    end
+  end
+
+  defp validate_addressee_output({:error, reason}), do: normalize_error(reason)
+  defp validate_addressee_output(_other), do: {:error, :malformed_output}
 
   defp validate_candidate_text(text, max_chars) when is_binary(text) do
     trimmed = String.trim(text)

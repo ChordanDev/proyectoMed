@@ -368,6 +368,53 @@ describe("station API client", () => {
     expect((failure as { learnerTurn?: unknown }).learnerTurn).toBeUndefined();
   });
 
+  it("decodes an examiner acknowledgement with the kept learner turn (#274)", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        outcome: "examiner_acknowledged",
+        reply_text: null,
+        reply_audio_url: null,
+        learner_turn: { role: "learner", modality: "text", text: "Blumberg positivo." },
+        server_now: "2026-01-01T10:01:00Z",
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.sendMessage("session-1", {
+        role: "learner",
+        modality: "text",
+        text: "Blumberg positivo.",
+      }),
+    ).resolves.toEqual({
+      outcome: "examiner_acknowledged",
+      reply_text: null,
+      learner_turn: { role: "learner", text: "Blumberg positivo." },
+      server_now: "2026-01-01T10:01:00Z",
+    });
+  });
+
+  it("reads a reply with outcome patient_reply as a patient reply", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        outcome: "patient_reply",
+        reply_text: "Começou ontem.",
+        reply_audio_url: null,
+        server_now: "2026-01-01T10:01:00Z",
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.sendMessage("session-1", { role: "learner", modality: "text", text: "Quando?" }),
+    ).resolves.toEqual({
+      outcome: "patient_reply",
+      reply_text: "Começou ontem.",
+      reply_audio_url: null,
+      server_now: "2026-01-01T10:01:00Z",
+    });
+  });
+
   it("requests a voice session and decodes its response", async () => {
     const voiceSession = {
       url: "wss://livekit.example.test",

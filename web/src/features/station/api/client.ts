@@ -55,11 +55,26 @@ export interface SendMessageRequest {
   text: string;
 }
 
-export interface MessageReply {
+/** A verified patient reply. An older backend sends no `outcome`. */
+export interface PatientMessageReply {
+  outcome?: "patient_reply";
   reply_text: string;
   reply_audio_url?: string | null;
   server_now: string;
 }
+
+/**
+ * A learner turn addressed to the examiner (#274): the backend kept it without
+ * generating a patient reply.
+ */
+export interface ExaminerAcknowledgedReply {
+  outcome: "examiner_acknowledged";
+  reply_text: null;
+  learner_turn: SessionMessage;
+  server_now: string;
+}
+
+export type MessageReply = PatientMessageReply | ExaminerAcknowledgedReply;
 
 export interface VoiceSession {
   url: string;
@@ -290,7 +305,18 @@ const decodeMessageReply = (value: unknown): MessageReply => {
     invalid("message");
   }
 
+  if (body.outcome === "examiner_acknowledged") {
+    const learnerTurn = decodeKeptLearnerTurn(body);
+    return {
+      outcome: "examiner_acknowledged",
+      reply_text: null,
+      learner_turn: learnerTurn ?? invalid("message"),
+      server_now: stringValue(body, "server_now", "message"),
+    };
+  }
+
   return {
+    ...(body.outcome === "patient_reply" ? { outcome: "patient_reply" as const } : {}),
     reply_text: stringValue(body, "reply_text", "message"),
     server_now: stringValue(body, "server_now", "message"),
     ...(hasAudioUrl ? { reply_audio_url: audioUrl as string | null } : {}),
