@@ -34,7 +34,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `fact_stated:<n>` - the reply states fact `n` (one per fact)
     * `fact_asked:<n>` - the learner asked about the subject of fact `n`, with a
       subject that can be identified from the conversation (only for `on_request`
-      facts). Its `instructions` is an object, `question` plus the fact under `fact`,
+      facts not in `disclosed_fact_ids`, issue #286). Its `instructions` is an object, `question` plus the fact under `fact`,
       and it carries `criteria` that rule out vague questions with no identifiable
       subject; that wording was chosen from live runs (see issue #206).
     * `rule_broken:<n>` - the reply breaks response rule `n` (one per rule)
@@ -505,11 +505,17 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   A fact without an id or without content is left out: it is not sent, so a reply
   that states it is reported by the unsupported-information question instead.
+
+  A fact named in the request's `disclosed_fact_ids` (disclosed by an earlier
+  verified patient turn of the session, issue #286) gets no `fact_asked` question:
+  its disclosure is respected. Its `fact_stated` question is still asked, for
+  `used_fact_ids`, and every risk question still applies.
   """
   @spec plan_facts(map()) ::
           {:ok, [fact_plan()]} | {:error, {:technical_failure, :invalid_disclosure_condition}}
   def plan_facts(request) do
     facts = request |> package() |> Map.get("revealable_facts", []) |> List.wrap()
+    disclosed = disclosed_fact_ids(request)
 
     if Enum.all?(facts, &known_disclosure_condition?/1) do
       {:ok,
@@ -525,11 +531,19 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
            content: fact["content"],
            disclosure_condition: condition,
            stated: "fact_stated:#{n}",
-           asked: if(condition == @on_request, do: "fact_asked:#{n}")
+           asked:
+             if(condition == @on_request and fact["id"] not in disclosed, do: "fact_asked:#{n}")
          }
        end)}
     else
       {:error, {:technical_failure, :invalid_disclosure_condition}}
+    end
+  end
+
+  defp disclosed_fact_ids(request) do
+    case Map.get(request, :disclosed_fact_ids) do
+      ids when is_list(ids) -> Enum.filter(ids, &is_binary/1)
+      _other -> []
     end
   end
 
