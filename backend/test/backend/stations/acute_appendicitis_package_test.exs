@@ -217,4 +217,16 @@ defmodule Backend.Stations.AcuteAppendicitisPackageTest do
       assert criterion["rule"] == nil
     end
   end
+
+  # Issue #273: the fever answer carried "não tomou antitérmico", so Jev could not
+  # tell whether a reply to "Teve febre?" also stated the unasked medication facts.
+  test "the fever fact no longer carries the antipyretic clause" do
+    assert %{"content" => "Mediu a temperatura em casa e teve “febre baixa”."} = fact("hda-06")
+
+    assert %{"content" => "Não tomou antitérmico.", "disclosure_condition" => "on_request"} =
+             fact("hda-06-antitermico")
+
+    contents = Enum.map(package()["revealable_facts"], & &1["content"])
+    refute Enum.any?(contents, &(&1 =~ "febre" and &1 =~ "antitérmico"))
+  end
 end
