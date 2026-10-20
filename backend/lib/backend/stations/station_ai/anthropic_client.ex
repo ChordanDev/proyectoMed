@@ -53,7 +53,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   `config :backend, Backend.Stations.StationAI.AnthropicClient` holds
   `:api_key`, `:base_url` (default `https://api.anthropic.com`), `:model`
   (default `claude-opus-5-5`, the resolver and feedback), `:patient_model`
-  (default `claude-sonnet-5-5`, the patient), `:adjudicator_model` (default
+  (default `claude-haiku-5-5`, the patient, issue #308), `:adjudicator_model` (default
   `claude-haiku-5-5`, the undecided-verdict adjudicator, issue #290) and
   `:req_options`; `config/runtime.exs` writes them from `ANTHROPIC_API_KEY`,
   `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_PATIENT_MODEL` and
@@ -93,7 +93,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   @default_base_url "https://api.anthropic.com"
   @default_models %{
     model: "claude-opus-5-5",
-    patient_model: "claude-sonnet-5-5",
+    patient_model: "claude-haiku-5-5",
     adjudicator_model: "claude-haiku-5-5"
   }
   @between_tools_models ["claude-sonnet-5-5"]

@@ -48,7 +48,7 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
   end
 
   describe "request" do
-    test "posts a Sonnet 5.5 Messages request with the safety prompt, roles, low effort, thinking off and fallbacks" do
+    test "posts a Haiku 5.5 Messages request with the safety prompt, roles, low effort and thinking off" do
       test_pid = self()
 
       Req.Test.stub(PatientInspectStub, fn conn ->
@@ -70,13 +70,13 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       assert_receive {:req, "POST", "/v1/messages", headers, payload}
       assert headers["x-api-key"] == "sk-ant-test-secret"
       assert headers["anthropic-version"] == "2023-06-01"
-      assert headers["anthropic-beta"] == "server-side-fallback-2026-07-01"
+      # Issue #308: the patient defaults to Haiku 5.5, which has no
+      # server-side fallback and accepts `disabled` thinking at effort `low`.
+      refute Map.has_key?(headers, "anthropic-beta")
       refute Map.has_key?(headers, "authorization")
 
-      # Issue #256: the patient defaults to Sonnet 5.5, where `disabled`
-      # thinking is a 400 and `between_tools` (alone) is the lowest setting.
-      assert payload["model"] == "claude-sonnet-5-5"
-      assert payload["thinking"] == %{"type" => "between_tools"}
+      assert payload["model"] == "claude-haiku-5-5"
+      assert payload["thinking"] == %{"type" => "disabled"}
 
       assert payload["system"] == [
                %{
@@ -87,7 +87,7 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
              ]
 
       assert payload["output_config"] == %{"effort" => "low"}
-      assert payload["fallbacks"] == "default"
+      refute Map.has_key?(payload, "fallbacks")
       assert is_integer(payload["max_tokens"]) and payload["max_tokens"] > 0
 
       for forbidden <- ["temperature", "top_p", "top_k", "response_format"] do
@@ -181,7 +181,24 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
                       %{"effort" => "medium"}}
     end
 
-    test "a patient model other than Sonnet 5.5 gets no thinking field" do
+    test "a Sonnet 5.5 patient keeps between_tools thinking and the server-side fallback" do
+      test_pid = self()
+
+      Req.Test.stub(PatientSonnetStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:req, Map.new(conn.req_headers), Jason.decode!(body)})
+        Req.Test.json(conn, message([%{"type" => "text", "text" => "Sim."}]))
+      end)
+
+      assert {:ok, _} = reply(PatientSonnetStub, model: "claude-sonnet-5-5")
+      assert_receive {:req, headers, payload}
+      assert headers["anthropic-beta"] == "server-side-fallback-2026-07-01"
+      assert payload["model"] == "claude-sonnet-5-5"
+      assert payload["thinking"] == %{"type" => "between_tools"}
+      assert payload["fallbacks"] == "default"
+    end
+
+    test "a patient model other than Sonnet 5.5 or Haiku 5.5 gets no thinking field" do
       test_pid = self()
 
       Req.Test.stub(PatientOpusStub, fn conn ->
@@ -238,7 +255,7 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       assert_receive {:req, ["sk-ant-from-config"], "claude-haiku-5-5"}
     end
 
-    test "the patient ignores the shared model setting and defaults to Sonnet 5.5" do
+    test "the patient ignores the shared model setting and defaults to Haiku 5.5" do
       previous = Application.fetch_env(:backend, Backend.Stations.StationAI.AnthropicClient)
 
       on_exit(fn ->
@@ -270,8 +287,8 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
                )
 
       assert_receive {:payload, payload}
-      assert payload["model"] == "claude-sonnet-5-5"
-      assert payload["thinking"] == %{"type" => "between_tools"}
+      assert payload["model"] == "claude-haiku-5-5"
+      assert payload["thinking"] == %{"type" => "disabled"}
     end
   end
 
@@ -461,8 +478,8 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       assert_received {:delta, "horas."}
       assert_received {:payload, payload}
       assert payload["stream"] == true
-      assert payload["model"] == "claude-sonnet-5-5"
-      assert payload["thinking"] == %{"type" => "between_tools"}
+      assert payload["model"] == "claude-haiku-5-5"
+      assert payload["thinking"] == %{"type" => "disabled"}
       assert payload["output_config"] == %{"effort" => "low"}
       assert [%{"cache_control" => %{"type" => "ephemeral"}}] = payload["system"]
 

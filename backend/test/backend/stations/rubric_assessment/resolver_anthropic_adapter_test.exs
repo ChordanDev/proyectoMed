@@ -108,7 +108,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
 
       Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient,
         model: "claude-opus-5-5",
-        patient_model: "claude-sonnet-5-5"
+        patient_model: "claude-haiku-5-5"
       )
 
       test_pid = self()

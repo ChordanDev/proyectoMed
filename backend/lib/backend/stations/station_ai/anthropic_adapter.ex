@@ -12,10 +12,11 @@ defmodule Backend.Stations.StationAI.AnthropicAdapter do
   conversation stays in `messages`. The reply is a plain text candidate: the caller still
   bounds it (`BoundedReply`) and the CandidateGate and Jev still verify it.
 
-  The patient runs on its own model setting (`:patient_model`, default
-  `claude-sonnet-5-5`, issue #256) at `output_config.effort` `low` with
-  thinking at its lowest setting (`between_tools` on Sonnet 5.5) for
-  latency. Like the
+  The patient runs on its own model setting (`:patient_model`,
+  `ANTHROPIC_PATIENT_MODEL`, issue #256; default `claude-haiku-5-5` since
+  issue #308) at `output_config.effort` `low` with thinking at its lowest
+  setting (`disabled` on Haiku 5.5, `between_tools` on Sonnet 5.5) for
+  latency. The resolver and learner feedback keep `:model`. Like the
   OpenAI patient adapter it sets no receive timeout of its own (Req's default
   applies). Errors are the client's vocabulary (see
   `Backend.Stations.StationAI.AnthropicClient`); a refusal is
