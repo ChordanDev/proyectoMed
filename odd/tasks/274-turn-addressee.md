@@ -84,7 +84,19 @@ patient-addressed; grading and evidence unchanged; live check (pending, human).
   acknowledgements and a display-only "Aviso" entry "O paciente não respondeu a essa
   mensagem. Você pode reformulá-la." for kept refusals (text and voice). Voice events:
   `status: acknowledged` → `examiner-acknowledged`, `status: kept` → `patient-unanswered`.
-  RED: 9 failing (5 files); GREEN: web 311 passed, typecheck and lint clean.
+  RED: 9 failing (5 files); GREEN: web 311 passed, typecheck and lint clean. Commit `aa5a069`.
+- Credo flagged nesting in `validate_addressee_request/2`; flattened (refactor commit,
+  tests unchanged and green).
+
+## Verification evidence
+- `local_ci.sh` on this worktree: LOCAL CI PASSED — web 16 files / 307 tests, backend
+  `mix test` 1547 passed, e2e-support vitest 4 passed, typecheck, lint, format, compile
+  (warnings as errors), credo strict, dialyzer all clean.
+- Voice worker (not in local CI): `uv run python -m unittest` 147 tests OK.
+- GitHub Actions blocked by billing; not run.
+- Pending: live check (human) — findings, labs and plan get "Anotado." in under 1 s and
+  patient questions are answered; threshold/wording calibration on live pt-BR turns.
+- Engram mirror `odd/274-turn-addressee/tasks` saved at closure.
 
 ## Next step
-T1.
+Open the PR to `feat/237-clinician-demo-readiness`; run the live check.
