@@ -9,6 +9,8 @@ defmodule Backend.Stations.JevDecision.Adapter do
        allowed classes and evidence IDs (Rubric Decision).
     3. Optionally, classifying several independent rubric questions over one shared
        evidence pool in a single call (Rubric Batch Decision).
+    4. Optionally, deciding whether a learner turn is addressed to the examiner or
+       to the patient before any reply is generated (Addressee Decision, #274).
 
   Concrete adapters must implement this behaviour. The default adapter is
   `Backend.Stations.JevDecision.DisabledAdapter`, reflecting that live provider
@@ -129,5 +131,29 @@ defmodule Backend.Stations.JevDecision.Adapter do
   @callback decide_rubric_batch(request :: rubric_batch_request()) ::
               {:ok, rubric_batch_response() | map()} | {:error, technical_failure() | term()}
 
-  @optional_callbacks decide_rubric_batch: 1
+  @type addressee :: :examiner | :patient | :undecided
+
+  @type addressee_request :: %{
+          required(:conversation) => [conversation_turn()],
+          required(:latest_learner_turn) => conversation_turn(),
+          required(:deadline_ms) => pos_integer(),
+          optional(:deadline_at_monotonic_ms) => integer()
+        }
+
+  @doc """
+  Decides whether the latest learner turn is addressed to the examiner or to the
+  patient (issue #274), from the latest learner turn and the bounded recent
+  conversation only.
+
+  Returns `{:ok, %{addressee: :examiner | :patient | :undecided}}` or
+  `{:error, reason}` on technical failure.
+
+  This callback is optional: an adapter that does not implement it leaves every
+  turn patient-addressed.
+  """
+  @callback decide_addressee(request :: addressee_request()) ::
+              {:ok, %{required(:addressee) => addressee()} | map()}
+              | {:error, technical_failure() | term()}
+
+  @optional_callbacks decide_rubric_batch: 1, decide_addressee: 1
 end
