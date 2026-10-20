@@ -46,6 +46,21 @@ defmodule Backend.Stations.CandidateGate do
        returned instead of `{:error, :timeout}` (issue #256), so the learner
        turn is kept (#235). A timeout before any refusal stays `{:error, :timeout}`.
 
+  ## Undecided-verdict adjudication (issue #290)
+
+  A `:low_confidence` decision is not refused outright: it is handed once to
+  `Backend.Stations.PatientAdjudicator`, a small language model separate from
+  the patient generator, which reads Jev's undecided labels and scores.
+  `:deliver` delivers the candidate with the verdict's `used_fact_ids`;
+  `{:regenerate, ids}` runs the single regeneration withholding those facts;
+  a refusal, a failure, a timeout or a lack of budget keeps the behaviour
+  described above (one regeneration withholding Jev's `undecided_fact_ids`).
+  A regenerated candidate that Jev leaves undecided is adjudicated too, and is
+  delivered only on `:deliver`. The adjudicator runs inside the same monotonic
+  deadline, never after a deterministic denial, and never delivers a fact
+  Jev's clear-no "asked" answer says was not requested. A `:verified` or
+  `:semantic_refusal` decision is never adjudicated.
+
   ## Refusal causes (issue #273)
 
   Every Jev decision on a candidate, the regenerated one included, is counted
@@ -69,6 +84,7 @@ defmodule Backend.Stations.CandidateGate do
   require Logger
 
   alias Backend.Stations.JevDecision
+  alias Backend.Stations.PatientAdjudicator
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.BoundedReply
   alias Backend.Stations.TemplateApplicability
@@ -376,10 +392,21 @@ defmodule Backend.Stations.CandidateGate do
         {:ok, %{status: :verified} = decision} ->
           {:ok, delivered(candidate_text, decision)}
 
-        {:ok, %{status: status} = decision}
-        when status in [:semantic_refusal, :low_confidence] ->
+        {:ok, %{status: :low_confidence} = decision} ->
+          candidate_text
+          |> adjudicate(decision, package, conversation, deadline_at, opts)
+          |> resolve_adjudication(
+            candidate_text,
+            decision,
+            package,
+            conversation,
+            deadline_at,
+            opts
+          )
+
+        {:ok, %{status: :semantic_refusal} = decision} ->
           handle_refusal(
-            status,
+            :semantic_refusal,
             regeneration_guidance(decision),
             package,
             conversation,
@@ -393,6 +420,38 @@ defmodule Backend.Stations.CandidateGate do
           {:error, reason}
       end
     end
+  end
+
+  # ============================================================================
+  # Undecided-verdict adjudication (issue #290)
+  # ============================================================================
+
+  defp adjudicate(candidate_text, decision, package, conversation, deadline_at, opts) do
+    PatientAdjudicator.adjudicate(
+      decision,
+      candidate_text,
+      package,
+      conversation,
+      Keyword.put(opts, :deadline_at_monotonic_ms, deadline_at)
+    )
+  end
+
+  defp resolve_adjudication(:deliver, text, decision, _package, _conversation, _deadline, _opts),
+    do: {:ok, delivered(text, decision)}
+
+  defp resolve_adjudication({:regenerate, ids}, _text, _decision, package, conv, deadline, opts),
+    do: handle_refusal(:low_confidence, %{withheld_fact_ids: ids}, package, conv, deadline, opts)
+
+  # A refusal, a failure or no budget: today's low-confidence path.
+  defp resolve_adjudication({:refuse, _reason}, _text, decision, package, conv, deadline, opts) do
+    handle_refusal(
+      :low_confidence,
+      regeneration_guidance(decision),
+      package,
+      conv,
+      deadline,
+      opts
+    )
   end
 
   # The guidance names facts only by authored ids: those Jev reported as stated
@@ -476,7 +535,7 @@ defmodule Backend.Stations.CandidateGate do
       |> patient_jev_request(package, conversation, deadline_at, recheck_opts)
       |> JevDecision.decide_patient(recheck_opts)
       |> count_cause()
-      |> eval_recheck_jev_result(regen_text)
+      |> eval_recheck_jev_result(regen_text, package, conversation, deadline_at, recheck_opts)
     end
   end
 
@@ -535,14 +594,29 @@ defmodule Backend.Stations.CandidateGate do
     end
   end
 
-  defp eval_recheck_jev_result({:ok, %{status: :verified} = decision}, regen_text),
+  defp eval_recheck_jev_result({:ok, %{status: :verified} = decision}, regen_text, _, _, _, _),
     do: {:ok, delivered(regen_text, decision)}
 
-  defp eval_recheck_jev_result({:ok, %{status: status}}, _text)
-       when status in [:semantic_refusal, :low_confidence],
-       do: {:error, {:refused, status}}
+  # The regenerated candidate is adjudicated like the first one; only a deliver
+  # helps, since no second regeneration exists (issue #290).
+  defp eval_recheck_jev_result(
+         {:ok, %{status: :low_confidence} = decision},
+         regen_text,
+         package,
+         conversation,
+         deadline_at,
+         opts
+       ) do
+    case adjudicate(regen_text, decision, package, conversation, deadline_at, opts) do
+      :deliver -> {:ok, delivered(regen_text, decision)}
+      _other -> {:error, {:refused, :low_confidence}}
+    end
+  end
 
-  defp eval_recheck_jev_result({:error, reason}, _text), do: {:error, reason}
+  defp eval_recheck_jev_result({:ok, %{status: :semantic_refusal}}, _text, _, _, _, _),
+    do: {:error, {:refused, :semantic_refusal}}
+
+  defp eval_recheck_jev_result({:error, reason}, _text, _, _, _, _), do: {:error, reason}
 
   defp invoke_generator(generator, guidance, package, conversation, deadline_at) do
     remaining_ms = JevDecision.remaining_budget_ms(deadline_at)

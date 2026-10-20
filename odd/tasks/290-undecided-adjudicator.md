@@ -20,10 +20,11 @@ A `low_confidence` Jev verdict (any undecided label) is no longer an automatic r
 ## Tasks
 - [x] T1 Jev verdict carries the undecided labels with their scores and the clear-no "asked" facts; `JevDecision` passes them through (RED→GREEN) — `45b3618`
   - RED: 9 failing in `jev_decision_test.exs` + `typesafe_adapter_test.exs` (163 run). GREEN: 163 passed; full `mix test` 1607 passed.
-- [x] T2 `PatientAdjudicator` seam: behaviour, disabled and Anthropic adapters, output validation, deadline, logging; `AnthropicClient` Haiku 5.5 support; configuration (RED→GREEN) — commit recorded in T3
+- [x] T2 `PatientAdjudicator` seam: behaviour, disabled and Anthropic adapters, output validation, deadline, logging; `AnthropicClient` Haiku 5.5 support; configuration (RED→GREEN) — `4bc040c`
   - RED: 25 of 46 failing (module undefined, Haiku body/header, runtime config). GREEN: 46 passed; `mix compile --warnings-as-errors` and `mix credo --strict` clean.
   - Haiku 5.5 facts (claude-api skill): no server-side fallback (omit `fallbacks` and the beta), `thinking: disabled` accepted at effort `high` or below, effort default `medium` (we send `low`), 512-token cache minimum (the system prompt may sit below it and then silently does not cache).
-- [ ] T3 `CandidateGate` routes `low_confidence` through the adjudicator under the hard limits (first candidate and recheck; text and voice share the path) (RED→GREEN)
+- [x] T3 `CandidateGate` routes `low_confidence` through the adjudicator under the hard limits (first candidate and recheck; text and voice share the path) (RED→GREEN) — commit recorded in T4
+  - RED: 4 of 9 failing in `candidate_gate_adjudication_test.exs` (the 5 passing ones assert today's path is kept). GREEN: 9 passed; full `mix test` 1642 passed; warnings-as-errors and `credo --strict` clean.
 - [ ] T4 Design doc in `docs/design/`, README configuration rows, ADR-011 amendment draft, live check
 
 ## Routing
@@ -38,5 +39,7 @@ All tasks: delegated direct (this worker is the single bounded writer). Mapping 
 - T1 done: `TypesafeAdapter.put_adjudication_evidence/5` adds `undecided_labels` (question, fact_id or rule, score rounded to 3 decimals) and `not_asked_fact_ids` to low-confidence verdicts only; `JevDecision` validates them (malformed labels dropped, unknown not-asked ids are an invalid response like the other id lists).
 - T2 done: `Backend.Stations.PatientAdjudicator` (+ `DisabledAdapter`, `AnthropicAdapter`), `AnthropicClient` `:adjudicator_model` and Haiku handling, `config.exs` defaults, `runtime.exs` `ANTHROPIC_ADJUDICATOR_MODEL`, `PATIENT_ADJUDICATOR=off`, `PATIENT_ADJUDICATOR_DEADLINE_MS`.
 
+- T3 done: `CandidateGate` sends each `:low_confidence` decision (first candidate and recheck) to `PatientAdjudicator`; deliver delivers, regenerate uses the single regeneration with the adjudicator's ids, anything else keeps today's path. Voice sentences go through the same `verify_candidate/3`, so index > 0 (`can_retry?: false`) can only deliver or refuse.
+
 ## Next step
-T3.
+T4.
