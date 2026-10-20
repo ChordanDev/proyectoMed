@@ -162,6 +162,10 @@ def build_tts(session_id: str, context):
 class PatientVoice:
     """Delivers each accepted reply to the room: approved text first, then its audio.
 
+    A reply Phoenix streams arrives as one verified sentence at a time (#271): each
+    is published with its `segment` index and spoken after the previous sentence of
+    the same generation, while later sentences are still being generated.
+
     The text event is the only place reply text leaves the worker, and it is published
     before synthesis starts so the learner can read the reply whatever happens to the
     audio. Playback runs in background tasks, so the speech reader keeps hearing the
@@ -175,6 +179,9 @@ class PatientVoice:
         self.player = player
         self.session_id = player.session_id if player is not None else session_id
         self._tasks: set[asyncio.Task] = set()
+        # Last queued speech as (generation_id, turn_id, task): sentences of one
+        # streamed reply (#271) are spoken in order, each after the previous one.
+        self._tail: tuple[int | None, int, asyncio.Task] | None = None
 
     async def start(self) -> None:
         """Publish the patient track ahead of the first reply; a failure is retried then."""
@@ -192,22 +199,26 @@ class PatientVoice:
         if reply.is_kept_receipt():
             await self._acknowledge(reply)
             return
+        event = {
+            "session_id": self.session_id,
+            "turn_id": reply.turn_id,
+            "generation_id": reply.generation_id,
+            "role": "patient",
+            "text": reply.reply_text,
+        }
+        if reply.index is not None:
+            event["segment"] = reply.index  # one verified sentence of the reply (#271)
         try:
-            await publish(
-                self.room,
-                {
-                    "session_id": self.session_id,
-                    "turn_id": reply.turn_id,
-                    "generation_id": reply.generation_id,
-                    "role": "patient",
-                    "text": reply.reply_text,
-                },
-            )
+            await publish(self.room, event)
         except Exception:
             # Called from the speech reader: a room publish error must not stop the
             # job. Phoenix keeps the approved text, and the reply is still spoken.
             await self._publish_failure(reply, "text_delivery_failed")
-        task = asyncio.create_task(self._speak(reply))
+        previous = None
+        if self._tail is not None and self._tail[0] == reply.generation_id:
+            previous = self._tail[2]
+        task = asyncio.create_task(self._speak(reply, previous))
+        self._tail = (reply.generation_id, reply.turn_id, task)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -237,6 +248,11 @@ class PatientVoice:
             return
         try:
             self.player.cancel_turn(turn_id)
+            # Sentences of that turn still waiting for their turn to speak (#271).
+            if self._tail is not None and self._tail[1] <= turn_id:
+                generation_id = self._tail[0]
+                if generation_id is not None:
+                    self.player.tracker.cancel(generation_id=generation_id)
         except Exception:
             # Called from the speech reader: a playback error must not stop the job.
             logger.warning(
@@ -257,7 +273,13 @@ class PatientVoice:
         if self.player is not None:
             await self.player.aclose()
 
-    async def _speak(self, reply: VoiceTurnReply) -> None:
+    async def _speak(
+        self, reply: VoiceTurnReply, previous: asyncio.Task | None = None
+    ) -> None:
+        if previous is not None:
+            # The previous sentence of the same reply finishes first; a cancelled
+            # generation is then skipped by the player's fence.
+            await asyncio.wait({previous})
         if self.player is None:
             failure = VoiceFailure("synthesis_failed")
             logger.warning(

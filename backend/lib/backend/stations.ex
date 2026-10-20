@@ -23,6 +23,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
+  alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
@@ -769,28 +770,85 @@ defmodule Backend.Stations do
              | term()}
   def process_voice_turn(session_id, turn_id, text)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
-    case String.trim(text) do
-      "" ->
-        {:error, :invalid_transcript}
+    case admit_voice_turn(session_id, turn_id, text) do
+      {:ok, generation_id} when is_integer(generation_id) ->
+        process_voice_reply(session_id, turn_id, generation_id)
 
-      trimmed_text ->
-        with {:ok, session} <- Conversation.fetch(session_id),
-             :ok <- ensure_voice_turn_open(session),
-             :ok <- ensure_audio_consent(session),
-             {:ok, :committed, generation_id} <-
-               Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
-          process_voice_reply(session_id, turn_id, generation_id)
-        else
-          {:ok, :duplicate} ->
-            {:ok, :duplicate}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+      other ->
+        other
     end
   end
 
   def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
+
+  @typedoc "One verified sentence handed to the voice worker (#271)."
+  @type voice_sentence ::
+          {:sentence,
+           %{
+             turn_id: pos_integer(),
+             generation_id: pos_integer(),
+             index: non_neg_integer(),
+             text: String.t()
+           }}
+
+  @doc """
+  Processes a real-time learner voice turn like `process_voice_turn/3`, but
+  generates the patient reply as a stream and hands it to `sink` one verified
+  sentence at a time (issue #271), so the worker can speak the first sentence
+  while the next one is generated and verified.
+
+  `sink` is `fn {:sentence, %{turn_id, generation_id, index, text}}, acc ->
+  {:cont, acc} | {:halt, acc} end`; it runs in the calling process, in order.
+  `text` is the sentence to speak: verified, without stage directions
+  (`Backend.Stations.TTS.StageDirections`, applied per sentence). A sentence
+  made only of stage directions is verified and stored but not handed over.
+  `{:halt, acc}` (e.g. the worker went away) stops the reply after the
+  sentences already accepted.
+
+  Verification (ADR-011): each complete sentence is verified through
+  `verify_patient_reply/3` with the whole conversation and the sentences of
+  this reply already verified (the candidate is the reply so far), before it
+  is handed over. Nothing unverified is handed over, stored or logged.
+
+    * The first refused sentence stops the reply. The verified sentences
+      already handed over are stored as the patient turn and the rest is
+      discarded; a failure after the first spoken sentence does the same.
+    * When nothing was handed over, the #256/#269 rules apply unchanged: a
+      refused first sentence gets the gate's single regeneration (a whole
+      reply, verified as a whole, then handed over sentence by sentence); a
+      refusal that stands keeps the learner turn; a reply with nothing
+      speakable keeps it as `:unspeakable`; a technical failure fails the
+      generation as `:station_ai_unavailable`.
+    * A turn cancelled or superseded mid-reply hands nothing more over, stores
+      nothing and returns `{:error, :stale_generation}`.
+
+  Returns `{result, acc}`, where `result` has the shape of
+  `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
+  joined by a space. Each sentence logs its generation and verification
+  latency without content (`Backend.Stations.StationAI.SentenceStream`).
+  """
+  @spec stream_voice_turn(
+          String.t(),
+          pos_integer(),
+          String.t(),
+          acc,
+          (voice_sentence(), acc -> {:cont, acc} | {:halt, acc})
+        ) :: {term(), acc}
+        when acc: term()
+  def stream_voice_turn(session_id, turn_id, text, acc, sink)
+      when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) and
+             is_function(sink, 2) do
+    case admit_voice_turn(session_id, turn_id, text) do
+      {:ok, generation_id} when is_integer(generation_id) ->
+        stream_voice_reply(session_id, turn_id, generation_id, acc, sink)
+
+      other ->
+        {other, acc}
+    end
+  end
+
+  def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink),
+    do: {{:error, :invalid_transcript}, acc}
 
   @doc """
   Explicitly cancels a pending voice turn generation (#119).
@@ -932,27 +990,149 @@ defmodule Backend.Stations do
            |> resolve_voice_reply(session_id, turn_id, generation_id) do
       {:ok, result}
     else
-      {:error, :stale_generation} ->
-        {:error, :stale_generation}
+      {:error, reason} ->
+        fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
 
-      # The deadline cut this generation off: an end of session, not a failure.
-      {:error, :station_time_elapsed} ->
-        {:error, :station_time_elapsed}
+  # Commits the learner voice turn and opens its generation, at most once per
+  # turn: `{:ok, generation_id}`, `{:ok, :duplicate}` or an error.
+  defp admit_voice_turn(session_id, turn_id, text) do
+    case String.trim(text) do
+      "" ->
+        {:error, :invalid_transcript}
 
-      {:error, :completed} ->
-        {:error, :completed}
-
-      {:error, :expired} ->
-        {:error, :expired}
-
-      {:error, :not_found} ->
-        {:error, :not_found}
-
-      {:error, _reason} ->
-        case Conversation.fail_generation(session_id, generation_id, :station_ai_unavailable) do
-          {:ok, :failed} -> {:error, :station_ai_unavailable}
-          {:error, reason} -> {:error, reason}
+      trimmed_text ->
+        with {:ok, session} <- Conversation.fetch(session_id),
+             :ok <- ensure_voice_turn_open(session),
+             :ok <- ensure_audio_consent(session),
+             {:ok, :committed, generation_id} <-
+               Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
+          {:ok, generation_id}
         end
+    end
+  end
+
+  # Session-state outcomes pass through; the deadline cutting a generation off
+  # is an end of session, not a failure. Anything else fails the generation.
+  defp fail_voice_reply(_session_id, _generation_id, reason)
+       when reason in [:stale_generation, :station_time_elapsed, :completed, :expired, :not_found],
+       do: {:error, reason}
+
+  defp fail_voice_reply(session_id, generation_id, _reason) do
+    case Conversation.fail_generation(session_id, generation_id, :station_ai_unavailable) do
+      {:ok, :failed} -> {:error, :station_ai_unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp stream_voice_reply(session_id, turn_id, generation_id, acc, sink) do
+    package = get_active_package()
+
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_voice_turn_open(session) do
+      context = format_context(session, package)
+
+      %{outcome: outcome, delivered: delivered, acc: acc} =
+        SentenceStream.run(
+          generate: &stream_patient_reply(package, context, &1),
+          verify: &verify_voice_sentence(package, session, context, &1, &2),
+          deliver: fn sentence, index, acc ->
+            deliver_voice_sentence(
+              session_id,
+              turn_id,
+              generation_id,
+              {sentence, index},
+              acc,
+              sink
+            )
+          end,
+          acc: acc
+        )
+
+      {resolve_streamed_reply(session_id, turn_id, generation_id, outcome, delivered), acc}
+    else
+      {:error, reason} -> {fail_voice_reply(session_id, generation_id, reason), acc}
+    end
+  end
+
+  # The gate's single regeneration is allowed only for the first sentence,
+  # when nothing has been spoken yet.
+  defp verify_voice_sentence(package, session, context, candidate, index) do
+    params = %{deadline_ms: patient_reply_deadline_ms()}
+    params = if index > 0, do: Map.put(params, :verify_opts, can_retry?: false), else: params
+    opts = build_verify_opts(package, session, context, params)
+
+    case verify_patient_reply(package, candidate, opts) do
+      {:ok, ^candidate} -> :verified
+      {:ok, regenerated} when is_binary(regenerated) -> {:regenerated, regenerated}
+      {:error, {:refused, refusal}} -> {:refused, refusal}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # A cancelled or superseded turn hands nothing more over.
+  defp deliver_voice_sentence(session_id, turn_id, generation_id, {sentence, index}, acc, sink) do
+    case Conversation.active_generation(session_id) do
+      {:ok, ^generation_id} ->
+        case StageDirections.strip(sentence) do
+          "" ->
+            {:cont, acc}
+
+          spoken ->
+            event = %{turn_id: turn_id, generation_id: generation_id, index: index, text: spoken}
+            sink.({:sentence, event}, acc)
+        end
+
+      _other ->
+        {:halt, acc}
+    end
+  end
+
+  defp resolve_streamed_reply(session_id, turn_id, generation_id, outcome, delivered) do
+    spoken =
+      delivered
+      |> Enum.map(&StageDirections.strip/1)
+      |> Enum.reject(&(&1 == ""))
+
+    cond do
+      spoken != [] ->
+        stored_text = delivered |> Enum.join() |> String.trim()
+
+        with {:ok, _session} <-
+               Conversation.resolve_patient_reply(session_id, generation_id, stored_text) do
+          {:ok,
+           %{
+             reply_text: Enum.join(spoken, " "),
+             turn_id: turn_id,
+             generation_id: generation_id,
+             used_facts: []
+           }}
+        end
+
+      match?({:refused, _refusal}, outcome) ->
+        {:refused, refusal} = outcome
+        keep_voice_turn(session_id, turn_id, generation_id, refusal)
+
+      outcome == :complete and delivered != [] ->
+        keep_voice_turn(session_id, turn_id, generation_id, :unspeakable)
+
+      outcome == :halted ->
+        fail_halted_voice_reply(session_id, generation_id)
+
+      true ->
+        reason = with {:error, reason} <- outcome, do: reason
+        fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
+
+  # A halt before anything was spoken is a stale turn when the generation is
+  # no longer active, and a failure when the worker could not take a sentence.
+  defp fail_halted_voice_reply(session_id, generation_id) do
+    case Conversation.active_generation(session_id) do
+      {:ok, ^generation_id} -> fail_voice_reply(session_id, generation_id, :halted)
+      {:ok, _other} -> {:error, :stale_generation}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1140,6 +1320,37 @@ defmodule Backend.Stations do
 
     Logger.debug(
       "[Stations] patient_generation latency_ms=#{JevDecision.monotonic_now_ms() - started_at} outcome=#{outcome}"
+    )
+
+    result
+  end
+
+  # Streams the patient generation (#271). An adapter without `stream_reply/3`
+  # is streamed as one piece once its whole reply is ready. Logs only the
+  # outcome and latency, like `generate_patient_reply/2`.
+  defp stream_patient_reply(package, context, on_text) do
+    started_at = JevDecision.monotonic_now_ms()
+    adapter = resolve_station_ai_adapter()
+
+    result =
+      if Code.ensure_loaded?(adapter) and function_exported?(adapter, :stream_reply, 3) do
+        case adapter.stream_reply(package, context, on_text) do
+          {:ok, %{text: text}} when is_binary(text) -> {:ok, text}
+          {:ok, text} when is_binary(text) -> {:ok, text}
+          {:error, reason} -> {:error, reason}
+          other -> {:error, {:invalid_adapter_output, other}}
+        end
+      else
+        with {:ok, %{text: text}} when is_binary(text) <- run_patient_adapter(package, context) do
+          on_text.(text)
+          {:ok, text}
+        end
+      end
+
+    outcome = if match?({:ok, _}, result), do: "ok", else: "error"
+
+    Logger.debug(
+      "[Stations] patient_generation streamed=true latency_ms=#{JevDecision.monotonic_now_ms() - started_at} outcome=#{outcome}"
     )
 
     result

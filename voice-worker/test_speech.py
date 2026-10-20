@@ -456,6 +456,29 @@ class SpeechPlayerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sources[0].closed, 1)
         self.assertEqual(self.tts.closed, 1)
 
+    async def test_first_audio_of_a_turn_logs_its_latency_once(self):
+        first = accepted(self.tracker, 1)
+        first.speech_ended_at = asyncio.get_running_loop().time() - 0.25
+        with self.assertLogs("voice-worker.speech", level="INFO") as logs:
+            task = await self.start(first)
+            self.tts.streams[0].queue.put_nowait(chunk("a1"))
+            self.tts.streams[0].queue.put_nowait(chunk("a2"))
+            self.tts.streams[0].queue.put_nowait(None)
+            await task
+            # A later sentence of the same turn is not a first audio.
+            again = VoiceTurnReply(1, "committed", 1, "Ainda dói.")
+            again.speech_ended_at = first.speech_ended_at
+            task = await self.start(again)
+            self.tts.streams[1].queue.put_nowait(chunk("b1"))
+            self.tts.streams[1].queue.put_nowait(None)
+            await task
+
+        lines = [line for line in logs.output if "first patient audio" in line]
+        self.assertEqual(len(lines), 1)
+        ms = int(lines[0].rsplit("after ", 1)[1].split(" ms")[0])
+        self.assertGreaterEqual(ms, 250)
+        self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
+
     async def test_reply_text_never_appears_in_logs_or_repr(self):
         with self.assertLogs("voice-worker", level="DEBUG") as logs:
             reply = accepted(self.tracker, 1)

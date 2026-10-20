@@ -9,6 +9,13 @@ defmodule BackendWeb.VoiceWorkerController do
       returning only verified `reply_text` with `turn_id` and `generation_id` on success.
       A refused patient reply keeps the learner turn and answers `201` with
       `status: "kept"` and no text (#269).
+      With `application/x-ndjson` in `Accept` (#271; the worker sends `application/x-ndjson, application/json`, since the API pipeline accepts JSON) the reply is streamed: the
+      first verified sentence opens a `200` chunked NDJSON body, one line per
+      verified sentence (`{"type":"sentence","turn_id","generation_id","index","text"}`,
+      text without stage directions), then one last line: the `result`
+      (`status: "committed"` with the spoken `reply_text`) or an `error` with
+      the same code the status response would carry. A turn that speaks
+      nothing answers exactly as without the header.
       Duplicate finals stay 200 and never replay text. Once the station time is
       over it answers `409` with `station_time_elapsed`: a new turn at or after
       the deadline, any turn on a session the timer completed, or a reply that
@@ -25,6 +32,8 @@ defmodule BackendWeb.VoiceWorkerController do
 
   alias Backend.Stations
 
+  @ndjson "application/x-ndjson"
+
   plug :authenticate
 
   def show(conn, %{"id" => session_id}) do
@@ -35,34 +44,102 @@ defmodule BackendWeb.VoiceWorkerController do
   end
 
   def create_transcript(conn, %{"id" => session_id} = params) do
-    with {:ok, turn_id, text} <- validate_transcript(params),
-         {:ok, result} <- Stations.process_voice_turn(session_id, turn_id, text) do
-      case result do
-        :duplicate ->
-          conn
-          |> put_status(:ok)
-          |> json(%{turn_id: turn_id, status: "duplicate"})
+    case validate_transcript(params) do
+      {:ok, turn_id, text} ->
+        if sentence_stream?(conn) do
+          {result, conn} =
+            Stations.stream_voice_turn(session_id, turn_id, text, conn, &send_sentence/2)
 
-        %{reply_text: reply_text, turn_id: ^turn_id, generation_id: generation_id} ->
-          conn
-          |> put_status(:created)
-          |> json(%{
+          finish_transcript(conn, turn_id, result)
+        else
+          render_transcript(conn, turn_id, Stations.process_voice_turn(session_id, turn_id, text))
+        end
+
+      {:error, reason} ->
+        send_error(conn, reason)
+    end
+  end
+
+  defp sentence_stream?(conn) do
+    conn
+    |> get_req_header("accept")
+    |> Enum.any?(&String.contains?(&1, @ndjson))
+  end
+
+  # The first verified sentence opens the chunked NDJSON body (#271).
+  defp send_sentence({:sentence, sentence}, conn) do
+    conn =
+      if conn.state == :chunked,
+        do: conn,
+        else: conn |> put_resp_content_type(@ndjson) |> send_chunked(200)
+
+    line = Map.put(sentence, :type, "sentence")
+
+    case chunk(conn, [Jason.encode_to_iodata!(line), "\n"]) do
+      {:ok, conn} -> {:cont, conn}
+      {:error, _reason} -> {:halt, conn}
+    end
+  end
+
+  # Once a sentence was streamed the status is sent, so the result or the
+  # error is the last line; otherwise the answer is the single-reply form.
+  defp finish_transcript(%Plug.Conn{state: :chunked} = conn, turn_id, result) do
+    line =
+      case result do
+        {:ok, %{reply_text: reply_text, generation_id: generation_id}} ->
+          %{
+            type: "result",
             turn_id: turn_id,
             status: "committed",
             generation_id: generation_id,
             reply_text: reply_text
-          })
+          }
 
-        # A refused reply kept the learner turn (#269): no text to speak.
-        {:kept, %{turn_id: ^turn_id, generation_id: generation_id}} ->
-          conn
-          |> put_status(:created)
-          |> json(%{turn_id: turn_id, status: "kept", generation_id: generation_id})
+        {:ok, {:kept, %{generation_id: generation_id}}} ->
+          %{type: "result", turn_id: turn_id, status: "kept", generation_id: generation_id}
+
+        {:ok, :duplicate} ->
+          %{type: "result", turn_id: turn_id, status: "duplicate"}
+
+        {:error, reason} ->
+          {_status, code} = error_details(reason)
+          %{type: "error", error: code}
       end
-    else
-      {:error, reason} -> send_error(conn, reason)
+
+    case chunk(conn, [Jason.encode_to_iodata!(line), "\n"]) do
+      {:ok, conn} -> conn
+      {:error, _reason} -> conn
     end
   end
+
+  defp finish_transcript(conn, turn_id, result), do: render_transcript(conn, turn_id, result)
+
+  defp render_transcript(conn, turn_id, {:ok, result}) do
+    case result do
+      :duplicate ->
+        conn
+        |> put_status(:ok)
+        |> json(%{turn_id: turn_id, status: "duplicate"})
+
+      %{reply_text: reply_text, turn_id: ^turn_id, generation_id: generation_id} ->
+        conn
+        |> put_status(:created)
+        |> json(%{
+          turn_id: turn_id,
+          status: "committed",
+          generation_id: generation_id,
+          reply_text: reply_text
+        })
+
+      # A refused reply kept the learner turn (#269): no text to speak.
+      {:kept, %{turn_id: ^turn_id, generation_id: generation_id}} ->
+        conn
+        |> put_status(:created)
+        |> json(%{turn_id: turn_id, status: "kept", generation_id: generation_id})
+    end
+  end
+
+  defp render_transcript(conn, _turn_id, {:error, reason}), do: send_error(conn, reason)
 
   def cancel(conn, %{"id" => session_id} = params) do
     with {:ok, cancel_target} <- validate_cancel_params(params),
@@ -143,4 +220,5 @@ defmodule BackendWeb.VoiceWorkerController do
   defp error_details(:expired), do: {410, "session_expired"}
   defp error_details(:completed), do: {422, "session_completed"}
   defp error_details(:station_ai_unavailable), do: {503, "station_ai_unavailable"}
+  defp error_details(_other), do: {503, "station_ai_unavailable"}
 end

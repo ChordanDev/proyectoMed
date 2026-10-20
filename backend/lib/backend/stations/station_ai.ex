@@ -60,6 +60,19 @@ defmodule Backend.Stations.StationAI do
               | {:ok, %{text: String.t()}}
               | {:error, term()}
 
+  @doc """
+  Optional streaming form of `next_reply/2` (issue #271), used by the
+  real-time voice path. The adapter calls `on_text` with each piece of the
+  reply as it is generated, in order, and returns the whole reply at the end.
+  Every piece is unverified candidate text; the caller verifies it sentence by
+  sentence before anything is spoken or stored. An adapter without it is
+  streamed as one piece once `next_reply/2` returns.
+  """
+  @callback stream_reply(package(), context(), (String.t() -> any())) ::
+              {:ok, %{text: String.t()}} | {:error, term()}
+
+  @optional_callbacks stream_reply: 3
+
   @default_refusal_text "Não tenho essa informação"
 
   @doc """

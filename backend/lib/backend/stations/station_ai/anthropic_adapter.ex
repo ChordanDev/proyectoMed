@@ -37,21 +37,41 @@ defmodule Backend.Stations.StationAI.AnthropicAdapter do
   @spec next_reply(StationAI.package(), StationAI.context(), keyword()) ::
           {:ok, %{text: String.t()}} | {:error, AnthropicClient.error()}
   def next_reply(package, context, opts) do
-    config =
+    with {:ok, text} <- AnthropicClient.create_message(config(opts), request(package, context)) do
+      {:ok, %{text: text}}
+    end
+  end
+
+  @impl true
+  def stream_reply(package, context, on_text), do: stream_reply(package, context, on_text, [])
+
+  @doc """
+  Streams the same patient request (issue #271), calling `on_text` with each
+  text delta as it arrives. Every delta is unverified candidate text: the
+  caller verifies it sentence by sentence before anything is spoken or stored.
+  """
+  @spec stream_reply(StationAI.package(), StationAI.context(), (String.t() -> any()), keyword()) ::
+          {:ok, %{text: String.t()}} | {:error, AnthropicClient.error()}
+  def stream_reply(package, context, on_text, opts) do
+    with {:ok, text} <-
+           AnthropicClient.stream_message(config(opts), request(package, context), on_text) do
+      {:ok, %{text: text}}
+    end
+  end
+
+  defp config(opts),
+    do:
       AnthropicClient.config(opts, effort: @effort, model_key: :patient_model, thinking: :lowest)
 
+  defp request(package, context) do
     {stable_prompt, per_turn_prompt} = StationAI.system_prompt_parts(package, context)
 
-    request = %{
+    %{
       system: stable_prompt,
       system_suffix: per_turn_prompt,
       messages: messages(context),
       max_tokens: @max_tokens
     }
-
-    with {:ok, text} <- AnthropicClient.create_message(config, request) do
-      {:ok, %{text: text}}
-    end
   end
 
   defp messages(context) do

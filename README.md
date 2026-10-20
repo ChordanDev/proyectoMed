@@ -429,6 +429,29 @@ it, in this order:
    audio frame by frame on one patient audio track (`patient-voice`) of the
    `voice-worker` participant.
 
+**Sentence by sentence (#271).** The worker asks Phoenix to stream the reply
+(`Accept: application/x-ndjson, application/json` on the same transcript POST, same
+bearer secret). Phoenix streams the patient generation from the Messages API, splits it
+into sentences and verifies each complete sentence with Jev, with the whole
+conversation and the sentences already verified, while the next one is generated. Each
+verified sentence is sent as one NDJSON line
+(`{"type":"sentence","turn_id","generation_id","index","text"}`, without stage
+directions), then one last `result` line (`status: "committed"`, the spoken
+`reply_text`) or an `error` line carrying the same code the status response would. The
+worker publishes and speaks each sentence as it arrives, in order, so the first one is
+heard while the rest of the reply is still being generated. Nothing unverified is sent:
+the first refused sentence stops the reply, and the sentences already spoken are what
+the session transcript stores. When nothing was spoken the rules below are unchanged
+(one regeneration after a refused first sentence, then a kept learner turn), and
+Phoenix answers with the single JSON body, as it does for a worker that does not ask for
+the stream. A barge-in while the reply streams cancels the turn: the remaining
+sentences are dropped and, as for any cancelled generation, nothing of it is stored.
+
+Latency is logged without content: Phoenix logs each sentence's
+`voice_sentence index=<i> generation_ms=<ms> verification_ms=<ms> outcome=<o>`, and the
+worker logs `first patient audio for session <id> turn <n> generation <g> after <ms> ms`,
+measured from the end of the learner's utterance. The live target is under 1.5 s.
+
 Playback is fenced by the turn's generation: a newer accepted turn, a barge-in on a
 pending turn, a stale result or the learner disconnecting stops the provider stream,
 clears the buffered audio and drops any frame that arrives late. Phoenix remains the
@@ -450,12 +473,14 @@ through the subscribed audio track.
 | `PHOENIX_TURN_TIMEOUT_S` | no    | Seconds each transcript POST waits for Phoenix. Default `35` (see below). |
 | `PHOENIX_TURN_RETRIES`   | no    | Retries of a transcript POST after a timeout or disconnect. Default `1`.  |
 
-Phoenix answers a transcript only after the patient reply is generated and verified,
-so the worker waits for the server budget (#269): the patient generation (Phoenix sets
+Without the sentence stream Phoenix answers a transcript only after the patient reply
+is generated and verified; with it, the timeout applies to each wait for the next line.
+Either way the worker allows for the server budget (#269): the patient generation (Phoenix sets
 no timeout of its own, so Req's 15 s receive timeout applies), the Jev verification
 budget (`jev_decision_default_deadline_ms`, 3 s) and one regeneration after a refusal
 (another 15 s), plus 2 s headroom: 15 + 3 + 15 + 2 = 35 s. Context and cancel calls
-keep a 5 s timeout. A retry repeats the same `turn_id`, so it never adds a turn. An
+keep a 5 s timeout. A retry repeats the same `turn_id`, so it never adds a turn; once a sentence
+was received the POST is not retried. An
 invalid value keeps the default.
 
 If the key or the voice id is missing the worker keeps transcribing and delivers every
@@ -467,6 +492,7 @@ reply as text followed by a `synthesis_failed` event.
 | --------------------- | --------------------------------------------------------------------------------------- |
 | Learner transcript    | `{"session_id", "turn_id", "final", "text"}`                                            |
 | Patient text          | `{"session_id", "turn_id", "generation_id", "role": "patient", "text"}`                 |
+| Patient sentence      | `{"session_id", "turn_id", "generation_id", "role": "patient", "text", "segment"}` (#271) |
 | Kept learner turn     | `{"session_id", "turn_id", "generation_id", "role": "examiner", "status": "kept"}`      |
 | Speech failure        | `{"session_id", "turn_id", "generation_id", "failure": "synthesis_failed"}`             |
 | Text delivery failure | `{"session_id", "turn_id", "generation_id", "failure": "text_delivery_failed"}`         |

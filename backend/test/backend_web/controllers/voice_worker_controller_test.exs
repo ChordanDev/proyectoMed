@@ -749,6 +749,178 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
   defp restore_env(key, nil), do: Application.delete_env(:backend, key)
   defp restore_env(key, value), do: Application.put_env(:backend, key, value)
 
+  describe "POST transcripts as a sentence stream (#271)" do
+    defmodule CompletingJevAdapter do
+      @behaviour Backend.Stations.JevDecision.Adapter
+
+      # Verifies the first sentence; while the second is verified the turn is
+      # cancelled, so the reply ends after one spoken sentence.
+      @impl true
+      def decide_patient(%{candidate_text: candidate}) do
+        if String.contains?(candidate, "REMÉDIO") do
+          id = Application.fetch_env!(:backend, :completing_session_id)
+          Backend.Stations.cancel_voice_turn(id, turn_id: 1)
+        end
+
+        {:ok, %{status: :verified}}
+      end
+
+      @impl true
+      def decide_rubric(_request), do: {:error, :not_implemented}
+    end
+
+    defmodule SentenceStreamAdapter do
+      @behaviour Backend.Stations.StationAI
+      @impl true
+      def next_reply(_package, _context), do: {:error, :no_regeneration}
+
+      @impl true
+      def stream_reply(_package, _context, on_text) do
+        pieces = ["*(geme)* Começou ontem. ", "Tomei REMÉDIO", " ontem. ", "Ainda dói."]
+        Enum.each(pieces, on_text)
+        {:ok, %{text: Enum.join(pieces)}}
+      end
+    end
+
+    defmodule MarkerRefusingJevAdapter do
+      @behaviour Backend.Stations.JevDecision.Adapter
+
+      @impl true
+      def decide_patient(%{candidate_text: candidate}) do
+        if String.contains?(candidate, "REMÉDIO"),
+          do: {:ok, %{status: :semantic_refusal}},
+          else: {:ok, %{status: :verified}}
+      end
+
+      @impl true
+      def decide_rubric(_request), do: {:error, :not_implemented}
+    end
+
+    defp ndjson(conn),
+      do: put_req_header(conn, "accept", "application/x-ndjson, application/json")
+
+    defp lines(conn) do
+      conn
+      |> response(200)
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+    end
+
+    test "streams each verified sentence, then the result", %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, SentenceStreamAdapter)
+      id = Stations.create_session(%{audio_consent: true}).session_id
+
+      conn = conn |> ndjson() |> post(transcripts_path(id), %{turn_id: 1, text: "Quando?"})
+
+      assert ["application/x-ndjson" <> _] = get_resp_header(conn, "content-type")
+
+      assert lines(conn) == [
+               %{
+                 "type" => "sentence",
+                 "turn_id" => 1,
+                 "generation_id" => 1,
+                 "index" => 0,
+                 "text" => "Começou ontem."
+               },
+               %{
+                 "type" => "sentence",
+                 "turn_id" => 1,
+                 "generation_id" => 1,
+                 "index" => 1,
+                 "text" => "Tomei REMÉDIO ontem."
+               },
+               %{
+                 "type" => "sentence",
+                 "turn_id" => 1,
+                 "generation_id" => 1,
+                 "index" => 2,
+                 "text" => "Ainda dói."
+               },
+               %{
+                 "type" => "result",
+                 "turn_id" => 1,
+                 "generation_id" => 1,
+                 "status" => "committed",
+                 "reply_text" => "Começou ontem. Tomei REMÉDIO ontem. Ainda dói."
+               }
+             ]
+    end
+
+    test "a refused second sentence streams only the first", %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, SentenceStreamAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, MarkerRefusingJevAdapter)
+      id = Stations.create_session(%{audio_consent: true}).session_id
+
+      conn = conn |> ndjson() |> post(transcripts_path(id), %{turn_id: 1, text: "Quando?"})
+      body = response(conn, 200)
+
+      refute body =~ "REMÉDIO"
+
+      assert [%{"type" => "sentence", "text" => "Começou ontem."}, result] = lines(conn)
+
+      assert result == %{
+               "type" => "result",
+               "turn_id" => 1,
+               "generation_id" => 1,
+               "status" => "committed",
+               "reply_text" => "Começou ontem."
+             }
+
+      assert {:ok, %{messages: [_, %{role: :patient, text: "*(geme)* Começou ontem."}]}} =
+               Stations.get_session(id)
+    end
+
+    test "a turn with nothing spoken answers like the single-reply form", %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, TestRefusingJevAdapter)
+      id = Stations.create_session(%{audio_consent: true}).session_id
+
+      conn = conn |> ndjson() |> post(transcripts_path(id), %{turn_id: 1, text: "Quando?"})
+
+      assert json_response(conn, 201) == %{
+               "turn_id" => 1,
+               "status" => "kept",
+               "generation_id" => 1
+             }
+
+      conn = build_conn() |> put_req_header("authorization", "Bearer " <> @secret) |> ndjson()
+
+      assert %{"status" => "duplicate"} =
+               conn
+               |> post(transcripts_path(id), %{turn_id: 1, text: "Quando?"})
+               |> json_response(200)
+    end
+
+    test "errors before any sentence keep their status codes", %{conn: conn} do
+      conn = ndjson(conn)
+
+      assert %{"error" => "invalid_transcript"} =
+               json_response(post(conn, transcripts_path("x"), %{turn_id: 1, text: " "}), 400)
+
+      assert %{"error" => "session_not_found"} =
+               json_response(
+                 post(conn, transcripts_path("missing"), %{turn_id: 1, text: "Oi"}),
+                 404
+               )
+    end
+
+    test "an error after a streamed sentence ends the stream with an error line", %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, SentenceStreamAdapter)
+      id = Stations.create_session(%{audio_consent: true}).session_id
+      # The session is completed by the user while the first sentence is handed over.
+      Application.put_env(:backend, :jev_decision_adapter, CompletingJevAdapter)
+      Application.put_env(:backend, :completing_session_id, id)
+      on_exit(fn -> Application.delete_env(:backend, :completing_session_id) end)
+
+      conn = conn |> ndjson() |> post(transcripts_path(id), %{turn_id: 1, text: "Quando?"})
+
+      assert [%{"type" => "sentence", "index" => 0}, %{"type" => "error", "error" => error}] =
+               lines(conn)
+
+      assert error in ["stale_generation", "session_completed"]
+    end
+  end
+
   defp wait_until(fun, attempts \\ 100)
 
   defp wait_until(_fun, 0), do: flunk("condition not met in time")

@@ -162,6 +162,30 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
     end
   end
 
+  @doc """
+  Streams one Messages request (`"stream": true`, issue #271) and calls
+  `on_text` with each `text_delta` as it arrives, in order, from the calling
+  process. The request body is `body/2` plus `stream`, so the cached system
+  prefix, thinking and effort are unchanged.
+
+  Returns the same outcomes as `create_message/2` once the stream ends:
+  `{:ok, text}` (all deltas joined) after a normal stop, `{:error, :refused}`
+  after a refusal, `{:error, :malformed_response}` after any other stop or
+  without text, `{:error, :upstream_error}` on a non-2xx status or an `error`
+  event. Deltas already handed over before an error stay handed over: the
+  caller treats every delta as unverified candidate text. A non-2xx body is
+  never handed over. Server-side fallbacks continue on the same stream, so
+  their text arrives as more deltas.
+  """
+  @spec stream_message(config(), request(), (String.t() -> any())) ::
+          {:ok, String.t()} | {:error, error()}
+  def stream_message(config, request, on_text) when is_function(on_text, 1) do
+    with :ok <- validate_credentials(config.api_key) do
+      body = config |> body(request) |> Map.put("stream", true)
+      stream_post(config, body, on_text)
+    end
+  end
+
   @doc "The request body sent for `request` under `config`."
   @spec body(config(), request()) :: map()
   def body(config, request) do
@@ -209,20 +233,20 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
 
   defp validate_credentials(_key), do: {:error, :missing_credentials}
 
+  defp request_headers(config) do
+    [
+      {"x-api-key", config.api_key},
+      {"anthropic-version", @anthropic_version},
+      {"anthropic-beta", @fallback_beta}
+    ]
+  end
+
   defp post(config, body) do
     url = String.trim_trailing(config.base_url, "/") <> "/v1/messages"
 
     req_opts =
       Keyword.merge(
-        [
-          headers: [
-            {"x-api-key", config.api_key},
-            {"anthropic-version", @anthropic_version},
-            {"anthropic-beta", @fallback_beta}
-          ],
-          json: body,
-          retry: false
-        ],
+        [headers: request_headers(config), json: body, retry: false],
         config.req_options
       )
 
@@ -243,6 +267,103 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
         {:error, :network_error}
     end
   end
+
+  @stream_key :anthropic_stream
+
+  defp stream_post(config, body, on_text) do
+    url = String.trim_trailing(config.base_url, "/") <> "/v1/messages"
+
+    into = fn {:data, data}, {req, resp} ->
+      state = Req.Response.get_private(resp, @stream_key, new_stream_state())
+
+      state =
+        if resp.status in 200..299,
+          do: consume_sse(state, data, on_text),
+          else: state
+
+      {:cont, {req, Req.Response.put_private(resp, @stream_key, state)}}
+    end
+
+    req_opts =
+      Keyword.merge(
+        [headers: request_headers(config), json: body, retry: false, into: into],
+        config.req_options
+      )
+
+    started = System.monotonic_time()
+
+    case Req.post(url, req_opts) do
+      {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
+        state = Req.Response.get_private(resp, @stream_key, new_stream_state())
+        log_usage(config.model, %{"usage" => state.usage}, started)
+        stream_result(state)
+
+      {:ok, %Req.Response{}} ->
+        {:error, :upstream_error}
+
+      {:error, %Req.TransportError{reason: reason}} ->
+        transport_error(reason)
+
+      {:error, _exception} ->
+        {:error, :network_error}
+    end
+  end
+
+  defp new_stream_state,
+    do: %{buffer: "", text: [], stop_reason: nil, error?: false, usage: %{}}
+
+  # SSE events end with a blank line; an event cut across chunks waits in the
+  # buffer for the rest of it.
+  defp consume_sse(state, data, on_text) do
+    parts = String.split(state.buffer <> String.replace(data, "\r\n", "\n"), "\n\n")
+    {events, [buffer]} = Enum.split(parts, -1)
+
+    Enum.reduce(events, %{state | buffer: buffer}, &apply_event(&1, &2, on_text))
+  end
+
+  defp apply_event(raw_event, state, on_text) do
+    data =
+      raw_event
+      |> String.split("\n")
+      |> Enum.filter(&String.starts_with?(&1, "data:"))
+      |> Enum.map_join("\n", &(&1 |> String.replace_prefix("data:", "") |> String.trim_leading()))
+
+    case Jason.decode(data) do
+      {:ok, event} when is_map(event) -> apply_decoded(event, state, on_text)
+      _other -> state
+    end
+  end
+
+  defp apply_decoded(
+         %{"type" => "content_block_delta", "delta" => %{"type" => "text_delta", "text" => text}},
+         state,
+         on_text
+       )
+       when is_binary(text) do
+    on_text.(text)
+    %{state | text: [state.text, text]}
+  end
+
+  defp apply_decoded(%{"type" => "message_start", "message" => %{"usage" => usage}}, state, _)
+       when is_map(usage),
+       do: %{state | usage: Map.merge(state.usage, usage)}
+
+  defp apply_decoded(%{"type" => "message_delta", "delta" => %{"stop_reason" => stop}}, state, _)
+       when is_binary(stop),
+       do: %{state | stop_reason: stop}
+
+  defp apply_decoded(%{"type" => "error"}, state, _), do: %{state | error?: true}
+  defp apply_decoded(_event, state, _), do: state
+
+  defp stream_result(%{error?: true}), do: {:error, :upstream_error}
+  defp stream_result(%{stop_reason: "refusal"}), do: {:error, :refused}
+
+  defp stream_result(%{stop_reason: stop, text: text}) when stop in @normal_stops do
+    text = IO.iodata_to_binary(text)
+    if String.trim(text) == "", do: {:error, :malformed_response}, else: {:ok, text}
+  end
+
+  defp stream_result(_state), do: {:error, :malformed_response}
 
   defp log_usage(model, body, started) do
     latency_ms =
