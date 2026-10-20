@@ -37,6 +37,10 @@ was stored. The worker publishes no end-of-turn signal for a streamed reply.
 - [x] T1 — Worker: end-of-turn event `{"session_id", "turn_id", "generation_id", "role": "patient", "status": "complete"}` after a streamed reply settles; README event table. Route: inline (worker files already mapped). Checks: `uv run python -m unittest`.
 - [x] T2 — Web: parse `segment` and the end event; one growing bubble per turn; reconcile on the end event; delivery failure keeps the learner line. Route: inline (station feature files already mapped). Checks: `npm --prefix web test`, typecheck.
 - [x] T3 — Local CI (`local_ci.sh`) and PR.
+- [x] T4 — Jorge round 1 (C1/TR-1): a newer voice turn drops the partial reply and learner
+  line of older unresolved streamed turns, whose end event never comes (barge-in, lost end
+  publish). Route: inline (two already-mapped station files). Checks: `npm --prefix web test`,
+  local CI.
 
 ## Acceptance criteria
 
@@ -68,6 +72,12 @@ was stored. The worker publishes no end-of-turn signal for a streamed reply.
   passed, process-level E2E 4/4, typecheck, lint, format, compile, credo, dialyzer clean.
   Worker: 149/149 `uv run python -m unittest` (not part of local CI). GitHub Actions is
   blocked by billing.
+
+- T4: `dropSupersededVoiceTurns` removes `voicePartial` entries of turns older than the
+  newest one (and their learner lines) unless the turn is kept (resolving or undelivered);
+  `StationScreen` calls it on any event of a newer turn, deletes the stale segment buffers
+  and ignores late sentences of an older turn. No client timeout; worker unchanged. RED: 2
+  of 13 voice screen tests failed. GREEN: station 305/305.
 
 ## Next step
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DisplayMessage } from "./StationScreen";
 import {
   addVoiceLearnerTurn,
+  dropSupersededVoiceTurns,
   joinVoiceSegments,
   resolveVoiceTurn,
   showVoiceReplySoFar,
@@ -167,6 +168,29 @@ describe("streamed voice replies (#281)", () => {
       "Irradia?",
       "Não.",
     ]);
+  });
+
+  it("drops the partial replies of older turns with their learner lines", () => {
+    let messages = addVoiceLearnerTurn(textTurn, 1, "Desde quando?");
+    messages = showVoiceReplySoFar(messages, 1, "Começou ontem.");
+    messages = addVoiceLearnerTurn(messages, 2, "Irradia?");
+    messages = showVoiceReplySoFar(messages, 2, "Não.");
+
+    expect(dropSupersededVoiceTurns(messages, 2)).toEqual([
+      ...textTurn,
+      { role: "learner", text: "Irradia?", voiceTurnId: 2 },
+      { role: "patient", text: "Não.", voiceTurnId: 2, voicePartial: true },
+    ]);
+    expect(dropSupersededVoiceTurns(messages, 2, new Set([1]))).toBe(messages);
+    expect(dropSupersededVoiceTurns(messages, 1)).toBe(messages);
+  });
+
+  it("keeps the resolved replies of older turns", () => {
+    let messages = addVoiceLearnerTurn([], 1, "Desde quando?");
+    messages = showVoiceReplySoFar(messages, 1, "Começou ontem.");
+    messages = resolveVoiceTurn(messages, 1, { role: "patient", text: "Começou ontem." });
+
+    expect(dropSupersededVoiceTurns(messages, 2)).toBe(messages);
   });
 });
 

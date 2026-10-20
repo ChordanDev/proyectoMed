@@ -104,6 +104,32 @@ export const showVoiceReplySoFar = (
   );
 };
 
+/**
+ * Drops the partial replies of voice turns older than `turnId`, with their
+ * learner lines (#281). A newer turn means the worker superseded them (barge-in):
+ * their end event never comes, and Phoenix did not keep them. `keptTurns` are
+ * turns still being resolved or kept for another reason; they stay.
+ */
+export const dropSupersededVoiceTurns = (
+  messages: DisplayMessage[],
+  turnId: number,
+  keptTurns: ReadonlySet<number> = new Set(),
+): DisplayMessage[] => {
+  const superseded = new Set(
+    messages
+      .filter(
+        (message) =>
+          message.voicePartial === true &&
+          message.voiceTurnId !== undefined &&
+          message.voiceTurnId < turnId &&
+          !keptTurns.has(message.voiceTurnId),
+      )
+      .map((message) => message.voiceTurnId),
+  );
+  if (superseded.size === 0) return messages;
+  return messages.filter((message) => !superseded.has(message.voiceTurnId));
+};
+
 /** The sentences of a streamed reply, in `segment` order. */
 export const joinVoiceSegments = (segments: ReadonlyMap<number, string>): string =>
   [...segments.entries()]

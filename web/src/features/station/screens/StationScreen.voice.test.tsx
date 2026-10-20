@@ -359,6 +359,48 @@ describe("StationScreen real-time voice (#270)", () => {
       );
     });
 
+    it("drops the partial reply of a turn superseded before its end event", async () => {
+      const { room, onFetchTranscript } = await renderRealtime({
+        stored: [
+          { role: "learner", text: "Irradia?" },
+          { role: "patient", text: "Não." },
+        ],
+      });
+
+      act(() => {
+        room.worker({ turn_id: 1, final: true, text: "Desde quando?" });
+        room.worker(sentence(0, "Começou ontem."));
+        // Barge-in: turn 1 goes stale, so its end event never comes.
+        room.worker({ turn_id: 2, final: true, text: "Irradia?" });
+        room.worker({ turn_id: 2, generation_id: 2, role: "patient", text: "Não." });
+      });
+      await waitFor(() =>
+        expect(transcriptTexts()).toEqual([
+          ["message-learner", "Irradia?"],
+          ["message-patient", "Não."],
+        ]),
+      );
+      expect(onFetchTranscript).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a superseded partial reply as soon as the next learner turn arrives", async () => {
+      const { room } = await renderRealtime();
+
+      act(() => {
+        room.worker({ turn_id: 1, final: true, text: "Desde quando?" });
+        room.worker(sentence(0, "Começou ontem."));
+        room.worker({ turn_id: 1, generation_id: 1, failure: "text_delivery_failed" });
+        room.worker({ turn_id: 2, final: true, text: "Irradia?" });
+      });
+      expect(transcriptTexts()).toEqual([["message-learner", "Irradia?"]]);
+
+      // A late sentence of the superseded turn is not shown again.
+      act(() => {
+        room.worker(sentence(1, "Ainda dói."));
+      });
+      expect(transcriptTexts()).toEqual([["message-learner", "Irradia?"]]);
+    });
+
     it("keeps the learner line of a reply that could not be delivered", async () => {
       const { room } = await renderRealtime({
         stored: [

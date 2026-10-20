@@ -15,6 +15,7 @@ import { StationBrief } from "./StationBrief";
 import { VoicePanel } from "./VoicePanel";
 import {
   addVoiceLearnerTurn,
+  dropSupersededVoiceTurns,
   joinVoiceSegments,
   resolveVoiceTurn,
   showVoiceReplySoFar,
@@ -165,6 +166,8 @@ export function StationScreen({
   const voiceResolvedRef = useRef<Set<number>>(new Set());
   // Sentences of each streamed reply by `segment` index (#281).
   const voiceSegmentsRef = useRef<Map<number, Map<number, string>>>(new Map());
+  // The newest voice turn seen: an older streamed turn was superseded (#281).
+  const voiceLatestTurnRef = useRef(0);
   // Turns whose reply could not be shown: their learner line stays (#280 C2).
   const voiceUndeliveredRef = useRef<Set<number>>(new Set());
   const realtime = realtimeVoice !== undefined;
@@ -416,7 +419,12 @@ export function StationScreen({
 
   const showVoiceSegment = useCallback(
     (turnId: number, segment: number, text: string) => {
-      if (voiceResolvedRef.current.has(turnId)) return;
+      if (
+        voiceResolvedRef.current.has(turnId) ||
+        turnId < voiceLatestTurnRef.current
+      ) {
+        return;
+      }
       const segments = voiceSegmentsRef.current.get(turnId) ?? new Map();
       segments.set(segment, text);
       voiceSegmentsRef.current.set(turnId, segments);
@@ -428,8 +436,26 @@ export function StationScreen({
     [keptVoiceTurns],
   );
 
+  // A newer turn supersedes the streamed replies of older unresolved turns:
+  // the worker cancelled them, so their end event never comes (#281).
+  const supersedeOlderVoiceTurns = useCallback(
+    (turnId: number) => {
+      if (turnId <= voiceLatestTurnRef.current) return;
+      voiceLatestTurnRef.current = turnId;
+      const kept = keptVoiceTurns();
+      for (const olderTurn of [...voiceSegmentsRef.current.keys()]) {
+        if (olderTurn < turnId && !kept.has(olderTurn)) {
+          voiceSegmentsRef.current.delete(olderTurn);
+        }
+      }
+      setMessages((previous) => dropSupersededVoiceTurns(previous, turnId, kept));
+    },
+    [keptVoiceTurns],
+  );
+
   const handleVoiceEvent = useCallback(
     (event: VoiceTranscriptEvent) => {
+      if (event.type !== "fatal") supersedeOlderVoiceTurns(event.turnId);
       switch (event.type) {
         case "learner":
           if (!event.final) {
@@ -485,7 +511,7 @@ export function StationScreen({
           return;
       }
     },
-    [keptVoiceTurns, resolveVoiceReply, showVoiceSegment],
+    [keptVoiceTurns, resolveVoiceReply, showVoiceSegment, supersedeOlderVoiceTurns],
   );
 
   const handleSend = useCallback(async () => {
