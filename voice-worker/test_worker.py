@@ -167,6 +167,88 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
 
         await self.disconnect(task)
 
+    # Issue #271: Phoenix streams the verified sentences of a reply.
+    async def test_first_streamed_sentence_is_spoken_while_the_reply_still_streams(self):
+        more = asyncio.Event()
+        self.client.streams[1] = ["Começou ontem.", more, "Ainda dói."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+
+        # The first sentence is being synthesized; Phoenix has not answered yet.
+        self.assertEqual(self.tts.texts, ["Começou ontem."])
+        self.assertNotIn("commit_end", [entry[0] for entry in self.client.call_log])
+        self.tts.streams[0].queue.put_nowait(chunk("s1"))
+        await settle()
+
+        more.set()
+        await asyncio.sleep(0.01)
+        # The next sentence waits for the one being spoken.
+        self.assertEqual(self.tts.texts, ["Começou ontem."])
+        self.tts.streams[0].queue.put_nowait(None)
+        await asyncio.sleep(0.01)
+        self.assertEqual(self.tts.texts, ["Começou ontem.", "Ainda dói."])
+        self.tts.streams[1].queue.put_nowait(chunk("s2"))
+        self.tts.streams[1].queue.put_nowait(None)
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(self.sources[0].frames, ["s1", "s2"])
+        self.assertEqual(
+            [(e["turn_id"], e["segment"], e["text"]) for e in self.room.patient_events()],
+            [(1, 0, "Começou ontem."), (1, 1, "Ainda dói.")],
+        )
+        # Each sentence's text event precedes its audio.
+        timeline = self.room.timeline
+        first_text = timeline.index(("data", self.room.patient_events()[0]))
+        self.assertLess(first_text, timeline.index(("frame", "s1")))
+        # The settled turn is accepted once and never spoken again as a whole.
+        self.assertEqual(self.tracker.last_accepted_turn_id, 1)
+        await self.disconnect(task)
+        self.assertEqual(len(self.tts.texts), 2)
+
+    async def test_barge_in_mid_stream_stops_the_reply_and_its_later_sentences(self):
+        more = asyncio.Event()
+        self.client.streams[1] = ["Começou ontem.", more, "Ainda dói."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        first = self.tts.streams[0]
+        first.queue.put_nowait(chunk("s1"))
+        await settle()
+
+        self.queue.put_nowait(event(INTERIM, "espera"))
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(first.closed, 1)
+        self.assertIn({"generation_id": None, "turn_id": 1}, self.client.cancel_calls)
+        more.set()
+        await asyncio.sleep(0.01)
+        self.assertEqual(self.tts.texts, ["Começou ontem."])
+        self.assertEqual(self.sources[0].frames, ["s1"])
+        await self.disconnect(task)
+
+    async def test_first_audio_latency_is_logged_without_content(self):
+        self.client.streams[1] = ["Começou ontem.", "Ainda dói."]
+        with self.assertLogs("voice-worker", level="INFO") as logs:
+            task = self.connect()
+            await self.say("quando")
+            await settle()
+            self.tts.streams[0].queue.put_nowait(chunk("s1"))
+            self.tts.streams[0].queue.put_nowait(None)
+            await asyncio.sleep(0.01)
+            self.tts.streams[1].queue.put_nowait(chunk("s2"))
+            self.tts.streams[1].queue.put_nowait(None)
+            await asyncio.sleep(0.01)
+            await self.disconnect(task)
+
+        output = "\n".join(logs.output)
+        first_audio = [line for line in logs.output if "first patient audio" in line]
+        self.assertEqual(len(first_audio), 1)
+        self.assertRegex(first_audio[0], r"session s1 turn 1 generation 1 after \d+ ms")
+        self.assertNotIn("Começou", output)
+        self.assertNotIn("Ainda", output)
+        self.assertNotIn("quando", output)
+
     async def test_barge_in_on_the_pending_turn_cancels_playback(self):
         self.client.commit_delays[2] = asyncio.Event()
         task = self.connect()

@@ -54,6 +54,8 @@ class SpeechPlayer:
         self._speaking: VoiceTurnReply | None = None
         self._task: asyncio.Task | None = None
         self._closed = False
+        # Highest turn whose first audio frame was logged (#271).
+        self._first_audio_turn = 0
 
     @property
     def speaking(self) -> VoiceTurnReply | None:
@@ -168,6 +170,24 @@ class SpeechPlayer:
             and reply.generation_id not in self.tracker.cancelled_generations
         )
 
+    def _log_first_audio(self, reply: VoiceTurnReply) -> None:
+        """Log, once per turn, the time from end of learner speech to first audio (#271).
+
+        Content-free: only identifiers and milliseconds.
+        """
+        ended_at = getattr(reply, "speech_ended_at", None)
+        if ended_at is None or reply.turn_id <= self._first_audio_turn:
+            return
+        self._first_audio_turn = reply.turn_id
+        elapsed_ms = round((asyncio.get_running_loop().time() - ended_at) * 1000)
+        logger.info(
+            "first patient audio for session %s turn %d generation %d after %d ms",
+            self.session_id,
+            reply.turn_id,
+            reply.generation_id,
+            elapsed_ms,
+        )
+
     def _stop(self) -> None:
         task, self._task, self._speaking = self._task, None, None
         if task is not None:
@@ -191,6 +211,7 @@ class SpeechPlayer:
                     # Fenced by the tracker alone: drop this frame and every later one.
                     self._source.clear_queue()
                     return None
+                self._log_first_audio(reply)
                 await self._source.capture_frame(audio.frame)
             # Still this generation until the buffered tail is heard, so a cancel in
             # that window clears it instead of being a finished-generation no-op.

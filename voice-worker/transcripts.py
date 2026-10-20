@@ -5,6 +5,7 @@ Nothing in this module logs or stores transcript text, audio or provider payload
 
 # pyright: reportMissingImports=false
 import asyncio
+import json
 import logging
 import sys
 
@@ -31,6 +32,23 @@ DEFAULT_TURN_RETRIES = 1
 REQUEST_TIMEOUT_S = 5.0
 # Drain headroom on top of every transcript attempt at end of stream.
 EOF_HEADROOM_S = 5.0
+# The transcript POST asks Phoenix to stream the verified sentences of the reply
+# (#271); JSON stays acceptable because Phoenix answers a turn that speaks
+# nothing, and older servers answer every turn, with one JSON body.
+NDJSON = "application/x-ndjson"
+STREAM_ACCEPT = f"{NDJSON}, application/json"
+# Error codes a sentence stream may end with, mapped to the kinds the status
+# responses produce.
+_STREAM_ERROR_KINDS = {
+    "unauthorized": "auth",
+    "stale_generation": "stale_generation",
+    "station_time_elapsed": "station_time_elapsed",
+    "no_consent": "session_inactive",
+    "session_not_found": "session_inactive",
+    "session_expired": "session_inactive",
+    "session_completed": "session_inactive",
+    "station_ai_unavailable": "disconnected",
+}
 
 
 class VoiceFailure(Exception):
@@ -63,6 +81,9 @@ class VoiceTurnReply:
 
     `status` is `committed` (a verified reply to speak), `kept` (the patient reply
     was refused and Phoenix kept the learner turn without one, #269) or `duplicate`.
+    A streamed sentence (#271) is a `committed` reply carrying one verified sentence
+    and its `index`. `speech_ended_at` is the event-loop time the learner's
+    utterance ended, set by `TurnManager` for the first-audio latency log.
     """
 
     def __init__(
@@ -71,11 +92,14 @@ class VoiceTurnReply:
         status: str,
         generation_id: int | None = None,
         reply_text: str | None = None,
+        index: int | None = None,
     ):
         self.turn_id = turn_id
         self.status = status
         self.generation_id = generation_id
         self.reply_text = reply_text
+        self.index = index
+        self.speech_ended_at: float | None = None
 
     def is_committed_receipt(self) -> bool:
         """Validate runtime metadata before trusting it as server fence evidence."""
@@ -214,6 +238,27 @@ class TurnTracker:
             return False
         return reply.is_kept_receipt() or bool(reply.reply_text)
 
+    def accept_sentence(self, reply: VoiceTurnReply) -> VoiceTurnReply | None:
+        """Accept one streamed verified sentence of the pending turn (#271).
+
+        The sentence makes its generation the active one, so it can be spoken, but
+        does not settle the turn: it stays pending (and open to barge-in) until
+        Phoenix's result arrives and `accept_reply` settles it.
+        """
+        if not isinstance(reply, VoiceTurnReply) or not reply.is_committed_receipt():
+            return None
+        if self.is_turn_stale(reply.turn_id):
+            return None
+        if reply.generation_id in self.cancelled_generations:
+            return None
+        if (
+            self.active_generation_id is not None
+            and reply.generation_id < self.active_generation_id
+        ):
+            return None
+        self.active_generation_id = reply.generation_id
+        return reply
+
     def accept_reply(self, reply: VoiceTurnReply) -> VoiceTurnReply | None:
         """Accepts typed generation-bound reply metadata; rejects superseded or cancelled results."""
         if not self.is_valid_reply(reply):
@@ -279,24 +324,44 @@ class PhoenixClient:
     async def context(self) -> dict:
         return await self._request("GET", self._path)
 
-    async def commit(self, turn_id: int, text: str) -> VoiceTurnReply:
+    async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
         """Commits a final transcript; returns typed VoiceTurnReply.
 
         Each attempt waits for the server budget (`turn_timeout`, #269), and a
         transport failure is retried `turn_retries` times: `turn_id` makes the retry
         idempotent.
+
+        With `on_sentence` (#271) the worker asks for the reply as a stream:
+        `on_sentence` is awaited with each verified sentence (a `committed`
+        `VoiceTurnReply` with `index`) as Phoenix sends it, and the returned reply
+        is Phoenix's final result. Once a sentence was handed over the request is
+        never retried: a retry could only answer `duplicate`.
         """
         body = {"turn_id": turn_id, "text": text}
         path = self._path + "/transcripts"
         attempts_left = self._turn_retries
+        handed_over = False
+
+        async def hand_over(sentence: VoiceTurnReply) -> None:
+            nonlocal handed_over
+            handed_over = True
+            await on_sentence(sentence)
+
         while True:
             try:
-                result = await self._request(
-                    "POST", path, json=body, timeout=self._turn_timeout
-                )
+                if on_sentence is None:
+                    result = await self._request(
+                        "POST", path, json=body, timeout=self._turn_timeout
+                    )
+                else:
+                    result = await self._stream_turn(path, body, hand_over)
                 break
             except VoiceFailure as failure:
-                if failure.kind not in ("timeout", "disconnected") or attempts_left <= 0:
+                if (
+                    failure.kind not in ("timeout", "disconnected")
+                    or attempts_left <= 0
+                    or handed_over
+                ):
                     raise
                 attempts_left -= 1
 
@@ -306,6 +371,56 @@ class PhoenixClient:
             generation_id=result.get("generation_id"),
             reply_text=result.get("reply_text"),
         )
+
+    async def _stream_turn(self, path: str, body: dict, on_sentence) -> dict:
+        """POST a transcript asking for NDJSON; returns the final result object.
+
+        Lines are `sentence`, then one `result` or `error`. A single JSON body (a
+        turn that speaks nothing, or an older server) is read as before.
+        """
+        try:
+            async with self._http.stream(
+                "POST",
+                path,
+                json=body,
+                timeout=self._turn_timeout,
+                headers={"accept": STREAM_ACCEPT},
+            ) as response:
+                if not response.headers.get("content-type", "").startswith(NDJSON):
+                    await response.aread()
+                    return self._decode(response)
+                if response.status_code != 200:
+                    self._check_status(response)
+                    raise VoiceFailure("malformed")
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    item = _stream_item(line)
+                    kind = item.get("type")
+                    if kind == "sentence":
+                        await on_sentence(
+                            VoiceTurnReply(
+                                turn_id=item.get("turn_id"),
+                                status="committed",
+                                generation_id=item.get("generation_id"),
+                                reply_text=item.get("text"),
+                                index=item.get("index"),
+                            )
+                        )
+                    elif kind == "result" and isinstance(item.get("status"), str):
+                        return item
+                    elif kind == "error":
+                        raise VoiceFailure(
+                            _STREAM_ERROR_KINDS.get(item.get("error"), "malformed")
+                        )
+                    else:
+                        raise VoiceFailure("malformed")
+        except httpx.TimeoutException:
+            raise VoiceFailure("timeout") from None
+        except httpx.HTTPError:
+            raise VoiceFailure("disconnected") from None
+        # The stream ended without its result line.
+        raise VoiceFailure("disconnected")
 
     async def cancel(
         self, generation_id: int | None = None, turn_id: int | None = None
@@ -330,7 +445,17 @@ class PhoenixClient:
             raise VoiceFailure("timeout") from None
         except httpx.HTTPError:
             raise VoiceFailure("disconnected") from None
+        return self._decode(response)
 
+    def _decode(self, response: httpx.Response) -> dict:
+        self._check_status(response)
+        try:
+            return response.json()
+        except ValueError:
+            raise VoiceFailure("malformed") from None
+
+    @staticmethod
+    def _check_status(response: httpx.Response) -> None:
         if response.status_code == 401:
             raise VoiceFailure("auth")
         if response.status_code in (403, 404, 410, 422):
@@ -341,10 +466,17 @@ class PhoenixClient:
             raise VoiceFailure("malformed")
         if response.status_code >= 300:
             raise VoiceFailure("disconnected")
-        try:
-            return response.json()
-        except ValueError:
-            raise VoiceFailure("malformed") from None
+
+
+def _stream_item(line: str) -> dict:
+    """One NDJSON line as a dict; anything else is malformed. Never logged."""
+    try:
+        item = json.loads(line)
+    except ValueError:
+        raise VoiceFailure("malformed") from None
+    if not isinstance(item, dict):
+        raise VoiceFailure("malformed")
+    return item
 
 
 def _conflict_kind(response: httpx.Response) -> str:
@@ -389,6 +521,7 @@ class TurnManager:
         self._all_tasks: set[asyncio.Task] = set()
         self._active_commit_tasks: set[asyncio.Task] = set()
         self._queued_commit: tuple[int, str] | None = None
+        self._speech_ended_at: dict[int, float] = {}
         self._queued_task: asyncio.Task | None = None
         self._cancel_requested_turns: set[int] = set()
         self._local_cancel_turn: int | None = None
@@ -465,6 +598,8 @@ class TurnManager:
                 raise VoiceFailure("malformed")
         self.pending_turn_id = turn_id
         self._queued_commit = (turn_id, text)
+        # End of the learner's utterance, for the first-audio latency log (#271).
+        self._speech_ended_at[turn_id] = asyncio.get_running_loop().time()
         if len(self._unresolved_cancel_turns) >= self.MAX_DISPATCHED_TURNS:
             self._cancel_requested_turns.update(
                 turn
@@ -568,7 +703,29 @@ class TurnManager:
             # Dispatch can outlive the HTTP await (including an idempotent retry
             # reporting duplicate). Only correlated server evidence releases it.
             self._unresolved_cancel_turns.add(turn_id)
-            reply = await self.phoenix.commit(turn_id, text)
+            speech_ended_at = self._speech_ended_at.pop(turn_id, None)
+            for older in [t for t in self._speech_ended_at if t < turn_id]:
+                del self._speech_ended_at[older]  # superseded before dispatch
+            streamed = False
+
+            async def on_sentence(sentence: VoiceTurnReply) -> None:
+                # Each verified sentence is spoken as it arrives (#271); the turn
+                # stays pending, so a barge-in still cancels it.
+                nonlocal streamed
+                if sentence.turn_id != turn_id:
+                    return
+                accepted_sentence = self.tracker.accept_sentence(sentence)
+                if accepted_sentence is None:
+                    return
+                streamed = True
+                accepted_sentence.speech_ended_at = speech_ended_at
+                if self.on_reply is not None:
+                    result = self.on_reply(accepted_sentence)
+                    if asyncio.iscoroutine(result):
+                        await result
+
+            reply = await self.phoenix.commit(turn_id, text, on_sentence=on_sentence)
+            reply.speech_ended_at = speech_ended_at
             if (
                 isinstance(reply, VoiceTurnReply)
                 and reply.is_settled_receipt()
@@ -586,7 +743,9 @@ class TurnManager:
                 self._capacity_changed.set()
             if reply.turn_id == turn_id and not self.tracker.is_turn_stale(turn_id):
                 accepted = self.tracker.accept_reply(reply)
-                if accepted is not None and self.on_reply is not None:
+                # A streamed reply was already spoken sentence by sentence; its
+                # result only settles the turn.
+                if accepted is not None and self.on_reply is not None and not streamed:
                     result = self.on_reply(accepted)
                     if asyncio.iscoroutine(result):
                         await result

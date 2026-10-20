@@ -558,6 +558,198 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ctx.exception.kind, "malformed")
 
 
+
+def ndjson(*items) -> bytes:
+    return b"".join(json.dumps(item).encode() + b"\n" for item in items)
+
+
+def sentence_line(index: int, text: str, turn_id: int = 1, generation_id: int = 1):
+    return {
+        "type": "sentence",
+        "turn_id": turn_id,
+        "generation_id": generation_id,
+        "index": index,
+        "text": text,
+    }
+
+
+class PhoenixClientSentenceStreamTest(unittest.IsolatedAsyncioTestCase):
+    """The transcript POST as a stream of verified sentences (#271)."""
+
+    def client(self, handler, **options):
+        return PhoenixClient(
+            "http://phoenix",
+            "secret",
+            "s1",
+            transport=httpx.MockTransport(handler),
+            **options,
+        )
+
+    async def test_hands_over_each_sentence_in_order_then_returns_the_result(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=ndjson(
+                    sentence_line(0, "Começou ontem."),
+                    sentence_line(1, "Ainda dói."),
+                    {
+                        "type": "result",
+                        "turn_id": 1,
+                        "generation_id": 1,
+                        "status": "committed",
+                        "reply_text": "Começou ontem. Ainda dói.",
+                    },
+                ),
+            )
+
+        sentences = []
+
+        async def on_sentence(sentence):
+            sentences.append(sentence)
+
+        async with self.client(handler) as client:
+            reply = await client.commit(1, "Quando?", on_sentence=on_sentence)
+
+        self.assertIn("application/x-ndjson", requests[0].headers["accept"])
+        self.assertIn("application/json", requests[0].headers["accept"])
+        self.assertEqual(requests[0].headers["authorization"], "Bearer secret")
+        self.assertEqual(
+            [(s.turn_id, s.generation_id, s.index, s.reply_text) for s in sentences],
+            [(1, 1, 0, "Começou ontem."), (1, 1, 1, "Ainda dói.")],
+        )
+        self.assertTrue(all(s.is_committed_receipt() for s in sentences))
+        self.assertEqual(
+            reply,
+            VoiceTurnReply(1, "committed", 1, "Começou ontem. Ainda dói."),
+        )
+
+    async def test_a_single_json_reply_is_still_understood(self):
+        def handler(request):
+            return httpx.Response(
+                201, json={"turn_id": 1, "status": "kept", "generation_id": 1}
+            )
+
+        on_sentence = AsyncMock()
+        async with self.client(handler) as client:
+            reply = await client.commit(1, "Quando?", on_sentence=on_sentence)
+
+        on_sentence.assert_not_called()
+        self.assertTrue(reply.is_kept_receipt())
+
+    async def test_status_errors_keep_their_kinds(self):
+        def handler(request):
+            return httpx.Response(409, json={"error": "station_time_elapsed"})
+
+        async with self.client(handler) as client:
+            with self.assertRaises(VoiceFailure) as ctx:
+                await client.commit(1, "Quando?", on_sentence=AsyncMock())
+        self.assertEqual(ctx.exception.kind, "station_time_elapsed")
+
+    async def test_an_error_line_after_a_sentence_is_a_typed_failure(self):
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=ndjson(
+                    sentence_line(0, "Começou ontem."),
+                    {"type": "error", "error": "stale_generation"},
+                ),
+            )
+
+        on_sentence = AsyncMock()
+        async with self.client(handler) as client:
+            with self.assertRaises(VoiceFailure) as ctx:
+                await client.commit(1, "Quando?", on_sentence=on_sentence)
+        self.assertEqual(ctx.exception.kind, "stale_generation")
+        on_sentence.assert_awaited_once()
+
+    async def test_a_stream_cut_after_a_sentence_is_not_retried(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=ndjson(sentence_line(0, "Começou ontem.")),
+            )
+
+        async with self.client(handler, turn_retries=2) as client:
+            with self.assertRaises(VoiceFailure) as ctx:
+                await client.commit(1, "Quando?", on_sentence=AsyncMock())
+        self.assertEqual(ctx.exception.kind, "disconnected")
+        self.assertEqual(calls, 1)
+
+    async def test_a_transport_failure_before_any_sentence_is_retried(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ConnectError("down")
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=ndjson(
+                    {"type": "result", "turn_id": 1, "status": "duplicate"}
+                ),
+            )
+
+        async with self.client(handler, turn_retries=1) as client:
+            reply = await client.commit(1, "Quando?", on_sentence=AsyncMock())
+        self.assertEqual(reply.status, "duplicate")
+        self.assertEqual(calls, 2)
+
+    async def test_a_malformed_line_is_malformed(self):
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=b"not json\n",
+            )
+
+        async with self.client(handler) as client:
+            with self.assertRaises(VoiceFailure) as ctx:
+                await client.commit(1, "Quando?", on_sentence=AsyncMock())
+        self.assertEqual(ctx.exception.kind, "malformed")
+
+
+class TurnTrackerSentenceTest(unittest.TestCase):
+    def sentence(self, turn_id=1, generation_id=1, text="Começou ontem."):
+        return VoiceTurnReply(turn_id, "committed", generation_id, text, index=0)
+
+    def test_sentences_of_the_pending_turn_are_accepted_without_settling_it(self):
+        tracker = TurnTracker("s1", last_turn_id=0)
+        first = self.sentence()
+        self.assertIs(tracker.accept_sentence(first), first)
+        self.assertIsNotNone(tracker.accept_sentence(self.sentence(text="Dói.")))
+        self.assertEqual(tracker.active_generation_id, 1)
+        # The turn is not settled until Phoenix's result: it can still be barged in on.
+        self.assertFalse(tracker.is_turn_stale(1))
+        final = VoiceTurnReply(1, "committed", 1, "Começou ontem. Dói.")
+        self.assertIs(tracker.accept_reply(final), final)
+        self.assertTrue(tracker.is_turn_stale(1))
+
+    def test_sentences_of_a_stale_turn_or_cancelled_generation_are_refused(self):
+        tracker = TurnTracker("s1", last_turn_id=0)
+        tracker.mark_turn_stale(1)
+        self.assertIsNone(tracker.accept_sentence(self.sentence()))
+
+        tracker = TurnTracker("s1", last_turn_id=0)
+        tracker.cancel(generation_id=1)
+        self.assertIsNone(tracker.accept_sentence(self.sentence()))
+
+    def test_a_sentence_without_text_is_refused(self):
+        tracker = TurnTracker("s1", last_turn_id=0)
+        self.assertIsNone(tracker.accept_sentence(self.sentence(text=" ")))
+
+
 class ControllablePhoenixClient(PhoenixClient):
     def __init__(self):
         super().__init__("http://phoenix", "secret", "s1")
@@ -572,8 +764,11 @@ class ControllablePhoenixClient(PhoenixClient):
         self.commit_errors: dict[int, Exception] = {}
         self.cancel_errors: dict[int, Exception] = {}
         self.call_log: list[tuple] = []
+        # Sentence streams (#271): each item is a sentence to hand over or an
+        # asyncio.Event the stream waits for before going on.
+        self.streams: dict[int, list] = {}
 
-    async def commit(self, turn_id: int, text: str) -> VoiceTurnReply:
+    async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
         self.call_log.append(("commit_start", turn_id, text))
         self.commit_calls.append((turn_id, text))
         if turn_id in self.commit_events:
@@ -583,6 +778,32 @@ class ControllablePhoenixClient(PhoenixClient):
         if turn_id in self.commit_errors:
             self.call_log.append(("commit_error", turn_id))
             raise self.commit_errors[turn_id]
+        if turn_id in self.streams and on_sentence is not None:
+            spoken = []
+            for item in self.streams[turn_id]:
+                if isinstance(item, asyncio.Event):
+                    await item.wait()
+                    continue
+                if isinstance(item, Exception):
+                    raise item
+                sentence = VoiceTurnReply(
+                    turn_id=turn_id,
+                    status="committed",
+                    generation_id=turn_id,
+                    reply_text=item,
+                    index=len(spoken),
+                )
+                spoken.append(item)
+                await on_sentence(sentence)
+            self.replies.setdefault(
+                turn_id,
+                VoiceTurnReply(
+                    turn_id=turn_id,
+                    status="committed",
+                    generation_id=turn_id,
+                    reply_text=" ".join(spoken),
+                ),
+            )
 
         reply = self.replies.get(
             turn_id,

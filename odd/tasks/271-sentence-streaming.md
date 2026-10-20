@@ -46,7 +46,7 @@ and verified, so the learner waits for all of it.
 | T1 | Sentence splitter + Anthropic SSE streaming client + `stream_reply` adapter callback | delegated direct (this writer) | [x] |
 | T2 | `SentenceStream` orchestrator + `Stations.stream_voice_turn/5` (verify per sentence, stop on refusal, store spoken, kept rules, latency logs) | delegated direct (this writer) | [x] |
 | T3 | `VoiceWorkerController` NDJSON sentence channel | delegated direct (this writer) | [x] |
-| T4 | Worker: stream sentences from Phoenix, speak them in order, first-audio latency log, docs | delegated direct (this writer) | [ ] |
+| T4 | Worker: stream sentences from Phoenix, speak them in order, first-audio latency log, docs | delegated direct (this writer) | [x] |
 
 Route evidence: the parent delegated all four tasks to one bounded writer (2+ non-trivial files).
 
@@ -71,6 +71,14 @@ Route evidence: the parent delegated all four tasks to one bounded writer (2+ no
 
 - T3: RED 5/5 new controller tests failing (no NDJSON channel). Found during GREEN: the `:api` pipeline only accepts JSON, so the worker sends `Accept: application/x-ndjson, application/json`. GREEN controller suite 31/31, full `mix test` green, format and warnings clean.
 
+- T4: RED 14 new worker tests (3 failures, 11 errors: `commit(on_sentence=)`, `accept_sentence`, `index`, chaining, first-audio log missing). GREEN `uv run python -m unittest` 144/144. README documents the NDJSON channel, room `segment` event and latency logs.
+
+## Follow-ups
+
+- Live check pending: time to first audio (target < 1.5 s after end of speech) from the worker's `first patient audio` log in a real session.
+- A barge-in mid-reply cancels the generation and, through Conversation's existing generation fence, stores none of the sentences already heard. Storing the spoken prefix of a cancelled turn would need a Conversation change.
+- The web does not render room patient events yet (#121); each sentence is published with a `segment` index for when it does.
+
 ## Next step
 
-T4.
+Local CI, push, PR.
