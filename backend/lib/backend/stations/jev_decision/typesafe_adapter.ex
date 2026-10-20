@@ -88,6 +88,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `unasked_fact_ids` - present only when non-empty: the authored ids of the
       `on_request` facts stated (yes) while the learner did not ask for them (no).
       `CandidateGate` names them in its single regeneration (issue #242).
+    * `undecided_fact_ids` - present only on a `:low_confidence` verdict whose every
+      risk answer is a no and whose only open answers are the stated questions of
+      `on_request` facts the learner did not ask for (no): their authored ids.
+      `CandidateGate` withholds them in its single regeneration (issue #273).
     * `:semantic_refusal` - a risk answer is a yes, or an `on_request` fact is stated
       (yes) while the learner did not ask for it (no)
     * `:verified` - every risk answer is a no and no answer the verdict depends on is
@@ -661,7 +665,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @spec verdict([fact_plan()], [String.t()], %{String.t() => number()}, thresholds()) :: %{
           required(:status) => :verified | :semantic_refusal | :low_confidence,
           required(:used_fact_ids) => [String.t()],
-          optional(:unasked_fact_ids) => [String.t()]
+          optional(:unasked_fact_ids) => [String.t()],
+          optional(:undecided_fact_ids) => [String.t()]
         }
   def verdict(facts, risk_ids, nouls, thresholds) do
     risks = Enum.map(risk_ids, &classify(nouls[&1], thresholds))
@@ -678,17 +683,39 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
     status =
       cond do
-        :yes in risks or :violation in disclosures -> :semantic_refusal
-        Enum.all?(risks, &(&1 == :no)) and :undecided not in disclosures -> :verified
-        true -> :low_confidence
+        :yes in risks or :violation in disclosures ->
+          :semantic_refusal
+
+        Enum.all?(risks, &(&1 == :no)) and
+            Enum.all?(disclosures, &(&1 == :respected)) ->
+          :verified
+
+        true ->
+          :low_confidence
       end
 
     %{status: status, used_fact_ids: used_fact_ids}
-    |> put_unasked_fact_ids(unasked_fact_ids)
+    |> put_fact_ids(:unasked_fact_ids, unasked_fact_ids)
+    |> put_fact_ids(:undecided_fact_ids, undecided_fact_ids(status, risks, facts, disclosures))
   end
 
-  defp put_unasked_fact_ids(decision, []), do: decision
-  defp put_unasked_fact_ids(decision, ids), do: Map.put(decision, :unasked_fact_ids, ids)
+  defp put_fact_ids(decision, _key, []), do: decision
+  defp put_fact_ids(decision, key, ids), do: Map.put(decision, key, ids)
+
+  # Issue #273: a low-confidence verdict whose only open answers are the stated
+  # questions of on-request facts the learner clearly did not ask for. Any other
+  # open answer (a risk, an unclear asked question) names nothing.
+  defp undecided_fact_ids(:low_confidence, risks, facts, disclosures) do
+    if Enum.all?(risks, &(&1 == :no)) and
+         Enum.all?(disclosures, &(&1 in [:respected, :undecided_unasked])) do
+      for({fact, :undecided_unasked} <- Enum.zip(facts, disclosures), do: fact.id)
+      |> Enum.uniq()
+    else
+      []
+    end
+  end
+
+  defp undecided_fact_ids(_status, _risks, _facts, _disclosures), do: []
 
   @doc "Classifies a noul against the thresholds; both thresholds are inclusive."
   @spec classify(number(), thresholds()) :: :yes | :no | :undecided
@@ -702,7 +729,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   # Only an `on_request` fact has a disclosure rule the answers can break. It is
   # respected when the fact is not stated or the learner asked for it, broken when it
-  # is stated and the learner did not ask, and undecided in every other combination.
+  # is stated and the learner did not ask, and undecided in every other combination;
+  # `:undecided_unasked` marks the undecided case where the learner clearly did not ask.
   defp disclosure(%{asked: nil}, _nouls, _thresholds), do: :respected
 
   defp disclosure(fact, nouls, thresholds) do
@@ -712,6 +740,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     cond do
       stated == :no or asked == :yes -> :respected
       stated == :yes and asked == :no -> :violation
+      stated == :undecided and asked == :no -> :undecided_unasked
       true -> :undecided
     end
   end

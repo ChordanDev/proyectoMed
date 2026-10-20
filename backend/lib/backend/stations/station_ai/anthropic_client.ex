@@ -20,6 +20,19 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   A JSON schema, when given, becomes `output_config.format` (structured
   outputs).
 
+  ## Prompt caching
+
+  The request's `system` is the stable prefix (issue #272): it is sent as one
+  text block carrying `cache_control: {type: "ephemeral"}` (5-minute TTL), so
+  the rendered `system` up to that block is cached and reused while it stays
+  byte-identical. An optional `system_suffix` (per-turn instructions) follows
+  as a second block without a marker, and `messages` come after it, so
+  per-turn content never enters the cached prefix. Callers keep timestamps and
+  ids out of `system`. A prefix shorter than the model's minimum (512 tokens on
+  Claude Opus 5.5 and Claude Sonnet 5.5) silently does not cache; one
+  breakpoint at the end of the whole stable prefix keeps it as long as
+  possible.
+
   Thinking is left at the model default (adaptive) unless a seam asks for the
   lowest setting (`thinking: :lowest`, the patient, issue #256). On Claude
   Sonnet 5.5 that is `thinking: {type: "between_tools"}` with no other
@@ -56,7 +69,16 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
 
   `stop_reason` is checked before any content is read. Nothing here logs the
   key, the prompt or the provider output.
+
+  ## Usage log
+
+  Each 2xx response logs, at debug level, the model, `input_tokens`,
+  `cache_read_input_tokens`, `cache_creation_input_tokens` and the request
+  latency in milliseconds (missing usage fields are logged as 0), so a live run
+  shows whether the cache hits. It carries no prompt, output or key.
   """
+
+  require Logger
 
   @default_base_url "https://api.anthropic.com"
   @default_models %{model: "claude-opus-5-5", patient_model: "claude-sonnet-5-5"}
@@ -79,6 +101,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
           required(:system) => String.t(),
           required(:messages) => [map()],
           required(:max_tokens) => pos_integer(),
+          optional(:system_suffix) => String.t() | nil,
           optional(:schema) => map()
         }
 
@@ -154,12 +177,23 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
     %{
       "model" => config.model,
       "max_tokens" => request.max_tokens,
-      "system" => request.system,
+      "system" => system_blocks(request.system, request[:system_suffix]),
       "messages" => request.messages,
       "output_config" => output_config,
       "fallbacks" => "default"
     }
     |> put_thinking(config)
+  end
+
+  # The stable prefix ends at the cached block; a per-turn suffix follows it.
+  defp system_blocks(system, suffix) do
+    cached = %{"type" => "text", "text" => system, "cache_control" => %{"type" => "ephemeral"}}
+
+    if is_binary(suffix) and String.trim(suffix) != "" do
+      [cached, %{"type" => "text", "text" => suffix}]
+    else
+      [cached]
+    end
   end
 
   # `between_tools` is valid only on Claude Sonnet 5.5, alone in `thinking`.
@@ -192,11 +226,42 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
         config.req_options
       )
 
+    started = System.monotonic_time()
+
     case Req.post(url, req_opts) do
-      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 -> {:ok, body}
-      {:ok, %Req.Response{}} -> {:error, :upstream_error}
-      {:error, %Req.TransportError{reason: reason}} -> transport_error(reason)
-      {:error, _exception} -> {:error, :network_error}
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
+        log_usage(config.model, body, started)
+        {:ok, body}
+
+      {:ok, %Req.Response{}} ->
+        {:error, :upstream_error}
+
+      {:error, %Req.TransportError{reason: reason}} ->
+        transport_error(reason)
+
+      {:error, _exception} ->
+        {:error, :network_error}
+    end
+  end
+
+  defp log_usage(model, body, started) do
+    latency_ms =
+      System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
+
+    usage = if is_map(body) and is_map(body["usage"]), do: body["usage"], else: %{}
+
+    Logger.debug(fn ->
+      "anthropic_messages model=#{model} input_tokens=#{usage_count(usage, "input_tokens")}" <>
+        " cache_read_input_tokens=#{usage_count(usage, "cache_read_input_tokens")}" <>
+        " cache_creation_input_tokens=#{usage_count(usage, "cache_creation_input_tokens")}" <>
+        " latency_ms=#{latency_ms}"
+    end)
+  end
+
+  defp usage_count(usage, key) do
+    case usage[key] do
+      count when is_integer(count) -> count
+      _missing -> 0
     end
   end
 

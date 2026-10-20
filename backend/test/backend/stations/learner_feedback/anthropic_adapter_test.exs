@@ -99,7 +99,12 @@ defmodule Backend.Stations.LearnerFeedback.AnthropicAdapterTest do
       assert_receive {:req, "/v1/messages", ["sk-ant-test-secret"], payload}
       assert payload["model"] == "claude-opus-5-5"
       assert payload["fallbacks"] == "default"
-      assert payload["system"] =~ "Never mention a global or total score"
+      # Issue #272: the fixed system prompt is the cached prefix; the graded
+      # record stays in the user message, after the breakpoint.
+      assert [%{"type" => "text", "text" => system, "cache_control" => %{"type" => "ephemeral"}}] =
+               payload["system"]
+
+      assert system =~ "Never mention a global or total score"
 
       assert %{"effort" => "medium", "format" => %{"type" => "json_schema", "schema" => schema}} =
                payload["output_config"]

@@ -629,6 +629,17 @@ the provider text is never returned or logged. The resolver and feedback keep
 their deadlines (`RUBRIC_RESOLVER_DEADLINE_MS`, `LEARNER_FEEDBACK_DEADLINE_MS`):
 the HTTP receive timeout stays just below them.
 
+Claude requests use prompt caching (issue #272). The stable system prompt (the
+patient's package prompt; the fixed resolver and feedback prompts) is one block
+marked `cache_control` (5-minute TTL); per-turn content (the withheld-facts note
+of a patient regeneration, the conversation, the graded JSON) comes after it.
+A prefix shorter than the model's minimum (512 tokens on Opus 5.5 and Sonnet
+5.5) silently does not cache. To see whether the cache hits, run with the
+logger at `debug`: each response logs `anthropic_messages model=...
+input_tokens=... cache_read_input_tokens=... cache_creation_input_tokens=...
+latency_ms=...`, never the prompt, the output or the key. From the second
+patient turn of a station, `cache_read_input_tokens` should be above 0.
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.

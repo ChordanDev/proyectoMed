@@ -31,14 +31,28 @@ defmodule Backend.Stations.CandidateGate do
        asked, issue #242), the regeneration is targeted: an arity-4 generator
        `(package, conversation, remaining_ms, guidance)` receives
        `%{withheld_fact_ids: ids}`, and the default generator puts the same ids in
-       the StationAI context. Every other refusal passes `withheld_fact_ids: []`, so
-       the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
+       the StationAI context. A `:low_confidence` refusal that Jev reports with
+       `undecided_fact_ids` (on-request facts it could not tell were stated while the
+       learner did not ask, issue #273) is targeted the same way with those ids.
+       Every other refusal passes `withheld_fact_ids: []`, so the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
        If the second candidate fails for any reason, no text is released and
        `{:error, {:refused, status}}` or `{:error, reason}` is returned.
        When the regeneration runs out of budget (before or during generation,
        or while it is verified), the original `{:error, {:refused, status}}` is
        returned instead of `{:error, :timeout}` (issue #256), so the learner
        turn is kept (#235). A timeout before any refusal stays `{:error, :timeout}`.
+
+  ## Refusal causes (issue #273)
+
+  Every Jev decision on a candidate, the regenerated one included, is counted
+  node-wide by cause, so the false-refusal rate can be tracked:
+  `:verified`; `:unasked_fact` (a semantic refusal naming `unasked_fact_ids`,
+  even when a risk is also high); `:risk` (any other semantic refusal: a risk or
+  a response rule); `:undecided_unasked_fact` (a low-confidence decision naming
+  `undecided_fact_ids`); `:undecided_other` (any other low-confidence decision).
+  `refusal_cause_counts/0` reads the counts, which restart with the node. Each
+  refusal also logs one `:info` line, `[CandidateGate] refusal cause=<cause>
+  count=<n>`, with no text and no fact id.
 
   ## Security & No-Leak Invariants
 
@@ -48,9 +62,14 @@ defmodule Backend.Stations.CandidateGate do
     * Errors are sanitized without leaking candidate text or learner audio/text.
   """
 
+  require Logger
+
   alias Backend.Stations.JevDecision
   alias Backend.Stations.StationAI.BoundedReply
   alias Backend.Stations.TemplateApplicability
+
+  @decision_causes [:verified, :risk, :unasked_fact, :undecided_unasked_fact, :undecided_other]
+  @counts_key {__MODULE__, :decision_cause_counts}
 
   @type candidate_error ::
           {:denied, atom()}
@@ -93,6 +112,19 @@ defmodule Backend.Stations.CandidateGate do
           {:ok, String.t()} | {:error, candidate_error()}
   def verify_patient_reply(candidate_text, package, conversation \\ [], opts \\ []) do
     verify_and_deliver(candidate_text, package, conversation, opts)
+  end
+
+  @doc """
+  Returns how many Jev decisions on candidates each cause has had since the node
+  started (see "Refusal causes"). Holds only cause names and counts.
+  """
+  @spec refusal_cause_counts() :: %{atom() => non_neg_integer()}
+  def refusal_cause_counts do
+    ref = cause_counters()
+
+    @decision_causes
+    |> Enum.with_index(1)
+    |> Map.new(fn {cause, index} -> {cause, :counters.get(ref, index)} end)
   end
 
   @doc """
@@ -283,7 +315,7 @@ defmodule Backend.Stations.CandidateGate do
 
       jev_opts = Keyword.put(opts, :deadline_at_monotonic_ms, deadline_at)
 
-      case JevDecision.decide_patient(jev_request, jev_opts) do
+      case jev_request |> JevDecision.decide_patient(jev_opts) |> count_cause() do
         {:ok, %{status: :verified}} ->
           {:ok, candidate_text}
 
@@ -306,10 +338,18 @@ defmodule Backend.Stations.CandidateGate do
     end
   end
 
-  # The guidance names facts only by the authored ids Jev reported as stated
-  # without being asked (issue #242); it never carries Jev or candidate text.
+  # The guidance names facts only by authored ids: those Jev reported as stated
+  # without being asked (issue #242), or, on a low-confidence decision, those it
+  # could not tell were stated while the learner did not ask (issue #273). It
+  # never carries Jev or candidate text.
   defp regeneration_guidance(decision) do
-    case Map.get(decision, :unasked_fact_ids) do
+    key =
+      case decision.status do
+        :semantic_refusal -> :unasked_fact_ids
+        :low_confidence -> :undecided_fact_ids
+      end
+
+    case Map.get(decision, key) do
       ids when is_list(ids) -> %{withheld_fact_ids: Enum.filter(ids, &is_binary/1)}
       _ -> %{withheld_fact_ids: []}
     end
@@ -382,7 +422,65 @@ defmodule Backend.Stations.CandidateGate do
         deadline_at_monotonic_ms: deadline_at
       }
 
-      eval_recheck_jev_result(JevDecision.decide_patient(jev_request, recheck_opts), regen_text)
+      jev_request
+      |> JevDecision.decide_patient(recheck_opts)
+      |> count_cause()
+      |> eval_recheck_jev_result(regen_text)
+    end
+  end
+
+  # ============================================================================
+  # Refusal Causes
+  # ============================================================================
+
+  # Counts the decision's cause and returns the result unchanged. Errors are
+  # technical failures, not decisions, and are not counted.
+  defp count_cause({:ok, %{status: status} = decision} = result)
+       when status in [:verified, :semantic_refusal, :low_confidence] do
+    cause = decision_cause(decision)
+    index = Enum.find_index(@decision_causes, &(&1 == cause)) + 1
+    ref = cause_counters()
+    :counters.add(ref, index, 1)
+
+    if cause != :verified do
+      Logger.info("[CandidateGate] refusal cause=#{cause} count=#{:counters.get(ref, index)}")
+    end
+
+    result
+  end
+
+  defp count_cause(result), do: result
+
+  defp decision_cause(%{status: :verified}), do: :verified
+
+  defp decision_cause(%{status: :semantic_refusal} = decision) do
+    if named_fact_ids?(decision, :unasked_fact_ids), do: :unasked_fact, else: :risk
+  end
+
+  defp decision_cause(%{status: :low_confidence} = decision) do
+    if named_fact_ids?(decision, :undecided_fact_ids),
+      do: :undecided_unasked_fact,
+      else: :undecided_other
+  end
+
+  defp named_fact_ids?(decision, key) do
+    case Map.get(decision, key) do
+      [_ | _] -> true
+      _ -> false
+    end
+  end
+
+  # The counters live for the node. Two first callers racing may each create a
+  # set; the later one wins and at most the other's first count is lost.
+  defp cause_counters do
+    case :persistent_term.get(@counts_key, nil) do
+      nil ->
+        ref = :counters.new(length(@decision_causes), [:write_concurrency])
+        :persistent_term.put(@counts_key, ref)
+        ref
+
+      ref ->
+        ref
     end
   end
 

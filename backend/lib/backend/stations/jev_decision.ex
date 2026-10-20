@@ -64,7 +64,8 @@ defmodule Backend.Stations.JevDecision do
           required(:status) => patient_decision_status(),
           optional(:rationale) => String.t(),
           optional(:used_fact_ids) => [String.t()],
-          optional(:unasked_fact_ids) => [String.t()]
+          optional(:unasked_fact_ids) => [String.t()],
+          optional(:undecided_fact_ids) => [String.t()]
         }
 
   @type rubric_decision :: %{
@@ -764,15 +765,20 @@ defmodule Backend.Stations.JevDecision do
     unasked_fact_ids =
       Map.get(response, :unasked_fact_ids) || Map.get(response, "unasked_fact_ids")
 
+    undecided_fact_ids =
+      Map.get(response, :undecided_fact_ids) || Map.get(response, "undecided_fact_ids")
+
     with {:ok, status} <- normalize_patient_status(raw_status),
          {:ok, validated_fact_ids} <- validate_used_fact_ids(used_fact_ids, package),
-         {:ok, validated_unasked_ids} <- validate_used_fact_ids(unasked_fact_ids, package) do
+         {:ok, validated_unasked_ids} <- validate_used_fact_ids(unasked_fact_ids, package),
+         {:ok, validated_undecided_ids} <- validate_used_fact_ids(undecided_fact_ids, package) do
       rationale = Map.get(response, :rationale) || Map.get(response, "rationale")
 
       {:ok,
        status
        |> build_patient_output_result(rationale, validated_fact_ids)
-       |> maybe_put(:unasked_fact_ids, validated_unasked_ids)}
+       |> maybe_put(:unasked_fact_ids, validated_unasked_ids)
+       |> maybe_put(:undecided_fact_ids, validated_undecided_ids)}
     else
       :error -> {:error, {:invalid_response, :unrecognized_patient_status}}
       {:error, reason} -> {:error, {:invalid_response, reason}}
