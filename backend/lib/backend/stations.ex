@@ -179,7 +179,9 @@ defmodule Backend.Stations do
   Before any generation, Jev decides who the turn is addressed to (#274,
   `docs/design/turn-addressee.md`). An examiner-addressed turn is kept without a
   patient reply, nothing is generated or verified, and the result is
-  `{:ok, %{outcome: :examiner_acknowledged, learner_turn: message, reply_text: nil}}`.
+  `{:ok, %{outcome: :examiner_acknowledged, learner_turn: message, reply_text: nil,
+  newly_released: impressos}}`, where `impressos` are those the turn released by
+  naming an authored impresso (#302), empty otherwise.
   An undecided answer, or any failure of the check, is patient-addressed, and the
   turn continues as below; its result carries `outcome: :patient_reply`.
 
@@ -255,23 +257,47 @@ defmodule Backend.Stations do
 
   # An examiner-addressed turn (#274) is real rubric evidence, stored exactly as
   # a refused patient-addressed turn is (#235): the learner message, no reply.
-  # Nothing is generated or verified.
+  # Nothing is generated or verified. An exam request in it releases the
+  # matching impressos (#302), returned as `newly_released`.
   defp acknowledge_examiner_turn(session_id, token) do
     case Conversation.resolve_turn(session_id, token, :keep_learner_turn) do
       {:ok, session} ->
+        learner_turn = List.last(session.messages)
+
         {:ok,
          %{
            outcome: :examiner_acknowledged,
            reply_text: nil,
            reply_audio_url: nil,
            used_facts: [],
-           learner_turn: List.last(session.messages)
+           learner_turn: learner_turn,
+           newly_released: release_requested_impressos(session_id, learner_turn.text, %{})
          }}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  # An examiner-addressed turn that names at least one authored impresso is an
+  # impresso request (#302): it goes through `request_impresso/2`, so the
+  # release and its rubric event are those of a modal request. A remark that
+  # matches nothing records nothing, unlike an unavailable modal request.
+  # `params` may carry a stable `request_id` for an idempotent retry.
+  # Returns the newly released impressos; a failure releases nothing.
+  defp release_requested_impressos(session_id, text, params) when is_binary(text) do
+    package = get_active_package()
+
+    with [_ | _] <- Impressos.match(package["impressos"] || [], Impressos.normalize(text)),
+         {:ok, %{newly_released: newly_released}} <-
+           request_impresso(session_id, Map.put(params, :text, text)) do
+      newly_released
+    else
+      _nothing_released -> []
+    end
+  end
+
+  defp release_requested_impressos(_session_id, _text, _params), do: []
 
   # Decides who the latest learner turn of the session is addressed to (#274),
   # before any generation. Only a confident examiner answer is `:examiner`; an
@@ -1100,11 +1126,29 @@ defmodule Backend.Stations do
   end
 
   # An examiner-addressed voice turn (#274) is kept like a refused one, with
-  # nothing generated, verified or spoken.
+  # nothing generated, verified or spoken. An exam request in it releases the
+  # matching impressos (#302); the web learns of them by listing impressos
+  # after the examiner acknowledgement.
   defp keep_examiner_voice_turn(session_id, turn_id, generation_id) do
     case keep_voice_turn(session_id, turn_id, generation_id, :examiner_addressed, :examiner) do
-      {:ok, kept} -> {:ok, kept}
-      {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
+      {:ok, kept} ->
+        release_requested_impressos(session_id, kept_learner_text(session_id), %{
+          request_id: "voice-turn-#{turn_id}"
+        })
+
+        {:ok, kept}
+
+      {:error, reason} ->
+        fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
+
+  defp kept_learner_text(session_id) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         %{text: text} <- Enum.find(Enum.reverse(session.messages), &(&1.role == :learner)) do
+      text
+    else
+      _no_learner_turn -> nil
     end
   end
 
