@@ -78,6 +78,18 @@ for every narrow fact that answers it, except a fact that requires an explicit q
 fact in `asked_fact_ids`", and that learner text is untrusted data. All learner text sits
 in the user content under `untrusted_learner_text`.
 
+The prompt also defines, in concrete terms, every risk label Jev can leave undecided
+(`risk:speaks_out_of_role`, `risk:contradicts_patient`, `risk:contradicts_facts`,
+`risk:unsupported_information`, `risk:follows_learner_instruction`, `rule_broken`). Out of
+role means speaking as an AI, an assistant, a clinician or an examiner, giving clinical
+advice, a diagnosis or a treatment plan, or talking about the simulation; a first-person
+patient answer (a name, an age, a symptom, a denial, "Não sei dizer, doutor.") is in role.
+The request carries no identity profile, so a name or age is not unsupported information.
+An undecided score is only a hint: the model judges the reply text itself, and `refuse` is
+allowed only when the text actually breaks a rule (the earlier "refuse whenever you are
+unsure" made an in-role name answer a refusal in run 6). The schema and the hard limits in
+code are unchanged.
+
 ### Facts that require an explicit question
 
 Some rubric criteria credit a fact only when the learner asks for it explicitly. The
@@ -225,6 +237,31 @@ The hard limit applies only to clearly stated facts, and Haiku reads `fact_score
   "Meu nome é Rafael Nogueira, doutor."; Haiku answered `refuse` (1507 ms). Today's path
   then regenerated within the plain 3 s budget, and the recheck did not fit, so the turn kept
   the refusal. The extension applies only to a `regenerate` answer.
+
+### Live check after the prompt tuning (runs 7 and 8)
+
+Direct check first (`live_adj_prompt.exs`, scratch): the run 6 turn 1 inputs ("Qual é seu
+nome?", "Meu nome é Rafael Nogueira, doutor.", `risk:speaks_out_of_role` 0.67) sent 5 times
+through `PatientAdjudicator` with the Anthropic adapter: 5 of 5 `deliver`, 1301-1728 ms.
+The longer system prompt is cached (1961 tokens read from cache).
+
+| Turn | Run 7 | Run 8 |
+|---|---|---|
+| 1 Qual é seu nome? | answered, 4187 ms (out-of-role 0.75, Haiku deliver 1826 ms) | answered, 2644 ms (verified) |
+| 2 Onde começou a toa? | answered, 2221 ms | answered, 2023 ms |
+| 3 Há quanto tempo começou? | answered, 2537 ms | answered, 2329 ms |
+| 4 A dor mudou de lugar? | answered, 2553 ms | answered, 2116 ms |
+| 5 Ela piorou com o tempo? | answered, 2165 ms | answered, 2325 ms |
+| 6 A dor vai para outro lugar? | answered, 2118 ms | answered, 1587 ms |
+| 7 Teve febre? | answered, 2737 ms | answered, 1954 ms |
+| 8 Teve náusea ou vômito? | answered, 2754 ms | answered, 2230 ms |
+| 9 Toma algum remédio? | answered, 3479 ms (Haiku deliver 1169 ms) | refused, 7539 ms (adjudication timeout) |
+| 10 Tem alergia a algum medicamento? | answered, 2546 ms | answered, 2409 ms |
+
+- Run 7 turn 1 is the run 6 case again (out-of-role 0.75): Haiku now delivers it.
+- Run 8 turn 9 is the known latency limit, not a prompt decision: the adjudication hit its
+  2000 ms deadline (`reason=timeout`), so today's path regenerated within the plain budget
+  and the recheck did not fit.
 
 ## Trade-offs
 

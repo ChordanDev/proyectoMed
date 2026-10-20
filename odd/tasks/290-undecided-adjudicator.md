@@ -43,6 +43,9 @@ A `low_confidence` Jev verdict (any undecided label) is no longer an automatic r
   - TypesafeAdapter adds `stated_not_asked_fact_ids` (stated clear yes, asked clear no) and `fact_scores` (stated/asked per fact not clearly unstated); `JevDecision` validates both (unknown ids are invalid; malformed scores are dropped). `PatientAdjudicator` blocks only `stated_not_asked_fact_ids`; BoundedReply still re-checks every deliver.
   - RED: 8 of 201 failing across the 5 touched test files: (a) stated 0.31 + asked 0.19 + deliver → delivered, at both the adjudicator and the gate; (b) stated 0.9 + asked 0.19 + deliver → regenerate already passed, which is the unchanged behaviour. GREEN: 201 passed; full `mix test` 1656 passed; format, warnings-as-errors and `credo --strict` clean.
   - Live runs 5 and 6: turn 9 answered both times (4307 ms, 3799 ms; Haiku deliver 1326/1862 ms; `pergunta-explicita-02` stated 0.30/0.33, asked 0.14/0.17). Turn 10 answered (2745, 2231 ms). Run 6 turn 1 refused (out-of-role 0.67, Haiku refuse, then the 3 s budget ran out on the regeneration).
+- [x] T9 Adjudicator prompt judges the reply text: concrete risk-label definitions, undecided scores are hints, `refuse` only for a real violation (RED→GREEN) — `da1d9b3` (branch `fix/290-adjudicator-role-prompt`, from `feat/237-clinician-demo-readiness` b9ad946)
+  - RED: 2 of 8 failing in `anthropic_adapter_test.exs` (risk explanations; "scores are hints"/no "whenever you are unsure"). GREEN: 8 passed; full `mix test` 1658 passed; format, warnings-as-errors and `credo --strict` clean.
+  - Direct live check (run 6 turn 1 inputs, 5 calls): 5/5 `deliver`, 1301-1728 ms. Runs 7 and 8: turn 1 answered both times (run 7 out-of-role 0.75, Haiku deliver 1826 ms); run 8 turn 9 refused after an adjudication timeout (2001 ms), the known latency limit.
 
 ## Routing
 All tasks: delegated direct (this worker is the single bounded writer). Mapping done in-session with CodeGraph-free targeted reads (codegraph index initialised for the worktree).
@@ -62,13 +65,15 @@ All tasks: delegated direct (this worker is the single bounded writer). Mapping 
 
 ## Open concerns
 - Resolved by T8: "Toma algum remédio?" is answered live (runs 5 and 6).
-- An adjudicator `refuse` keeps the plain 3 s budget, so its regeneration seldom fits (run 6 turn 1, out-of-role 0.67). Extending it too would need a product decision.
+- An adjudicator `refuse` keeps the plain 3 s budget, so its regeneration seldom fits. The run 6 turn 1 case (out-of-role 0.67) no longer reaches it after T9; extending the budget would still need a product decision.
 - Even with 4.5 s, the recheck's adjudication (Haiku 1.0-1.9 s) can time out after Jev + adjudication + regeneration + recheck (about 2.6-3.3 s).
 - The voice worker's default transcript timeout (35 s) has 2 s of headroom over a 3 s verification budget; the 1.5 s extension uses most of it in the worst case (voice-worker is outside this change).
 
 - T5-T7 done (PR #299 follow-up): prevention in the patient prompt, asked facts never withheld, extended regeneration budget, live runs 3 and 4 recorded in the design doc.
 
 - T8 done: amended hard limit, per-fact scores for Haiku, live runs 5 and 6.
+
+- T9 done: the run 6 turn 1 refusal (in-role name answer, out-of-role 0.67) is fixed in the prompt; live runs 7 and 8 recorded.
 
 ## Next step
 Review of PR #299; product decision on whether an adjudicator `refuse` also gets the extended budget.
