@@ -596,7 +596,7 @@ describe("station API client", () => {
       return { fetchMock, signals };
     };
 
-    it("waits up to 80 s for the educational result, which may still be generating feedback", async () => {
+    it("waits up to 95 s for the educational result, which may still be generating feedback", async () => {
       vi.useFakeTimers();
       const { fetchMock, signals } = stalledFetch();
       const client = createApiClient({ baseUrl, fetch: fetchMock });
@@ -609,7 +609,7 @@ describe("station API client", () => {
           code: "request_timeout",
         });
 
-        await vi.advanceTimersByTimeAsync(79_999);
+        await vi.advanceTimersByTimeAsync(94_999);
         expect(signals[0]?.aborted).toBe(false);
 
         await vi.advanceTimersByTimeAsync(1);

@@ -135,6 +135,33 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
     }
   end
 
+  # Both criteria have an undecided action: history-taking's `ask-intensity`
+  # and treatment-plan's `indicate-expected`.
+  defp two_undecided_answers do
+    %{
+      @history => %{classification: "uncertain", evidence_ids: [], actions: history_actions()},
+      @treatment => %{
+        classification: "uncertain",
+        evidence_ids: [],
+        actions: [uncertain("indicate-expected"), not_performed("indicate-contraindicated")]
+      }
+    }
+  end
+
+  # Answers each single-criterion request after `delays[criterion_id]` ms.
+  defp per_criterion_reply(delays) do
+    fn %{criteria: [%{id: criterion_id}]} ->
+      Process.sleep(Map.get(delays, criterion_id, 0))
+
+      case criterion_id do
+        @history -> resolved([llm("ask-intensity", "performed", ["turn-3"])])
+        @treatment -> resolved([llm("indicate-expected", "performed", ["turn-3"], @treatment)])
+      end
+    end
+  end
+
+  defp treatment(assessment), do: Enum.find(assessment.criteria, &(&1.id == @treatment))
+
   defp resolved(decisions), do: {:ok, %{actions: decisions}}
 
   defp llm(id, classification, evidence_ids, criterion_id \\ @history) do
@@ -203,6 +230,24 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
                %{id: "turn-1", text: "Quando começou a dor?"},
                %{id: "turn-3", text: "A dor é forte?"}
              ]
+    end
+
+    test "each criterion with undecided actions is requested on its own" do
+      assess(resolved([]), answers: two_undecided_answers())
+
+      assert_received {:resolver_request, first}
+      assert_received {:resolver_request, second}
+      refute_received {:resolver_request, _third}
+
+      assert Enum.sort(Enum.map([first, second], &Enum.map(&1.criteria, fn c -> c.id end))) ==
+               [[@history], [@treatment]]
+
+      for request <- [first, second] do
+        assert request.evidence_pool == [
+                 %{id: "turn-1", text: "Quando começou a dor?"},
+                 %{id: "turn-3", text: "A dor é forte?"}
+               ]
+      end
     end
 
     test "is not sent when Jev left no action undecided" do
@@ -419,15 +464,51 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
       assess(slow, rubric_resolver_deadline_ms: 20) |> assert_still_uncertain()
     end
 
+    test "criteria are resolved concurrently under one deadline" do
+      # Sequentially the two 150 ms answers would need 300 ms.
+      assessment =
+        assess(per_criterion_reply(%{@history => 150, @treatment => 150}),
+          answers: two_undecided_answers(),
+          rubric_resolver_deadline_ms: 260
+        )
+
+      assert history(assessment).level == "adequado"
+      assert action(treatment(assessment), "indicate-expected").classification == "performed"
+    end
+
+    test "a criterion that times out stays uncertain while the others keep their decisions" do
+      assessment =
+        assess(per_criterion_reply(%{@history => 0, @treatment => 1_000}),
+          answers: two_undecided_answers(),
+          rubric_resolver_deadline_ms: 200
+        )
+
+      assert history(assessment).status == :assessed
+      assert history(assessment).level == "adequado"
+      assert action(treatment(assessment), "indicate-expected").classification == "uncertain"
+    end
+
+    test "a criterion whose request fails stays uncertain while the others keep their decisions" do
+      reply = fn
+        %{criteria: [%{id: @treatment}]} -> raise "boom"
+        request -> per_criterion_reply(%{}).(request)
+      end
+
+      assessment = assess(reply, answers: two_undecided_answers())
+
+      assert history(assessment).level == "adequado"
+      assert action(treatment(assessment), "indicate-expected").classification == "uncertain"
+    end
+
     test "the disabled resolver is a no-op" do
       assess(nil, resolver_adapter: Resolver.DisabledAdapter) |> assert_still_uncertain()
     end
   end
 
   describe "configuration" do
-    test "the resolver is disabled by default with its own ten second deadline" do
+    test "the resolver is disabled by default with its own thirty second deadline" do
       assert Resolver.adapter([]) == Resolver.DisabledAdapter
-      assert Resolver.deadline_ms([]) == 10_000
+      assert Resolver.deadline_ms([]) == 30_000
       assert Resolver.adapter(resolver_adapter: ResolverDouble) == ResolverDouble
       assert Resolver.deadline_ms(rubric_resolver_deadline_ms: 10) == 10
     end

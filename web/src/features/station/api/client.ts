@@ -556,10 +556,12 @@ const decodeKeptLearnerTurn = (body: JsonObject): SessionMessage | undefined => 
     : undefined;
 };
 
-// The educational result runs the rubric resolver (10 s deadline) and then
-// generates learner feedback (60 s deadline) before answering, so its first
-// fetch may take about a minute. Every other request keeps `timeoutMs`.
-const EDUCATIONAL_RESULT_TIMEOUT_MS = 80_000;
+// The educational result runs the rubric resolver (30 s deadline) and then
+// generates learner feedback (45 s deadline) before answering, so its first
+// fetch may take over a minute; later fetches are served from the session.
+// The backend keeps resolver + feedback within 80 s of this wait (issue #301,
+// `backend/config/runtime.exs`). Every other request keeps `timeoutMs`.
+const EDUCATIONAL_RESULT_TIMEOUT_MS = 95_000;
 
 export const createApiClient = ({
   baseUrl,

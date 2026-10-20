@@ -173,6 +173,38 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapterTest do
       assert payload["response_format"]["json_schema"]["schema"] == OpenAIAdapter.schema()
     end
 
+    test "the receive timeout follows the resolver deadline" do
+      previous = Application.fetch_env(:backend, :rubric_resolver_deadline_ms)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:backend, :rubric_resolver_deadline_ms, value)
+          :error -> Application.delete_env(:backend, :rubric_resolver_deadline_ms)
+        end
+      end)
+
+      test_pid = self()
+
+      probe = fn request ->
+        send(test_pid, {:receive_timeout, request.options[:receive_timeout]})
+        {request, Req.Response.new(status: 200, body: content(%{"actions" => []}))}
+      end
+
+      Application.put_env(:backend, :rubric_resolver_deadline_ms, 8_000)
+
+      assert {:ok, %{actions: []}} =
+               OpenAIAdapter.resolve(@request, api_key: "k", req_options: [adapter: probe])
+
+      assert_receive {:receive_timeout, 7_750}
+
+      Application.delete_env(:backend, :rubric_resolver_deadline_ms)
+
+      assert {:ok, _} =
+               OpenAIAdapter.resolve(@request, api_key: "k", req_options: [adapter: probe])
+
+      assert_receive {:receive_timeout, 29_750}
+    end
+
     test "uses the resolver model before the station OpenAI model" do
       test_pid = self()
 

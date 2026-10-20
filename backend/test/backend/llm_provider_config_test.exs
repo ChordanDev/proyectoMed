@@ -8,7 +8,7 @@ defmodule Backend.LLMProviderConfigTest do
   alias Backend.Stations.StationAI
 
   @runtime_config Path.expand("../../config/runtime.exs", __DIR__)
-  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_PATIENT_MODEL ANTHROPIC_ADJUDICATOR_MODEL PATIENT_ADJUDICATOR PATIENT_ADJUDICATOR_DEADLINE_MS PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS)
+  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_PATIENT_MODEL ANTHROPIC_ADJUDICATOR_MODEL PATIENT_ADJUDICATOR PATIENT_ADJUDICATOR_DEADLINE_MS PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS RUBRIC_RESOLVER_DEADLINE_MS LEARNER_FEEDBACK_DEADLINE_MS)
 
   setup do
     previous = Map.new(@variables, &{&1, System.get_env(&1)})
@@ -111,6 +111,49 @@ defmodule Backend.LLMProviderConfigTest do
                  :patient_adjudicator_deadline_ms
                )
       end
+    end
+  end
+
+  describe "educational result deadlines (issue #301)" do
+    test "RUBRIC_RESOLVER_DEADLINE_MS and LEARNER_FEEDBACK_DEADLINE_MS are read" do
+      backend =
+        runtime(%{
+          "RUBRIC_RESOLVER_DEADLINE_MS" => "20000",
+          "LEARNER_FEEDBACK_DEADLINE_MS" => "40000"
+        })
+
+      assert backend[:rubric_resolver_deadline_ms] == 20_000
+      assert backend[:learner_feedback_deadline_ms] == 40_000
+    end
+
+    test "a deadline that is not a positive integer keeps the default" do
+      for raw <- ["0", "-5", "fast", "1.5"] do
+        backend =
+          runtime(%{
+            "RUBRIC_RESOLVER_DEADLINE_MS" => raw,
+            "LEARNER_FEEDBACK_DEADLINE_MS" => raw
+          })
+
+        refute Keyword.has_key?(backend, :rubric_resolver_deadline_ms)
+        refute Keyword.has_key?(backend, :learner_feedback_deadline_ms)
+      end
+    end
+
+    test "overrides are capped so resolver and feedback fit the result budget" do
+      backend =
+        runtime(%{
+          "RUBRIC_RESOLVER_DEADLINE_MS" => "999999",
+          "LEARNER_FEEDBACK_DEADLINE_MS" => "999999"
+        })
+
+      assert backend[:rubric_resolver_deadline_ms] == 40_000
+      assert backend[:learner_feedback_deadline_ms] == 40_000
+
+      # Against the default resolver deadline (30 s), feedback gets the rest.
+      System.delete_env("RUBRIC_RESOLVER_DEADLINE_MS")
+
+      backend = runtime(%{"LEARNER_FEEDBACK_DEADLINE_MS" => "999999"})
+      assert backend[:learner_feedback_deadline_ms] == 50_000
     end
   end
 

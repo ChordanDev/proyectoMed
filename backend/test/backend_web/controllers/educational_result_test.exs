@@ -80,6 +80,18 @@ defmodule BackendWeb.EducationalResultTest do
     end
   end
 
+  # Counts rubric batches (issue #301), answering like `PartialDouble`.
+  defmodule CountingDouble do
+    @behaviour Backend.Stations.JevDecision.Adapter
+    def decide_patient(_), do: {:ok, %{status: :verified}}
+    def decide_rubric(_), do: {:error, :not_implemented}
+
+    def decide_rubric_batch(request) do
+      send(Application.fetch_env!(:backend, __MODULE__), :rubric_batch)
+      BackendWeb.EducationalResultTest.PartialDouble.decide_rubric_batch(request)
+    end
+  end
+
   defmodule TechnicalFailureDouble do
     @behaviour Backend.Stations.JevDecision.Adapter
     def decide_patient(_), do: {:error, :not_implemented}
@@ -170,6 +182,54 @@ defmodule BackendWeb.EducationalResultTest do
     refute Map.has_key?(uncertain, "level")
     refute Map.has_key?(body, "calls")
     refute Map.has_key?(assessed, "sub_actions")
+  end
+
+  describe "a finished session is graded once (issue #301)" do
+    setup do
+      Application.put_env(:backend, :jev_decision_adapter, CountingDouble)
+      Application.put_env(:backend, CountingDouble, self())
+      on_exit(fn -> Application.delete_env(:backend, CountingDouble) end)
+    end
+
+    test "fetching the result twice assesses once and returns the same body", %{
+      conn: conn,
+      session_id: id
+    } do
+      path = "/api/v2/stations/active/sessions/#{id}/result"
+      first = conn |> get(path) |> json_response(200)
+
+      # A different provider answer can no longer change the served grade.
+      Application.put_env(:backend, PartialDouble, %{"criterion-a" => "adequado"})
+      second = build_conn() |> get(path) |> json_response(200)
+
+      assert_received :rubric_batch
+      refute_received :rubric_batch
+      assert second == first
+    end
+
+    test "concurrent first fetches share one assessment", %{session_id: id} do
+      results =
+        1..3
+        |> Enum.map(fn _ -> Task.async(fn -> Stations.get_educational_result(id) end) end)
+        |> Task.await_many(10_000)
+
+      assert [{:ok, body}, {:ok, body}, {:ok, body}] = results
+      assert_received :rubric_batch
+      refute_received :rubric_batch
+    end
+
+    test "an invalid attempt is not kept, so the next fetch grades again", %{
+      conn: conn,
+      session_id: id
+    } do
+      Application.put_env(:backend, :jev_decision_adapter, TechnicalFailureDouble)
+      path = "/api/v2/stations/active/sessions/#{id}/result"
+      assert conn |> get(path) |> json_response(502)
+
+      Application.put_env(:backend, :jev_decision_adapter, CountingDouble)
+      assert build_conn() |> get(path) |> json_response(200)
+      assert_received :rubric_batch
+    end
   end
 
   test "v2 replaces only assessed recommendations with generated feedback", %{
