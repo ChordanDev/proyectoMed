@@ -30,6 +30,13 @@ config :backend,
   # Added to the turn's verification deadline only when the adjudicator asks for
   # a regeneration (3 s + 1.5 s = 4.5 s at most on that path).
   patient_adjudicator_regeneration_extension_ms: 1_500,
+  # Patient reply verification mode (issue #307): `:audit` delivers after the
+  # deterministic BoundedReply check and verifies with Jev afterwards;
+  # `:blocking` keeps the pre-delivery Jev gate; `:off` skips Jev. Resolved from
+  # PATIENT_VERIFICATION in runtime.exs outside :test.
+  patient_verification: :audit,
+  # Jev deadline of the after-delivery audit (off the critical path).
+  patient_audit_deadline_ms: 10_000,
   learner_message_max_characters: 2_000,
   active_station_id: "chest-pain-initial-assessment",
   # Resolved from VOICE_MODE in runtime.exs outside :test (#270).
