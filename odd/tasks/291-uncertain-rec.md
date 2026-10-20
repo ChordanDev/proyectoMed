@@ -21,7 +21,7 @@ In the 2026-10-20 rehearsal, item 2 ("Anamnese — caracterização da dor") was
 ## Tasks
 - [x] T1 Backend assessment: an uncertain criterion whose criterion and sub-action evidence validated keeps its sub-actions and its evidence (criterion evidence plus performed actions' evidence, pool order). Route: inline (2 files: rubric_assessment.ex + its test).
 - [x] T2 Backend recommendation: `LearnerFeedback` writes a deterministic recommendation for an uncertain criterion with sub-actions ("Você investigou: …. Ainda falta investigar: …."), keeps the authored text otherwise; educational result serializes evidence for uncertain items. Route: inline.
-- [ ] T3 Web: decoder accepts evidence on uncertain criteria (still rejects it on not_observable/not_applicable); ResultScreen test shows the evidence and the recommendation for an uncertain item. Route: inline.
+- [x] T3 Web: decoder accepts evidence on uncertain criteria (still rejects it on not_observable/not_applicable); ResultScreen test shows the evidence and the recommendation for an uncertain item. Route: inline.
 
 ## Acceptance
 - An uncertain item renders a recommendation that is not the bare title (tested in LearnerFeedback and at the HTTP result).
@@ -42,9 +42,13 @@ Forecast ~300 authored changed lines, single PR to `feat/237-clinician-demo-read
 - `Qualification.rubric_outcome/2` keeps observing an uncertain criterion as `"uncertain"` (its sub-actions are now reported), so qualification results do not change.
 - RED: new test "an uncertain criterion keeps its validated sub-actions and evidence, unscored" failed (`sub_actions` was `[]`). GREEN: `rubric_assessment_test.exs` 103 passed. Updated assertions that encoded the old empty sub-actions/evidence (`assert_unscored/1` for uncertain, two resolver tests). Full `mix test` 1573 passed.
 
-### T2 (done, commit in this task's commit)
+### T2 (done, commit f554517)
 - `LearnerFeedback.attach/3` writes a deterministic text for an uncertain criterion that reports authored actions: "Você investigou: …. Ainda falta investigar: …." (English labels for non-pt packages). Performed with evidence counts as asked; everything else is missing. No provider call; assessed criteria unchanged.
 - RED: 3 new `learner_feedback_test.exs` tests failed with the authored text; the HTTP rehearsal test (`educational_result_test.exs`, appendicitis item-02, location + duration asked) failed with `"Anamnese — caracterização da dor"` when the fix was stashed. GREEN: learner feedback 35 passed, educational result 9 passed, full `mix test` 1578 passed, `mix format --check-formatted` clean, `mix credo --strict` no issues.
 
+### T3 (done)
+- `decodeEducationalCriterion` accepts evidence on an `uncertain` criterion and still rejects it on `not_observable`/`not_applicable`. `ResultScreen` already renders evidence for any status, so no component change was needed. `docs/educational-result-api.md` documents the uncertain evidence and recommendation.
+- RED: "accepts evidence on an uncertain criterion" failed with `invalid_response`. The new ResultScreen test passed before the change (rendering was already status-agnostic; it is a regression guard, not a RED). GREEN: `npm --prefix web test` 334 passed, typecheck and lint clean.
+
 ## Next
-T3 (web decoder + ResultScreen).
+Local CI, push, PR to `feat/237-clinician-demo-readiness`.
