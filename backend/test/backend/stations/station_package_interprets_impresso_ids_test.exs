@@ -17,15 +17,15 @@ defmodule Backend.Stations.StationPackageInterpretsImpressoIdsTest do
 
   # The package without any authored `interprets_impresso_ids`.
   defp without_dependencies do
-    Map.update!(package(), "rubric", fn rubric ->
-      Enum.map(rubric, fn criterion ->
-        Map.update!(
-          criterion,
-          "actions",
-          &Enum.map(&1, fn action -> Map.delete(action, @key) end)
-        )
-      end)
-    end)
+    Map.update!(package(), "rubric", &Enum.map(&1, fn criterion -> strip(criterion) end))
+  end
+
+  defp strip(criterion) do
+    Map.update!(
+      criterion,
+      "actions",
+      &Enum.map(&1, fn action -> Map.delete(action, @key) end)
+    )
   end
 
   defp put_action(package, criterion_id, index, key, value) do

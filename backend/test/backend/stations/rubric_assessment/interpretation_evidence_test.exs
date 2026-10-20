@@ -136,19 +136,19 @@ defmodule Backend.Stations.RubricAssessment.InterpretationEvidenceTest do
   end
 
   defp author(%{"id" => @lab_interpretation} = criterion, authored?) do
-    Map.update!(criterion, "actions", fn actions ->
-      Enum.map(actions, fn action ->
-        action = Map.delete(action, "interprets_impresso_ids")
-
-        case {authored?, @interprets[action["id"]]} do
-          {true, [_ | _] = ids} -> Map.put(action, "interprets_impresso_ids", ids)
-          _undeclared -> action
-        end
-      end)
-    end)
+    Map.update!(criterion, "actions", fn actions -> Enum.map(actions, &declare(&1, authored?)) end)
   end
 
   defp author(criterion, _authored?), do: criterion
+
+  defp declare(action, authored?) do
+    action = Map.delete(action, "interprets_impresso_ids")
+
+    case {authored?, @interprets[action["id"]]} do
+      {true, [_ | _] = ids} -> Map.put(action, "interprets_impresso_ids", ids)
+      _undeclared -> action
+    end
+  end
 
   defp turn(text, second), do: %{role: :learner, modality: :text, text: text, at: at(second)}
 

@@ -85,13 +85,15 @@ defmodule Backend.Stations.RubricAssessment.Issue243RegressionTest do
 
   # The package as it was before issue #265, with no declared dependency.
   defp package_without_dependencies do
-    Map.update!(package(), "rubric", fn rubric ->
-      Enum.map(rubric, fn criterion ->
-        Map.update!(criterion, "actions", fn actions ->
-          Enum.map(actions, &Map.delete(&1, "interprets_impresso_ids"))
-        end)
-      end)
-    end)
+    Map.update!(package(), "rubric", &Enum.map(&1, fn criterion -> strip(criterion) end))
+  end
+
+  defp strip(criterion) do
+    Map.update!(
+      criterion,
+      "actions",
+      &Enum.map(&1, fn action -> Map.delete(action, "interprets_impresso_ids") end)
+    )
   end
 
   defp texts(fixture),
