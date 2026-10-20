@@ -54,17 +54,31 @@ turn-based record/play buttons).
 Route: delegated direct (this bounded writer). Planning heuristic ~400 changed lines
 per task; not a cap.
 
-- [ ] T1 — Backend `VOICE_MODE` config and `voice_mode` on the active station; web
-  client decodes it (default `turn`).
-- [ ] T2 — `useVoiceSession` parses `transcript` data events from the worker and
-  hands typed events to a callback.
-- [ ] T3 — Transcript merge (pure) + `StationScreen` hosts the real-time voice panel,
+- [x] T1 — Backend `VOICE_MODE` config and `voice_mode` on the active station; web
+  client decodes it (default `turn`). Commit `01ea78b`.
+  RED: backend 6 failed of 68 (controller + runtime config tests); web client 6 failed
+  of 40. GREEN: 68/68 and 40/40.
+- [x] T2 — `useVoiceSession` parses `transcript` data events from the worker and
+  hands typed events to a callback. Commit `03a628f`.
+  RED: parser suite failed to load (module missing) and the hook delivery test
+  failed. GREEN: 34/34.
+- [x] T3 — Transcript merge (pure) + `StationScreen` hosts the real-time voice panel,
   renders learner/patient/examiner entries, live caption and failure notices, and
-  uses the stored patient reply.
-- [ ] T4 — App wiring by voice mode; voice session after the brief, ended on finish,
-  deadline and leave; remove `StationSession`.
-- [ ] T5 — README demo runbook and `.env.example`.
-- [ ] T6 — Screenshots with `VOICE_MODE=realtime` (no live LiveKit session).
+  uses the stored patient reply. Commit `edea389`.
+  RED: merge suite failed to load; StationScreen voice tests 7/7 failed. A further
+  RED (kept turn 2 resolving before turn 1's stored reply dropped turn 1) added the
+  pending-turn guard and its test. GREEN: screens 114/114.
+- [x] T4 — App wiring by voice mode; voice session after the brief, ended on finish,
+  deadline and leave (LiveKit `disconnectOnPageLeave`); remove `StationSession`.
+  Commit `f2f2791`. RED: 5 failed of 73 (App modes, `fetchTranscript`). GREEN: web
+  unit 302/302.
+- [x] T5 — README demo runbook and `.env.example`. Commit `354efa6`. Passive
+  documentation: no runnable RED; structural readback.
+- [x] T6 — Screenshots with `VOICE_MODE=realtime` (no live LiveKit session): desktop
+  and mobile station with the panel under the header and no turn-based buttons, and
+  the `voice_unavailable` panel state. A spoken exchange could not be captured
+  (no LiveKit, Deepgram or ElevenLabs session available); transcript rendering is
+  covered by component tests with mocked LiveKit data events.
 
 ## Checks
 
@@ -74,8 +88,18 @@ per task; not a cap.
 
 ## Progress
 
-(updated per task)
+All tasks done. Local CI passed on `354efa6`: web unit 302/302 (16 files), backend 1484/1484, E2E 4/4, typecheck, lint, Dialyzer.
+
+## Follow-ups
+
+- Live check of a full spoken consultation with the transcript visible (needs
+  LiveKit, Deepgram, ElevenLabs and Jev credentials).
+- On a 390 px viewport the station input row overflows (the "Exame Físico / Exames"
+  and "Enviar" buttons are cut); pre-existing, outside this issue.
+- The worker publishes the speech text; the web reads the stored reply from
+  `GET /sessions/:id`. Publishing the stored text from the worker would save that
+  read, but needs a Phoenix voice API change.
 
 ## Next step
 
-T1.
+Open the PR to `feat/237-clinician-demo-readiness`.
