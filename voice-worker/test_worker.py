@@ -386,6 +386,35 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
 
+    async def test_kept_turn_publishes_an_examiner_acknowledgement_and_speaks_nothing(
+        self,
+    ):
+        # Issue #269: a refused reply kept the learner turn. It is an examiner
+        # acknowledgement on the data channel, never a failure or patient speech.
+        self.client.replies[1] = VoiceTurnReply(turn_id=1, status="kept", generation_id=1)
+        task = self.connect()
+        with self.assertNoLogs("voice-worker", level="WARNING"):
+            await self.say("abdome flácido")
+            await self.say("onde dói")
+            self.tts.streams[0].queue.put_nowait(chunk("a2"))
+            await settle()
+            await self.disconnect(task)
+
+        self.assertEqual(
+            self.room.patient_events()[0],
+            {
+                "session_id": "s1",
+                "turn_id": 1,
+                "generation_id": 1,
+                "role": "examiner",
+                "status": "kept",
+            },
+        )
+        self.assertEqual(self.room.patient_events()[1]["role"], "patient")
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 2"])
+        # The kept receipt settles the turn: cleanup has nothing to fence.
+        self.assertEqual(self.client.cancel_calls, [])
+
     async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
         self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
         task = self.connect()

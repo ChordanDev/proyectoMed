@@ -41,7 +41,11 @@ def classify_provider_error(exc: Exception) -> VoiceFailure:
 
 
 class VoiceTurnReply:
-    """Typed generation-bound reply metadata returned by Phoenix (#119)."""
+    """Typed generation-bound reply metadata returned by Phoenix (#119).
+
+    `status` is `committed` (a verified reply to speak), `kept` (the patient reply
+    was refused and Phoenix kept the learner turn without one, #269) or `duplicate`.
+    """
 
     def __init__(
         self,
@@ -66,6 +70,21 @@ class VoiceTurnReply:
             and isinstance(self.reply_text, str)
             and bool(self.reply_text.strip())
         )
+
+    def is_kept_receipt(self) -> bool:
+        """A refused reply kept the learner turn: generation-bound, with no text."""
+        return (
+            self.status == "kept"
+            and type(self.turn_id) is int
+            and self.turn_id > 0
+            and type(self.generation_id) is int
+            and self.generation_id > 0
+            and self.reply_text is None
+        )
+
+    def is_settled_receipt(self) -> bool:
+        """Server evidence that this turn was admitted and resolved."""
+        return self.is_committed_receipt() or self.is_kept_receipt()
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, VoiceTurnReply):
@@ -159,7 +178,7 @@ class TurnTracker:
         """Validates that a reply is generation-bound, not duplicate, and not superseded/cancelled."""
         if not isinstance(reply, VoiceTurnReply):
             return False
-        if not reply.is_committed_receipt():
+        if not reply.is_settled_receipt():
             return False
         if self.is_turn_stale(reply.turn_id):
             return False
@@ -175,7 +194,7 @@ class TurnTracker:
             return False
         if reply.turn_id <= self.last_accepted_turn_id:
             return False
-        return bool(reply.reply_text)
+        return reply.is_kept_receipt() or bool(reply.reply_text)
 
     def accept_reply(self, reply: VoiceTurnReply) -> VoiceTurnReply | None:
         """Accepts typed generation-bound reply metadata; rejects superseded or cancelled results."""
@@ -514,7 +533,7 @@ class TurnManager:
             reply = await self.phoenix.commit(turn_id, text)
             if (
                 isinstance(reply, VoiceTurnReply)
-                and reply.is_committed_receipt()
+                and reply.is_settled_receipt()
                 and reply.turn_id == turn_id
             ):
                 # Phoenix atomically replaces the active generation on a newer
@@ -533,7 +552,7 @@ class TurnManager:
                     result = self.on_reply(accepted)
                     if asyncio.iscoroutine(result):
                         await result
-                if accepted is None and reply.is_committed_receipt():
+                if accepted is None and reply.is_settled_receipt():
                     # A committed result the tracker refuses is a stale generation.
                     self._notify_cancel(turn_id)
                 return accepted

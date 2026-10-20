@@ -3,8 +3,9 @@
 Joins only `station-session-*` rooms, asks Phoenix whether the session may stream audio,
 publishes interim transcripts to the room (topic "transcript") and POSTs each final
 transcript to Phoenix, which owns the transcript. Each reply Phoenix approves is published
-to the room as patient text and then spoken through ElevenLabs (#120). Never logs
-transcript text, reply text or audio.
+to the room as patient text and then spoken through ElevenLabs (#120). A refused reply
+that Phoenix kept as a learner turn is published as an examiner acknowledgement and
+never spoken (#269). Never logs transcript text, reply text or audio.
 """
 
 # pyright: reportMissingImports=false
@@ -148,6 +149,9 @@ class PatientVoice:
             )
 
     async def on_reply(self, reply: VoiceTurnReply) -> None:
+        if reply.is_kept_receipt():
+            await self._acknowledge(reply)
+            return
         try:
             await publish(
                 self.room,
@@ -166,6 +170,26 @@ class PatientVoice:
         task = asyncio.create_task(self._speak(reply))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def _acknowledge(self, reply: VoiceTurnReply) -> None:
+        """A refused reply kept the learner turn (#269): the examiner acknowledges it.
+
+        Nothing is spoken and it is not a failure. A room publish error is reported
+        content-free and never stops the job.
+        """
+        try:
+            await publish(
+                self.room,
+                {
+                    "session_id": self.session_id,
+                    "turn_id": reply.turn_id,
+                    "generation_id": reply.generation_id,
+                    "role": "examiner",
+                    "status": "kept",
+                },
+            )
+        except Exception:
+            await self._publish_failure(reply, "text_delivery_failed")
 
     def cancel_turn(self, turn_id: int) -> None:
         """Stop the playback bound to a cancelled or stale turn (or an earlier one)."""

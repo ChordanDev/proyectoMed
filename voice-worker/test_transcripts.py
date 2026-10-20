@@ -162,6 +162,26 @@ class TurnTrackerTest(unittest.TestCase):
         self.assertEqual(tracker.active_generation_id, 1)
         self.assertEqual(tracker.last_accepted_turn_id, 1)
 
+    def test_accept_reply_accepts_a_kept_receipt_without_text(self):
+        # Issue #269: a refused reply kept the learner turn; nothing is spoken.
+        tracker = TurnTracker("s1", last_turn_id=0)
+        kept = VoiceTurnReply(turn_id=1, status="kept", generation_id=1)
+
+        self.assertIs(tracker.accept_reply(kept), kept)
+        self.assertEqual(tracker.last_accepted_turn_id, 1)
+        self.assertEqual(tracker.active_generation_id, 1)
+        self.assertIsNone(tracker.accept_reply(kept))
+
+    def test_accept_reply_rejects_malformed_kept_receipts(self):
+        tracker = TurnTracker("s1", last_turn_id=0)
+        for reply in (
+            VoiceTurnReply(turn_id=1, status="kept", generation_id=None),
+            VoiceTurnReply(turn_id=1, status="kept", generation_id=1, reply_text="x"),
+            VoiceTurnReply(turn_id=0, status="kept", generation_id=1),
+        ):
+            self.assertIsNone(tracker.accept_reply(reply))
+        self.assertEqual(tracker.last_accepted_turn_id, 0)
+
     def test_accept_reply_rejects_duplicates(self):
         tracker = TurnTracker("s1", last_turn_id=0)
         dup = VoiceTurnReply(turn_id=1, status="duplicate")
@@ -303,6 +323,19 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply.status, "duplicate")
             self.assertIsNone(reply.generation_id)
             self.assertIsNone(reply.reply_text)
+
+    async def test_commit_returns_a_kept_reply_without_text(self):
+        def handler(request):
+            return httpx.Response(
+                201, json={"turn_id": 1, "status": "kept", "generation_id": 1}
+            )
+
+        async with phoenix(handler) as client:
+            reply = await client.commit(1, "Abdome flácido, dor à palpação.")
+        self.assertEqual(reply.status, "kept")
+        self.assertEqual((reply.turn_id, reply.generation_id), (1, 1))
+        self.assertIsNone(reply.reply_text)
+        self.assertTrue(reply.is_kept_receipt())
 
     async def test_commit_retries_once_on_disconnect(self):
         calls = []
