@@ -14,6 +14,9 @@ defmodule Backend.Stations.CandidateGate do
        structured, machine-evaluable predicate from the vocabulary in
        `Backend.Stations.TemplateApplicability` evaluating to `true` against
        trusted case state (`opts[:case_state]`, never the AI `context` map).
+       The patient's no-information answer (`no_information_answer?/1`, issue
+       #293) is an approved template for every station: it discloses no facts,
+       so a candidate equal to it is delivered without Jev.
        Legacy deterministic literals (the `"unconditional"` string, `true`,
        and the `unconditional` map) remain accepted as defense in depth.
        Prose strings, malformed maps, unknown predicates, and predicates
@@ -117,7 +120,8 @@ defmodule Backend.Stations.CandidateGate do
     deadline_at = resolve_monotonic_deadline(opts)
 
     with :ok <- BoundedReply.check_violations(candidate_text, package) do
-      if template_bypass?(candidate_text, package, opts) do
+      if no_information_answer?(candidate_text) or
+           template_bypass?(candidate_text, package, opts) do
         {:ok, delivered(candidate_text, %{})}
       else
         verify_with_jev(candidate_text, package, conversation, deadline_at, opts)
@@ -171,6 +175,22 @@ defmodule Backend.Stations.CandidateGate do
   Delegates deny-first violation checks to `BoundedReply.check_violations/2`.
   """
   defdelegate check_violations(text, package), to: BoundedReply
+
+  @doc """
+  Whether `candidate_text` is the patient's no-information answer, the phrase
+  `Backend.Stations.StationAI.refusal_text/0` defines once for every station
+  (issue #293).
+
+  Only that exact phrase matches; surrounding whitespace is ignored because it
+  carries no content. Any other text, even one that contains the phrase,
+  does not match.
+  """
+  @spec no_information_answer?(term()) :: boolean()
+  def no_information_answer?(candidate_text) when is_binary(candidate_text) do
+    String.trim(candidate_text) === Backend.Stations.StationAI.refusal_text()
+  end
+
+  def no_information_answer?(_candidate_text), do: false
 
   # ============================================================================
   # Approved Template Check (Option B Fail-Closed)
@@ -442,7 +462,7 @@ defmodule Backend.Stations.CandidateGate do
   end
 
   defp recheck_candidate_dispatch(regen_text, package, conversation, deadline_at, recheck_opts) do
-    if template_bypass?(regen_text, package, recheck_opts) do
+    if no_information_answer?(regen_text) or template_bypass?(regen_text, package, recheck_opts) do
       {:ok, delivered(regen_text, %{})}
     else
       recheck_with_jev(regen_text, package, conversation, deadline_at, recheck_opts)
