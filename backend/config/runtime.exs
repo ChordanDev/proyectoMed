@@ -149,6 +149,27 @@ if config_env() != :test do
   end
 end
 
+# Patient reply verification (issue #307): `PATIENT_VERIFICATION=audit` (the
+# default) delivers a patient reply once the deterministic BoundedReply check
+# passes and verifies it with Jev after delivery; `blocking` keeps the
+# pre-delivery Jev gate with the adjudicator and the single regeneration; `off`
+# makes no patient-side Jev call. Case and surrounding whitespace are ignored.
+# Any other value fails the boot, naming it. `:test` reads none of it.
+if config_env() != :test do
+  case System.get_env("PATIENT_VERIFICATION", "") |> String.trim() |> String.downcase() do
+    "" ->
+      :ok
+
+    mode when mode in ["blocking", "audit", "off"] ->
+      config :backend, :patient_verification, String.to_existing_atom(mode)
+
+    _invalid ->
+      raise ArgumentError,
+            "PATIENT_VERIFICATION must be blocking, audit or off, got: " <>
+              inspect(System.get_env("PATIENT_VERIFICATION"))
+  end
+end
+
 # Text provider (issue #252): `LLM_PROVIDER=anthropic` serves the three text
 # seams (simulated patient, rubric resolver, learner feedback) from Claude's
 # Messages API. Unset, or any other value, keeps OpenAI exactly as before. Jev
