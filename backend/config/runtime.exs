@@ -55,6 +55,22 @@ if voice = System.get_env("OPENAI_TTS_VOICE") do
   config :backend, :openai_tts_voice, voice
 end
 
+if url = System.get_env("LIVEKIT_URL") do
+  config :backend, :livekit_url, url
+end
+
+if api_key = System.get_env("LIVEKIT_API_KEY") do
+  config :backend, :livekit_api_key, api_key
+end
+
+if api_secret = System.get_env("LIVEKIT_API_SECRET") do
+  config :backend, :livekit_api_secret, api_secret
+end
+
+if secret = System.get_env("VOICE_WORKER_SECRET") do
+  config :backend, :voice_worker_secret, secret
+end
+
 with timeout when is_binary(timeout) <- System.get_env("CONVERSATION_TIMEOUT_MS"),
      {timeout_ms, ""} when timeout_ms > 0 <- Integer.parse(timeout) do
   config :backend, :conversation_timeout_ms, timeout_ms

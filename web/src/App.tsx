@@ -3,6 +3,7 @@ import {
   BriefScreen,
   NoticeScreen,
   StationScreen,
+  VoicePanel,
   ResultScreen,
   useActiveStation,
   useStation,
@@ -112,6 +113,9 @@ export default function App(): React.JSX.Element {
   const timeElapsed = station.remainingMs !== null && station.remainingMs <= 0;
   return (
     <main className="app-root">
+      {station.audioConsent && (
+        <VoicePanel sessionId={station.sessionId} active />
+      )}
       <StationScreen
         title={title}
         brief={brief}

@@ -144,6 +144,7 @@ export const useStation = (api: StationApi = defaultApi) => {
   const [result, setResult] = useState<SessionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [audioConsent, setAudioConsent] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [deadlineAtMs, setDeadlineAtMs] = useState<number | null>(null);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [initialMessages, setInitialMessages] = useState<SessionMessage[]>([]);
@@ -184,6 +185,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       setDeadlineAtMs(null);
       setRemainingMs(null);
       setImpressoError(null);
+      setSessionId(null);
       setError(cause instanceof ApiError ? cause.message : unknownErrorMessage);
       updateStatus("failed");
     },
@@ -207,6 +209,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       clockAnchorRef.current = null;
       timerFinishTriggeredRef.current = false;
       clearPersistedSessionId();
+      setSessionId(null);
       setDeadlineAtMs(null);
       setRemainingMs(null);
       setInitialMessages([]);
@@ -237,6 +240,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         timerFinishTriggeredRef.current = false;
         pageHideAttemptedRef.current = null;
         clearPersistedSessionId();
+        setSessionId(null);
         setDeadlineAtMs(null);
         setRemainingMs(null);
         setInitialMessages([]);
@@ -277,6 +281,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       setAudioConsent(consent);
       setError(null);
       setResult(null);
+      setSessionId(null);
       setInitialMessages([]);
       setImpressos([]);
       setImpressoError(null);
@@ -287,6 +292,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         anchorClock(session.server_now);
         setDeadlineAtMs(Date.parse(session.deadline_at));
         persistSessionId(session.session_id);
+        setSessionId(session.session_id);
         updateStatus("active");
       } catch (cause) {
         fail(cause);
@@ -540,6 +546,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         if (cancelled || readPersistedSessionId() !== savedSessionId) return;
 
         sessionRef.current = detail;
+        setSessionId(detail.session_id);
         setAudioConsent(detail.audio_consent);
         anchorClock(detail.server_now);
         setDeadlineAtMs(Date.parse(detail.deadline_at));
@@ -643,6 +650,7 @@ export const useStation = (api: StationApi = defaultApi) => {
           timerFinishTriggeredRef.current = false;
           pageHideAttemptedRef.current = null;
           clearPersistedSessionId();
+          setSessionId(null);
           setResult(null);
           setInitialMessages([]);
           setImpressos([]);
@@ -676,6 +684,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     status,
     error,
     audioConsent,
+    sessionId,
     remainingMs,
     initialMessages,
     impressos,
