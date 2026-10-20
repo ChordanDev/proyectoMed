@@ -24,7 +24,8 @@ defmodule Backend.Stations.StationAI.SentenceStream do
     * `:acc` - the initial accumulator; `:idle_timeout_ms` - the longest wait for
       the next piece (default #{20_000} ms).
     * `:gate` - optional `fn -> :open | {:closed, reason} end`, a decision taken
-      while the generation already runs (issue #294, the turn addressee). It is
+      while the generation already runs (issues #294 and #309, the turn
+      addressee read from the generation's marker). It is
       called exactly once: before the first sentence is verified, or when the
       stream stops before any sentence was. `{:closed, reason}` stops the reply
       with outcome `{:closed, reason}` and stops the generation: nothing of it is

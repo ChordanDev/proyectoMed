@@ -515,7 +515,7 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
                Stations.create_message(session.session_id, %{
                  role: :learner,
                  modality: :text,
-                 text: "Examinador, e os exames laboratoriais?",
+                 text: "O senhor tem alguma alergia?",
                  deadline_ms: 50,
                  generator: fn _pkg, _conv, _remaining_ms, _guidance -> slow_regeneration.() end
                })
@@ -691,7 +691,7 @@ defmodule Backend.Stations.PreDeliveryGateContractTest do
          %{session: session} do
       Application.put_env(:backend, :jev_decision_adapter, RefuseThenVerifyJevDouble)
       patient_text = "Sinto uma dor forte do lado direito da barriga."
-      learner_text = "Examinador, quais os achados do exame físico?"
+      learner_text = "Onde a dor começou, senhor?"
       Process.put(:custom_ai_reply, patient_text)
 
       log =

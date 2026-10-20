@@ -4,14 +4,15 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
   grading evidence. The text turns of the #228 regression fixture are sent twice
   through `Stations.create_message/2`:
 
-    * as before #274: no addressee check (an adapter without it), and the patient
+    * as before #274: the generation carries no addressee marker, and the patient
       decision refuses the turns spoken to the examiner, so they are kept (#235);
-    * with the check: the same turns are examiner-addressed and acknowledged with
-      no generation.
+    * with the addressee decided by the generation (#309): the same turns start
+      with `[EXAMINADOR]` and are acknowledged with no patient reply.
 
   Both sessions yield the same transcript evidence (apart from timestamps).
-  Since #302 an examiner-addressed turn that names an authored impresso also
-  releases it, so the addressee session adds only those impresso events.
+  Since #302 an examiner turn that names an authored impresso also releases it,
+  and since #309 such a turn is examiner-addressed without the model in both
+  sessions, so the sessions differ at most in impresso events.
   """
   use ExUnit.Case, async: false
 
@@ -44,15 +45,23 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
-  defmodule AddresseeJev do
-    @behaviour Backend.Stations.JevDecision.Adapter
+  # Since #309 the generation decides the addressee: `[EXAMINADOR]` for a turn
+  # listed in `:evidence_test_examiner_texts`, else a patient reply.
+  defmodule MarkedAI do
+    @behaviour Backend.Stations.StationAI
 
     @impl true
-    def decide_addressee(%{latest_learner_turn: %{text: text}}) do
-      if text in Application.fetch_env!(:backend, :evidence_test_examiner_texts),
-        do: {:ok, %{addressee: :examiner}},
-        else: {:ok, %{addressee: :patient}}
+    def next_reply(_package, %{conversation: conversation}) do
+      %{text: latest} = conversation |> Enum.filter(&(&1.role == :student)) |> List.last()
+
+      if latest in Application.fetch_env!(:backend, :evidence_test_examiner_texts),
+        do: {:ok, %{text: "[EXAMINADOR]"}},
+        else: {:ok, %{text: "[PACIENTE] Entendi, doutor.", used_facts: []}}
     end
+  end
+
+  defmodule VerifyingJev do
+    @behaviour Backend.Stations.JevDecision.Adapter
 
     @impl true
     def decide_patient(_request), do: {:ok, %{status: :verified}}
@@ -72,7 +81,6 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
       end)
     end)
 
-    Application.put_env(:backend, :station_ai_adapter, FixedAI)
     :ok
   end
 
@@ -84,7 +92,8 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     |> Enum.filter(&(&1["role"] == "learner" and &1["modality"] == "text"))
   end
 
-  defp run_attempt(jev_adapter) do
+  defp run_attempt(station_ai_adapter, jev_adapter) do
+    Application.put_env(:backend, :station_ai_adapter, station_ai_adapter)
     Application.put_env(:backend, :jev_decision_adapter, jev_adapter)
     session = Stations.create_session(%{audio_consent: false})
 
@@ -115,10 +124,11 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     assert length(examiner_texts) == length(@examiner_keys)
     Application.put_env(:backend, :evidence_test_examiner_texts, examiner_texts)
 
-    {baseline_outcomes, baseline_pool} = run_attempt(BaselineJev)
-    {addressee_outcomes, addressee_pool} = run_attempt(AddresseeJev)
+    {baseline_outcomes, baseline_pool} = run_attempt(FixedAI, BaselineJev)
+    {addressee_outcomes, addressee_pool} = run_attempt(MarkedAI, VerifyingJev)
 
-    assert Enum.count(baseline_outcomes, &(&1 == :kept)) == length(@examiner_keys)
+    assert Enum.count(baseline_outcomes, &(&1 in [:kept, :examiner_acknowledged])) ==
+             length(@examiner_keys)
 
     assert Enum.count(addressee_outcomes, &(&1 == :examiner_acknowledged)) ==
              length(@examiner_keys)
@@ -126,10 +136,11 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     {addressee_turns, released_by_examiner} =
       Enum.split_with(addressee_pool, &(&1.kind == :turn))
 
-    assert addressee_turns == Enum.filter(baseline_pool, &(&1.kind == :turn))
-    assert Enum.reject(baseline_pool, &(&1.kind == :turn)) == []
+    {baseline_turns, baseline_released} = Enum.split_with(baseline_pool, &(&1.kind == :turn))
+
+    assert addressee_turns == baseline_turns
     assert released_by_examiner != []
-    assert Enum.all?(released_by_examiner, &(&1.kind == :impresso_event))
+    assert Enum.all?(released_by_examiner ++ baseline_released, &(&1.kind == :impresso_event))
 
     learner_items = Enum.filter(addressee_turns, &(&1.role == :learner))
     assert Enum.map(learner_items, & &1.text) == Enum.map(learner_texts(), & &1["text"])

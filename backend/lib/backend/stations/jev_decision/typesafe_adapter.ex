@@ -1,9 +1,8 @@
 defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @moduledoc """
   `Backend.Stations.JevDecision.Adapter` backed by the TypeSafe System One HTTP API
-  (model Jev). It serves the patient decision, the batched rubric decision and the
-  turn addressee decision (issue #274); the single-criterion rubric decision is not
-  served.
+  (model Jev). It serves the patient decision and the batched rubric decision; the
+  single-criterion rubric decision is not served.
 
   This adapter is never the default. It is selected by explicit configuration, and
   using it against the live provider is gated by the human privacy and legal
@@ -149,7 +148,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   ## Logging
 
-  Only `decide_patient/2` and `decide_addressee/2` log, and only at `:debug` level: after the answers are
+  Only `decide_patient/2` logs, and only at `:debug` level: after the answers are
   parsed, one line `[TypesafeAdapter] patient verdict=<status>` followed by every
   question as `<question id>=<noul rounded to 3 decimals>:<yes|no|undecided>`. Question
   ids are positional, so the line carries no learner, candidate or authored text, no
@@ -299,77 +298,6 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
          {:ok, nouls} <- ask_actions(request, config, items, plans, max_tokens) do
       {:ok, %{decisions: rubric_decisions(questions, plans, nouls, thresholds)}}
     end
-  end
-
-  @addressee_question "addressee:examiner"
-
-  # One question, phrased so that a high value means "examiner" (issue #274).
-  @addressee_instructions %{
-    "instructions" => %{
-      "question" =>
-        "Is the message in `latest_learner_message` addressed to the examiner rather " <>
-          "than to the patient? In this clinical skills exam the learner talks to a " <>
-          "simulated patient and also reports to an examiner who watches the encounter."
-    },
-    "criteria" => %{
-      "true" =>
-        "The learner reports a physical exam finding, interprets a lab or imaging " <>
-          "result, states a diagnosis or a plan for the examiner, or asks the examiner " <>
-          "for an exam or a result.",
-      "false" =>
-        "The learner speaks to the patient: greets, asks the patient a question, " <>
-          "explains something to the patient or reassures the patient."
-    }
-  }
-
-  @impl true
-  def decide_addressee(request), do: decide_addressee(request, [])
-
-  @doc """
-  Asks one noul question (`#{@addressee_question}`) over `latest_learner_message`
-  and the bounded `conversation`, nothing else. A yes is `:examiner`, a no is
-  `:patient` and a value between the thresholds is `:undecided` (issue #274).
-  Logs, at `:debug`, the addressee and the rounded noul, never any text.
-  """
-  @spec decide_addressee(map(), keyword()) ::
-          {:ok, %{addressee: :examiner | :patient | :undecided}} | {:error, term()}
-  def decide_addressee(request, opts) when is_map(request) and is_list(opts) do
-    config = get_config(opts)
-
-    with :ok <- validate_credentials(config.api_key),
-         {:ok, thresholds} <- validate_thresholds(config.yes_threshold, config.no_threshold),
-         :ok <- validate_base_url(config.base_url),
-         {:ok, budget_ms} <- usable_budget(request),
-         payload = addressee_payload(request, config.model),
-         {:ok, body} <- execute_request(config, payload, budget_ms),
-         {:ok, %{@addressee_question => noul}} <- parse_answers(body, [@addressee_question]) do
-      addressee =
-        case classify(noul, thresholds) do
-          :yes -> :examiner
-          :no -> :patient
-          :undecided -> :undecided
-        end
-
-      Logger.debug(fn ->
-        rounded = :erlang.float_to_binary(noul / 1, decimals: 3)
-
-        "[TypesafeAdapter] addressee=#{addressee} " <>
-          "#{@addressee_question}=#{rounded}:#{classify(noul, thresholds)}"
-      end)
-
-      {:ok, %{addressee: addressee}}
-    end
-  end
-
-  defp addressee_payload(request, model) do
-    %{
-      "model" => model,
-      "state" => %{
-        "latest_learner_message" => turn_text(Map.get(request, :latest_learner_turn)),
-        "conversation" => request |> Map.get(:conversation, []) |> Enum.map(&state_turn/1)
-      },
-      "questions" => %{@addressee_question => Map.put(@addressee_instructions, "type", "noul")}
-    }
   end
 
   # ============================================================================

@@ -1,10 +1,11 @@
 # Turn addressee: patient or examiner
 
-Status: **Implemented for #274** (parent #237). This note adds to ADR-011 (#123, the
-Jev verification gate) and ADR-008 (the station conversation). #235 recorded that
-deciding who a learner turn is addressed to deserves its own decision once real-time
-voice landed. It does not change ADR-011's gate, the grading contract (ADR-012) or any
-claim boundary in [jev-prototype.md](jev-prototype.md).
+Status: **Implemented for #274, decided by the patient generation since #309** (parent
+#237). This note adds to ADR-011 (#123, the Jev verification gate) and ADR-008 (the
+station conversation). #235 recorded that deciding who a learner turn is addressed to
+deserves its own decision once real-time voice landed. It does not change ADR-011's
+gate, the grading contract (ADR-012) or any claim boundary in
+[jev-prototype.md](jev-prototype.md).
 
 ## Problem
 
@@ -16,46 +17,39 @@ answer it), and only then did the learner see "Examinador: Anotado.". That cost 
 1.5-3 s per turn in the second half of the station. A refused reply to a real patient
 question showed the same "Anotado.", which reads as if the examiner had answered.
 
-## Decision
+#274 added a separate Jev `turn_addressee` question per turn, and #294 ran it beside
+the generation. It still cost 0.2-0.5 s per turn (one 1 s error in the 2026-10-20
+rehearsal) and spent a generation that was thrown away on every examiner turn.
 
-Each learner turn, text or voice, is classified once by Jev. Since #294 the check runs
-alongside the patient generation and is decided before anything of the generation is
-verified (see "Running alongside the generation").
+## Decision (#309)
+
+The patient generation decides the addressee in the same call. There is no Jev
+addressee request on any path (text, voice, streamed voice).
 
 | Item | Decision |
 |---|---|
-| Check | One TypeSafe `noul` question: "Is the message in `latest_learner_message` addressed to the examiner rather than to the patient?" with criteria for each side. No extra LLM call. |
-| State sent | The latest learner message and the bounded recent conversation (same minimization, trust labels and caps as the patient decision). No authored package content. |
-| Thresholds | `yes_threshold` 0.8 / `no_threshold` 0.2, the same TypeSafe adapter settings as the patient decision. |
-| Examiner | noul ≥ 0.8. |
-| Patient | noul ≤ 0.2. |
-| Undecided | 0.2 < noul < 0.8: **patient-addressed**. |
-| Failure | Timeout, disabled adapter, an adapter without the check, malformed output: **patient-addressed**, the behaviour before #274. The check never blocks or fails a turn. |
-| Deadline | Its own budget (`:jev_addressee_deadline_ms`, default 1,000 ms). It is decided before the patient reply's 3 s verification budget starts, so it never shortens that budget. |
-| Logging | One line per turn: `[Stations] turn_addressee decision=<examiner\|patient\|undecided\|error> channel=<text\|voice> latency_ms=<n>`. No learner text, no noul. |
+| Marker | The patient prompt ends with `MARCAÇÃO DO DESTINATÁRIO`: every reply starts with exactly `[PACIENTE]` or `[EXAMINADOR]`. Examiner = the learner addresses the examiner or the station: asks for an exam, a maneuver, the physical exam or a result, or tells the examiner what was done, found, concluded or planned. Nothing follows `[EXAMINADOR]`. In doubt, `[PACIENTE]`. |
+| Parsing | `Backend.Stations.StationAI.Addressee`, in code, from the first characters: case and spaces inside the brackets are ignored. The marker is stripped before BoundedReply, Jev, the transcript, the client or TTS see the text; it is never spoken, shown or stored. |
+| Missing or unknown marker | Patient-addressed, the text kept whole (an unknown bracket such as a stage direction is not lost), and logged with `source=missing_marker`. |
+| Impresso request | A learner text in which `Impressos.match` finds an authored impresso (#302, with the #305 negation rules) is examiner-addressed before any generation, without the model. |
+| Logging | One line per turn: `[Stations] turn_addressee decision=<examiner\|patient> source=<marker\|missing_marker\|impresso> channel=<text\|voice> latency_ms=<n>`, the time from the start of the turn to the decision. No learner or patient text. |
 
-### Running alongside the generation (#294)
+### Paths
 
-#274 first ran the check before the generation, so every patient turn paid it (0.2-0.7 s
-in the 2026-10-20 rehearsal) on top of a 1.0-2.6 s generation. #294 accepts the other
-trade-off: the generation starts at the same time as the check, and an examiner turn
-spends a generation that is then thrown away.
-
-- Streamed voice (`stream_voice_turn/5`): the decision gates the first sentence. The
-  stream waits for it before verifying its first sentence, or when it stops before
-  having one. Examiner stops the generation; nothing of it is verified, handed to the
-  worker, stored or logged as a `voice_sentence`, and the learner turn is kept as above.
-  Patient, undecided or a failed check keep the generation already running.
-- An examiner decision wins over a generation that failed before it was taken: the
-  turn is acknowledged, not failed.
+- Text (`create_message/2`) and non-streamed voice (`process_voice_turn/3`): the whole
+  reply is generated, its marker read, and an examiner reply is acknowledged without
+  verification; a patient reply continues to the pre-delivery check of its
+  verification mode (#307).
+- Streamed voice (`stream_voice_turn/5`): the generated pieces are held back until the
+  marker is decided, and the decision reaches the sentence gate
+  (`SentenceStream`'s `:gate`) before any text does. Examiner stops the reply: nothing
+  of the generation is verified, handed to the worker, stored or logged as a
+  `voice_sentence`. A marker decided before the generation failed still wins: the turn
+  is acknowledged, not failed.
+- The CandidateGate's regeneration (`StationAI.next_reply/2`) strips the marker too; a
+  regeneration is always patient-addressed.
 - The verification of an examiner turn is never spent, and no `verified_fact_ids` are
   recorded for it (#286).
-- Text turns (`create_message/2`) and the non-streamed voice fallback
-  (`process_voice_turn/3`) still classify first. Their generation runs in the request
-  process; running it alongside the check would either delay "Anotado." until the
-  generation ends or need the generation moved into a task that the check can stop,
-  which changes the process every station AI adapter runs in. That is a separate
-  change.
 
 ## What each outcome shows
 
@@ -75,8 +69,8 @@ event `status: "kept"` from a worker built before #274 now shows the neutral not
 
 ## Exam requests to the examiner (#302)
 
-An examiner-addressed turn (text or voice) whose text names at least one authored
-impresso is also an impresso request: the backend matches it with `Impressos.match`
+A turn (text or voice) whose text names at least one authored impresso is an
+impresso request, and since #309 examiner-addressed without the model: the backend matches it with `Impressos.match`
 over `Impressos.normalize(text)` (deterministic, no model) and, when anything
 matches, records it through `Stations.request_impresso/2`, the path of the impressos
 modal. The release and its `impresso_requests` event are therefore those of a modal
@@ -116,8 +110,9 @@ addition is the impresso events of exam requests made to the examiner.
 
 ## Open points
 
-- The thresholds and question wording are not calibrated on live pt-BR turns. The live
-  check of #274 (findings, labs and plan acknowledged in under 1 s; patient questions
-  answered) is pending a human run.
+- The prompt wording is not calibrated on a full set of live pt-BR turns; the #309 live
+  check covers the 10-turn script and three examiner phrasings.
 - A turn that mixes both addressees ("o abdome está doloroso; o senhor tem febre?") is
-  expected to land undecided and so goes to the patient, as before #274.
+  expected to be marked `[PACIENTE]` (the doubt rule), as before #274.
+- A patient question that names an authored exam ("o senhor já fez hemograma?") is an
+  exam request to the examiner by the impresso rule.

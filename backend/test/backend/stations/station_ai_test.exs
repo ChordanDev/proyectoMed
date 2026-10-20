@@ -269,4 +269,22 @@ defmodule Backend.StationAI.SystemPromptTest do
       end
     end
   end
+
+  describe "system_prompt/1 addressee marker (issue #309)" do
+    test "asks for exactly one marker at the start of every reply", %{prompt: prompt} do
+      assert prompt =~ "MARCAÇÃO DO DESTINATÁRIO"
+
+      assert prompt =~
+               "Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE] ou [EXAMINADOR]."
+    end
+
+    test "says when the turn is the examiner's and that nothing follows its marker",
+         %{prompt: prompt} do
+      assert prompt =~
+               "Use [EXAMINADOR] quando a última mensagem do estudante for dirigida ao examinador"
+
+      assert prompt =~ "Depois de [EXAMINADOR] não escreva mais nada."
+      assert prompt =~ "Na dúvida, use [PACIENTE]."
+    end
+  end
 end

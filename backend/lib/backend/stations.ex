@@ -24,6 +24,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
+  alias Backend.Stations.StationAI.Addressee
   alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
   alias Backend.Stations.SttKeyterms
@@ -177,14 +178,16 @@ defmodule Backend.Stations do
   `{:error, :message_too_long}` before it enters the conversation or reaches
   Jev. It is never truncated.
 
-  Before any generation, Jev decides who the turn is addressed to (#274,
-  `docs/design/turn-addressee.md`). An examiner-addressed turn is kept without a
-  patient reply, nothing is generated or verified, and the result is
-  `{:ok, %{outcome: :examiner_acknowledged, learner_turn: message, reply_text: nil,
-  newly_released: impressos}}`, where `impressos` are those the turn released by
-  naming an authored impresso (#302), empty otherwise.
-  An undecided answer, or any failure of the check, is patient-addressed, and the
-  turn continues as below; its result carries `outcome: :patient_reply`.
+  The patient generation decides who the turn is addressed to (#274, #309,
+  `docs/design/turn-addressee.md`): its reply starts with `[PACIENTE]` or
+  `[EXAMINADOR]`, stripped before anything else reads the text. A turn naming
+  an authored impresso is examiner-addressed without any generation. An
+  examiner-addressed turn is kept without a patient reply, nothing is verified,
+  and the result is `{:ok, %{outcome: :examiner_acknowledged, learner_turn:
+  message, reply_text: nil, newly_released: impressos}}`, where `impressos` are
+  those the turn released by naming an authored impresso (#302), empty
+  otherwise. A missing or unknown marker is patient-addressed (and logged), and
+  the turn continues as below; its result carries `outcome: :patient_reply`.
 
   Encapsulates:
     1. Appending the learner's message to the session conversation.
@@ -249,10 +252,17 @@ defmodule Backend.Stations do
     )
   end
 
+  # An exam request that names an authored impresso is examiner-addressed
+  # without asking the model (#309); any other turn is decided by the marker
+  # the patient generation starts with.
   defp generate_and_resolve_turn(session_id, token, params) do
-    case turn_addressee(session_id, :text, params) do
-      :examiner -> acknowledge_examiner_turn(session_id, token)
-      :patient -> generate_patient_turn(session_id, token, params)
+    started_at = JevDecision.monotonic_now_ms()
+
+    if impresso_request?(Map.get(params, :text) || Map.get(params, "text")) do
+      log_turn_addressee(:examiner, :impresso, :text, started_at)
+      acknowledge_examiner_turn(session_id, token)
+    else
+      generate_patient_turn(session_id, token, params, started_at)
     end
   end
 
@@ -300,71 +310,55 @@ defmodule Backend.Stations do
 
   defp release_requested_impressos(_session_id, _text, _params), do: []
 
-  # Decides who the latest learner turn of the session is addressed to (#274),
-  # before any generation. Only a confident examiner answer is `:examiner`; an
-  # undecided answer or any failure of the check is `:patient`, the behaviour
-  # before #274. Logs the decision and its latency, never any content.
-  defp turn_addressee(session_id, channel, params) do
-    started_at = JevDecision.monotonic_now_ms()
+  # Whether the learner text names an authored impresso (#302, #305), which
+  # makes the turn an exam request to the examiner (#309).
+  defp impresso_request?(text) when is_binary(text) do
+    package = get_active_package()
+    Impressos.match(package["impressos"] || [], Impressos.normalize(text)) != []
+  end
 
-    decision =
-      with {:ok, session} <- Conversation.fetch(session_id),
-           {:ok, addressee} <-
-             JevDecision.decide_addressee(
-               %{conversation: session.messages},
-               addressee_opts(params)
-             ) do
-        addressee
-      else
-        _failure -> :error
-      end
+  defp impresso_request?(_text), do: false
 
+  # Splits the addressee decided by the generation's marker (#309) from the
+  # reply, logging it.
+  defp take_addressee(ai_reply, channel, started_at) do
+    {addressee, ai_reply} = Map.pop(ai_reply, :addressee, :patient)
+    {source, ai_reply} = Map.pop(ai_reply, :addressee_source, :missing_marker)
+    log_turn_addressee(addressee, source, channel, started_at)
+    {addressee, ai_reply}
+  end
+
+  # One line per learner turn: the addressee, what decided it (`marker`,
+  # `missing_marker` or `impresso`), the channel and the time from the start of
+  # the turn to the decision. Never any content.
+  defp log_turn_addressee(addressee, source, channel, started_at) do
     Logger.info(
-      "[Stations] turn_addressee decision=#{decision} channel=#{channel} " <>
+      "[Stations] turn_addressee decision=#{addressee} source=#{source} channel=#{channel} " <>
         "latency_ms=#{JevDecision.monotonic_now_ms() - started_at}"
     )
-
-    if decision == :examiner, do: :examiner, else: :patient
   end
 
-  # Starts `turn_addressee/3` alongside the patient generation (#294); its
-  # decision is taken once with `await_turn_addressee/1`.
-  defp start_turn_addressee(session_id, channel, params) do
-    Task.async(fn -> turn_addressee(session_id, channel, params) end)
-  end
-
-  # The check has its own deadline inside `JevDecision`; the extra margin only
-  # guards against a stuck task, which is patient-addressed like any failure.
-  defp await_turn_addressee(task) do
-    case Task.yield(task, JevDecision.addressee_deadline_ms() + 1_000) ||
-           Task.shutdown(task, :brutal_kill) do
-      {:ok, :examiner} -> :examiner
-      _patient_or_failure -> :patient
-    end
-  end
-
-  defp addressee_opts(params) do
-    case Map.get(params, :adapter) || Map.get(params, "adapter") do
-      adapter when is_atom(adapter) and not is_nil(adapter) -> [adapter: adapter]
-      _ -> []
-    end
-  end
-
-  defp generate_patient_turn(session_id, token, params) do
+  defp generate_patient_turn(session_id, token, params, started_at) do
     package = get_active_package()
 
     with {:ok, current_session} <- Conversation.fetch(session_id),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
-      verify_and_resolve_turn(
-        session_id,
-        token,
-        package,
-        current_session,
-        context,
-        ai_reply,
-        params
-      )
+      case take_addressee(ai_reply, :text, started_at) do
+        {:examiner, _ai_reply} ->
+          acknowledge_examiner_turn(session_id, token)
+
+        {:patient, ai_reply} ->
+          verify_and_resolve_turn(
+            session_id,
+            token,
+            package,
+            current_session,
+            context,
+            ai_reply,
+            params
+          )
+      end
     else
       {:error, _reason} ->
         rollback_turn(session_id, token, :station_ai_unavailable)
@@ -969,10 +963,12 @@ defmodule Backend.Stations do
        A verified reply made only of stage directions has nothing to speak and
        is kept the same way with reason `:unspeakable`. Every kept result
        carries `addressee: :patient`, except the examiner-addressed turn below.
-    2a. Before generation, Jev decides who the turn is addressed to (#274): an
-       examiner-addressed turn is kept with nothing generated, verified or
-       spoken, as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
-       An undecided answer or a failed check continues as patient-addressed.
+    4a. The generation's addressee marker (#309) decides who the turn is
+       addressed to, and a turn naming an authored impresso is examiner-addressed
+       before any generation: an examiner-addressed turn is kept with nothing
+       verified or spoken, as
+       `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
+       A missing marker continues as patient-addressed.
     7. Failing closed on technical failures: a reply that is denied, unverifiable,
        or left without usable text fails the generation as
        `:station_ai_unavailable` and commits no patient content.
@@ -1076,10 +1072,11 @@ defmodule Backend.Stations do
     * A turn cancelled or superseded mid-reply hands nothing more over, stores
       nothing and returns `{:error, :stale_generation}`.
 
-  The addressee check (#274) runs alongside the generation (#294) and is
-  decided before the first sentence is verified: an examiner-addressed turn
-  stops the generation, hands nothing over, stores nothing of it and is kept as
-  `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
+  The addressee (#274) is decided by the marker the generation starts with
+  (#309), read before the first sentence is verified; a turn naming an
+  authored impresso is examiner-addressed without any generation. An
+  examiner-addressed turn hands nothing over, stores nothing of the generation
+  and is kept as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
 
   Returns `{result, acc}`, where `result` has the shape of
   `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
@@ -1255,9 +1252,13 @@ defmodule Backend.Stations do
   defp process_voice_reply(session_id, turn_id, generation_id, learner_text) do
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(session) do
-      case turn_addressee(session_id, :voice, %{}) do
-        :examiner -> keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
-        :patient -> generate_voice_reply(session_id, turn_id, generation_id)
+      started_at = JevDecision.monotonic_now_ms()
+
+      if impresso_request?(learner_text) do
+        log_turn_addressee(:examiner, :impresso, :voice, started_at)
+        keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+      else
+        generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at)
       end
     else
       {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
@@ -1284,23 +1285,47 @@ defmodule Backend.Stations do
     end
   end
 
-  defp generate_voice_reply(session_id, turn_id, generation_id) do
+  defp generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at) do
     package = get_active_package()
 
     with {:ok, current_session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(current_session),
          context = format_context(current_session, package),
-         {:ok, ai_reply} <- generate_patient_reply(package, context),
-         {:ok, result} <-
-           package
-           |> check_voice_reply(current_session, context, ai_reply)
-           |> resolve_voice_reply(session_id, turn_id, generation_id, fn session ->
-             audit_delivered_reply(session_id, session, package, current_session)
-           end) do
-      {:ok, result}
+         {:ok, ai_reply} <- generate_patient_reply(package, context) do
+      case take_addressee(ai_reply, :voice, started_at) do
+        {:examiner, _ai_reply} ->
+          keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+
+        {:patient, ai_reply} ->
+          deliver_voice_reply(
+            package,
+            current_session,
+            context,
+            ai_reply,
+            {turn_id, generation_id}
+          )
+      end
     else
       {:error, reason} ->
         fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
+
+  defp deliver_voice_reply(
+         package,
+         %{session_id: session_id} = session,
+         context,
+         ai_reply,
+         {turn_id, generation_id}
+       ) do
+    package
+    |> check_voice_reply(session, context, ai_reply)
+    |> resolve_voice_reply(session_id, turn_id, generation_id, fn stored ->
+      audit_delivered_reply(session_id, stored, package, session)
+    end)
+    |> case do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
     end
   end
 
@@ -1353,58 +1378,101 @@ defmodule Backend.Stations do
   end
 
   defp stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink) do
-    package = get_active_package()
+    started_at = JevDecision.monotonic_now_ms()
 
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(session) do
-      context = format_context(session, package)
-      # The addressee check runs alongside the generation (#294) and gates the
-      # first sentence: an examiner turn stops the generation before anything
-      # of it is verified, handed over or stored.
-      addressee = start_turn_addressee(session_id, :voice, %{})
-      mode = PatientVerification.mode()
-
-      %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
-        SentenceStream.run(
-          gate: fn -> addressee_gate(addressee) end,
-          generate: &stream_patient_reply(package, context, &1),
-          verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
-          deliver: fn sentence, index, acc ->
-            deliver_voice_sentence(
-              session_id,
-              turn_id,
-              generation_id,
-              {sentence, index},
-              acc,
-              sink
-            )
-          end,
-          acc: acc
+      if impresso_request?(learner_text) do
+        log_turn_addressee(:examiner, :impresso, :voice, started_at)
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+      else
+        stream_marked_voice_reply(
+          session,
+          {turn_id, generation_id, learner_text},
+          started_at,
+          acc,
+          sink
         )
-
-      case outcome do
-        {:closed, :examiner_addressed} ->
-          {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
-
-        outcome ->
-          {resolve_streamed_reply(
-             session_id,
-             turn_id,
-             generation_id,
-             outcome,
-             {delivered, fact_ids},
-             fn stored -> audit_delivered_reply(session_id, stored, package, session) end
-           ), acc}
       end
     else
       {:error, reason} -> {fail_voice_reply(session_id, generation_id, reason), acc}
     end
   end
 
-  defp addressee_gate(addressee) do
-    case await_turn_addressee(addressee) do
-      :examiner -> {:closed, :examiner_addressed}
-      :patient -> :open
+  # The generation's addressee marker (#309) gates the first sentence: the
+  # stream hands the decision over before any text, so an examiner turn stops
+  # before anything of the generation is verified, handed over or stored.
+  defp stream_marked_voice_reply(
+         %{session_id: session_id} = session,
+         {turn_id, generation_id, learner_text},
+         started_at,
+         acc,
+         sink
+       ) do
+    package = get_active_package()
+    context = format_context(session, package)
+    mode = PatientVerification.mode()
+    parent = self()
+    marker = make_ref()
+    on_addressee = fn addressee, source -> send(parent, {marker, addressee, source}) end
+
+    %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
+      SentenceStream.run(
+        gate: fn -> marker_gate(marker, started_at) end,
+        generate: &stream_patient_reply(package, context, &1, on_addressee),
+        verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
+        deliver: fn sentence, index, acc ->
+          deliver_voice_sentence(
+            session_id,
+            turn_id,
+            generation_id,
+            {sentence, index},
+            acc,
+            sink
+          )
+        end,
+        acc: acc
+      )
+
+    flush_marker(marker)
+
+    case outcome do
+      {:closed, :examiner_addressed} ->
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+
+      outcome ->
+        {resolve_streamed_reply(
+           session_id,
+           turn_id,
+           generation_id,
+           outcome,
+           {delivered, fact_ids},
+           fn stored -> audit_delivered_reply(session_id, stored, package, session) end
+         ), acc}
+    end
+  end
+
+  # The gate runs before the first sentence, which the generation sends only
+  # after its marker decision, or when the stream stops; a generation that
+  # failed before deciding is patient-addressed, like a missing marker.
+  defp marker_gate(marker, started_at) do
+    {addressee, source} =
+      receive do
+        {^marker, addressee, source} -> {addressee, source}
+      after
+        0 -> {:patient, :missing_marker}
+      end
+
+    log_turn_addressee(addressee, source, :voice, started_at)
+    if addressee == :examiner, do: {:closed, :examiner_addressed}, else: :open
+  end
+
+  # A decision sent after the gate (a generation that timed out) is dropped.
+  defp flush_marker(marker) do
+    receive do
+      {^marker, _addressee, _source} -> :ok
+    after
+      0 -> :ok
     end
   end
 
@@ -1737,26 +1805,31 @@ defmodule Backend.Stations do
   end
 
   # Streams the patient generation (#271). An adapter without `stream_reply/3`
-  # is streamed as one piece once its whole reply is ready. Logs only the
+  # is streamed as one piece once its whole reply is ready. The addressee
+  # marker (#309) is decided from the first pieces and never handed to
+  # `on_text`; `on_addressee` gets the decision first, once. Logs only the
   # outcome and latency, like `generate_patient_reply/2`.
-  defp stream_patient_reply(package, context, on_text) do
+  defp stream_patient_reply(package, context, on_text, on_addressee) do
     started_at = JevDecision.monotonic_now_ms()
     adapter = resolve_station_ai_adapter()
+    {filter, finish} = Addressee.stream(on_text, on_addressee)
 
     result =
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :stream_reply, 3) do
-        case adapter.stream_reply(package, context, on_text) do
+        case adapter.stream_reply(package, context, filter) do
           {:ok, %{text: text}} when is_binary(text) -> {:ok, text}
           {:ok, text} when is_binary(text) -> {:ok, text}
           {:error, reason} -> {:error, reason}
           other -> {:error, {:invalid_adapter_output, other}}
         end
       else
-        with {:ok, %{text: text}} when is_binary(text) <- run_patient_adapter(package, context) do
-          on_text.(text)
+        with {:ok, %{text: text}} <- adapter_reply_text(adapter, package, context) do
+          filter.(text)
           {:ok, text}
         end
       end
+
+    if match?({:ok, _}, result), do: finish.()
 
     outcome = if match?({:ok, _}, result), do: "ok", else: "error"
 
@@ -1767,18 +1840,21 @@ defmodule Backend.Stations do
     result
   end
 
+  # The addressee marker the reply starts with (#309) is stripped here, before
+  # anything checks, verifies, stores or speaks the text, and returned as
+  # `addressee` with its `addressee_source`.
   defp run_patient_adapter(package, context) do
     adapter = resolve_station_ai_adapter()
 
     case adapter.next_reply(package, context) do
-      {:ok, %{text: text, used_facts: used_facts}} when is_list(used_facts) ->
-        {:ok, %{text: text, used_facts: used_facts}}
+      {:ok, %{text: text, used_facts: used_facts}} when is_binary(text) and is_list(used_facts) ->
+        {:ok, marked_reply(text, used_facts)}
 
-      {:ok, %{text: text}} ->
-        {:ok, %{text: text, used_facts: []}}
+      {:ok, %{text: text}} when is_binary(text) ->
+        {:ok, marked_reply(text, [])}
 
       {:ok, text} when is_binary(text) ->
-        {:ok, %{text: text, used_facts: []}}
+        {:ok, marked_reply(text, [])}
 
       {:error, reason} ->
         {:error, reason}
@@ -1786,6 +1862,22 @@ defmodule Backend.Stations do
       other ->
         {:error, {:invalid_adapter_output, other}}
     end
+  end
+
+  # The unmarked reply of an adapter without `stream_reply/3`, for the stream
+  # to read the marker from.
+  defp adapter_reply_text(adapter, package, context) do
+    case adapter.next_reply(package, context) do
+      {:ok, %{text: text}} when is_binary(text) -> {:ok, %{text: text}}
+      {:ok, text} when is_binary(text) -> {:ok, %{text: text}}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:invalid_adapter_output, other}}
+    end
+  end
+
+  defp marked_reply(marked_text, used_facts) do
+    {addressee, source, text} = Addressee.split(marked_text)
+    %{text: text, used_facts: used_facts, addressee: addressee, addressee_source: source}
   end
 
   defp timer_finish_allowed?(session) do
@@ -1808,7 +1900,7 @@ defmodule Backend.Stations do
             _ -> :student
           end
 
-        %{role: role, text: msg.text}
+        %{role: role, text: generator_text(role, msg.text)}
       end)
       |> drop_unanswered_learner_turns()
 
@@ -1817,6 +1909,12 @@ defmodule Backend.Stations do
       language: package["language"] || "pt-BR"
     }
   end
+
+  # The generator sees its earlier replies with the addressee marker it wrote
+  # (#309): stored replies have it stripped, and a history without it led the
+  # live model to stop marking its replies after the second turn.
+  defp generator_text(:patient, text) when is_binary(text), do: "[PACIENTE] " <> text
+  defp generator_text(_role, text), do: text
 
   defp drop_unanswered_learner_turns(turns) do
     turns
