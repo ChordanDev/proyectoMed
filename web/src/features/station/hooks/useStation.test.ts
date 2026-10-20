@@ -153,6 +153,7 @@ describe("useStation", () => {
       result: null,
       error: null,
       audioConsent: false,
+      sessionId: null,
     });
 
     let blockedReply: MessageReply | null = reply;
@@ -181,6 +182,7 @@ describe("useStation", () => {
       await startPromise;
     });
     expect(result.current.status).toBe("active");
+    expect(result.current.sessionId).toBe("session-1");
 
     await act(async () => {
       await result.current.start(false);
@@ -255,6 +257,7 @@ describe("useStation", () => {
 
     expect(result.current.status).toBe("failed");
     expect(result.current.error).toBe("Estação indisponível.");
+    expect(result.current.sessionId).toBeNull();
   });
 
   it("retries a failed start with exactly one replacement session", async () => {
@@ -858,6 +861,34 @@ describe("useStation", () => {
       expect(result.current.status).toBe("active");
       expect(result.current.remainingMs).toBe(10 * 60 * 1000);
       expect(result.current.initialMessages).toEqual(resumedDetail.messages);
+    });
+
+    it("exposes the resumed session id for the voice panel and clears it after an acknowledged reset", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const resumedDetail: SessionDetail = {
+        ...session,
+        status: "active",
+        completion_reason: null,
+        messages: [],
+      };
+      const api = apiMock({
+        getSession: vi.fn().mockResolvedValue(resumedDetail),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.status).toBe("active");
+      expect(result.current.sessionId).toBe("session-1");
+
+      await act(async () => {
+        await result.current.reset();
+      });
+      expect(api.discardSession).toHaveBeenCalledWith("session-1");
+      expect(result.current.status).toBe("idle");
+      expect(result.current.sessionId).toBeNull();
     });
 
     it("clears the stored session id and starts fresh when the resumed session is gone (404/410)", async () => {

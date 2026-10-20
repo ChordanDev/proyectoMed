@@ -52,6 +52,14 @@ export interface MessageReply {
   server_now: string;
 }
 
+export interface VoiceSession {
+  url: string;
+  token: string;
+  room: string;
+  identity: string;
+  expires_at: string;
+}
+
 export type FinishReason = "user" | "timer";
 
 export interface CompletedSession {
@@ -273,6 +281,17 @@ const decodeMessageReply = (value: unknown): MessageReply => {
     reply_text: stringValue(body, "reply_text", "message"),
     server_now: stringValue(body, "server_now", "message"),
     ...(hasAudioUrl ? { reply_audio_url: audioUrl as string | null } : {}),
+  };
+};
+
+const decodeVoiceSession = (value: unknown): VoiceSession => {
+  const body = objectValue(value, "voice session");
+  return {
+    url: stringValue(body, "url", "voice session"),
+    token: stringValue(body, "token", "voice session"),
+    room: stringValue(body, "room", "voice session"),
+    identity: stringValue(body, "identity", "voice session"),
+    expires_at: stringValue(body, "expires_at", "voice session"),
   };
 };
 
@@ -608,6 +627,12 @@ export const createApiClient = ({
         jsonPost({ reason }),
         decodeCompletedSession,
       ),
+    createVoiceSession: (sessionId: string) =>
+      request(
+        `${sessionPath(sessionId)}/voice`,
+        { method: "POST" },
+        decodeVoiceSession,
+      ),
     transcribeAudio: (
       sessionId: string,
       audioBlob: Blob,
@@ -685,6 +710,7 @@ export const {
   transcribeAudio,
   synthesizeSpeech,
   fetchResult,
+  createVoiceSession,
   requestImpresso,
   getImpressos,
   discardSession,
