@@ -28,8 +28,16 @@ defmodule Backend.Stations.TurnAddresseeTest do
     @impl true
     def stream_reply(_package, _context, on_text) do
       send(Application.fetch_env!(:backend, :addressee_test_pid), :patient_generation)
-      on_text.("A dor começou ontem à noite.")
-      {:ok, %{text: "A dor começou ontem à noite."}}
+      Process.sleep(Application.get_env(:backend, :addressee_generation_delay_ms, 0))
+
+      case Application.get_env(:backend, :addressee_generation_result, :ok) do
+        :ok ->
+          on_text.("A dor começou ontem à noite.")
+          {:ok, %{text: "A dor começou ontem à noite."}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -44,6 +52,8 @@ defmodule Backend.Stations.TurnAddresseeTest do
         Application.fetch_env!(:backend, :addressee_test_pid),
         {:addressee_check, request.latest_learner_turn.text}
       )
+
+      Process.sleep(Application.get_env(:backend, :addressee_delay_ms, 0))
 
       case Application.fetch_env!(:backend, :addressee_answer) do
         {:error, reason} -> {:error, reason}
@@ -69,7 +79,10 @@ defmodule Backend.Stations.TurnAddresseeTest do
       :jev_addressee_deadline_ms,
       :addressee_test_pid,
       :addressee_answer,
-      :addressee_patient_status
+      :addressee_patient_status,
+      :addressee_delay_ms,
+      :addressee_generation_delay_ms,
+      :addressee_generation_result
     ]
 
     previous = Map.new(keys, &{&1, Application.fetch_env(:backend, &1)})
@@ -179,15 +192,66 @@ defmodule Backend.Stations.TurnAddresseeTest do
       assert [%{role: :learner, text: @finding}] = stored.messages
     end
 
-    test "an examiner-addressed streamed turn is classified before the stream and hands nothing over" do
+    test "an examiner-addressed streamed turn cancels the parallel generation and hands nothing over" do
       answer(:examiner)
+      # The generation is ready before the decision: the decision still wins.
+      Application.put_env(:backend, :addressee_delay_ms, 150)
+      session = Stations.create_session(%{audio_consent: true})
+      sink = fn sentence, acc -> {:cont, [sentence | acc]} end
+      level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: level) end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {{:ok, {:kept, %{addressee: :examiner, refusal: :examiner_addressed}}}, []} =
+                   Stations.stream_voice_turn(session.session_id, 1, @finding, [], sink)
+        end)
+
+      # #294: the generation runs alongside the check, but nothing from it is
+      # verified, spoken, committed or logged as a reply.
+      assert_received :patient_generation
+      refute_received :patient_verification
+      refute log =~ "voice_sentence"
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: @finding} = learner] = stored.messages
+      refute Map.get(learner, :verified_fact_ids)
+    end
+
+    test "an examiner decision wins over a generation that failed before it" do
+      answer(:examiner)
+      Application.put_env(:backend, :addressee_delay_ms, 100)
+      Application.put_env(:backend, :addressee_generation_result, {:error, :network_error})
       session = Stations.create_session(%{audio_consent: true})
       sink = fn sentence, acc -> {:cont, [sentence | acc]} end
 
       assert {{:ok, {:kept, %{addressee: :examiner}}}, []} =
                Stations.stream_voice_turn(session.session_id, 1, @finding, [], sink)
 
-      refute_received :patient_generation
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: @finding}] = stored.messages
+    end
+
+    test "a patient-addressed streamed turn adds no addressee latency to the first sentence" do
+      answer(:patient)
+      Application.put_env(:backend, :addressee_delay_ms, 400)
+      Application.put_env(:backend, :addressee_generation_delay_ms, 400)
+      session = Stations.create_session(%{audio_consent: true})
+      started_at = System.monotonic_time(:millisecond)
+      test_pid = self()
+
+      sink = fn {:sentence, %{text: text}}, acc ->
+        send(test_pid, {:first_sentence_ms, System.monotonic_time(:millisecond) - started_at})
+        {:cont, [text | acc]}
+      end
+
+      assert {{:ok, %{reply_text: @reply}}, [@reply]} =
+               Stations.stream_voice_turn(session.session_id, 1, @question, [], sink)
+
+      # Sequential would be at least 400 + 400 ms; in parallel the first
+      # sentence follows the slower of the two, plus verification.
+      assert_received {:first_sentence_ms, elapsed_ms}
+      assert elapsed_ms < 700, "first sentence after #{elapsed_ms} ms"
     end
 
     test "an undecided voice turn streams the patient reply" do

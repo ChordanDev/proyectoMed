@@ -23,6 +23,12 @@ defmodule Backend.Stations.StationAI.SentenceStream do
       called once per verified sentence, in order, with the raw sentence.
     * `:acc` - the initial accumulator; `:idle_timeout_ms` - the longest wait for
       the next piece (default #{20_000} ms).
+    * `:gate` - optional `fn -> :open | {:closed, reason} end`, a decision taken
+      while the generation already runs (issue #294, the turn addressee). It is
+      called exactly once: before the first sentence is verified, or when the
+      stream stops before any sentence was. `{:closed, reason}` stops the reply
+      with outcome `{:closed, reason}` and stops the generation: nothing of it is
+      verified, delivered or logged. Without a gate the stream is open.
 
   ## Outcome
 
@@ -32,7 +38,8 @@ defmodule Backend.Stations.StationAI.SentenceStream do
   sentences were all accepted, and
   `outcome` is `:complete`, `{:refused, reason}` (the first refused sentence
   stops the reply), `{:error, reason}` (generation or verification failed) or
-  `:halted` (`deliver` halted). Text after the stopping point, including an
+  `:halted` (`deliver` halted) or `{:closed, reason}` (the gate closed, nothing
+  was verified or delivered). Text after the stopping point, including an
   unfinished sentence, is discarded and never handed over.
 
   ## Logs
@@ -49,7 +56,8 @@ defmodule Backend.Stations.StationAI.SentenceStream do
 
   @default_idle_timeout_ms 20_000
 
-  @type outcome :: :complete | :halted | {:refused, term()} | {:error, term()}
+  @type outcome ::
+          :complete | :halted | {:refused, term()} | {:error, term()} | {:closed, term()}
 
   @spec run(keyword()) :: %{
           outcome: outcome(),
@@ -79,6 +87,7 @@ defmodule Backend.Stations.StationAI.SentenceStream do
       verify: Keyword.fetch!(opts, :verify),
       deliver: Keyword.fetch!(opts, :deliver),
       acc: Keyword.get(opts, :acc),
+      gate: Keyword.get(opts, :gate),
       idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms),
       buffer: "",
       prefix: "",
@@ -88,7 +97,7 @@ defmodule Backend.Stations.StationAI.SentenceStream do
       segment_started: now_ms()
     }
 
-    {outcome, state} = loop(state)
+    {outcome, state} = state |> loop() |> close_gate()
     stop_generation(state)
 
     %{
@@ -145,6 +154,33 @@ defmodule Backend.Stations.StationAI.SentenceStream do
   end
 
   defp handle_sentence(sentence, state) do
+    case pass_gate(state) do
+      {:open, state} -> verify_sentence(sentence, state)
+      {:closed, reason, state} -> {:stop, {:closed, reason}, state}
+    end
+  end
+
+  # A stream that stopped before its first sentence still takes the gate's
+  # decision, which wins over the stream's own outcome when it closes.
+  defp close_gate({outcome, state}) do
+    case pass_gate(state) do
+      {:open, state} -> {outcome, state}
+      {:closed, reason, state} -> {{:closed, reason}, state}
+    end
+  end
+
+  defp pass_gate(%{gate: nil} = state), do: {:open, state}
+
+  defp pass_gate(%{gate: gate} = state) do
+    state = %{state | gate: nil}
+
+    case gate.() do
+      {:closed, reason} -> {:closed, reason, state}
+      _open -> {:open, state}
+    end
+  end
+
+  defp verify_sentence(sentence, state) do
     found_at = now_ms()
     generation_ms = found_at - state.segment_started
     candidate = String.trim(state.prefix <> sentence)
