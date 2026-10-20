@@ -10,6 +10,10 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter do
   still validates and merges every decision; nothing here grants credit.
   Thinking stays adaptive, so there is no `temperature`; the effort is `medium`.
 
+  The fixed system prompt is the cached prompt prefix (issue #272, see
+  `Backend.Stations.StationAI.AnthropicClient`); the per-request user content
+  (criteria to decide and the learner evidence) stays after the breakpoint.
+
   The HTTP receive timeout sits just below the resolver deadline
   (`Backend.Stations.RubricAssessment.Resolver.deadline_ms/1`), which the
   resolver enforces as the hard limit.

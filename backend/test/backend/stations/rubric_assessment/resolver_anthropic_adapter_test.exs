@@ -68,7 +68,16 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
 
       assert_receive {:req, "/v1/messages", ["sk-ant-test"], payload}
       assert payload["model"] == "claude-opus-5-5"
-      assert payload["system"] == OpenAIAdapter.system_prompt()
+      # Issue #272: the fixed system prompt is the cached prefix; the
+      # per-request user content stays after the breakpoint.
+      assert payload["system"] == [
+               %{
+                 "type" => "text",
+                 "text" => OpenAIAdapter.system_prompt(),
+                 "cache_control" => %{"type" => "ephemeral"}
+               }
+             ]
+
       assert payload["fallbacks"] == "default"
 
       assert payload["output_config"] == %{

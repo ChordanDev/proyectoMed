@@ -77,7 +77,15 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       # thinking is a 400 and `between_tools` (alone) is the lowest setting.
       assert payload["model"] == "claude-sonnet-5-5"
       assert payload["thinking"] == %{"type" => "between_tools"}
-      assert payload["system"] == StationAI.system_prompt(@package, @context)
+
+      assert payload["system"] == [
+               %{
+                 "type" => "text",
+                 "text" => StationAI.system_prompt(@package, @context),
+                 "cache_control" => %{"type" => "ephemeral"}
+               }
+             ]
+
       assert payload["output_config"] == %{"effort" => "low"}
       assert payload["fallbacks"] == "default"
       assert is_integer(payload["max_tokens"]) and payload["max_tokens"] > 0
@@ -105,8 +113,8 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       context = Map.put(@context, :withheld_fact_ids, ["f1"])
       assert {:ok, _} = reply(PatientWithheldStub, context: context)
       assert_receive {:system, system}
-      assert system == StationAI.system_prompt(@package, context)
-      assert system =~ "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR"
+      assert Enum.map_join(system, & &1["text"]) == StationAI.system_prompt(@package, context)
+      assert Enum.map_join(system, & &1["text"]) =~ "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR"
     end
 
     test "honours base url, model and effort overrides" do
