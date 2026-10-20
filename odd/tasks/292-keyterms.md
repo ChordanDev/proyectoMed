@@ -46,7 +46,7 @@ acute-appendicitis has no `stt_keyterms`, so the list sent to Deepgram was empty
   Route: inline (one new module + one test file, already understood).
 - [x] T2 — Wire into `Backend.Stations.voice_worker_context/1`; context test on the
   acute-appendicitis package; README voice section. Route: inline (mechanical).
-- [ ] T3 — Live check on the Deepgram prerecorded API with an ElevenLabs TTS clip,
+- [x] T3 — Live check on the Deepgram prerecorded API with an ElevenLabs TTS clip,
   with and without keyterms; record both transcripts here. Route: inline (no source).
 
 ## Checks
@@ -63,7 +63,22 @@ acute-appendicitis has no `stt_keyterms`, so the list sent to Deepgram was empty
   Commit `69f4000`.
 - T2 done (inline). RED: voice context test for acute-appendicitis failed (1/2 passed,
   keyterms empty); GREEN: 2/2. Full `mix test`: 1587 passed; credo --strict clean.
+  Commit `3b3a5d7`.
+- T3 done (live check, no source change). Sentence "Na palpação há dor no ponto de
+  McBurney, sinal de Blumberg positivo." synthesized with ElevenLabs (station voice) and
+  sent to the Deepgram prerecorded API (`nova-3`, `pt-BR`, `smart_format`), with no
+  keyterms and with the 50 derived acute-appendicitis keyterms:
+  - `eleven_flash_v2_5` clip (4.1 s): without → "Na palpação, adorno, ponto de McBurney,
+    sinal de bloomberg positivo."; with → "Na palpação, adorno, ponto de McBurney, sinal
+    de Blumberg positivo."
+  - `eleven_multilingual_v2` clip (5.0 s): without → "Na palpação, há dor sinal de
+    Bloomberg positivo."; with → "Na palpação, há dor sinal de Blumberg positivo."
+    "no ponto de McBurney" is dropped with and without keyterms (also with only 4
+    keyterms), so it looks like that TTS rendering, not the list.
+  - Outcome: Blumberg fixed by keyterms in both clips; palpação and McBurney correct
+    where spoken clearly; "há dor no" → "adorno" is a short-word error keyterms do not
+    target. A human spoken check in a live session is still pending.
 
 ## Next step
 
-T3 (live check), then local CI.
+Local CI, push, PR to `feat/237-clinician-demo-readiness`; human live-session check.
