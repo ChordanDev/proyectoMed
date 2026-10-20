@@ -4,8 +4,9 @@ defmodule Backend.Stations.Conversation do
 
   Sessions are never persisted. A completed session is immutable: calling
   `complete/2` again returns the original completed session. The only data
-  added to a completed session is its learner feedback cache
-  (`put_learner_feedback/2`), which lives and dies with the session.
+  added to a completed session are its rubric assessment
+  (`put_rubric_assessment/2`, issue #301) and its learner feedback cache
+  (`put_learner_feedback/2`), which live and die with the session.
   """
 
   use GenServer
@@ -19,6 +20,7 @@ defmodule Backend.Stations.Conversation do
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
           optional(:learner_feedback) => learner_feedback(),
+          optional(:rubric_assessment) => map(),
           optional(:elapsed_generation_id) => pos_integer(),
           optional(:last_voice_turn_id) => pos_integer(),
           optional(:cancelled_voice_turn_id) => non_neg_integer(),
@@ -380,6 +382,28 @@ defmodule Backend.Stations.Conversation do
     with {:ok, session} <- fetch(session_id) do
       {:ok, Map.get(session, :learner_feedback, %{})}
     end
+  end
+
+  @doc """
+  Returns the rubric assessment kept with a session, or `nil` before it has
+  been graded (issue #301).
+  """
+  @spec rubric_assessment(String.t()) :: {:ok, map() | nil} | {:error, :not_found | :expired}
+  def rubric_assessment(session_id) do
+    with {:ok, session} <- fetch(session_id) do
+      {:ok, Map.get(session, :rubric_assessment)}
+    end
+  end
+
+  @doc """
+  Keeps the rubric assessment of a completed session, so it is graded once
+  (issue #301). An assessment already kept is never replaced, and a missing,
+  expired or still active session is left untouched.
+  """
+  @spec put_rubric_assessment(String.t(), map()) ::
+          :ok | {:error, :not_found | :expired | :session_not_finished}
+  def put_rubric_assessment(session_id, assessment) when is_map(assessment) do
+    GenServer.call(__MODULE__, {:put_rubric_assessment, session_id, assessment})
   end
 
   @doc """
@@ -755,6 +779,25 @@ defmodule Backend.Stations.Conversation do
         cache = session |> Map.get(:learner_feedback, %{}) |> Map.merge(entries)
         true = :ets.insert(__MODULE__, {session_id, Map.put(session, :learner_feedback, cache)})
         {:reply, :ok, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:put_rubric_assessment, session_id, assessment}, _from, state) do
+    case fetch_session(session_id) do
+      {:ok, %{status: :completed, rubric_assessment: %{}}} ->
+        {:reply, :ok, state}
+
+      {:ok, %{status: :completed} = session} ->
+        true =
+          :ets.insert(__MODULE__, {session_id, Map.put(session, :rubric_assessment, assessment)})
+
+        {:reply, :ok, state}
+
+      {:ok, _active} ->
+        {:reply, {:error, :session_not_finished}, state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}

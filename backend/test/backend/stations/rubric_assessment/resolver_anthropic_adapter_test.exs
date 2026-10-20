@@ -155,7 +155,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
       assert {:ok, _} =
                AnthropicAdapter.resolve(@request, api_key: "k", req_options: [adapter: probe])
 
-      assert_receive {:receive_timeout, 9_750}
+      assert_receive {:receive_timeout, 29_750}
     end
   end
 

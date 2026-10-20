@@ -751,6 +751,27 @@ defmodule Backend.ConversationTest do
     end
   end
 
+  describe "rubric assessment kept with a completed session (issue #301)" do
+    test "is nil until kept, then served and never replaced" do
+      session = Conversation.start()
+      id = session.session_id
+
+      assert Conversation.put_rubric_assessment(id, %{criteria: []}) ==
+               {:error, :session_not_finished}
+
+      {:ok, _} = Conversation.complete(id, :user)
+      assert Conversation.rubric_assessment(id) == {:ok, nil}
+
+      assert :ok = Conversation.put_rubric_assessment(id, %{criteria: [:first]})
+      assert :ok = Conversation.put_rubric_assessment(id, %{criteria: [:second]})
+      assert Conversation.rubric_assessment(id) == {:ok, %{criteria: [:first]}}
+
+      :ok = Conversation.discard(id)
+      assert Conversation.rubric_assessment(id) == {:error, :not_found}
+      assert Conversation.put_rubric_assessment(id, %{criteria: []}) == {:error, :not_found}
+    end
+  end
+
   describe "lifecycle boundaries: completion, expiry, discard" do
     test "complete locks session and refuses voice turns, replies, cancellations, and generation queries" do
       session = Conversation.start()

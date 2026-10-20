@@ -235,19 +235,35 @@ if config_env() != :test do
     config :backend, resolver_adapter, model: model
   end
 
-  # `RUBRIC_RESOLVER_DEADLINE_MS` overrides the resolver's own deadline (10 s).
-  with raw when is_binary(raw) <- System.get_env("RUBRIC_RESOLVER_DEADLINE_MS"),
-       {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
-    config :backend, :rubric_resolver_deadline_ms, deadline_ms
-  end
+  # Educational result budget (issue #301). The first fetch of the result runs
+  # the rubric resolver and then learner feedback before answering, and the web
+  # client waits 95 s for it (`EDUCATIONAL_RESULT_TIMEOUT_MS`). 15 s are kept
+  # for Jev's rubric calls, the network and serialization, so resolver plus
+  # feedback get at most 80 s. Defaults (config.exs): resolver 30 s, feedback
+  # 45 s. `test/backend/educational_result_budget_test.exs` pins this.
+  educational_result_budget_ms = 80_000
+  max_resolver_deadline_ms = 40_000
 
-  # `LEARNER_FEEDBACK_DEADLINE_MS` overrides the learner feedback deadline (60 s,
-  # issue #226). Anything but a positive integer keeps the default. Values above
-  # 65 s are capped: with the resolver's 10 s, the request must still finish
-  # inside the web client's 80 s wait for the educational result.
+  # `RUBRIC_RESOLVER_DEADLINE_MS` overrides the resolver's own deadline (30 s),
+  # capped at 40 s. Anything but a positive integer keeps the default.
+  resolver_deadline_ms =
+    with raw when is_binary(raw) <- System.get_env("RUBRIC_RESOLVER_DEADLINE_MS"),
+         {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
+      deadline_ms = min(deadline_ms, max_resolver_deadline_ms)
+      config :backend, :rubric_resolver_deadline_ms, deadline_ms
+      deadline_ms
+    else
+      _default -> 30_000
+    end
+
+  # `LEARNER_FEEDBACK_DEADLINE_MS` overrides the learner feedback deadline (45 s,
+  # issues #226 and #301). Anything but a positive integer keeps the default.
+  # Values above what the resolver leaves of the budget are capped.
   with raw when is_binary(raw) <- System.get_env("LEARNER_FEEDBACK_DEADLINE_MS"),
        {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
-    config :backend, :learner_feedback_deadline_ms, min(deadline_ms, 65_000)
+    config :backend,
+           :learner_feedback_deadline_ms,
+           min(deadline_ms, educational_result_budget_ms - resolver_deadline_ms)
   end
 end
 

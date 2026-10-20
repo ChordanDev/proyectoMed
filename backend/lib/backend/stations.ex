@@ -539,6 +539,13 @@ defmodule Backend.Stations do
   @doc """
   Returns the explicit v2 educational result, without provider diagnostics or persistence.
 
+  A finished session is graded once (issue #301): the first successful
+  assessment is kept with the session and every later fetch serves it, so
+  refreshing the result neither re-runs grading nor changes the grade.
+  Concurrent first fetches of one session wait for a single assessment. An
+  invalid attempt is not kept, so the next fetch grades again. `opts` reach
+  `assess_session/2` only when the session has not been graded yet.
+
   After grading, `Backend.Stations.LearnerFeedback` replaces the
   `recommendation` of each assessed criterion with generated learner feedback
   (issue #215), cached with the session and bound to the graded outcome. Any
@@ -547,10 +554,34 @@ defmodule Backend.Stations do
   """
   @spec get_educational_result(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_educational_result(session_id, opts \\ []) do
-    with {:ok, assessment} <- assess_session(session_id, opts) do
+    with {:ok, assessment} <- graded_assessment(session_id, opts) do
       package = get_active_package()
       assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
       {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
+    end
+  end
+
+  defp graded_assessment(session_id, opts) do
+    with {:ok, _session} <- fetch_completed_session(session_id) do
+      :global.trans({{__MODULE__, :rubric_assessment, session_id}, self()}, fn ->
+        kept_or_assess(session_id, opts)
+      end)
+    end
+  end
+
+  defp kept_or_assess(session_id, opts) do
+    case Conversation.rubric_assessment(session_id) do
+      {:ok, %{} = assessment} ->
+        {:ok, assessment}
+
+      {:ok, nil} ->
+        with {:ok, assessment} <- assess_session(session_id, opts) do
+          _ = Conversation.put_rubric_assessment(session_id, assessment)
+          {:ok, assessment}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
