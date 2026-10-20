@@ -32,8 +32,8 @@ refusal cost about 1.5 s. #242 targets the retry only at stated-yes/asked-no.
 
 ## Tasks
 
-- [ ] T0 Feature document. Route: inline.
-- [ ] T1 Targeted regeneration for undecided unasked facts: `TypesafeAdapter.verdict/4`
+- [x] T0 Feature document. Route: inline.
+- [x] T1 Targeted regeneration for undecided unasked facts: `TypesafeAdapter.verdict/4`
   reports `undecided_fact_ids` (on-request facts whose stated answer is undecided while
   the learner did not ask) only when they are the sole open answer of a
   `:low_confidence` verdict; `JevDecision` validates the ids against the package;
@@ -62,7 +62,9 @@ refusal cost about 1.5 s. #242 targets the retry only at stated-yes/asked-no.
 
 | Task | Commit | RED | GREEN |
 | --- | --- | --- | --- |
+| T0 | `3fb2989` | n/a (document) | n/a |
+| T1 | `1b30a14` | 6 of 219 failed (adapter verdict x3, seam pass-through x2, gate targeted retry x1) | 219 of 219; full backend 1282 passed; format clean |
 
 ## Next step
 
-T1.
+T3.

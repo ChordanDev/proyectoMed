@@ -587,6 +587,14 @@ defmodule Backend.Stations do
   end
 
   @doc """
+  How many patient-reply verifications each cause has had since the node
+  started (issue #273). Holds only cause names and counts; see
+  `Backend.Stations.CandidateGate.refusal_cause_counts/0`.
+  """
+  @spec refusal_cause_counts() :: %{atom() => non_neg_integer()}
+  defdelegate refusal_cause_counts, to: CandidateGate
+
+  @doc """
   Verification seam for generated patient replies before display or synthesis.
 
   Wires directly to `Backend.Stations.CandidateGate.verify_and_deliver/4`.
