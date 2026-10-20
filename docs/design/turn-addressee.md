@@ -50,6 +50,12 @@ spends a generation that is then thrown away.
   turn is acknowledged, not failed.
 - The verification of an examiner turn is never spent, and no `verified_fact_ids` are
   recorded for it (#286).
+- Text turns (`create_message/2`) and the non-streamed voice fallback
+  (`process_voice_turn/3`) still classify first. Their generation runs in the request
+  process; running it alongside the check would either delay "Anotado." until the
+  generation ends or need the generation moved into a task that the check can stop,
+  which changes the process every station AI adapter runs in. That is a separate
+  change.
 
 ## What each outcome shows
 
