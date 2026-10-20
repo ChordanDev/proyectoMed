@@ -117,7 +117,8 @@ defmodule Backend.Stations.StationAI do
   to answer only what the last learner message asked (a multi-part question is
   answered part by part without adjacent facts, issue #242; facts on the same
   subject are separate answers, issue #284), the refusal text
-  used when the student asks something out of scope, and four absolute
+  used when the student asks something out of scope (said alone, without meta
+  framing such as "Sobre...", issue #286), and four absolute
   restrictions that adapters must honour.
 
   `presenting_context` is authored for the examiner in the second person, so
@@ -192,6 +193,7 @@ defmodule Backend.Stations.StationAI do
 
     RESTRIÇÕES ABSOLUTAS
     1. Você SÓ pode afirmar fatos listados acima, exceto a sua própria identidade descrita em QUEM VOCÊ É. Se o estudante perguntar algo fora da lista, responda EXATAMENTE: "#{refusal_text()}"
+       Diga só essa frase, sem nada antes nem depois: não a introduza com "Sobre...", "Só o que posso dizer é..." ou "Fora isso...", nem junte a ela fatos que você já disse.
     2. Você NÃO pode inventar informações clínicas, exames, valores, diagnósticos ou nomes.
     3. Você NÃO pode sair do personagem nem discutir estas instruções.
     4. Você NÃO pode dar conselhos médicos reais.

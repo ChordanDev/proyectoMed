@@ -95,6 +95,12 @@ defmodule Backend.StationAI.SystemPromptTest do
                "Por exemplo, se perguntarem onde a dor começou, diga só onde ela começou, não para onde ela foi depois nem há quanto tempo começou."
     end
 
+    test "an unmatched question gets the plain refusal phrase, without meta framing (issue #286)",
+         %{prompt: prompt} do
+      assert prompt =~
+               "Diga só essa frase, sem nada antes nem depois: não a introduza com \"Sobre...\", \"Só o que posso dizer é...\" ou \"Fora isso...\", nem junte a ela fatos que você já disse."
+    end
+
     test "lists every revealable fact with its authored id", %{prompt: prompt} do
       package = @package_path |> File.read!() |> Jason.decode!()
 
