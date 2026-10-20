@@ -40,25 +40,25 @@ essa informação") score `risk:speaks_out_of_role` ≈ 0.6 (undecided).
 
 ## Tasks
 
-- [ ] T1 — the generator context omits learner messages that never got a patient
+- [x] T1 — the generator context omits learner messages that never got a patient
   reply (a learner message directly followed by another learner message); the
   Jev request still carries both.
   Route: inline (one function in `stations.ex` + tests).
-- [ ] T2 — Jev seam: the patient request carries `disclosed_fact_ids`
+- [x] T2 — Jev seam: the patient request carries `disclosed_fact_ids`
   (validated authored ids); `TypesafeAdapter` asks no `fact_asked` question for
   those facts, so their disclosure is respected; undisclosed facts keep today's
   gating.
   Route: inline (`jev_decision.ex`, `typesafe_adapter.ex` + tests; understood).
-- [ ] T3 — session memory: the verdict's `used_fact_ids` flow out of
+- [x] T3 — session memory: the verdict's `used_fact_ids` flow out of
   `CandidateGate`, are stored on the committed patient message (text, voice and
   streamed voice paths) and the session's disclosed set is passed to every
   later verification.
   Route: inline (gate, stations, conversation, sentence stream; the parent
   delegated this whole issue to this single writer).
-- [ ] T4 — the patient prompt answers an unmatched question with the plain
+- [x] T4 — the patient prompt answers an unmatched question with the plain
   approved refusal phrase, without meta framing.
   Route: inline (one prompt sentence + test).
-- [ ] T5 — README documents the multi-turn behaviour; live 8-turn replay.
+- [x] T5 — README documents the multi-turn behaviour; live 8-turn replay.
 
 ## Checks
 
@@ -71,7 +71,46 @@ essa informação") score `risk:speaks_out_of_role` ≈ 0.6 (undecided).
 
 | Task | Commit | RED | GREEN |
 |---|---|---|---|
+| T1 | `c190c4c` | 2 failing in `multiturn_verification_test.exs` (generator saw the stale questions) | `mix test test/backend`: 1416 passed |
+| T2 | `7b28ae5` | 4 failing in `typesafe_adapter_test.exs` (fact_asked still asked for a disclosed fact) | `test/backend/stations/jev_decision`: 208 passed; `mix test`: 1561 passed |
+| T3 | `87d7db1` | 5 failing in `multiturn_verification_test.exs` (`disclosed_fact_ids` always `[]`), 3 in `candidate_gate_test.exs` (`verify/4` undefined), each observed with the implementation stashed | `mix test`: 1570 passed |
+| T4 | `9c8017e` | 1 failing in `station_ai_test.exs` | `mix test`: 1571 passed |
+| T5 | this commit | — (docs + live check) | live, see below |
+
+T3 design: the disclosed set is derived from the transcript
+(`Conversation.disclosed_fact_ids/1` over the patient messages'
+`verified_fact_ids`), so it needs no new session field, is per session, survives
+resume through ETS, and a kept, rolled back or cancelled turn cannot add or drop
+facts. `Conversation.resolve_patient_reply/4` records the ids atomically with the
+reply; a stale generation records nothing. Streamed replies record the union of
+the verdicts of the sentences actually handed over.
+
+T5 live check (2026-10-20, `mix run` in `dev`, `ACTIVE_STATION_ID=acute-appendicitis`,
+`JEV_ADAPTER=typesafe`, Claude patient, real text path `Stations.create_message/2`,
+26 provider calls). Script:
+`scratchpad/multiturn_live_286.exs` (session scratch, not in the repo).
+
+| # | Learner | Candidate | Verdict | Cause | Latency |
+|---|---|---|---|---|---|
+| 1 | Qual é seu nome? | Meu nome é Rafael Nogueira. | verified | — | 2475 ms |
+| 2 | Onde começou a toa? | A dor começou ao redor do umbigo. | verified (`hda-01`) | — | 1940 ms |
+| 3 | Há quanto tempo começou? | Começou há 18 horas. | verified (`hda-01-tempo`) | — | 2404 ms |
+| 4 | A dor mudou de lugar? | Sim, há cerca de 10 horas ela migrou para a parte inferior direita da barriga. | verified (`hda-01-migracao`) | — | 2056 ms |
+| 5 | Ela piorou com o tempo? | Sim, foi aumentando aos poucos. | verified (`hda-02-progressao`) | — | 2248 ms |
+| 6 | A dor vai para outro lugar? | Não tenho essa informação (both attempts) | semantic_refusal, kept | `risk`: `speaks_out_of_role` 0.90 / 0.92 | 4003 ms |
+| 7 | Teve febre? | Tive uma febre baixa, medi em casa. | verified (`hda-06`) | — | 2038 ms |
+| 8 | Teve náusea ou vômito? | Tive náusea e vomitei uma vez, sem sangue nem bile. | verified (`hda-04`) | — | 2108 ms |
+
+Every generation answered only the latest question (turn 7's context did not
+carry the refused turn 6). Turn 6 is a radiation question with no authored
+fact, so the plain refusal phrase is the right content, but Jev scores the bare
+"Não tenho essa informação" as out of role (0.90). Not fixed here: making the
+refusal pass needs a content decision (an approved template for it, which the
+clinical review owns, D20, or a more in-role refusal phrase).
+
+Review: native RDD not run by this bounded writer; the parent owns it.
 
 ## Next step
 
-T1.
+Local CI, push, PR to `feat/237-clinician-demo-readiness`. Follow-up: the bare
+refusal phrase scored out of role by Jev.
