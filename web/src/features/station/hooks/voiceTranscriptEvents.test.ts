@@ -31,6 +31,31 @@ describe("parseVoiceTranscriptEvent", () => {
     ).toEqual({ type: "patient", turnId: 3, text: "No peito." });
   });
 
+  it("reads one sentence of a streamed reply with its segment index (#281)", () => {
+    expect(
+      parse({
+        session_id: "session-1",
+        turn_id: 3,
+        generation_id: 7,
+        role: "patient",
+        text: "Começou ontem.",
+        segment: 0,
+      }),
+    ).toEqual({ type: "patient", turnId: 3, text: "Começou ontem.", segment: 0 });
+  });
+
+  it("reads the end of a streamed reply (#281)", () => {
+    expect(
+      parse({
+        session_id: "session-1",
+        turn_id: 3,
+        generation_id: 7,
+        role: "patient",
+        status: "complete",
+      }),
+    ).toEqual({ type: "patient-complete", turnId: 3 });
+  });
+
   it("reads a kept turn as an examiner acknowledgement", () => {
     expect(
       parse({
@@ -67,6 +92,10 @@ describe("parseVoiceTranscriptEvent", () => {
     ["a non-string text", { session_id: "session-1", turn_id: 1, final: true, text: 3 }],
     ["an empty final", { session_id: "session-1", turn_id: 1, final: true, text: "  " }],
     ["an empty patient reply", { session_id: "session-1", turn_id: 1, role: "patient", text: "" }],
+    ["a negative segment", { session_id: "session-1", turn_id: 1, role: "patient", text: "Oi", segment: -1 }],
+    ["a fractional segment", { session_id: "session-1", turn_id: 1, role: "patient", text: "Oi", segment: 0.5 }],
+    ["a non-numeric segment", { session_id: "session-1", turn_id: 1, role: "patient", text: "Oi", segment: "0" }],
+    ["an unknown patient status", { session_id: "session-1", turn_id: 1, role: "patient", status: "x" }],
     ["an unknown examiner status", { session_id: "session-1", turn_id: 1, role: "examiner", status: "x" }],
     ["an unknown role", { session_id: "session-1", turn_id: 1, role: "nurse", text: "Oi" }],
     ["invalid JSON", "{not json"],
