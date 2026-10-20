@@ -5,8 +5,10 @@ defmodule Backend.Stations.Conversation do
   Sessions are never persisted. A completed session is immutable: calling
   `complete/2` again returns the original completed session. The only data
   added to a completed session are its rubric assessment
-  (`put_rubric_assessment/2`, issue #301) and its learner feedback cache
-  (`put_learner_feedback/2`), which live and die with the session.
+  (`put_rubric_assessment/2`, issue #301), its learner feedback cache
+  (`put_learner_feedback/2`) and the after-delivery audits of its patient
+  replies (`record_patient_audit/3`, issue #307), which live and die with the
+  session.
   """
 
   use GenServer
@@ -21,6 +23,7 @@ defmodule Backend.Stations.Conversation do
           optional(:completion_reason) => term(),
           optional(:learner_feedback) => learner_feedback(),
           optional(:rubric_assessment) => map(),
+          optional(:patient_audits) => [map()],
           optional(:elapsed_generation_id) => pos_integer(),
           optional(:last_voice_turn_id) => pos_integer(),
           optional(:cancelled_voice_turn_id) => non_neg_integer(),
@@ -315,6 +318,24 @@ defmodule Backend.Stations.Conversation do
   end
 
   def disclosed_fact_ids(_session), do: []
+
+  @doc """
+  Records the after-delivery Jev audit of a patient message (issue #307).
+
+  The message is the patient message stored at `message_at`. `audit` is
+  appended to the session's `patient_audits` with that message's
+  `message_index`; when `verified_fact_ids` is a list it replaces the message's
+  `verified_fact_ids`, so `disclosed_fact_ids/1` follows the audit verdict.
+  A completed session still records it: audits are measurement data that live
+  and die with the session. Returns the recorded audit.
+  """
+  @spec record_patient_audit(String.t(), DateTime.t(), %{
+          audit: map(),
+          verified_fact_ids: [String.t()] | nil
+        }) :: {:ok, map()} | {:error, :not_found | :expired | :message_not_found}
+  def record_patient_audit(session_id, message_at, entry) do
+    GenServer.call(__MODULE__, {:record_patient_audit, session_id, message_at, entry})
+  end
 
   @doc """
   Explicitly cancels a pending generation. When `generation_id` is provided,
@@ -782,6 +803,34 @@ defmodule Backend.Stations.Conversation do
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:record_patient_audit, session_id, message_at, entry}, _from, state) do
+    with {:ok, session} <- fetch_session(session_id),
+         index when is_integer(index) <-
+           Enum.find_index(session.messages, &match?(%{role: :patient, at: ^message_at}, &1)) do
+      audit = Map.put(entry.audit, :message_index, index)
+
+      messages =
+        case entry.verified_fact_ids do
+          ids when is_list(ids) ->
+            List.update_at(session.messages, index, &Map.put(&1, :verified_fact_ids, ids))
+
+          nil ->
+            session.messages
+        end
+
+      session =
+        session
+        |> Map.put(:messages, messages)
+        |> Map.put(:patient_audits, Map.get(session, :patient_audits, []) ++ [audit])
+
+      true = :ets.insert(__MODULE__, {session_id, session})
+      {:reply, {:ok, audit}, state}
+    else
+      nil -> {:reply, {:error, :message_not_found}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
