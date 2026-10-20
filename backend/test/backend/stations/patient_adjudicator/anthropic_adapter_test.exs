@@ -20,6 +20,7 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapterTest do
     undecided_labels: [%{question: "fact_asked", fact_id: "hda-06-antitermico", score: 0.45}],
     not_asked_fact_ids: [],
     asked_fact_ids: ["hda-06-antitermico"],
+    fact_scores: [%{fact_id: "hda-06-antitermico", stated: 0.4, asked: 0.45}],
     response_rules: ["Responda apenas ao que foi perguntado."],
     deadline_ms: 1_200
   }
@@ -87,6 +88,10 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapterTest do
            ]
 
     assert user["asked_fact_ids"] == ["hda-06-antitermico"]
+
+    assert user["fact_scores"] == [
+             %{"fact_id" => "hda-06-antitermico", "stated" => 0.4, "asked" => 0.45}
+           ]
   end
 
   test "the prompt never withholds an asked fact and keeps explicit-question facts narrow" do
@@ -98,6 +103,7 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapterTest do
              "Never list in withheld_fact_ids a fact that answers the latest learner message"
 
     assert system =~ "requires_explicit_question"
+    assert system =~ "fact_scores"
   end
 
   test "the schema allows exactly a decision and the facts to withhold" do

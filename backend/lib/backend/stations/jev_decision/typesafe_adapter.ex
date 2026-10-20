@@ -99,7 +99,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       or the asked question of an `on_request` fact the reply states (yes, issue
       #284): their authored ids. `CandidateGate` withholds them in its single
       regeneration.
-    * `undecided_labels`, `not_asked_fact_ids`, `asked_fact_ids` - only on a `:low_confidence`
+    * `undecided_labels`, `not_asked_fact_ids`, `asked_fact_ids`,
+      `stated_not_asked_fact_ids`, `fact_scores` - only on a `:low_confidence`
       verdict: the evidence the undecided-verdict adjudicator reads (issue #290,
       see `put_adjudication_evidence/5`)
     * `:semantic_refusal` - a risk answer is a yes, or an `on_request` fact is stated
@@ -842,6 +843,15 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `asked_fact_ids` - present only when non-empty: the `on_request` facts
       whose `fact_asked` answer is a clear yes, so the adjudicator never
       withholds a fact the learner asked for
+    * `stated_not_asked_fact_ids` - present only when non-empty: the facts
+      whose `fact_stated` answer is a clear yes and `fact_asked` a clear no, the
+      only facts the adjudicator's hard limit blocks (a defense in depth: this
+      verdict is normally already a `:semantic_refusal`)
+    * `fact_scores` - present only when non-empty: every fact whose
+      `fact_stated` answer is not a clear no, in question order, with its
+      `stated` and `asked` scores rounded to 3 decimals (`asked` is `nil` for a
+      fact that is not `on_request`), so the adjudicator can judge whether the
+      reply really states it
   """
   @spec put_adjudication_evidence(map(), [fact_plan()], [rule_plan()], map(), thresholds()) ::
           map()
@@ -892,10 +902,33 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       )
       |> Enum.uniq()
 
+    stated_not_asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :no,
+        classify(nouls[fact.stated], thresholds) == :yes,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
+    fact_scores =
+      for(
+        fact <- facts,
+        classify(nouls[fact.stated], thresholds) != :no,
+        do: %{
+          fact_id: fact.id,
+          stated: rounded(nouls[fact.stated]),
+          asked: if(fact.asked, do: rounded(nouls[fact.asked]))
+        }
+      )
+      |> Enum.uniq_by(& &1.fact_id)
+
     decision
     |> Map.put(:undecided_labels, fact_labels ++ risk_labels ++ rule_labels)
     |> put_fact_ids(:not_asked_fact_ids, not_asked)
     |> put_fact_ids(:asked_fact_ids, asked)
+    |> put_fact_ids(:stated_not_asked_fact_ids, stated_not_asked)
+    |> put_fact_ids(:fact_scores, fact_scores)
   end
 
   def put_adjudication_evidence(decision, _facts, _rules, _nouls, _thresholds), do: decision

@@ -31,14 +31,29 @@ defmodule Backend.Stations.CandidateGateAdjudicationTest do
       }
     end
 
-    # A key on-request fact the learner clearly did not ask for, maybe stated.
+    # A key on-request fact the learner clearly did not ask for, clearly stated.
     defp decision("Não tomo remédio, mas tenho alergia a dipirona.") do
       %{
         status: :low_confidence,
-        used_fact_ids: [],
-        undecided_fact_ids: ["fact-key"],
+        used_fact_ids: ["fact-key"],
         not_asked_fact_ids: ["fact-key"],
-        undecided_labels: [%{question: "fact_stated", fact_id: "fact-key", score: 0.4}]
+        stated_not_asked_fact_ids: ["fact-key"],
+        fact_scores: [%{fact_id: "fact-key", stated: 0.9, asked: 0.19}],
+        undecided_labels: [%{question: "risk:unsupported_information", score: 0.5}]
+      }
+    end
+
+    # Live turn 9 (issue #290): a generic denial Jev thinks may state a narrow
+    # explicit-question fact the learner clearly did not ask about.
+    defp decision("Não tomo nenhum remédio regularmente, doutor.") do
+      %{
+        status: :low_confidence,
+        used_fact_ids: [],
+        not_asked_fact_ids: ["pergunta-explicita-02"],
+        fact_scores: [%{fact_id: "pergunta-explicita-02", stated: 0.31, asked: 0.19}],
+        undecided_labels: [
+          %{question: "fact_stated", fact_id: "pergunta-explicita-02", score: 0.31}
+        ]
       }
     end
 
@@ -169,6 +184,15 @@ defmodule Backend.Stations.CandidateGateAdjudicationTest do
       assert verify(@medication, %{@medication => failure}, can_retry?: false) ==
                {:error, {:refused, :low_confidence}}
     end
+  end
+
+  test "a generic denial that may state an unrequested fact is delivered on deliver" do
+    denial = "Não tomo nenhum remédio regularmente, doutor."
+
+    assert verify(denial, %{denial => answer("deliver")}) ==
+             {:ok, %{text: denial, used_fact_ids: []}}
+
+    refute_received {:regenerated, _}
   end
 
   test "a key fact Jev found clearly unrequested is never delivered" do

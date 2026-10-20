@@ -54,6 +54,11 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapter do
   the quoted rule.
   - not_asked_fact_ids: facts the verifier is sure the learner did not ask about.
   - asked_fact_ids: facts the verifier is sure the learner asked about.
+  - fact_scores: for each fact the reply may state, "stated" (the probability that the \
+  reply states it) and "asked" (the probability that the learner asked about it). A \
+  "stated" score between 0.2 and 0.8 means the verifier is unsure: read the reply and \
+  judge whether it really states that specific fact. A generic answer such as "I take no \
+  medication" does not state a narrow fact it does not name.
   - response_rules: authored rules every patient reply must follow.
 
   Decide:
@@ -73,7 +78,8 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapter do
   whether the patient took an antipyretic, so a reply that denies it answers the \
   question; it does not ask about a fact that requires an explicit question, such as \
   recent antibiotics, unless the message names that subject.
-  2. Never choose "deliver" when the reply states a fact listed in not_asked_fact_ids.
+  2. Never choose "deliver" when the reply actually states a fact listed in \
+  not_asked_fact_ids; when it does not, the fact is no reason to regenerate or refuse.
   3. withheld_fact_ids must be empty unless the decision is "regenerate", and may only \
   contain ids from facts.
   4. Answer only with the JSON object the schema describes.
@@ -131,6 +137,7 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapter do
       undecided_labels: request.undecided_labels,
       not_asked_fact_ids: request.not_asked_fact_ids,
       asked_fact_ids: Map.get(request, :asked_fact_ids, []),
+      fact_scores: Map.get(request, :fact_scores, []),
       response_rules: request.response_rules
     }
   end

@@ -151,6 +151,7 @@ defmodule Backend.Stations.PatientAdjudicatorTest do
       assert request.undecided_labels == @decision.undecided_labels
       assert request.not_asked_fact_ids == []
       assert request.asked_fact_ids == []
+      assert request.fact_scores == []
       assert request.response_rules == ["Responda apenas ao que foi perguntado."]
       assert is_integer(request.deadline_ms) and request.deadline_ms > 0
     end
@@ -260,14 +261,13 @@ defmodule Backend.Stations.PatientAdjudicatorTest do
   end
 
   describe "hard limits" do
-    test "never delivers a fact a clear-no asked label says was not requested" do
+    test "never delivers a fact Jev found clearly stated and clearly not requested" do
+      # stated 0.9 (clear yes) and asked 0.19 (clear no): the limit still applies.
       decision =
         @decision
         |> Map.put(:not_asked_fact_ids, ["fact-key"])
-        |> Map.update!(
-          :undecided_labels,
-          &[%{question: "fact_stated", fact_id: "fact-key", score: 0.4} | &1]
-        )
+        |> Map.put(:stated_not_asked_fact_ids, ["fact-key"])
+        |> Map.put(:fact_scores, [%{fact_id: "fact-key", stated: 0.9, asked: 0.19}])
 
       assert adjudicate(answer("deliver"), decision: decision) == {:regenerate, ["fact-key"]}
 
@@ -275,6 +275,30 @@ defmodule Backend.Stations.PatientAdjudicatorTest do
                {:regenerate, ["pergunta-explicita-02", "fact-key"]}
 
       assert_received {:adjudication_request, %{not_asked_fact_ids: ["fact-key"]}}
+    end
+
+    test "an undecided stated fact that was clearly not requested is the adjudicator's call" do
+      # The live turn-9 case: stated 0.31 (undecided), asked 0.19 (clear no).
+      decision =
+        @decision
+        |> Map.put(:not_asked_fact_ids, ["pergunta-explicita-02"])
+        |> Map.put(:fact_scores, [
+          %{fact_id: "pergunta-explicita-02", stated: 0.31, asked: 0.19}
+        ])
+
+      assert adjudicate(answer("deliver"), decision: decision) == :deliver
+
+      assert adjudicate(answer("regenerate", ["pergunta-explicita-02"]), decision: decision) ==
+               {:regenerate, ["pergunta-explicita-02"]}
+
+      assert adjudicate(answer("refuse"), decision: decision) == {:refuse, :adjudicator}
+
+      assert_received {:adjudication_request,
+                       %{
+                         fact_scores: [
+                           %{fact_id: "pergunta-explicita-02", stated: 0.31, asked: 0.19}
+                         ]
+                       }}
     end
 
     test "never withholds a fact a clear-yes asked label says was requested" do

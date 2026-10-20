@@ -30,7 +30,9 @@ defmodule Backend.Stations.PatientAdjudicator do
   `Backend.Stations.StationAI.explicit_question_fact?/1`), the
   `disclosed_facts` earlier verified turns disclosed (issue #286), every
   `undecided_labels` entry with its score, the `not_asked_fact_ids` and
-  `asked_fact_ids`, the authored `response_rules` and its `deadline_ms`.
+  `asked_fact_ids`, the per-fact `fact_scores` (`fact_id`, `stated`, `asked`)
+  so the model can judge whether the reply really states a fact, the authored
+  `response_rules` and its `deadline_ms`.
 
   ## Hard limits, enforced in code
 
@@ -38,11 +40,13 @@ defmodule Backend.Stations.PatientAdjudicator do
       with `d` one of `deliver`, `regenerate`, `refuse` and every id an authored
       fact id of the package; a `deliver` that names facts contradicts itself.
       Anything else is `{:refuse, :malformed_output}`.
-    * A `deliver` while Jev reported `not_asked_fact_ids` (an `on_request` fact
-      whose `fact_asked` answer is a clear no and whose `fact_stated` answer is
-      not) becomes `{:regenerate, not_asked_fact_ids}`, and a `regenerate`
-      always withholds them too: the adjudicator never delivers a fact Jev
-      clearly found unrequested.
+    * A `deliver` while Jev reported `stated_not_asked_fact_ids` (a fact whose
+      `fact_stated` answer is a clear yes and whose `fact_asked` answer is a
+      clear no) becomes `{:regenerate, stated_not_asked_fact_ids}`, and a
+      `regenerate` always withholds them too: the adjudicator never delivers a
+      fact Jev clearly found stated and unrequested. When `fact_stated` is
+      undecided (only `not_asked_fact_ids` names the fact), the adjudicator's
+      decision stands: it judges from the scores whether the reply states it.
     * A `regenerate` never withholds a fact Jev reported in `asked_fact_ids`
       (an `on_request` fact whose `fact_asked` answer is a clear yes): the
       learner asked for it, so those ids are dropped from `withheld_fact_ids`.
@@ -118,6 +122,7 @@ defmodule Backend.Stations.PatientAdjudicator do
           undecided_labels: [JevDecision.undecided_label()],
           not_asked_fact_ids: [String.t()],
           asked_fact_ids: [String.t()],
+          fact_scores: [JevDecision.fact_score()],
           response_rules: [String.t()],
           deadline_ms: pos_integer()
         }
@@ -138,6 +143,7 @@ defmodule Backend.Stations.PatientAdjudicator do
            {:ok, budget_ms} <- budget(opts) do
         not_asked = fact_ids(decision, :not_asked_fact_ids)
         asked = fact_ids(decision, :asked_fact_ids)
+        blocked = fact_ids(decision, :stated_not_asked_fact_ids)
 
         decision
         |> build_request(labels, {not_asked, asked}, candidate, package, conversation, opts)
@@ -145,7 +151,7 @@ defmodule Backend.Stations.PatientAdjudicator do
         |> run(adapter(opts), Keyword.get(opts, :adjudicator_opts, []), budget_ms)
         |> validate(package)
         |> drop_asked(asked)
-        |> enforce_limits(not_asked, candidate, package)
+        |> enforce_limits(blocked, candidate, package)
       end
 
     log_outcome(outcome, JevDecision.monotonic_now_ms() - started_at)
@@ -242,8 +248,16 @@ defmodule Backend.Stations.PatientAdjudicator do
       undecided_labels: labels,
       not_asked_fact_ids: not_asked,
       asked_fact_ids: asked,
+      fact_scores: fact_scores(decision),
       response_rules: response_rules(package)
     }
+  end
+
+  defp fact_scores(decision) do
+    case Map.get(decision, :fact_scores) do
+      scores when is_list(scores) -> scores
+      _ -> []
+    end
   end
 
   defp label_fact_ids(labels) do
@@ -353,8 +367,8 @@ defmodule Backend.Stations.PatientAdjudicator do
   defp drop_asked({:regenerate, ids}, [_ | _] = asked), do: {:regenerate, ids -- asked}
   defp drop_asked(outcome, _asked), do: outcome
 
-  defp enforce_limits(:deliver, [_ | _] = not_asked, _candidate, _package),
-    do: {:regenerate, not_asked, :not_asked}
+  defp enforce_limits(:deliver, [_ | _] = blocked, _candidate, _package),
+    do: {:regenerate, blocked, :not_asked}
 
   defp enforce_limits(:deliver, [], candidate, package) do
     case BoundedReply.check_violations(candidate, package) do
@@ -363,10 +377,10 @@ defmodule Backend.Stations.PatientAdjudicator do
     end
   end
 
-  defp enforce_limits({:regenerate, ids}, not_asked, _candidate, _package),
-    do: {:regenerate, Enum.uniq(ids ++ not_asked)}
+  defp enforce_limits({:regenerate, ids}, blocked, _candidate, _package),
+    do: {:regenerate, Enum.uniq(ids ++ blocked)}
 
-  defp enforce_limits(outcome, _not_asked, _candidate, _package), do: outcome
+  defp enforce_limits(outcome, _blocked, _candidate, _package), do: outcome
 
   defp strip_limit({:regenerate, ids, _limit}), do: {:regenerate, ids}
   defp strip_limit(outcome), do: outcome
