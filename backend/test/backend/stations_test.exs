@@ -96,6 +96,21 @@ defmodule Backend.StationsTest do
     end
   end
 
+  # Refused first candidate, then a regeneration slower than the Jev deadline
+  # the test configures (issue #269).
+  defmodule SlowRegenerationAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      if Process.put(:slow_regeneration_requested, true) do
+        Process.sleep(300)
+        {:ok, %{text: "Foi durante uma caminhada, doutor.", used_facts: []}}
+      else
+        {:ok, %{text: "initial_refused", used_facts: []}}
+      end
+    end
+  end
+
   defmodule TestRevealableFactsAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true
@@ -1198,10 +1213,10 @@ defmodule Backend.StationsTest do
       assert_receive :jev_verification_invoked
     end
 
-    test "Jev rejection or unavailability fails the voice generation without releasing text" do
+    test "Jev unavailability fails the voice generation without releasing text" do
       Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
 
-      for jev_adapter <- [TestRefusingJevAdapter, Backend.Stations.JevDecision.DisabledAdapter] do
+      for jev_adapter <- [Backend.Stations.JevDecision.DisabledAdapter] do
         Application.put_env(:backend, :jev_decision_adapter, jev_adapter)
         session = Stations.create_session(%{audio_consent: true})
 
@@ -1216,6 +1231,60 @@ defmodule Backend.StationsTest do
         assert stored.failed_voice_turn.turn_id == 1
         assert {:ok, nil} = Conversation.active_generation(session.session_id)
       end
+    end
+
+    # Issue #269: a refused voice reply follows the text path (#235): the
+    # learner turn is kept, no patient text is stored or spoken, and the
+    # result is a kept turn, not a technical failure.
+    for refusal <- [:semantic_refusal, :low_confidence] do
+      test "a #{refusal} keeps the learner voice turn without patient text" do
+        Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+        use_patient_decision({:ok, %{status: unquote(refusal), rationale: "refused"}})
+        session = Stations.create_session(%{audio_consent: true})
+        id = session.session_id
+
+        assert {:ok, {:kept, kept}} = Stations.process_voice_turn(id, 1, "Quando a dor começou?")
+        assert kept == %{turn_id: 1, generation_id: 1, refusal: unquote(refusal)}
+
+        assert {:ok, stored} = Stations.get_session(id)
+        assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
+        assert stored.failed_voice_turn == nil
+        assert {:ok, nil} = Conversation.active_generation(id)
+
+        # A retry of the kept turn never duplicates it or starts a new generation.
+        assert {:ok, :duplicate} = Stations.process_voice_turn(id, 1, "Quando a dor começou?")
+
+        # The next turn is processed normally.
+        use_patient_decision({:ok, %{status: :verified}})
+
+        assert {:ok, %{turn_id: 2, reply_text: _}} =
+                 Stations.process_voice_turn(id, 2, "E agora?")
+
+        assert {:ok, stored} = Stations.get_session(id)
+        assert Enum.map(stored.messages, & &1.role) == [:learner, :learner, :patient]
+      end
+    end
+
+    test "a refusal whose regeneration runs out of time keeps the learner voice turn" do
+      Application.put_env(:backend, :station_ai_adapter, SlowRegenerationAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, RefuseThenVerifyAdapter)
+      prev_deadline = Application.get_env(:backend, :jev_decision_default_deadline_ms)
+      Application.put_env(:backend, :jev_decision_default_deadline_ms, 100)
+
+      on_exit(fn ->
+        Application.put_env(:backend, :jev_decision_default_deadline_ms, prev_deadline)
+      end)
+
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      assert {:ok, {:kept, %{turn_id: 1, generation_id: 1, refusal: :semantic_refusal}}} =
+               Stations.process_voice_turn(id, 1, "Quando a dor começou?")
+
+      assert {:ok, stored} = Stations.get_session(id)
+      assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
+      assert stored.failed_voice_turn == nil
+      assert {:ok, nil} = Conversation.active_generation(id)
     end
 
     test "provider and model errors remain technical failures on retry without text or regeneration" do
@@ -1484,7 +1553,7 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :jev_decision_adapter, TestRefusingJevAdapter)
       session = Stations.create_session(%{audio_consent: true})
 
-      assert {:error, :station_ai_unavailable} =
+      assert {:ok, {:kept, %{turn_id: 1, generation_id: 1, refusal: :semantic_refusal}}} =
                Stations.process_voice_turn(
                  session.session_id,
                  1,

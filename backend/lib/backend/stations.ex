@@ -714,11 +714,16 @@ defmodule Backend.Stations do
     5. Passing through the `verify_patient_reply/3` seam, the single authority on
        what the patient may say on both channels. The verified reply is used as
        returned, exactly as the text path does; there is no voice-only filter.
-    6. Failing closed: a reply that is denied, refused, or left without usable
-       text fails the generation as `:station_ai_unavailable` and commits no
-       patient content.
-    7. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
-    8. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
+    6. Keeping the learner turn when Jev refuses the reply (`low_confidence` or
+       `semantic_refusal`), also when the single regeneration runs out of time
+       (#256), exactly as the text path does (#235, #269): no patient text is
+       stored or returned, and the result is
+       `{:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: reason}}}`.
+    7. Failing closed on technical failures: a reply that is denied, unverifiable,
+       or left without usable text fails the generation as
+       `:station_ai_unavailable` and commits no patient content.
+    8. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
+    9. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
        solely on success. Stale, cancelled, completed, or expired generations never return text.
 
   The station deadline is enforced in `Backend.Stations.Conversation`, not here.
@@ -738,6 +743,13 @@ defmodule Backend.Stations do
              generation_id: pos_integer(),
              used_facts: StationAI.revealable_facts()
            }}
+          | {:ok,
+             {:kept,
+              %{
+                turn_id: pos_integer(),
+                generation_id: pos_integer(),
+                refusal: :low_confidence | :semantic_refusal
+              }}}
           | {:ok, :duplicate}
           | {:error,
              :not_found
@@ -897,17 +909,11 @@ defmodule Backend.Stations do
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context),
          verify_opts = build_verify_opts(package, current_session, context, %{}),
-         {:ok, verified_reply} <- verify_patient_reply(package, ai_reply, verify_opts),
-         verified_text = extract_reply_text(verified_reply),
-         {:ok, _session} <-
-           Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
-      {:ok,
-       %{
-         reply_text: verified_text,
-         turn_id: turn_id,
-         generation_id: generation_id,
-         used_facts: extract_used_facts(verified_reply)
-       }}
+         {:ok, result} <-
+           package
+           |> verify_patient_reply(ai_reply, verify_opts)
+           |> resolve_voice_reply(session_id, turn_id, generation_id) do
+      {:ok, result}
     else
       {:error, :stale_generation} ->
         {:error, :stale_generation}
@@ -930,6 +936,38 @@ defmodule Backend.Stations do
           {:ok, :failed} -> {:error, :station_ai_unavailable}
           {:error, reason} -> {:error, reason}
         end
+    end
+  end
+
+  defp resolve_voice_reply({:ok, verified_reply}, session_id, turn_id, generation_id) do
+    verified_text = extract_reply_text(verified_reply)
+
+    with {:ok, _session} <-
+           Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
+      {:ok,
+       %{
+         reply_text: verified_text,
+         turn_id: turn_id,
+         generation_id: generation_id,
+         used_facts: extract_used_facts(verified_reply)
+       }}
+    end
+  end
+
+  # A refused patient reply keeps the learner voice turn, as the text path does
+  # (#235, #256): no patient text is stored or spoken. The refused text is
+  # never stored or returned.
+  defp resolve_voice_reply({:error, {:refused, refusal}}, session_id, turn_id, generation_id) do
+    keep_voice_turn(session_id, turn_id, generation_id, refusal)
+  end
+
+  defp resolve_voice_reply({:error, reason}, _session_id, _turn_id, _generation_id),
+    do: {:error, reason}
+
+  defp keep_voice_turn(session_id, turn_id, generation_id, refusal) do
+    with {:ok, _session} <-
+           Conversation.resolve_patient_reply(session_id, generation_id, :keep_learner_turn) do
+      {:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: refusal}}}
     end
   end
 

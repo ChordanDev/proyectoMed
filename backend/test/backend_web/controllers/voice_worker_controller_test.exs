@@ -359,7 +359,8 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert [%{role: :learner}, %{role: :patient, text: @natural_reply}] = stored.messages
     end
 
-    test "a reply Jev refuses returns 503 without text and commits no patient message",
+    # Issue #269: a refusal keeps the learner turn, as on the text path (#235).
+    test "a reply Jev refuses returns 201 kept without text and commits no patient message",
          %{conn: conn} do
       Application.put_env(:backend, :station_ai_adapter, TestNaturalReplyAdapter)
       Application.put_env(:backend, :jev_decision_adapter, TestRefusingJevAdapter)
@@ -369,12 +370,19 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       resp =
         conn
         |> post(transcripts_path(id), %{turn_id: 1, text: "Quando a dor começou?"})
-        |> json_response(503)
+        |> json_response(201)
 
-      refute Map.has_key?(resp, "reply_text")
+      assert resp == %{"turn_id" => 1, "status" => "kept", "generation_id" => 1}
 
       {:ok, stored} = Stations.get_session(id)
       assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
+
+      # A retry of the kept turn is a duplicate, never a second generation.
+      assert %{"status" => "duplicate"} =
+               build_conn()
+               |> put_req_header("authorization", "Bearer " <> @secret)
+               |> post(transcripts_path(id), %{turn_id: 1, text: "Quando a dor começou?"})
+               |> json_response(200)
     end
 
     test "rejects malformed payloads", %{conn: conn} do

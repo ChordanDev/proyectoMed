@@ -250,12 +250,16 @@ defmodule Backend.Stations.Conversation do
   Refuses invalid replies (non-binary or empty text), stale generations,
   completed sessions, expired sessions, and missing/discarded sessions.
 
+  `:keep_learner_turn` settles the generation the same way without appending a
+  patient message: the learner voice turn stays, as `resolve_turn/3` keeps a
+  text turn whose patient reply was refused (#235, #269).
+
   A reply resolved inside the deadline grace window is appended and the returned
   session is then completed with reason `:timer`, unless a text turn is still
   pending under the same window. Once the window elapsed, the generation it cut
   off returns `{:error, :station_time_elapsed}` and nothing is appended.
   """
-  @spec resolve_patient_reply(String.t(), pos_integer(), String.t()) ::
+  @spec resolve_patient_reply(String.t(), pos_integer(), String.t() | :keep_learner_turn) ::
           {:ok, session()}
           | {:error,
              :not_found
@@ -530,16 +534,9 @@ defmodule Backend.Stations.Conversation do
             {:reply, {:error, :stale_generation}, state}
 
           true ->
-            patient_msg = %{
-              role: :patient,
-              modality: :voice,
-              text: reply_text,
-              at: DateTime.utc_now()
-            }
-
             session =
               session
-              |> Map.put(:messages, session.messages ++ [patient_msg])
+              |> Map.put(:messages, session.messages ++ patient_messages(reply_text))
               |> Map.put(:active_generation_id, nil)
               |> Map.put(:active_voice_turn_id, nil)
               |> Map.put(:active_generation_message_index, nil)
@@ -896,6 +893,14 @@ defmodule Backend.Stations.Conversation do
   defp schedule_purge do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
   end
+
+  defp patient_messages(:keep_learner_turn), do: []
+
+  defp patient_messages(reply_text) do
+    [%{role: :patient, modality: :voice, text: reply_text, at: DateTime.utc_now()}]
+  end
+
+  defp valid_reply_text?(:keep_learner_turn), do: true
 
   defp valid_reply_text?(text) when is_binary(text) do
     String.trim(text) != ""
