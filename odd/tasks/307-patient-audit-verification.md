@@ -43,7 +43,7 @@ points by itself.
   Route: inline (Stations + new internal module + Conversation; seams mapped).
 - [x] T3 Voice paths (`process_voice_turn/3`, `stream_voice_turn/5`) in `audit`/`off`.
   Route: inline (same seams as T2).
-- [ ] T4 Design note `docs/design/patient-audit-verification.md`, ADR-011 amendment
+- [x] T4 Design note `docs/design/patient-audit-verification.md`, ADR-011 amendment
   comment on #123, live check on acute-appendicitis.
   Route: inline.
 
@@ -67,8 +67,19 @@ points by itself.
 | --- | --- | --- | --- |
 | T1 | `99c5f68` | 6 of 8 failed (mode/0 undefined, no runtime parsing) | 8 passed; backend 1700 passed |
 | T2 | `37aad8c` | 8 of 8 failed (`patient_audits/1` undefined, gate still blocking) | 8 passed; backend 1708 passed |
-| T3 | this commit | 6 of 6 failed (voice paths still blocking) | 6 passed; backend 1714 passed |
+| T3 | `909bec9` | 6 of 6 failed (voice paths still blocking) | 6 passed; backend 1714 passed |
+| T4 | this commit | n/a (docs and live check) | live: 10/10 answered, mean 1738 ms vs 2716 ms blocking |
+
+## Live check (2026-10-20)
+
+`PATIENT_VERIFICATION=audit`, acute-appendicitis, 10-turn #290 replay (scratchpad
+`live_307.exs`): 10/10 answered; wall ms 2363, 1700, 1574, 1647, 1601, 1754, 1861,
+1580, 1649, 1654 (mean 1738). Last blocking run (#290 run 8): 9/10, mean 2716.
+Ten audits after delivery, 245-307 ms; two `low_confidence` (turns 1 and 9), both
+delivered; no adjudicator call.
+
+ADR-011 amendment posted on #123 (issuecomment-6301180103).
 
 ## Next step
 
-T4: design note, ADR-011 amendment on #123, live check.
+PR into `feat/237-clinician-demo-readiness`; local CI at closure.
