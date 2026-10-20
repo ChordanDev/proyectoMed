@@ -418,4 +418,58 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       assert text == StationAI.refusal_text()
     end
   end
+
+  describe "stream_reply/4 (issue #271)" do
+    test "streams the same patient request and hands each text delta over" do
+      test_pid = self()
+
+      Req.Test.stub(PatientStreamStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:payload, Jason.decode!(body)})
+
+        events =
+          [
+            %{
+              "type" => "content_block_delta",
+              "index" => 0,
+              "delta" => %{"type" => "text_delta", "text" => "Há duas "}
+            },
+            %{
+              "type" => "content_block_delta",
+              "index" => 0,
+              "delta" => %{"type" => "text_delta", "text" => "horas."}
+            },
+            %{"type" => "message_delta", "delta" => %{"stop_reason" => "end_turn"}}
+          ]
+          |> Enum.map_join(&"event: #{&1["type"]}\ndata: #{Jason.encode!(&1)}\n\n")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/event-stream")
+        |> Plug.Conn.send_resp(200, events)
+      end)
+
+      assert {:ok, %{text: "Há duas horas."}} =
+               AnthropicAdapter.stream_reply(
+                 @package,
+                 @context,
+                 &send(test_pid, {:delta, &1}),
+                 api_key: "sk-ant-test-secret",
+                 plug: {Req.Test, PatientStreamStub}
+               )
+
+      assert_received {:delta, "Há duas "}
+      assert_received {:delta, "horas."}
+      assert_received {:payload, payload}
+      assert payload["stream"] == true
+      assert payload["model"] == "claude-sonnet-5-5"
+      assert payload["thinking"] == %{"type" => "between_tools"}
+      assert payload["output_config"] == %{"effort" => "low"}
+      assert [%{"cache_control" => %{"type" => "ephemeral"}}] = payload["system"]
+
+      assert List.last(payload["messages"]) == %{
+               "role" => "user",
+               "content" => "Quando começou a dor?"
+             }
+    end
+  end
 end

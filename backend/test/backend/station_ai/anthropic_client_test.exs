@@ -118,4 +118,199 @@ defmodule Backend.Stations.StationAI.AnthropicClientTest do
       assert log =~ "cache_creation_input_tokens=0"
     end
   end
+
+  describe "stream_message/3 (issue #271)" do
+    defp sse(events) do
+      Enum.map_join(events, fn {event, data} ->
+        "event: #{event}\ndata: #{Jason.encode!(data)}\n\n"
+      end)
+    end
+
+    defp text_events(texts, stop_reason) do
+      [
+        {"message_start",
+         %{
+           "type" => "message_start",
+           "message" => %{"usage" => %{"input_tokens" => 7, "cache_read_input_tokens" => 600}}
+         }},
+        {"content_block_start",
+         %{
+           "type" => "content_block_start",
+           "index" => 0,
+           "content_block" => %{"type" => "text", "text" => ""}
+         }},
+        {"ping", %{"type" => "ping"}}
+      ] ++
+        Enum.map(texts, fn text ->
+          {"content_block_delta",
+           %{
+             "type" => "content_block_delta",
+             "index" => 0,
+             "delta" => %{"type" => "text_delta", "text" => text}
+           }}
+        end) ++
+        [
+          {"content_block_stop", %{"type" => "content_block_stop", "index" => 0}},
+          {"message_delta",
+           %{"type" => "message_delta", "delta" => %{"stop_reason" => stop_reason}}},
+          {"message_stop", %{"type" => "message_stop"}}
+        ]
+    end
+
+    # Sends the SSE body in small chunks that cut events in half, as a network would.
+    defp stream_stub(name, body, status \\ 200) do
+      test_pid = self()
+
+      Req.Test.stub(name, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+
+        conn =
+          conn
+          |> Plug.Conn.put_resp_content_type("text/event-stream")
+          |> Plug.Conn.send_chunked(status)
+
+        body
+        |> String.codepoints()
+        |> Enum.chunk_every(17)
+        |> Enum.reduce(conn, fn piece, conn ->
+          {:ok, conn} = Plug.Conn.chunk(conn, Enum.join(piece))
+          conn
+        end)
+      end)
+    end
+
+    defp request do
+      %{
+        system: "Stable rules.",
+        system_suffix: "Per-turn note.",
+        messages: [%{"role" => "user", "content" => "Quando começou?"}],
+        max_tokens: 64
+      }
+    end
+
+    test "hands each text delta over in order and returns the whole text" do
+      stream_stub(StreamOkStub, sse(text_events(["Começou ", "ontem. ", "Dói."], "end_turn")))
+      test_pid = self()
+
+      assert {:ok, "Começou ontem. Dói."} =
+               AnthropicClient.stream_message(
+                 config(plug: {Req.Test, StreamOkStub}),
+                 request(),
+                 &send(test_pid, {:delta, &1})
+               )
+
+      assert_received {:delta, "Começou "}
+      assert_received {:delta, "ontem. "}
+      assert_received {:delta, "Dói."}
+    end
+
+    test "sends stream: true with the cached system prefix and the patient thinking" do
+      stream_stub(StreamBodyStub, sse(text_events(["Ok."], "end_turn")))
+
+      config =
+        AnthropicClient.config([api_key: "k", plug: {Req.Test, StreamBodyStub}],
+          model_key: :patient_model,
+          effort: "low",
+          thinking: :lowest
+        )
+
+      assert {:ok, "Ok."} = AnthropicClient.stream_message(config, request(), fn _ -> :ok end)
+      assert_received {:request_body, body}
+
+      assert body["stream"] == true
+      assert body["model"] == "claude-sonnet-5-5"
+      assert body["thinking"] == %{"type" => "between_tools"}
+      assert body["output_config"] == %{"effort" => "low"}
+      assert body["fallbacks"] == "default"
+
+      assert body["system"] == [
+               %{"type" => "text", "text" => "Stable rules.", "cache_control" => @cache_control},
+               %{"type" => "text", "text" => "Per-turn note."}
+             ]
+    end
+
+    test "a refusal stop is an error after the deltas already handed over" do
+      stream_stub(StreamRefusalStub, sse(text_events(["Começou. "], "refusal")))
+
+      assert {:error, :refused} =
+               AnthropicClient.stream_message(
+                 config(plug: {Req.Test, StreamRefusalStub}),
+                 request(),
+                 fn _ -> :ok end
+               )
+    end
+
+    test "any other stop is malformed" do
+      stream_stub(StreamMaxTokensStub, sse(text_events(["Começou"], "max_tokens")))
+
+      assert {:error, :malformed_response} =
+               AnthropicClient.stream_message(
+                 config(plug: {Req.Test, StreamMaxTokensStub}),
+                 request(),
+                 fn _ -> :ok end
+               )
+    end
+
+    test "an error event is an upstream error" do
+      body =
+        sse([
+          {"error",
+           %{"type" => "error", "error" => %{"type" => "overloaded_error", "message" => "x"}}}
+        ])
+
+      stream_stub(StreamErrorEventStub, body)
+
+      assert {:error, :upstream_error} =
+               AnthropicClient.stream_message(
+                 config(plug: {Req.Test, StreamErrorEventStub}),
+                 request(),
+                 fn _ -> :ok end
+               )
+    end
+
+    test "a non-2xx response hands nothing over" do
+      stream_stub(StreamStatusStub, ~s({"type":"error","error":{"message":"bad"}}), 529)
+      test_pid = self()
+
+      assert {:error, :upstream_error} =
+               AnthropicClient.stream_message(
+                 config(plug: {Req.Test, StreamStatusStub}),
+                 request(),
+                 &send(test_pid, {:delta, &1})
+               )
+
+      refute_received {:delta, _}
+    end
+
+    test "missing credentials never send a request" do
+      assert {:error, :missing_credentials} =
+               AnthropicClient.stream_message(
+                 AnthropicClient.config(api_key: ""),
+                 request(),
+                 fn _ -> :ok end
+               )
+    end
+
+    test "logs usage and latency without content" do
+      stream_stub(StreamLogStub, sse(text_events(["SECRET-OUTPUT."], "end_turn")))
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert {:ok, _} =
+                   AnthropicClient.stream_message(
+                     config(plug: {Req.Test, StreamLogStub}),
+                     request(),
+                     fn _ -> :ok end
+                   )
+        end)
+
+      assert log =~ "cache_read_input_tokens=600"
+      assert log =~ ~r/latency_ms=\d+/
+      refute log =~ "SECRET"
+    end
+  end
 end
