@@ -1522,7 +1522,7 @@ defmodule Backend.Stations.CandidateGateTest do
       for text <- [
             no_information() <> " A dor começou há 2 horas.",
             "Sobre isso: " <> no_information(),
-            String.upcase(no_information())
+            String.trim_trailing(no_information(), ".")
           ] do
         assert CandidateGate.verify_and_deliver(text, base_package(), [],
                  adapter: RefuseAllAdapter,

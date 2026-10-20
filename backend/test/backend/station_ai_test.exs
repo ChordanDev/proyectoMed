@@ -233,7 +233,7 @@ defmodule Backend.StationAITest do
       package = load_fixture("valid-package.json")
       prompt = StationAI.system_prompt(package)
 
-      assert prompt =~ ~s("Não tenho essa informação")
+      assert prompt =~ ~s("Não sei dizer, doutor.")
     end
 
     test "lists every response rule id so adapters can apply each one" do
@@ -270,7 +270,7 @@ defmodule Backend.StationAITest do
     end
 
     test "returns an empty list when no fact is referenced", %{facts: facts} do
-      assert [] = StationAI.detect_used_facts("Não tenho essa informação", facts)
+      assert [] = StationAI.detect_used_facts(StationAI.refusal_text(), facts)
     end
 
     test "ignores facts with empty content and missing topic", %{facts: facts} do
@@ -288,7 +288,7 @@ defmodule Backend.StationAITest do
     test "returns the canonical pt-BR refusal by default" do
       Application.delete_env(:backend, :station_ai_refusal_text)
 
-      assert StationAI.refusal_text() == "Não tenho essa informação"
+      assert StationAI.refusal_text() == "Não sei dizer, doutor."
     end
 
     test "honors application env override" do

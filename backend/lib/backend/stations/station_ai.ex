@@ -73,7 +73,7 @@ defmodule Backend.Stations.StationAI do
 
   @optional_callbacks stream_reply: 3
 
-  @default_refusal_text "Não tenho essa informação"
+  @default_refusal_text "Não sei dizer, doutor."
 
   @doc """
   Generates the next patient reply for the given package and context.
@@ -220,6 +220,12 @@ defmodule Backend.Stations.StationAI do
   @doc """
   Returns the canonical pt-BR refusal text used when the student asks for
   a fact outside the package. Override via `:backend, :station_ai_refusal_text`.
+
+  It is the patient's in-role no-information answer, defined once for every
+  station (issue #293): a bare "Não tenho essa informação" was scored out of
+  role by Jev, so the patient's honest answer never reached the learner.
+  `Backend.Stations.CandidateGate` delivers a candidate equal to it without
+  Jev, since it discloses no facts.
   """
   @spec refusal_text() :: String.t()
   def refusal_text do
