@@ -32,7 +32,7 @@ only then shows "Examinador: Anotado.". A refused patient question shows the sam
 - [x] T3 Text path: classify before generation; examiner → keep learner turn, `200 outcome: examiner_acknowledged`; regression check that evidence is unchanged (RED→GREEN)
 - [x] T4 Voice path (backend): classify before generation/stream; kept receipts carry `addressee` (RED→GREEN)
 - [x] T5 Voice worker: examiner-addressed kept receipt publishes `status: acknowledged`, refusal keeps `status: kept` (RED→GREEN, unittest)
-- [ ] T6 Web: examiner acknowledgement shows "Anotado."; kept refusal (text and voice) shows the neutral notice (RED→GREEN)
+- [x] T6 Web: examiner acknowledgement shows "Anotado."; kept refusal (text and voice) shows the neutral notice (RED→GREEN)
 
 Route note: this whole issue runs inside one delegated bounded writer (the parent
 orchestrator delegated it); tasks run sequentially in this worker.
@@ -76,7 +76,15 @@ patient-addressed; grading and evidence unchanged; live check (pending, human).
   the worker publishes `{role: examiner, status: acknowledged}` for an examiner-addressed
   kept turn and keeps `status: kept` for a refused reply (and for older servers).
   RED: 3 errors (`unexpected keyword argument 'addressee'`); GREEN: `uv run python -m
-  unittest` 147 tests OK.
+  unittest` 147 tests OK. Commit `c06005f`.
+- T6: client decodes `outcome: examiner_acknowledged` (with `learner_turn`) and keeps
+  replies without `outcome` as patient replies; `useStation.send` throws
+  `ExaminerAcknowledgement` (station stays active) so `App.tsx` (outside this issue's edit
+  surface) is untouched; StationScreen shows "Examinador: Anotado." only for examiner
+  acknowledgements and a display-only "Aviso" entry "O paciente não respondeu a essa
+  mensagem. Você pode reformulá-la." for kept refusals (text and voice). Voice events:
+  `status: acknowledged` → `examiner-acknowledged`, `status: kept` → `patient-unanswered`.
+  RED: 9 failing (5 files); GREEN: web 311 passed, typecheck and lint clean.
 
 ## Next step
 T1.

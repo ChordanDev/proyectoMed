@@ -98,6 +98,24 @@ export const isKeptLearnerTurn = (cause: unknown): boolean => {
   );
 };
 
+/**
+ * Thrown by `send` when the backend kept a learner turn addressed to the
+ * examiner (#274): there is no patient reply, and the station goes on. It
+ * travels the same path as a kept refusal, so the screen decides what to show.
+ */
+export class ExaminerAcknowledgement extends Error {
+  constructor(readonly learnerTurn: SessionMessage) {
+    super("Examiner acknowledgement");
+    this.name = "ExaminerAcknowledgement";
+  }
+}
+
+/** Whether a send outcome is a turn the examiner acknowledged (#274). */
+export const isExaminerAcknowledgement = (cause: unknown): boolean =>
+  typeof cause === "object" &&
+  cause !== null &&
+  (cause as { name?: unknown }).name === "ExaminerAcknowledgement";
+
 const unknownImpressoErrorMessage =
   "Não foi possível solicitar o impresso. Tente novamente.";
 
@@ -392,11 +410,16 @@ export const useStation = (api: StationApi = defaultApi) => {
             return null;
           }
           anchorClock(messageReply.server_now);
+          if (messageReply.outcome === "examiner_acknowledged") {
+            throw new ExaminerAcknowledgement(messageReply.learner_turn);
+          }
           return messageReply;
         } catch (cause) {
           if (sessionRef.current !== session || isResettingRef.current) {
             return null;
           }
+
+          if (isExaminerAcknowledgement(cause)) throw cause;
 
           if (cause instanceof ApiError && cause.code === "station_time_elapsed") {
             if (!timerFinishTriggeredRef.current) {

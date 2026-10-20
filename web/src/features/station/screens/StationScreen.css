@@ -116,6 +116,15 @@
   font-style: italic;
 }
 
+/* Display-only notice that the patient did not answer a kept turn (#274). */
+.station-message--notice {
+  align-self: center;
+  background: #f9fafb;
+  color: #374151;
+  border: 1px dashed #9ca3af;
+  font-style: italic;
+}
+
 .station-message__play-button {
   display: block;
   margin-top: 6px;

@@ -138,16 +138,25 @@ describe("StationScreen real-time voice (#270)", () => {
         role: "patient",
         text: "No peito.",
       });
-      room.worker({ turn_id: 2, final: true, text: "Chame o examinador." });
-      room.worker({ turn_id: 2, generation_id: 2, role: "examiner", status: "kept" });
+      room.worker({ turn_id: 2, final: true, text: "Blumberg positivo." });
+      room.worker({
+        turn_id: 2,
+        generation_id: 2,
+        role: "examiner",
+        status: "acknowledged",
+      });
+      room.worker({ turn_id: 3, final: true, text: "Qual o seu nome?" });
+      room.worker({ turn_id: 3, generation_id: 3, role: "examiner", status: "kept" });
     });
 
     await waitFor(() =>
       expect(transcriptTexts()).toEqual([
         ["message-learner", "Onde dói?"],
         ["message-patient", "No peito. (leva a mão ao peito)"],
-        ["message-learner", "Chame o examinador."],
+        ["message-learner", "Blumberg positivo."],
         ["message-examiner", strings.examinerAcknowledgement],
+        ["message-learner", "Qual o seu nome?"],
+        ["message-notice", strings.patientDidNotAnswerNotice],
       ]),
     );
     expect(onFetchTranscript).toHaveBeenCalledTimes(1);

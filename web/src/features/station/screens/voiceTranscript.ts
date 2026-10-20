@@ -8,7 +8,7 @@ import type { DisplayMessage } from "./StationScreen";
  */
 
 type VoiceOutcome = Pick<DisplayMessage, "role" | "text"> & {
-  role: "patient" | "examiner";
+  role: "patient" | "examiner" | "notice";
 };
 
 const hasOutcome = (messages: DisplayMessage[], turnId: number): boolean =>

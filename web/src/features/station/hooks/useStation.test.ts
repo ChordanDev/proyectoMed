@@ -13,6 +13,7 @@ import {
   type SessionResult,
 } from "../api/client";
 import {
+  isExaminerAcknowledgement,
   isKeptLearnerTurn,
   sessionIdStorageKey,
   useStation,
@@ -488,6 +489,37 @@ describe("useStation", () => {
     expect(result.current.status).toBe("active");
     expect(result.current.error).toBeNull();
     expect(api.finishSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the station active and rethrows an examiner acknowledgement (#274)", async () => {
+    const acknowledged: MessageReply = {
+      outcome: "examiner_acknowledged",
+      reply_text: null,
+      learner_turn: { role: "learner", text: "Blumberg positivo." },
+      server_now: "2026-01-01T10:01:00Z",
+    };
+    const api = apiMock({
+      sendMessage: vi.fn().mockResolvedValueOnce(acknowledged),
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.send(message);
+      } catch (cause) {
+        caught = cause;
+      }
+    });
+
+    expect(isExaminerAcknowledgement(caught)).toBe(true);
+    expect(isKeptLearnerTurn(caught)).toBe(false);
+    expect(result.current.status).toBe("active");
+    expect(result.current.error).toBeNull();
   });
 
   it.each([

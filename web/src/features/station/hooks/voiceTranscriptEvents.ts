@@ -9,8 +9,10 @@ export type VoiceTranscriptEvent =
   | { type: "learner"; turnId: number; final: boolean; text: string }
   /** The verified patient reply, as spoken (stage directions removed). */
   | { type: "patient"; turnId: number; text: string }
-  /** The patient reply was refused; Phoenix kept the learner turn. */
-  | { type: "examiner-kept"; turnId: number }
+  /** The turn was addressed to the examiner; Phoenix kept it unanswered (#274). */
+  | { type: "examiner-acknowledged"; turnId: number }
+  /** The patient reply was refused; Phoenix kept the learner turn (#269). */
+  | { type: "patient-unanswered"; turnId: number }
   /** A turn-level failure (e.g. synthesis_failed); the session goes on. */
   | { type: "turn-failure"; turnId: number; failure: string }
   /** The worker stopped transcribing this session. */
@@ -57,7 +59,8 @@ export const parseVoiceTranscriptEvent = (
     return nonBlank(event.text) ? { type: "patient", turnId, text: event.text } : null;
   }
   if (event.role === "examiner") {
-    return event.status === "kept" ? { type: "examiner-kept", turnId } : null;
+    if (event.status === "acknowledged") return { type: "examiner-acknowledged", turnId };
+    return event.status === "kept" ? { type: "patient-unanswered", turnId } : null;
   }
   if (event.role !== undefined || typeof event.final !== "boolean") return null;
   if (typeof event.text !== "string") return null;

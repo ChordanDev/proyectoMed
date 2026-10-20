@@ -46,7 +46,11 @@ a generation on every examiner turn, which is exactly what #274 removes.
 | Patient-addressed, refused (#235, #269) | Learner turn, no reply | `502 reply_verification_failed` with `learner_turn` (unchanged) | Receipt `status: "kept"`, `addressee: "patient"`; the worker publishes `{role: "examiner", status: "kept"}` | Neutral notice "O paciente não respondeu a essa mensagem. Você pode reformulá-la." — never "Anotado." |
 | Technical failure | Turn rolled back (unchanged) | Unchanged | Unchanged | Unchanged retry notice |
 
-Compatibility: a client that sends no `outcome` is treated as `patient_reply`. A worker
+The neutral notice is a display-only transcript entry labelled "Aviso", placed after
+the kept learner turn like the examiner's "Anotado.", so the learner turn stays visible
+and the input stays empty for a rephrased message. Neither entry is stored or graded.
+
+Compatibility: a response without `outcome` is read as `patient_reply`. A worker
 event `status: "kept"` from a worker built before #274 now shows the neutral notice.
 
 ## Grading
