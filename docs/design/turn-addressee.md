@@ -91,6 +91,10 @@ the modal. A patient-addressed turn never releases impressos.
   objects, empty when nothing was released).
 - Voice: the receipt and the worker event are unchanged; the web learns of the release
   by listing the session impressos after the examiner acknowledgement.
+- Web: after an examiner acknowledgement (text reply or voice event) `useStation`
+  re-reads the released impressos (`getImpressos`). When new ones appear, the examiner's
+  existing hand-over entry ("Entrega: <títulos>") follows "Anotado." and the impressos
+  drawer opens; with none, only "Anotado." shows. The impressos modal is unchanged.
 
 ## Grading
 

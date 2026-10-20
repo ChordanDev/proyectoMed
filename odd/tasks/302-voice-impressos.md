@@ -30,7 +30,7 @@ the modal.
 - [x] T1 Backend: examiner-addressed turns (text + voice) release matching
   impressos; text response carries `newly_released`; rubric parity test;
   design note in `docs/design/turn-addressee.md`.
-- [ ] T2 Web: after an examiner acknowledgement (text reply or voice event)
+- [x] T2 Web: after an examiner acknowledgement (text reply or voice event)
   refresh impressos; when new ones appear open the drawer and add the
   hands-over bubble instead of only "Anotado.".
 - [ ] T3 ADR-008 amendment comment on #104.
@@ -55,6 +55,16 @@ the modal.
   turns and allow only impresso events on top. Full backend: 1666 passed;
   `mix format --check-formatted`, `mix credo --strict` clean.
 
+- T2 done (feature slice). RED: 7 of 138 failed (useStation 4,
+  StationScreen 1, StationScreen.voice 2). GREEN: station feature 322 passed;
+  `npm run typecheck` and eslint clean. `useStation.refreshImpressos` re-reads
+  impressos; the text path carries the new ones on `ExaminerAcknowledgement`;
+  `StationScreen` takes `onRefreshImpressos` for voice acknowledgements.
+- Open: `web/src/App.tsx` is outside the allowed edit surfaces, so
+  `onRefreshImpressos={station.refreshImpressos}` is not wired yet; approval
+  requested from the parent. Until wired, the live voice path releases on the
+  backend but the drawer only refreshes on resume.
+
 ## Next step
 
-T2.
+T3, then App.tsx wiring if approved.

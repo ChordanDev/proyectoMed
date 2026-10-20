@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RoomEvent } from "livekit-client";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionMessage, VoiceSession } from "../api/client";
+import type { Impresso, SessionMessage, VoiceSession } from "../api/client";
 import type { VoiceRoom, VoiceSessionApi } from "../hooks/useVoiceSession";
 import strings from "../i18n/pt-BR.json";
 import { StationScreen } from "./StationScreen";
@@ -64,6 +64,8 @@ const renderRealtime = async ({
   stored = [] as SessionMessage[],
   disabled = false,
   initialMessages = undefined as { role: "learner" | "patient"; text: string }[] | undefined,
+  refreshed = [] as Impresso[],
+  impressos = [] as Impresso[],
 } = {}) => {
   const room = new FakeRoom();
   const api: VoiceSessionApi = {
@@ -84,6 +86,8 @@ const renderRealtime = async ({
     initialMessages,
     realtimeVoice: { sessionId: "session-1", api, createRoom: () => room },
     onFetchTranscript,
+    onRefreshImpressos: vi.fn().mockResolvedValue(refreshed),
+    impressos,
   };
   const view = render(<StationScreen {...props} disabled={disabled} />);
   await userEvent.click(screen.getByTestId("voice-toggle-button"));
@@ -483,5 +487,74 @@ describe("StationScreen real-time voice (#270)", () => {
 
     view.unmount();
     expect(room.listeners.get(RoomEvent.DataReceived)?.size ?? 0).toBe(0);
+  });
+
+  describe("impressos requested by voice (#302)", () => {
+    const labs: Impresso = {
+      id: "labs",
+      title: "Exames laboratoriais",
+      category: "laboratory",
+      content: "Hemoglobina 13,5 g/dL.",
+    };
+
+    const acknowledgeSpokenRequest = (room: FakeRoom) => {
+      act(() => {
+        room.worker({ turn_id: 1, final: true, text: "Solicito hemograma e PCR." });
+        room.worker({ turn_id: 1, generation_id: 1, role: "examiner", status: "acknowledged" });
+      });
+    };
+
+    it("refreshes the impressos, opens the drawer and hands the new ones over", async () => {
+      const { room, props } = await renderRealtime({ refreshed: [labs], impressos: [labs] });
+
+      acknowledgeSpokenRequest(room);
+
+      await waitFor(() =>
+        expect(transcriptTexts()).toEqual([
+          ["message-learner", "Solicito hemograma e PCR."],
+          ["message-examiner", strings.examinerAcknowledgement],
+          ["message-examiner", `${strings.examinerHandsOver} ${labs.title}`],
+        ]),
+      );
+      expect(props.onRefreshImpressos).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("impresso-drawer-toggle")).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByTestId("impresso-drawer")).toHaveTextContent(labs.title);
+    });
+
+    it("shows only the acknowledgement when nothing new was released", async () => {
+      const { room, props } = await renderRealtime();
+
+      acknowledgeSpokenRequest(room);
+
+      await waitFor(() => expect(props.onRefreshImpressos).toHaveBeenCalledTimes(1));
+      expect(transcriptTexts()).toEqual([
+        ["message-learner", "Solicito hemograma e PCR."],
+        ["message-examiner", strings.examinerAcknowledgement],
+      ]);
+      expect(screen.getByTestId("impresso-drawer-toggle")).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+    });
+
+    it("does not refresh the impressos for a turn the patient did not answer", async () => {
+      const { room, props } = await renderRealtime({ refreshed: [labs] });
+
+      act(() => {
+        room.worker({ turn_id: 1, final: true, text: "Qual o seu nome?" });
+        room.worker({ turn_id: 1, generation_id: 1, role: "examiner", status: "kept" });
+      });
+
+      await waitFor(() =>
+        expect(transcriptTexts()).toEqual([
+          ["message-learner", "Qual o seu nome?"],
+          ["message-notice", strings.patientDidNotAnswerNotice],
+        ]),
+      );
+      expect(props.onRefreshImpressos).not.toHaveBeenCalled();
+    });
   });
 });
