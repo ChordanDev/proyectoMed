@@ -30,7 +30,7 @@ only then shows "Examinador: Anotado.". A refused patient question shows the sam
 - [x] T1 Design note `docs/design/turn-addressee.md` (ADR-011/ADR-008 addendum) — route: inline (one passive doc)
 - [x] T2 Jev addressee decision: optional adapter callback, TypeSafe question, `JevDecision.decide_addressee/2` with deadline and content-free log (RED→GREEN) — route: inline writer (this worker)
 - [x] T3 Text path: classify before generation; examiner → keep learner turn, `200 outcome: examiner_acknowledged`; regression check that evidence is unchanged (RED→GREEN)
-- [ ] T4 Voice path (backend): classify before generation/stream; kept receipts carry `addressee` (RED→GREEN)
+- [x] T4 Voice path (backend): classify before generation/stream; kept receipts carry `addressee` (RED→GREEN)
 - [ ] T5 Voice worker: examiner-addressed kept receipt publishes `status: acknowledged`, refusal keeps `status: kept` (RED→GREEN, unittest)
 - [ ] T6 Web: examiner acknowledgement shows "Anotado."; kept refusal (text and voice) shows the neutral notice (RED→GREEN)
 
@@ -64,7 +64,14 @@ patient-addressed; grading and evidence unchanged; live check (pending, human).
   failing; GREEN: 6 and 65 passed. Evidence regression `turn_addressee_evidence_test.exs`
   (#228 fixture turns, baseline kept-refusals vs examiner acknowledgements give the same pool)
   written after GREEN as a characterization test: passed (no RED by design). Full backend
-  `mix test`: 1541 passed.
+  `mix test`: 1541 passed. Commit `93cc5dc`.
+- T4: voice path classifies after admission and before generation; for streaming
+  (`stream_voice_turn/5`) before the stream starts. Examiner → kept with
+  `refusal: :examiner_addressed, addressee: :examiner`; every other kept result carries
+  `addressee: :patient`. Worker API kept receipts (single and NDJSON) carry `addressee`.
+  RED: 7/43 failing (3 Stations voice tests, 2 new and 2 updated controller assertions);
+  GREEN: 43 passed; the two exact-map assertions in `stations_test.exs` were updated for
+  the added key. Full backend `mix test`: 1547 passed.
 
 ## Next step
 T1.

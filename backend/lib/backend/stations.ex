@@ -792,7 +792,12 @@ defmodule Backend.Stations do
        stored or returned, and the result is
        `{:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: reason}}}`.
        A verified reply made only of stage directions has nothing to speak and
-       is kept the same way with reason `:unspeakable`.
+       is kept the same way with reason `:unspeakable`. Every kept result
+       carries `addressee: :patient`, except the examiner-addressed turn below.
+    2a. Before generation, Jev decides who the turn is addressed to (#274): an
+       examiner-addressed turn is kept with nothing generated, verified or
+       spoken, as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
+       An undecided answer or a failed check continues as patient-addressed.
     7. Failing closed on technical failures: a reply that is denied, unverifiable,
        or left without usable text fails the generation as
        `:station_ai_unavailable` and commits no patient content.
@@ -824,7 +829,8 @@ defmodule Backend.Stations do
               %{
                 turn_id: pos_integer(),
                 generation_id: pos_integer(),
-                refusal: :low_confidence | :semantic_refusal | :unspeakable
+                refusal: :low_confidence | :semantic_refusal | :unspeakable | :examiner_addressed,
+                addressee: :examiner | :patient
               }}}
           | {:ok, :duplicate}
           | {:error,
@@ -1043,6 +1049,27 @@ defmodule Backend.Stations do
   defp ensure_audio_consent(_session), do: {:error, :no_consent}
 
   defp process_voice_reply(session_id, turn_id, generation_id) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_voice_turn_open(session) do
+      case turn_addressee(session_id, :voice, %{}) do
+        :examiner -> keep_examiner_voice_turn(session_id, turn_id, generation_id)
+        :patient -> generate_voice_reply(session_id, turn_id, generation_id)
+      end
+    else
+      {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
+
+  # An examiner-addressed voice turn (#274) is kept like a refused one, with
+  # nothing generated, verified or spoken.
+  defp keep_examiner_voice_turn(session_id, turn_id, generation_id) do
+    case keep_voice_turn(session_id, turn_id, generation_id, :examiner_addressed, :examiner) do
+      {:ok, kept} -> {:ok, kept}
+      {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
+
+  defp generate_voice_reply(session_id, turn_id, generation_id) do
     package = get_active_package()
 
     with {:ok, current_session} <- Conversation.fetch(session_id),
@@ -1099,7 +1126,8 @@ defmodule Backend.Stations do
     package = get_active_package()
 
     with {:ok, session} <- Conversation.fetch(session_id),
-         :ok <- ensure_voice_turn_open(session) do
+         :ok <- ensure_voice_turn_open(session),
+         :patient <- turn_addressee(session_id, :voice, %{}) do
       context = format_context(session, package)
 
       %{outcome: outcome, delivered: delivered, acc: acc} =
@@ -1121,6 +1149,8 @@ defmodule Backend.Stations do
 
       {resolve_streamed_reply(session_id, turn_id, generation_id, outcome, delivered), acc}
     else
+      # Classified before the stream starts (#274): nothing is handed over.
+      :examiner -> {keep_examiner_voice_turn(session_id, turn_id, generation_id), acc}
       {:error, reason} -> {fail_voice_reply(session_id, generation_id, reason), acc}
     end
   end
@@ -1247,10 +1277,17 @@ defmodule Backend.Stations do
 
   defp speakable_text(other), do: other
 
-  defp keep_voice_turn(session_id, turn_id, generation_id, refusal) do
+  defp keep_voice_turn(session_id, turn_id, generation_id, refusal, addressee \\ :patient) do
     with {:ok, _session} <-
            Conversation.resolve_patient_reply(session_id, generation_id, :keep_learner_turn) do
-      {:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: refusal}}}
+      {:ok,
+       {:kept,
+        %{
+          turn_id: turn_id,
+          generation_id: generation_id,
+          refusal: refusal,
+          addressee: addressee
+        }}}
     end
   end
 

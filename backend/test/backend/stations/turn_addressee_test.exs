@@ -9,8 +9,6 @@ defmodule Backend.Stations.TurnAddresseeTest do
 
   import ExUnit.CaptureLog
 
-  require Logger
-
   alias Backend.Stations
 
   @finding "Ao exame, abdome doloroso em fossa ilíaca direita, Blumberg positivo."
@@ -163,6 +161,55 @@ defmodule Backend.Stations.TurnAddresseeTest do
 
       assert log =~ ~r/\[Stations\] turn_addressee decision=examiner channel=text latency_ms=\d+/
       refute log =~ "Blumberg"
+    end
+  end
+
+  describe "voice turns" do
+    test "an examiner-addressed voice turn is kept with no generation" do
+      answer(:examiner)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, {:kept, %{turn_id: 1, addressee: :examiner, refusal: :examiner_addressed}}} =
+               Stations.process_voice_turn(session.session_id, 1, @finding)
+
+      assert_received {:addressee_check, @finding}
+      refute_received :patient_generation
+      refute_received :patient_verification
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: @finding}] = stored.messages
+    end
+
+    test "an examiner-addressed streamed turn is classified before the stream and hands nothing over" do
+      answer(:examiner)
+      session = Stations.create_session(%{audio_consent: true})
+      sink = fn sentence, acc -> {:cont, [sentence | acc]} end
+
+      assert {{:ok, {:kept, %{addressee: :examiner}}}, []} =
+               Stations.stream_voice_turn(session.session_id, 1, @finding, [], sink)
+
+      refute_received :patient_generation
+    end
+
+    test "an undecided voice turn streams the patient reply" do
+      answer(:undecided)
+      session = Stations.create_session(%{audio_consent: true})
+      sink = fn {:sentence, %{text: text}}, acc -> {:cont, [text | acc]} end
+
+      assert {{:ok, %{reply_text: @reply}}, [@reply]} =
+               Stations.stream_voice_turn(session.session_id, 1, @question, [], sink)
+
+      assert_received :patient_generation
+    end
+
+    test "a refused patient-addressed voice turn is kept with addressee patient" do
+      answer(:patient)
+      Application.put_env(:backend, :addressee_patient_status, :semantic_refusal)
+      session = Stations.create_session(%{audio_consent: true})
+
+      capture_log(fn ->
+        assert {:ok, {:kept, %{addressee: :patient, refusal: :semantic_refusal}}} =
+                 Stations.process_voice_turn(session.session_id, 1, @question)
+      end)
     end
   end
 end
