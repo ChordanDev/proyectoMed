@@ -48,5 +48,7 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 - T2 done.
 - T3 done. Follow-ups: guard `hda-06-antitermico` beyond the prompt (package `requires_explicit_question` or the withheld-facts regeneration, per #307); README `ANTHROPIC_PATIENT_MODEL` default row.
 
+- Review round 1 (PR #310, Jorge C1): README `ANTHROPIC_PATIENT_MODEL` row now states the `claude-haiku-5-5` default and per-model thinking/fallback handling (matches `anthropic_client.ex`). Route: inline, one mechanical doc row. Check: `rg -n 'ANTHROPIC_PATIENT_MODEL' README.md` shows `claude-haiku-5-5`; local CI.
+
 ## Next step
-Local CI, push, PR to `feat/237-clinician-demo-readiness`.
+PR #310 review to `feat/237-clinician-demo-readiness`.
