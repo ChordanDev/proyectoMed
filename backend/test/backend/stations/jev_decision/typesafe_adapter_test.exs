@@ -341,11 +341,17 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                decide(OutOfRoleOptStub, nouls, out_of_role_no_threshold: 0.2)
     end
 
-    test "is low confidence when it is unclear whether a stated on_request fact was asked for" do
+    test "names a stated on_request fact when it is unclear whether it was asked for" do
+      # Issue #284: "Onde começou a dor?" answered with the migration as well.
       nouls = nouls(%{@stated_onset => 0.97, @asked_onset => 0.5})
 
       assert decide(UnsureAskedStub, nouls) ==
-               {:ok, %{status: :low_confidence, used_fact_ids: ["fact-onset"]}}
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: ["fact-onset"],
+                  undecided_fact_ids: ["fact-onset"]
+                }}
     end
 
     test "is low confidence when it is unclear whether an unrequested on_request fact is stated" do
@@ -387,6 +393,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
         {UndecidedWithRiskStub, Map.put(undecided_stated, @risk_unsupported, 0.5)},
         # It is unclear whether the learner asked.
         {UndecidedAskedStub, %{@stated_allergy => 0.31, @asked_allergy => 0.5}},
+        # Stated, unclear whether asked, and a risk is also undecided.
+        {StatedUnsureAskedWithRiskStub,
+         %{@stated_allergy => 0.9, @asked_allergy => 0.5, @risk_unsupported => 0.5}},
         # Another fact is a clear disclosure violation.
         {UndecidedWithViolationStub,
          Map.merge(undecided_stated, %{@stated_onset => 0.96, @asked_onset => 0.03})},
@@ -1380,6 +1389,45 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                   used_fact_ids: [],
                   undecided_fact_ids: ["fact-allergy"]
                 }}
+    end
+
+    test "a stated fact the learner may not have asked for gets one regeneration that withholds it" do
+      # Issue #284, end to end through CandidateGate: the first candidate states the
+      # on-request onset while `fact_asked` is undecided; the regeneration is verified.
+      test_pid = self()
+      calls = :counters.new(1, [])
+
+      Req.Test.stub(GateUnsureAskedStub, fn conn ->
+        :counters.add(calls, 1, 1)
+
+        nouls =
+          if :counters.get(calls, 1) == 1,
+            do: nouls(%{@stated_onset => 0.97, @asked_onset => 0.5}),
+            else: nouls()
+
+        Req.Test.json(conn, success_body(nouls))
+      end)
+
+      generator = fn _package, _conversation, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "Começou durante uma caminhada."}
+      end
+
+      %{package: package, conversation: conversation} = seam_request()
+
+      assert Backend.Stations.CandidateGate.verify_and_deliver(
+               @candidate,
+               package,
+               conversation,
+               adapter: TypesafeAdapter,
+               generator: generator,
+               api_key: "ts-test-key",
+               plug: {Req.Test, GateUnsureAskedStub}
+             ) == {:ok, "Começou durante uma caminhada."}
+
+      assert_received {:guidance, %{withheld_fact_ids: ["fact-onset"]}}
+      refute_received {:guidance, _}
+      assert :counters.get(calls, 1) == 2
     end
 
     test "returns a sanitized error for an overloaded provider, with a log free of payload text" do

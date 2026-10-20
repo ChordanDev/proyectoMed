@@ -94,9 +94,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       `on_request` facts stated (yes) while the learner did not ask for them (no).
       `CandidateGate` names them in its single regeneration (issue #242).
     * `undecided_fact_ids` - present only on a `:low_confidence` verdict whose every
-      risk answer is a no and whose only open answers are the stated questions of
-      `on_request` facts the learner did not ask for (no): their authored ids.
-      `CandidateGate` withholds them in its single regeneration (issue #273).
+      risk answer is a no and whose only open answers are either the stated
+      question of an `on_request` fact the learner did not ask for (no, issue #273)
+      or the asked question of an `on_request` fact the reply states (yes, issue
+      #284): their authored ids. `CandidateGate` withholds them in its single
+      regeneration.
     * `:semantic_refusal` - a risk answer is a yes, or an `on_request` fact is stated
       (yes) while the learner did not ask for it (no)
     * `:verified` - every risk answer is a no and no answer the verdict depends on is
@@ -807,13 +809,20 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   defp put_fact_ids(decision, _key, []), do: decision
   defp put_fact_ids(decision, key, ids), do: Map.put(decision, key, ids)
 
-  # Issue #273: a low-confidence verdict whose only open answers are the stated
-  # questions of on-request facts the learner clearly did not ask for. Any other
-  # open answer (a risk, an unclear asked question) names nothing.
+  # A low-confidence verdict whose only open answers are on-request facts that a
+  # regeneration can safely leave out: stated-undecided while clearly not asked
+  # (issue #273), or clearly stated while it is unclear whether the learner asked
+  # (issue #284). Any other open answer (a risk, both answers unclear) names nothing.
+  @withholdable [:undecided_unasked, :undecided_asked]
+
   defp undecided_fact_ids(:low_confidence, risks, facts, disclosures) do
     if Enum.all?(risks, &(&1 == :no)) and
-         Enum.all?(disclosures, &(&1 in [:respected, :undecided_unasked])) do
-      for({fact, :undecided_unasked} <- Enum.zip(facts, disclosures), do: fact.id)
+         Enum.all?(disclosures, &(&1 == :respected or &1 in @withholdable)) do
+      for(
+        {fact, disclosure} <- Enum.zip(facts, disclosures),
+        disclosure in @withholdable,
+        do: fact.id
+      )
       |> Enum.uniq()
     else
       []
@@ -843,7 +852,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   # Only an `on_request` fact has a disclosure rule the answers can break. It is
   # respected when the fact is not stated or the learner asked for it, broken when it
   # is stated and the learner did not ask, and undecided in every other combination;
-  # `:undecided_unasked` marks the undecided case where the learner clearly did not ask.
+  # `:undecided_unasked` marks the undecided case where the learner clearly did not ask,
+  # `:undecided_asked` the one where the fact is clearly stated but the ask is unclear.
   defp disclosure(%{asked: nil}, _nouls, _thresholds), do: :respected
 
   defp disclosure(fact, nouls, thresholds) do
@@ -854,6 +864,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       stated == :no or asked == :yes -> :respected
       stated == :yes and asked == :no -> :violation
       stated == :undecided and asked == :no -> :undecided_unasked
+      stated == :yes and asked == :undecided -> :undecided_asked
       true -> :undecided
     end
   end
