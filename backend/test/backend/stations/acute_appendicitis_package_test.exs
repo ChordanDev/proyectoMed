@@ -130,6 +130,58 @@ defmodule Backend.Stations.AcuteAppendicitisPackageTest do
            ]
   end
 
+  # Issue #264: one on-request fact per rubric characteristic, so a reply to one
+  # question cannot volunteer the answer to another criterion.
+  @item_2_facts [
+    {"criterio-1", "hda-01", "A dor começou ao redor do umbigo."},
+    {"criterio-2", "hda-01-migracao",
+     "Há cerca de 10 horas, a dor migrou para a parte inferior direita do abdome."},
+    {"criterio-3", "hda-02", "É uma dor contínua."},
+    {"criterio-3", "hda-02-progressao", "A dor foi aumentando progressivamente."},
+    {"criterio-4", "hda-01-tempo", "A dor começou há 18 horas."},
+    {"criterio-5", "hda-02-intensidade", "Atualmente, a dor é 7/10."}
+  ]
+
+  defp fact(id), do: Enum.find(package()["revealable_facts"], &(&1["id"] == id))
+
+  test "each item-2 characteristic is a separate on-request fact" do
+    item_2 = Enum.find(package()["rubric"], &(&1["id"] == "item-02"))
+    action_ids = Enum.map(item_2["actions"], & &1["id"])
+
+    for {criterion, id, content} <- @item_2_facts do
+      assert criterion in action_ids
+      assert %{"content" => ^content, "disclosure_condition" => "on_request"} = fact(id)
+    end
+  end
+
+  test "no fact still bundles the item-2 characteristics" do
+    contents = Enum.map(package()["revealable_facts"], & &1["content"])
+
+    refute Enum.any?(contents, &(&1 =~ "18 horas" and &1 =~ "umbigo"))
+    refute Enum.any?(contents, &(&1 =~ "umbigo" and &1 =~ "migrou"))
+    refute Enum.any?(contents, &(&1 =~ "contínua" and &1 =~ "7/10"))
+  end
+
+  @item_4_facts [
+    {"criterio-1", "antecedentes-01", "Nega doenças crônicas."},
+    {"criterio-2", "antecedentes-01-internacoes-cirurgias",
+     "Nega internações anteriores e cirurgias."},
+    {"criterio-3", "pergunta-explicita-02-anti-inflamatorios",
+     "Nega uso recente de anti-inflamatórios."},
+    {"criterio-5", "pergunta-explicita-02",
+     "Nega uso recente de antibióticos ou anticoagulantes."}
+  ]
+
+  test "each item-4 characteristic is a separate on-request fact" do
+    item_4 = Enum.find(package()["rubric"], &(&1["id"] == "item-04"))
+    action_ids = Enum.map(item_4["actions"], & &1["id"])
+
+    for {criterion, id, content} <- @item_4_facts do
+      assert criterion in action_ids
+      assert %{"content" => ^content, "disclosure_condition" => "on_request"} = fact(id)
+    end
+  end
+
   test "every criterion has rule fields the assessment can apply" do
     for criterion <- package()["rubric"] do
       assert AuthoredRules.check(criterion) == :ok
