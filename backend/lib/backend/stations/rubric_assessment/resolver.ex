@@ -45,7 +45,8 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   Candidates are consumed here and never reported: every action still
   `"uncertain"` after this step carries no evidence, whatever the outcome.
   The resolver has its own deadline, `:rubric_resolver_deadline_ms` (default
-  10000 ms), independent of Jev's.
+  30000 ms), independent of Jev's; it bounds all of a session's requests
+  together, not each one.
 
   The adapter is `opts[:resolver_adapter]` or the `:rubric_resolver_adapter`
   application setting, `Backend.Stations.RubricAssessment.Resolver.DisabledAdapter`
@@ -62,7 +63,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   @performed "performed"
   @not_performed "not_performed"
   @classes [@performed, @not_performed, @uncertain]
-  @default_deadline_ms 10_000
+  @default_deadline_ms 30_000
   @default_max_concurrency 6
 
   @typedoc "An authored action with Jev's classification."

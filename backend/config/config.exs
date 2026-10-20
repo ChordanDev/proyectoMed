@@ -19,9 +19,11 @@ config :backend,
   jev_decision_max_context_characters: 24_000,
   jev_decision_max_rubric_context_characters: 120_000,
   learner_feedback_adapter: Backend.Stations.LearnerFeedback.OpenAIAdapter,
-  learner_feedback_deadline_ms: 60_000,
+  # resolver 30 s + feedback 45 s fit the web client's 95 s wait for the
+  # educational result (issue #301, see runtime.exs).
+  learner_feedback_deadline_ms: 45_000,
   rubric_resolver_adapter: Backend.Stations.RubricAssessment.Resolver.DisabledAdapter,
-  rubric_resolver_deadline_ms: 10_000,
+  rubric_resolver_deadline_ms: 30_000,
   # Undecided-verdict adjudicator (issue #290): off unless runtime.exs selects it.
   patient_adjudicator_adapter: Backend.Stations.PatientAdjudicator.DisabledAdapter,
   patient_adjudicator_deadline_ms: 2_000,

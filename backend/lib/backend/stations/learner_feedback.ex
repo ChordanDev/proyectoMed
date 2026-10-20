@@ -21,7 +21,7 @@ defmodule Backend.Stations.LearnerFeedback do
       authored actions, and the text of the learner evidence the assessment
       already cited. The conversation is never sent.
     * **Deadline.** The call runs under `:learner_feedback_deadline_ms`
-      (default 60 000 ms, overridden at boot by `LEARNER_FEEDBACK_DEADLINE_MS`);
+      (default 45 000 ms, overridden at boot by `LEARNER_FEEDBACK_DEADLINE_MS`);
       a timeout, error or crash keeps the authored text for every criterion.
       There are no retries. Each call logs its latency at info level (success)
       or warning level (fallback), never the texts.
@@ -53,7 +53,7 @@ defmodule Backend.Stations.LearnerFeedback do
   alias Backend.Stations.LearnerFeedback.DisabledAdapter
   alias Backend.Stations.RubricAssessment.Points
 
-  @default_deadline_ms 60_000
+  @default_deadline_ms 45_000
   @max_characters 400
   @performed "performed"
   @not_performed "not_performed"

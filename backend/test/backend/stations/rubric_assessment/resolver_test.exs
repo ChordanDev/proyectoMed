@@ -506,9 +506,9 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
   end
 
   describe "configuration" do
-    test "the resolver is disabled by default with its own ten second deadline" do
+    test "the resolver is disabled by default with its own thirty second deadline" do
       assert Resolver.adapter([]) == Resolver.DisabledAdapter
-      assert Resolver.deadline_ms([]) == 10_000
+      assert Resolver.deadline_ms([]) == 30_000
       assert Resolver.adapter(resolver_adapter: ResolverDouble) == ResolverDouble
       assert Resolver.deadline_ms(rubric_resolver_deadline_ms: 10) == 10
     end

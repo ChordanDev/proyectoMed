@@ -30,7 +30,7 @@ timeout lost all of them. The result was also recomputed on every fetch.
 
 ## Checklist
 
-- [ ] T1 - Resolver sends one request per criterion with undecided actions,
+- [x] T1 - Resolver sends one request per criterion with undecided actions,
   concurrently (bounded), under one overall deadline; a criterion that fails
   or times out stays uncertain, the others keep their decisions; per-criterion
   outcome/latency logs. Route: inline (one module plus its test).
@@ -53,8 +53,23 @@ timeout lost all of them. The result was also recomputed on every fetch.
 
 ## Progress
 
-Not started.
+- T1 done in `d66f7ce`. RED: 4 new resolver tests failed (multi-criterion
+  request crashed the per-criterion double). GREEN: `mix test
+  test/backend/stations` 1035 passed. `issue_228_regression_test` updated to
+  expect one request per criterion.
+- T2: RED 6 failing (budget invariant x2, default 30 s, runtime caps, OpenAI
+  receive timeout, feedback default 45 s). GREEN: backend `mix test` 1668
+  passed; web `client.test.ts` 42 passed (its 80 s expectation moved to 95 s).
+  Budget: resolver 30 s + feedback 45 s + 15 s margin <= web 95 s; runtime
+  caps resolver at 40 s and feedback at 80 s minus the resolver deadline.
+
+## Follow-ups (outside allowed edit surfaces)
+
+- `README.md` (~798) and `docs/educational-result-api.md` (~30-35) still
+  describe the 10 s / 60 s / 65 s cap / 80 s wait.
+- `web/src/features/station/i18n/pt-BR.json` `loadingResultFeedbackWait` says
+  "até um minuto"; the first fetch can now take up to ~95 s.
 
 ## Next step
 
-T1.
+T3.
