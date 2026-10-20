@@ -46,7 +46,19 @@ defmodule Backend.Stations.Conversation do
           status: :active | :completed
         }
 
-  @type message :: %{role: term(), modality: term(), text: String.t(), at: DateTime.t()}
+  @typedoc """
+  A transcript message. A patient message may carry `verified_fact_ids`: the
+  authored ids of the facts the Jev verdict that verified it found stated
+  (issue #286). The session's disclosed facts are derived from them, see
+  `disclosed_fact_ids/1`.
+  """
+  @type message :: %{
+          required(:role) => term(),
+          required(:modality) => term(),
+          required(:text) => String.t(),
+          required(:at) => DateTime.t(),
+          optional(:verified_fact_ids) => [String.t()]
+        }
 
   @type impresso_request_event :: %{
           request_id: String.t(),
@@ -121,7 +133,7 @@ defmodule Backend.Stations.Conversation do
   period elapses.
 
   The deadline grants one grace window per session: it also covers a voice
-  generation in flight, see `begin_voice_turn/3` and `resolve_patient_reply/3`.
+  generation in flight, see `begin_voice_turn/3` and `resolve_patient_reply/4`.
   """
   @spec begin_turn(String.t(), map()) ::
           {:ok, session(), turn_token()}
@@ -258,8 +270,17 @@ defmodule Backend.Stations.Conversation do
   session is then completed with reason `:timer`, unless a text turn is still
   pending under the same window. Once the window elapsed, the generation it cut
   off returns `{:error, :station_time_elapsed}` and nothing is appended.
+
+  `verified_fact_ids` are stored on the appended patient message (issue #286);
+  they are recorded only when the reply is, never for a stale, cancelled or
+  kept generation.
   """
-  @spec resolve_patient_reply(String.t(), pos_integer(), String.t() | :keep_learner_turn) ::
+  @spec resolve_patient_reply(
+          String.t(),
+          pos_integer(),
+          String.t() | :keep_learner_turn,
+          [String.t()]
+        ) ::
           {:ok, session()}
           | {:error,
              :not_found
@@ -268,9 +289,30 @@ defmodule Backend.Stations.Conversation do
              | :stale_generation
              | :invalid_reply
              | :station_time_elapsed}
-  def resolve_patient_reply(session_id, generation_id, reply_text) do
-    GenServer.call(__MODULE__, {:resolve_patient_reply, session_id, generation_id, reply_text})
+  def resolve_patient_reply(session_id, generation_id, reply_text, verified_fact_ids \\ []) do
+    GenServer.call(
+      __MODULE__,
+      {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids}
+    )
   end
+
+  @doc """
+  The facts the session's verified patient turns disclosed (issue #286): the
+  `verified_fact_ids` of its patient messages, in first-disclosure order,
+  without duplicates. Derived from the transcript, so it lives and dies with the
+  session and is unaffected by kept, rolled back or cancelled learner turns.
+  """
+  @spec disclosed_fact_ids(session()) :: [String.t()]
+  def disclosed_fact_ids(%{messages: messages}) when is_list(messages) do
+    messages
+    |> Enum.flat_map(fn
+      %{role: :patient, verified_fact_ids: ids} when is_list(ids) -> ids
+      _message -> []
+    end)
+    |> Enum.uniq()
+  end
+
+  def disclosed_fact_ids(_session), do: []
 
   @doc """
   Explicitly cancels a pending generation. When `generation_id` is provided,
@@ -518,7 +560,11 @@ defmodule Backend.Stations.Conversation do
     do_voice_turn(session_id, turn_id, text, :with_generation, state)
   end
 
-  def handle_call({:resolve_patient_reply, session_id, generation_id, reply_text}, _from, state) do
+  def handle_call(
+        {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids},
+        _from,
+        state
+      ) do
     case active_session(session_id) do
       {:ok, %{status: :completed} = session} ->
         {:reply, {:error, completed_generation_error(session, generation_id)}, state}
@@ -536,7 +582,10 @@ defmodule Backend.Stations.Conversation do
           true ->
             session =
               session
-              |> Map.put(:messages, session.messages ++ patient_messages(reply_text))
+              |> Map.put(
+                :messages,
+                session.messages ++ patient_messages(reply_text, verified_fact_ids)
+              )
               |> Map.put(:active_generation_id, nil)
               |> Map.put(:active_voice_turn_id, nil)
               |> Map.put(:active_generation_message_index, nil)
@@ -894,10 +943,18 @@ defmodule Backend.Stations.Conversation do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
   end
 
-  defp patient_messages(:keep_learner_turn), do: []
+  defp patient_messages(:keep_learner_turn, _verified_fact_ids), do: []
 
-  defp patient_messages(reply_text) do
-    [%{role: :patient, modality: :voice, text: reply_text, at: DateTime.utc_now()}]
+  defp patient_messages(reply_text, verified_fact_ids) do
+    [
+      %{
+        role: :patient,
+        modality: :voice,
+        text: reply_text,
+        at: DateTime.utc_now(),
+        verified_fact_ids: Enum.filter(List.wrap(verified_fact_ids), &is_binary/1)
+      }
+    ]
   end
 
   defp valid_reply_text?(:keep_learner_turn), do: true

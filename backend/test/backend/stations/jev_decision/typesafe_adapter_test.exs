@@ -1493,4 +1493,100 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       refute log =~ <<0xFF, 0xFE>>
     end
   end
+
+  describe "facts already disclosed (issue #286)" do
+    # A fact an earlier verified patient turn disclosed is not re-gated: its
+    # `fact_asked` question is not asked, so its disclosure is respected.
+    defp disclosed_request(ids) do
+      %{
+        candidate_text: @candidate,
+        package: %{
+          "station_id" => "station-1",
+          "version" => "2.0.0",
+          "language" => "pt-BR",
+          "patient_profile" => %{"persona" => "Maria Silva", "age" => 52},
+          "revealable_facts" => [@onset, @sweating, @allergy],
+          "response_rules" => [@rule]
+        },
+        conversation: [%{role: "student", text: @learner_question}],
+        disclosed_fact_ids: ids
+      }
+    end
+
+    @without_asked_onset @all_ids -- [@asked_onset]
+
+    test "plan_facts asks no fact_asked question for a disclosed fact" do
+      {:ok, facts} =
+        TypesafeAdapter.plan_facts(request(%{disclosed_fact_ids: ["fact-onset"]}))
+
+      assert Enum.map(facts, &{&1.id, &1.stated, &1.asked}) == [
+               {"fact-onset", @stated_onset, nil},
+               {"fact-sweating", @stated_sweating, nil},
+               {"fact-allergy", @stated_allergy, @asked_allergy}
+             ]
+    end
+
+    test "restating a disclosed fact verifies without asking whether it was asked for" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            DisclosedVerifiedStub,
+            nouls(%{@stated_onset => 0.97}, @without_asked_onset)
+          )
+
+      assert JevDecision.decide_patient(disclosed_request(["fact-onset"]), opts) ==
+               {:ok, %{status: :verified, used_fact_ids: ["fact-onset"]}}
+
+      assert_receive {:typesafe_request, _conn, payload}
+      questions = Map.keys(payload["questions"])
+      refute @asked_onset in questions
+      assert @stated_onset in questions
+      assert @asked_allergy in questions
+      assert @risk_contradicts_patient in questions
+    end
+
+    test "a disclosed fact still refuses a reply that contradicts the patient" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            DisclosedContradictionStub,
+            nouls(
+              %{@stated_onset => 0.97, @risk_contradicts_patient => 0.9},
+              @without_asked_onset
+            )
+          )
+
+      assert {:ok, %{status: :semantic_refusal}} =
+               JevDecision.decide_patient(disclosed_request(["fact-onset"]), opts)
+    end
+
+    test "an undisclosed fact keeps today's gating" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            UndisclosedGatedStub,
+            nouls(%{@stated_allergy => 0.97, @asked_allergy => 0.5}, @without_asked_onset)
+          )
+
+      assert JevDecision.decide_patient(disclosed_request(["fact-onset"]), opts) ==
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: ["fact-allergy"],
+                  undecided_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "a malformed disclosed set discloses nothing" do
+      for ids <- ["fact-onset", [:"fact-onset", 1], nil] do
+        opts = [adapter: TypesafeAdapter] ++ stub_nouls(MalformedDisclosedStub, nouls())
+
+        assert {:ok, %{status: :verified}} =
+                 JevDecision.decide_patient(disclosed_request(ids), opts)
+
+        assert_receive {:typesafe_request, _conn, payload}
+        assert @asked_onset in Map.keys(payload["questions"])
+      end
+    end
+  end
 end

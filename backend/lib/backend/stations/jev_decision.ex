@@ -20,7 +20,9 @@ defmodule Backend.Stations.JevDecision do
       are stripped; conversation history is bounded to recent turns; learner turns
       are explicitly marked with `:trust => :untrusted` and patient turns with
       `:trust => :trusted`; `latest_learner_turn`, `package_id`, `package_version`,
-      and authored `disclosure_condition` are preserved.
+      and authored `disclosure_condition` are preserved. `disclosed_fact_ids` (the
+      facts earlier verified patient turns disclosed, issue #286) is always a list
+      of authored ids, empty when the caller passes none or a malformed value.
     * **Total text cap, never truncated**: The learner/conversation text handed to
       any adapter (candidate, bounded conversation and latest learner turn for
       patient requests, capped by `max_context_characters/0`; the evidence pool
@@ -407,14 +409,15 @@ defmodule Backend.Stations.JevDecision do
          :ok <- validate_conversation(conversation),
          {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
       minimized =
-        minimize_patient_request(
-          candidate_text,
+        candidate_text
+        |> minimize_patient_request(
           package,
           conversation,
           deadline_ms,
           deadline_at,
           opts
         )
+        |> Map.put(:disclosed_fact_ids, disclosed_fact_ids(request))
 
       max_chars = opts[:max_context_characters] || max_context_characters()
 
@@ -426,6 +429,19 @@ defmodule Backend.Stations.JevDecision do
 
   defp validate_patient_request(_not_a_map, _opts) do
     {:error, {:invalid_request, :expected_map}}
+  end
+
+  # Facts earlier verified patient turns of the session disclosed (issue #286),
+  # by authored id. Anything but a list of non-blank ids discloses nothing, so a
+  # malformed value can only keep the gating, never relax it.
+  defp disclosed_fact_ids(request) do
+    case Map.get(request, :disclosed_fact_ids) || Map.get(request, "disclosed_fact_ids") do
+      ids when is_list(ids) ->
+        ids |> Enum.filter(&(is_binary(&1) and String.trim(&1) != "")) |> Enum.uniq()
+
+      _other ->
+        []
+    end
   end
 
   # The addressee request carries conversation text only: the same labelling,

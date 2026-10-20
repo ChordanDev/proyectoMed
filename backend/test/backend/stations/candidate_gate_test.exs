@@ -95,6 +95,22 @@ defmodule Backend.Stations.CandidateGateTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  # Issue #286: echoes the request's `disclosed_fact_ids` as the verdict's
+  # `used_fact_ids`, and refuses any candidate starting with "refuse".
+  defmodule DisclosedEchoAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(%{candidate_text: "refuse" <> _rest}),
+      do: {:ok, %{status: :semantic_refusal}}
+
+    def decide_patient(%{disclosed_fact_ids: disclosed}),
+      do: {:ok, %{status: :verified, used_fact_ids: disclosed}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   defmodule ExplosiveAdapter do
     @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -1422,6 +1438,41 @@ defmodule Backend.Stations.CandidateGateTest do
                  sample_conversation(),
                  adapter: DoubleAdapter
                )
+    end
+  end
+
+  describe "verify/4 (issue #286)" do
+    test "returns the verdict's facts and passes the disclosed facts to Jev" do
+      assert CandidateGate.verify("Começou há 2 horas.", base_package(), [],
+               adapter: DisclosedEchoAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, %{text: "Começou há 2 horas.", used_fact_ids: ["fact-1"]}}
+
+      assert CandidateGate.verify("Começou há 2 horas.", base_package(), [],
+               adapter: DisclosedEchoAdapter
+             ) == {:ok, %{text: "Começou há 2 horas.", used_fact_ids: []}}
+    end
+
+    test "returns the regeneration's facts when the regeneration is delivered" do
+      assert CandidateGate.verify("refuse this", base_package(), [],
+               adapter: DisclosedEchoAdapter,
+               disclosed_fact_ids: ["fact-1"],
+               generator: fn -> {:ok, "Começou durante a caminhada."} end
+             ) == {:ok, %{text: "Começou durante a caminhada.", used_fact_ids: ["fact-1"]}}
+    end
+
+    test "an approved template bypass discloses nothing" do
+      assert CandidateGate.verify("Compreendo, doutor.", base_package(), [],
+               adapter: ExplosiveAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, %{text: "Compreendo, doutor.", used_fact_ids: []}}
+    end
+
+    test "verify_and_deliver/4 keeps returning the text only" do
+      assert CandidateGate.verify_and_deliver("Começou há 2 horas.", base_package(), [],
+               adapter: DisclosedEchoAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, "Começou há 2 horas."}
     end
   end
 end

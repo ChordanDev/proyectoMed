@@ -737,6 +737,13 @@ never replaced by the default: every decision is then a technical failure.
 in clear; any other value makes every decision a technical failure. An answer
 between them yields `low_confidence`, which the gate treats like a refusal.
 
+Long conversations (issue #286): a fact an earlier verified patient turn of the
+session disclosed (the verdict's `used_fact_ids`, stored on that patient
+message) is not asked about again: its `fact_asked` question is skipped, while
+`fact_stated` and every risk question still apply. The patient generator sees
+only answered turns plus the latest question: a refused, cancelled or
+examiner-addressed learner turn is left out of its context, but not of Jev's.
+
 If both `JEV_ADAPTER=typesafe` and, in `dev`, `JEV_E2E_APPROVING_ADAPTER=true`
 are set, the E2E approving adapter wins. The adapter sends one request per
 patient decision, does not retry, and logs nothing. It also serves rubric

@@ -58,6 +58,7 @@ defmodule Backend.Stations.JevDecision.Adapter do
           required(:conversation) => [conversation_turn()],
           required(:latest_learner_turn) => conversation_turn() | nil,
           required(:deadline_ms) => pos_integer(),
+          required(:disclosed_fact_ids) => [String.t()],
           optional(:deadline_at_monotonic_ms) => integer()
         }
 
