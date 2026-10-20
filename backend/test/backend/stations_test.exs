@@ -1324,6 +1324,37 @@ defmodule Backend.StationsTest do
       for budget <- [voice_budget, text_budget], do: assert(budget in 2_000..2_345)
     end
 
+    # Issue #269: the voice reply follows the #257 stage-direction rule, so the
+    # worker never reads a nonverbal action aloud. The transcript keeps the full
+    # verified reply, as on the text path.
+    test "process_voice_turn/3 returns reply_text without stage directions" do
+      Application.put_env(:backend, :station_ai_adapter, TemplateReplyAIAdapter)
+      Process.put(:template_reply_text, "*(curvado, com a mão na barriga)* Começou ontem. (geme)")
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{reply_text: "Começou ontem.", turn_id: 1}} =
+               Stations.process_voice_turn(session.session_id, 1, "Quando começou?")
+
+      assert {:ok, stored} = Stations.get_session(session.session_id)
+
+      assert [%{role: :learner}, %{role: :patient, text: full}] = stored.messages
+      assert full == "*(curvado, com a mão na barriga)* Começou ontem. (geme)"
+    end
+
+    test "a voice reply made only of stage directions keeps the learner turn" do
+      Application.put_env(:backend, :station_ai_adapter, TemplateReplyAIAdapter)
+      Process.put(:template_reply_text, "*(suspira e olha para o chão)*")
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, {:kept, %{turn_id: 1, generation_id: 1, refusal: :unspeakable}}} =
+               Stations.process_voice_turn(session.session_id, 1, "Como o senhor está?")
+
+      assert {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: "Como o senhor está?"}] = stored.messages
+      assert stored.failed_voice_turn == nil
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+    end
+
     test "provider and model errors remain technical failures on retry without text or regeneration" do
       Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
       Process.put(:voice_turn_test_pid, self())

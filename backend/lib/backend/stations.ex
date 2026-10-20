@@ -26,6 +26,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
+  alias Backend.Stations.TTS.StageDirections
 
   @early_timer_finish_tolerance_ms 2_000
   @default_learner_message_max_characters 2_000
@@ -720,12 +721,16 @@ defmodule Backend.Stations do
        (#256), exactly as the text path does (#235, #269): no patient text is
        stored or returned, and the result is
        `{:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: reason}}}`.
+       A verified reply made only of stage directions has nothing to speak and
+       is kept the same way with reason `:unspeakable`.
     7. Failing closed on technical failures: a reply that is denied, unverifiable,
        or left without usable text fails the generation as
        `:station_ai_unavailable` and commits no patient content.
     8. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
     9. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
-       solely on success. Stale, cancelled, completed, or expired generations never return text.
+       solely on success. `reply_text` is what the worker speaks: the verified
+       reply without stage directions (`Backend.Stations.TTS.StageDirections`,
+       #257), while the transcript keeps the full verified reply. Stale, cancelled, completed, or expired generations never return text.
 
   The station deadline is enforced in `Backend.Stations.Conversation`, not here.
   A new turn at or after the deadline, or any turn on a session the timer
@@ -749,7 +754,7 @@ defmodule Backend.Stations do
               %{
                 turn_id: pos_integer(),
                 generation_id: pos_integer(),
-                refusal: :low_confidence | :semantic_refusal
+                refusal: :low_confidence | :semantic_refusal | :unspeakable
               }}}
           | {:ok, :duplicate}
           | {:error,
@@ -943,18 +948,28 @@ defmodule Backend.Stations do
     end
   end
 
+  # The worker speaks `reply_text` as it is, so stage directions are removed here
+  # with the rule the text path's speech uses (#257, #269); the transcript keeps
+  # the full verified reply. A reply with nothing speakable left keeps the
+  # learner turn instead of storing a reply nobody hears.
   defp resolve_voice_reply({:ok, verified_reply}, session_id, turn_id, generation_id) do
     verified_text = extract_reply_text(verified_reply)
 
-    with {:ok, _session} <-
-           Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
-      {:ok,
-       %{
-         reply_text: verified_text,
-         turn_id: turn_id,
-         generation_id: generation_id,
-         used_facts: extract_used_facts(verified_reply)
-       }}
+    case speakable_text(verified_text) do
+      "" ->
+        keep_voice_turn(session_id, turn_id, generation_id, :unspeakable)
+
+      spoken_text ->
+        with {:ok, _session} <-
+               Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
+          {:ok,
+           %{
+             reply_text: spoken_text,
+             turn_id: turn_id,
+             generation_id: generation_id,
+             used_facts: extract_used_facts(verified_reply)
+           }}
+        end
     end
   end
 
@@ -967,6 +982,13 @@ defmodule Backend.Stations do
 
   defp resolve_voice_reply({:error, reason}, _session_id, _turn_id, _generation_id),
     do: {:error, reason}
+
+  # A verified reply without usable text stays a technical failure.
+  defp speakable_text(text) when is_binary(text) do
+    if String.trim(text) == "", do: text, else: StageDirections.strip(text)
+  end
+
+  defp speakable_text(other), do: other
 
   defp keep_voice_turn(session_id, turn_id, generation_id, refusal) do
     with {:ok, _session} <-

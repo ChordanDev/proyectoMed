@@ -40,6 +40,14 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
+  defmodule TestStageDirectionAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok, %{text: "*(aponta para a fossa ilíaca direita)* Dói aqui embaixo, doutor."}}
+    end
+  end
+
   defmodule TestSlowBarrierAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true
@@ -339,6 +347,19 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
       assert resp["status"] == "committed"
       assert resp["reply_text"] == "Não tenho essa informação"
+    end
+
+    test "returns reply_text without stage directions (#269)", %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, TestStageDirectionAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      resp =
+        conn
+        |> post(transcripts_path(session.session_id), %{turn_id: 1, text: "Onde dói?"})
+        |> json_response(201)
+
+      assert resp["status"] == "committed"
+      assert resp["reply_text"] == "Dói aqui embaixo, doutor."
     end
 
     test "returns a Jev-approved reply verbatim even when it is not an exact package fact",

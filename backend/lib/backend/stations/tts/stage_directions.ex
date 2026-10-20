@@ -1,7 +1,8 @@
 defmodule Backend.Stations.TTS.StageDirections do
   @moduledoc """
   Removes the patient's nonverbal stage directions from the text sent to a voice
-  provider, so "Ouvir resposta" speaks only the patient's words.
+  provider, so "Ouvir resposta" speaks only the patient's words. The real-time
+  voice worker gets its `reply_text` through the same rule (#269).
 
   The rule, applied in order:
 
