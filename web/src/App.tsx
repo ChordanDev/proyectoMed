@@ -139,6 +139,7 @@ export default function App(): React.JSX.Element {
         remainingMs={station.remainingMs}
         initialMessages={station.initialMessages}
         onRequestImpresso={station.requestImpresso}
+        onRefreshImpressos={station.refreshImpressos}
         impressos={station.impressos}
         impressoError={station.impressoError}
       />
