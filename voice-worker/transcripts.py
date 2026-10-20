@@ -14,6 +14,24 @@ from livekit.agents.stt import SpeechEvent, SpeechEventType
 
 logger = logging.getLogger("voice-worker.transcripts")
 
+# Phoenix answers a transcript POST only after the patient reply is generated and
+# verified (#269). Worst case: the patient generation (Phoenix sets no timeout of
+# its own, so Req's 15 s receive timeout applies), the Jev verification budget
+# (`jev_decision_default_deadline_ms`, 3 s), one regeneration after a refusal
+# (another 15 s) and 2 s headroom: 15 + 3 + 15 + 2 = 35 s. Override with
+# PHOENIX_TURN_TIMEOUT_S when the server budget changes.
+PATIENT_GENERATION_TIMEOUT_S = 15.0
+VERIFICATION_DEADLINE_S = 3.0
+TURN_HEADROOM_S = 2.0
+DEFAULT_TURN_TIMEOUT_S = (
+    2 * PATIENT_GENERATION_TIMEOUT_S + VERIFICATION_DEADLINE_S + TURN_HEADROOM_S
+)
+DEFAULT_TURN_RETRIES = 1
+# Context and cancellation calls do no generation work.
+REQUEST_TIMEOUT_S = 5.0
+# Drain headroom on top of every transcript attempt at end of stream.
+EOF_HEADROOM_S = 5.0
+
 
 class VoiceFailure(Exception):
     """Typed failure. `kind` is one of: auth, timeout, disconnected, malformed, session_inactive, stale_generation,
@@ -41,7 +59,11 @@ def classify_provider_error(exc: Exception) -> VoiceFailure:
 
 
 class VoiceTurnReply:
-    """Typed generation-bound reply metadata returned by Phoenix (#119)."""
+    """Typed generation-bound reply metadata returned by Phoenix (#119).
+
+    `status` is `committed` (a verified reply to speak), `kept` (the patient reply
+    was refused and Phoenix kept the learner turn without one, #269) or `duplicate`.
+    """
 
     def __init__(
         self,
@@ -66,6 +88,21 @@ class VoiceTurnReply:
             and isinstance(self.reply_text, str)
             and bool(self.reply_text.strip())
         )
+
+    def is_kept_receipt(self) -> bool:
+        """A refused reply kept the learner turn: generation-bound, with no text."""
+        return (
+            self.status == "kept"
+            and type(self.turn_id) is int
+            and self.turn_id > 0
+            and type(self.generation_id) is int
+            and self.generation_id > 0
+            and self.reply_text is None
+        )
+
+    def is_settled_receipt(self) -> bool:
+        """Server evidence that this turn was admitted and resolved."""
+        return self.is_committed_receipt() or self.is_kept_receipt()
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, VoiceTurnReply):
@@ -159,7 +196,7 @@ class TurnTracker:
         """Validates that a reply is generation-bound, not duplicate, and not superseded/cancelled."""
         if not isinstance(reply, VoiceTurnReply):
             return False
-        if not reply.is_committed_receipt():
+        if not reply.is_settled_receipt():
             return False
         if self.is_turn_stale(reply.turn_id):
             return False
@@ -175,7 +212,7 @@ class TurnTracker:
             return False
         if reply.turn_id <= self.last_accepted_turn_id:
             return False
-        return bool(reply.reply_text)
+        return reply.is_kept_receipt() or bool(reply.reply_text)
 
     def accept_reply(self, reply: VoiceTurnReply) -> VoiceTurnReply | None:
         """Accepts typed generation-bound reply metadata; rejects superseded or cancelled results."""
@@ -212,12 +249,24 @@ class TurnTracker:
 class PhoenixClient:
     """Client for Phoenix's internal voice worker API (the transcript authority)."""
 
-    def __init__(self, base_url: str, secret: str, session_id: str, transport=None):
+    def __init__(
+        self,
+        base_url: str,
+        secret: str,
+        session_id: str,
+        transport=None,
+        turn_timeout: float = DEFAULT_TURN_TIMEOUT_S,
+        turn_retries: int = DEFAULT_TURN_RETRIES,
+    ):
         self._path = f"/api/internal/voice/sessions/{session_id}"
+        self._turn_timeout = turn_timeout
+        self._turn_retries = turn_retries
+        # End-of-stream wait for pending turns: every transcript attempt plus drain.
+        self.eof_timeout = turn_timeout * (turn_retries + 1) + EOF_HEADROOM_S
         self._http = httpx.AsyncClient(
             base_url=base_url,
             headers={"authorization": f"Bearer {secret}"},
-            timeout=5.0,
+            timeout=REQUEST_TIMEOUT_S,
             transport=transport,
         )
 
@@ -233,15 +282,23 @@ class PhoenixClient:
     async def commit(self, turn_id: int, text: str) -> VoiceTurnReply:
         """Commits a final transcript; returns typed VoiceTurnReply.
 
-        Retries once on a transport failure: `turn_id` makes the retry idempotent.
+        Each attempt waits for the server budget (`turn_timeout`, #269), and a
+        transport failure is retried `turn_retries` times: `turn_id` makes the retry
+        idempotent.
         """
         body = {"turn_id": turn_id, "text": text}
-        try:
-            result = await self._request("POST", self._path + "/transcripts", json=body)
-        except VoiceFailure as failure:
-            if failure.kind not in ("timeout", "disconnected"):
-                raise
-            result = await self._request("POST", self._path + "/transcripts", json=body)
+        path = self._path + "/transcripts"
+        attempts_left = self._turn_retries
+        while True:
+            try:
+                result = await self._request(
+                    "POST", path, json=body, timeout=self._turn_timeout
+                )
+                break
+            except VoiceFailure as failure:
+                if failure.kind not in ("timeout", "disconnected") or attempts_left <= 0:
+                    raise
+                attempts_left -= 1
 
         return VoiceTurnReply(
             turn_id=result.get("turn_id"),
@@ -514,7 +571,7 @@ class TurnManager:
             reply = await self.phoenix.commit(turn_id, text)
             if (
                 isinstance(reply, VoiceTurnReply)
-                and reply.is_committed_receipt()
+                and reply.is_settled_receipt()
                 and reply.turn_id == turn_id
             ):
                 # Phoenix atomically replaces the active generation on a newer
@@ -533,7 +590,7 @@ class TurnManager:
                     result = self.on_reply(accepted)
                     if asyncio.iscoroutine(result):
                         await result
-                if accepted is None and reply.is_committed_receipt():
+                if accepted is None and reply.is_settled_receipt():
                     # A committed result the tracker refuses is a stale generation.
                     self._notify_cancel(turn_id)
                 return accepted
@@ -590,7 +647,8 @@ class TurnManager:
 
     async def wait_pending(self, timeout: float = 15.0) -> None:
         # One EOF budget for all work, including admission waiting on ownership.
-        # The default allows two five-second HTTP attempts plus drain headroom.
+        # The worker passes PhoenixClient.eof_timeout (every transcript attempt
+        # plus drain headroom, #269); this default only serves direct callers.
         # asyncio.wait does not cancel dispatches on expiry: only cleanup may
         # abort local tasks, and expiry never releases ambiguous remote ownership.
         deadline = asyncio.get_running_loop().time() + timeout

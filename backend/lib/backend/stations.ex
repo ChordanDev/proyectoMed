@@ -26,6 +26,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.StationLoader
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
+  alias Backend.Stations.TTS.StageDirections
 
   @early_timer_finish_tolerance_ms 2_000
   @default_learner_message_max_characters 2_000
@@ -266,6 +267,7 @@ defmodule Backend.Stations do
          ai_reply,
          params
        ) do
+    params = Map.put_new(params, :deadline_ms, patient_reply_deadline_ms())
     verify_opts = build_verify_opts(package, current_session, context, params)
 
     case verify_patient_reply(package, ai_reply, verify_opts) do
@@ -714,12 +716,21 @@ defmodule Backend.Stations do
     5. Passing through the `verify_patient_reply/3` seam, the single authority on
        what the patient may say on both channels. The verified reply is used as
        returned, exactly as the text path does; there is no voice-only filter.
-    6. Failing closed: a reply that is denied, refused, or left without usable
-       text fails the generation as `:station_ai_unavailable` and commits no
-       patient content.
-    7. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
-    8. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
-       solely on success. Stale, cancelled, completed, or expired generations never return text.
+    6. Keeping the learner turn when Jev refuses the reply (`low_confidence` or
+       `semantic_refusal`), also when the single regeneration runs out of time
+       (#256), exactly as the text path does (#235, #269): no patient text is
+       stored or returned, and the result is
+       `{:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: reason}}}`.
+       A verified reply made only of stage directions has nothing to speak and
+       is kept the same way with reason `:unspeakable`.
+    7. Failing closed on technical failures: a reply that is denied, unverifiable,
+       or left without usable text fails the generation as
+       `:station_ai_unavailable` and commits no patient content.
+    8. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
+    9. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
+       solely on success. `reply_text` is what the worker speaks: the verified
+       reply without stage directions (`Backend.Stations.TTS.StageDirections`,
+       #257), while the transcript keeps the full verified reply. Stale, cancelled, completed, or expired generations never return text.
 
   The station deadline is enforced in `Backend.Stations.Conversation`, not here.
   A new turn at or after the deadline, or any turn on a session the timer
@@ -738,6 +749,13 @@ defmodule Backend.Stations do
              generation_id: pos_integer(),
              used_facts: StationAI.revealable_facts()
            }}
+          | {:ok,
+             {:kept,
+              %{
+                turn_id: pos_integer(),
+                generation_id: pos_integer(),
+                refusal: :low_confidence | :semantic_refusal | :unspeakable
+              }}}
           | {:ok, :duplicate}
           | {:error,
              :not_found
@@ -904,18 +922,15 @@ defmodule Backend.Stations do
          :ok <- ensure_voice_turn_open(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context),
-         verify_opts = build_verify_opts(package, current_session, context, %{}),
-         {:ok, verified_reply} <- verify_patient_reply(package, ai_reply, verify_opts),
-         verified_text = extract_reply_text(verified_reply),
-         {:ok, _session} <-
-           Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
-      {:ok,
-       %{
-         reply_text: verified_text,
-         turn_id: turn_id,
-         generation_id: generation_id,
-         used_facts: extract_used_facts(verified_reply)
-       }}
+         verify_opts =
+           build_verify_opts(package, current_session, context, %{
+             deadline_ms: patient_reply_deadline_ms()
+           }),
+         {:ok, result} <-
+           package
+           |> verify_patient_reply(ai_reply, verify_opts)
+           |> resolve_voice_reply(session_id, turn_id, generation_id) do
+      {:ok, result}
     else
       {:error, :stale_generation} ->
         {:error, :stale_generation}
@@ -940,6 +955,59 @@ defmodule Backend.Stations do
         end
     end
   end
+
+  # The worker speaks `reply_text` as it is, so stage directions are removed here
+  # with the rule the text path's speech uses (#257, #269); the transcript keeps
+  # the full verified reply. A reply with nothing speakable left keeps the
+  # learner turn instead of storing a reply nobody hears.
+  defp resolve_voice_reply({:ok, verified_reply}, session_id, turn_id, generation_id) do
+    verified_text = extract_reply_text(verified_reply)
+
+    case speakable_text(verified_text) do
+      "" ->
+        keep_voice_turn(session_id, turn_id, generation_id, :unspeakable)
+
+      spoken_text ->
+        with {:ok, _session} <-
+               Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
+          {:ok,
+           %{
+             reply_text: spoken_text,
+             turn_id: turn_id,
+             generation_id: generation_id,
+             used_facts: extract_used_facts(verified_reply)
+           }}
+        end
+    end
+  end
+
+  # A refused patient reply keeps the learner voice turn, as the text path does
+  # (#235, #256): no patient text is stored or spoken. The refused text is
+  # never stored or returned.
+  defp resolve_voice_reply({:error, {:refused, refusal}}, session_id, turn_id, generation_id) do
+    keep_voice_turn(session_id, turn_id, generation_id, refusal)
+  end
+
+  defp resolve_voice_reply({:error, reason}, _session_id, _turn_id, _generation_id),
+    do: {:error, reason}
+
+  # A verified reply without usable text stays a technical failure.
+  defp speakable_text(text) when is_binary(text) do
+    if String.trim(text) == "", do: text, else: StageDirections.strip(text)
+  end
+
+  defp speakable_text(other), do: other
+
+  defp keep_voice_turn(session_id, turn_id, generation_id, refusal) do
+    with {:ok, _session} <-
+           Conversation.resolve_patient_reply(session_id, generation_id, :keep_learner_turn) do
+      {:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: refusal}}}
+    end
+  end
+
+  # One verification budget for text and voice turns (#256, #269): Jev, the
+  # single regeneration after a refusal and its recheck all share it.
+  defp patient_reply_deadline_ms, do: JevDecision.default_deadline_ms()
 
   defp build_verify_opts(package, session, context, params) do
     deadline_at = resolve_verify_deadline(params)

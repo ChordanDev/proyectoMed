@@ -40,6 +40,14 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
+  defmodule TestStageDirectionAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok, %{text: "*(aponta para a fossa ilíaca direita)* Dói aqui embaixo, doutor."}}
+    end
+  end
+
   defmodule TestSlowBarrierAdapter do
     @behaviour Backend.Stations.StationAI
     @impl true
@@ -341,6 +349,19 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert resp["reply_text"] == "Não tenho essa informação"
     end
 
+    test "returns reply_text without stage directions (#269)", %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, TestStageDirectionAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      resp =
+        conn
+        |> post(transcripts_path(session.session_id), %{turn_id: 1, text: "Onde dói?"})
+        |> json_response(201)
+
+      assert resp["status"] == "committed"
+      assert resp["reply_text"] == "Dói aqui embaixo, doutor."
+    end
+
     test "returns a Jev-approved reply verbatim even when it is not an exact package fact",
          %{conn: conn} do
       Application.put_env(:backend, :station_ai_adapter, TestNaturalReplyAdapter)
@@ -359,7 +380,8 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert [%{role: :learner}, %{role: :patient, text: @natural_reply}] = stored.messages
     end
 
-    test "a reply Jev refuses returns 503 without text and commits no patient message",
+    # Issue #269: a refusal keeps the learner turn, as on the text path (#235).
+    test "a reply Jev refuses returns 201 kept without text and commits no patient message",
          %{conn: conn} do
       Application.put_env(:backend, :station_ai_adapter, TestNaturalReplyAdapter)
       Application.put_env(:backend, :jev_decision_adapter, TestRefusingJevAdapter)
@@ -369,12 +391,19 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       resp =
         conn
         |> post(transcripts_path(id), %{turn_id: 1, text: "Quando a dor começou?"})
-        |> json_response(503)
+        |> json_response(201)
 
-      refute Map.has_key?(resp, "reply_text")
+      assert resp == %{"turn_id" => 1, "status" => "kept", "generation_id" => 1}
 
       {:ok, stored} = Stations.get_session(id)
       assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
+
+      # A retry of the kept turn is a duplicate, never a second generation.
+      assert %{"status" => "duplicate"} =
+               build_conn()
+               |> put_req_header("authorization", "Bearer " <> @secret)
+               |> post(transcripts_path(id), %{turn_id: 1, text: "Quando a dor começou?"})
+               |> json_response(200)
     end
 
     test "rejects malformed payloads", %{conn: conn} do

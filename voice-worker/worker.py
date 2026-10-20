@@ -3,14 +3,16 @@
 Joins only `station-session-*` rooms, asks Phoenix whether the session may stream audio,
 publishes interim transcripts to the room (topic "transcript") and POSTs each final
 transcript to Phoenix, which owns the transcript. Each reply Phoenix approves is published
-to the room as patient text and then spoken through ElevenLabs (#120). Never logs
-transcript text, reply text or audio.
+to the room as patient text and then spoken through ElevenLabs (#120). A refused reply
+that Phoenix kept as a learner turn is published as an examiner acknowledgement and
+never spoken (#269). Never logs transcript text, reply text or audio.
 """
 
 # pyright: reportMissingImports=false
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 
@@ -19,6 +21,8 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, c
 from livekit.plugins import deepgram, elevenlabs
 from speech import SpeechPlayer
 from transcripts import (
+    DEFAULT_TURN_RETRIES,
+    DEFAULT_TURN_TIMEOUT_S,
     PhoenixClient,
     TurnTracker,
     VoiceFailure,
@@ -49,8 +53,13 @@ async def on_request(req: JobRequest) -> None:
 @server.rtc_session(on_request=on_request)
 async def entrypoint(ctx: JobContext) -> None:
     session_id = ctx.room.name.removeprefix(ROOM_PREFIX)
+    turn_timeout, turn_retries = phoenix_turn_settings(os.environ)
     phoenix = PhoenixClient(
-        os.environ["PHOENIX_URL"], os.environ["VOICE_WORKER_SECRET"], session_id
+        os.environ["PHOENIX_URL"],
+        os.environ["VOICE_WORKER_SECRET"],
+        session_id,
+        turn_timeout=turn_timeout,
+        turn_retries=turn_retries,
     )
     voice = None
     async with phoenix:
@@ -87,6 +96,38 @@ async def entrypoint(ctx: JobContext) -> None:
             if voice is not None:
                 await voice.aclose()
             ctx.shutdown()
+
+
+def phoenix_turn_settings(environ) -> tuple[float, int]:
+    """Transcript POST timeout (seconds) and retry count, from the environment.
+
+    `PHOENIX_TURN_TIMEOUT_S` must cover the server budget (see
+    `transcripts.DEFAULT_TURN_TIMEOUT_S`); `PHOENIX_TURN_RETRIES` is a non-negative
+    integer. A missing or invalid value keeps the default; only the variable name
+    is logged.
+    """
+    timeout = DEFAULT_TURN_TIMEOUT_S
+    raw_timeout = environ.get("PHOENIX_TURN_TIMEOUT_S", "").strip()
+    if raw_timeout:
+        try:
+            parsed = float(raw_timeout)
+        except ValueError:
+            parsed = math.nan
+        if math.isfinite(parsed) and parsed > 0:
+            timeout = parsed
+        else:
+            logger.warning("invalid PHOENIX_TURN_TIMEOUT_S; using the default")
+
+    retries = DEFAULT_TURN_RETRIES
+    raw_retries = environ.get("PHOENIX_TURN_RETRIES")
+    if raw_retries is not None:
+        stripped = raw_retries.strip()
+        # isascii(): str.isdigit() also accepts digits such as "²" that int() rejects.
+        if stripped.isascii() and stripped.isdigit():
+            retries = int(stripped)
+        else:
+            logger.warning("invalid PHOENIX_TURN_RETRIES; using the default")
+    return timeout, retries
 
 
 def _required_setting(name: str) -> str:
@@ -148,6 +189,9 @@ class PatientVoice:
             )
 
     async def on_reply(self, reply: VoiceTurnReply) -> None:
+        if reply.is_kept_receipt():
+            await self._acknowledge(reply)
+            return
         try:
             await publish(
                 self.room,
@@ -166,6 +210,26 @@ class PatientVoice:
         task = asyncio.create_task(self._speak(reply))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def _acknowledge(self, reply: VoiceTurnReply) -> None:
+        """A refused reply kept the learner turn (#269): the examiner acknowledges it.
+
+        Nothing is spoken and it is not a failure. A room publish error is reported
+        content-free and never stops the job.
+        """
+        try:
+            await publish(
+                self.room,
+                {
+                    "session_id": self.session_id,
+                    "turn_id": reply.turn_id,
+                    "generation_id": reply.generation_id,
+                    "role": "examiner",
+                    "status": "kept",
+                },
+            )
+        except Exception:
+            await self._publish_failure(reply, "text_delivery_failed")
 
     def cancel_turn(self, turn_id: int) -> None:
         """Stop the playback bound to a cancelled or stale turn (or an earlier one)."""
@@ -319,6 +383,7 @@ async def transcribe(
             on_reply=on_reply,
             on_close=close_resources,
             cleanup_timeout=cleanup_timeout,
+            eof_timeout=phoenix.eof_timeout,
             on_cancel=voice.cancel_turn if voice is not None else None,
         )
     finally:

@@ -24,7 +24,7 @@ from test_transcripts import (
     event,
 )
 from transcripts import TurnTracker, VoiceTurnReply
-from worker import PatientVoice, build_tts, transcribe
+from worker import PatientVoice, build_tts, phoenix_turn_settings, transcribe
 
 REPLY_TEXT = "Resposta clinica confidencial"
 PROVIDER_SECRET = "sk-provider-secret"
@@ -386,6 +386,35 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
 
+    async def test_kept_turn_publishes_an_examiner_acknowledgement_and_speaks_nothing(
+        self,
+    ):
+        # Issue #269: a refused reply kept the learner turn. It is an examiner
+        # acknowledgement on the data channel, never a failure or patient speech.
+        self.client.replies[1] = VoiceTurnReply(turn_id=1, status="kept", generation_id=1)
+        task = self.connect()
+        with self.assertNoLogs("voice-worker", level="WARNING"):
+            await self.say("abdome flácido")
+            await self.say("onde dói")
+            self.tts.streams[0].queue.put_nowait(chunk("a2"))
+            await settle()
+            await self.disconnect(task)
+
+        self.assertEqual(
+            self.room.patient_events()[0],
+            {
+                "session_id": "s1",
+                "turn_id": 1,
+                "generation_id": 1,
+                "role": "examiner",
+                "status": "kept",
+            },
+        )
+        self.assertEqual(self.room.patient_events()[1]["role"], "patient")
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 2"])
+        # The kept receipt settles the turn: cleanup has nothing to fence.
+        self.assertEqual(self.client.cancel_calls, [])
+
     async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
         self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
         task = self.connect()
@@ -490,3 +519,57 @@ class BuildTTSTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoenixTurnSettingsTest(unittest.TestCase):
+    def test_defaults_cover_the_server_budget(self):
+        import transcripts
+
+        self.assertEqual(
+            phoenix_turn_settings({}),
+            (transcripts.DEFAULT_TURN_TIMEOUT_S, transcripts.DEFAULT_TURN_RETRIES),
+        )
+
+    def test_reads_timeout_and_retries_from_the_environment(self):
+        env = {"PHOENIX_TURN_TIMEOUT_S": " 20.5 ", "PHOENIX_TURN_RETRIES": "0"}
+        self.assertEqual(phoenix_turn_settings(env), (20.5, 0))
+
+    def test_invalid_values_fall_back_to_the_defaults(self):
+        import transcripts
+
+        for env in (
+            {"PHOENIX_TURN_TIMEOUT_S": "abc", "PHOENIX_TURN_RETRIES": "-1"},
+            {"PHOENIX_TURN_TIMEOUT_S": "0", "PHOENIX_TURN_RETRIES": "1.5"},
+            {"PHOENIX_TURN_TIMEOUT_S": "nan", "PHOENIX_TURN_RETRIES": ""},
+            # Non-ASCII digits pass str.isdigit() but int() rejects them.
+            {"PHOENIX_TURN_TIMEOUT_S": "", "PHOENIX_TURN_RETRIES": "²"},
+        ):
+            with self.assertLogs("voice-worker", level="WARNING"):
+                self.assertEqual(
+                    phoenix_turn_settings(env),
+                    (
+                        transcripts.DEFAULT_TURN_TIMEOUT_S,
+                        transcripts.DEFAULT_TURN_RETRIES,
+                    ),
+                )
+
+
+class TranscribeEofBudgetTest(unittest.IsolatedAsyncioTestCase):
+    async def test_transcribe_waits_for_pending_turns_within_the_phoenix_budget(self):
+        client = ControllablePhoenixClient()
+        seen = {}
+
+        async def fake_process(*_args, **kwargs):
+            seen["eof_timeout"] = kwargs["eof_timeout"]
+
+        with patch.object(worker, "process_speech_stream", fake_process):
+            await transcribe(
+                MockRoom(),
+                learner=None,
+                context={"language": "pt-BR", "keyterms": []},
+                tracker=TurnTracker("s1", last_turn_id=0),
+                phoenix=client,
+                stt=MockSTT(MockStream(asyncio.Queue())),
+                audio=MockAudioStream(),
+            )
+        self.assertEqual(seen["eof_timeout"], client.eof_timeout)

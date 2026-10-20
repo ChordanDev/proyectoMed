@@ -7,6 +7,8 @@ defmodule BackendWeb.VoiceWorkerController do
     * `POST /api/internal/voice/sessions/:id/transcripts` — processes one final
       transcript as a learner turn via `Backend.Stations.process_voice_turn/3`,
       returning only verified `reply_text` with `turn_id` and `generation_id` on success.
+      A refused patient reply keeps the learner turn and answers `201` with
+      `status: "kept"` and no text (#269).
       Duplicate finals stay 200 and never replay text. Once the station time is
       over it answers `409` with `station_time_elapsed`: a new turn at or after
       the deadline, any turn on a session the timer completed, or a reply that
@@ -50,6 +52,12 @@ defmodule BackendWeb.VoiceWorkerController do
             generation_id: generation_id,
             reply_text: reply_text
           })
+
+        # A refused reply kept the learner turn (#269): no text to speak.
+        {:kept, %{turn_id: ^turn_id, generation_id: generation_id}} ->
+          conn
+          |> put_status(:created)
+          |> json(%{turn_id: turn_id, status: "kept", generation_id: generation_id})
       end
     else
       {:error, reason} -> send_error(conn, reason)

@@ -332,6 +332,16 @@ the SPA attaches the subscribed audio track.
 | `ELEVENLABS_API_KEY`  | yes      | ElevenLabs API key.                                                     |
 | `ELEVENLABS_VOICE_ID` | yes      | Voice used for the patient.                                             |
 | `ELEVENLABS_MODEL`    | no       | TTS model. Default `eleven_flash_v2_5` (low latency, supports pt-BR).   |
+| `PHOENIX_TURN_TIMEOUT_S` | no    | Seconds each transcript POST waits for Phoenix. Default `35` (see below). |
+| `PHOENIX_TURN_RETRIES`   | no    | Retries of a transcript POST after a timeout or disconnect. Default `1`.  |
+
+Phoenix answers a transcript only after the patient reply is generated and verified,
+so the worker waits for the server budget (#269): the patient generation (Phoenix sets
+no timeout of its own, so Req's 15 s receive timeout applies), the Jev verification
+budget (`jev_decision_default_deadline_ms`, 3 s) and one regeneration after a refusal
+(another 15 s), plus 2 s headroom: 15 + 3 + 15 + 2 = 35 s. Context and cancel calls
+keep a 5 s timeout. A retry repeats the same `turn_id`, so it never adds a turn. An
+invalid value keeps the default.
 
 If the key or the voice id is missing the worker keeps transcribing and delivers every
 reply as text followed by a `synthesis_failed` event.
@@ -342,11 +352,16 @@ reply as text followed by a `synthesis_failed` event.
 | --------------------- | --------------------------------------------------------------------------------------- |
 | Learner transcript    | `{"session_id", "turn_id", "final", "text"}`                                            |
 | Patient text          | `{"session_id", "turn_id", "generation_id", "role": "patient", "text"}`                 |
+| Kept learner turn     | `{"session_id", "turn_id", "generation_id", "role": "examiner", "status": "kept"}`      |
 | Speech failure        | `{"session_id", "turn_id", "generation_id", "failure": "synthesis_failed"}`             |
 | Text delivery failure | `{"session_id", "turn_id", "generation_id", "failure": "text_delivery_failed"}`         |
 | Worker stopped        | `{"session_id", "error": "<kind>"}`                                                     |
 
-`failure` is not fatal: the worker keeps serving the session. `synthesis_failed` covers
+A kept learner turn is the voice counterpart of the text path's examiner
+acknowledgement (#235, #269): Jev refused the patient reply (also when the single
+regeneration ran out of time), Phoenix kept the learner turn without a reply (the
+transcripts endpoint answers `201` with `status: "kept"` and no text), and nothing is
+spoken. It is not a failure. `failure` is not fatal: the worker keeps serving the session. `synthesis_failed` covers
 any provider error, provider disconnect or track publication error, and carries no
 provider message; the patient text for that generation was already delivered.
 `text_delivery_failed` means the room rejected the patient text event: the reply is
@@ -381,7 +396,12 @@ default `Backend.Stations.JevDecision.DisabledAdapter` the turn fails closed wit
 with `JEV_E2E_APPROVING_ADAPTER=true` (see
 ["E2E-only Jev adapter"](#e2e-only-jev-adapter)). Jev is the single gate on both
 channels: the voice path speaks the verified reply exactly as the text path would show
-it, and a reply that is denied or refused fails the turn with nothing spoken.
+it. A reply Jev refuses keeps the learner turn with nothing spoken (a kept learner turn,
+above); a reply that is denied or cannot be verified fails the turn with nothing
+spoken. The text the worker speaks (`reply_text`) never contains the patient's stage
+directions such as `*(curvado…)*`: Phoenix removes them with the same rule as
+"Ouvir resposta" (#257), while the session transcript keeps the full reply. A reply
+made only of stage directions has nothing to speak and keeps the learner turn.
 
 **Manual test** (continues the Deepgram checklist above, same backend):
 
@@ -406,6 +426,10 @@ it, and a reply that is denied or refused fails the turn with nothing spoken.
    worker logs `speech stopped for session <id> turn <n> generation <n>:
    synthesis_failed` and keeps running; the next learner turn is still committed.
 6. Scan the worker output: no reply text, API key or provider message appears.
+7. Say a physical exam finding (e.g. "Abdome flácido, doloroso à palpação na fossa
+   ilíaca direita"): Jev refuses a patient reply to it, the room receives a kept
+   learner turn event, nothing is spoken and the worker keeps running. Ask about the
+   pain: the patient never reads a stage direction aloud.
 
 ---
 
