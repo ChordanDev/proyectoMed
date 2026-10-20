@@ -41,7 +41,7 @@ timeout lost all of them. The result was also recomputed on every fetch.
 - [x] T3 - Educational result graded once per finished session and served from
   the session afterwards (assessment cached in `Conversation`, per-session
   serialization of concurrent first fetches). Route: inline.
-- [ ] T4 - Live check on acute-appendicitis with a transcript covering items
+- [x] T4 - Live check on acute-appendicitis with a transcript covering items
   1, 2 and 4; record per-criterion latencies and statuses. Route: inline
   (scratch script, no repository change).
 
@@ -63,7 +63,7 @@ timeout lost all of them. The result was also recomputed on every fetch.
   Budget: resolver 30 s + feedback 45 s + 15 s margin <= web 95 s; runtime
   caps resolver at 40 s and feedback at 80 s minus the resolver deadline.
 
-- T3: RED 2 failing (fetch twice assessed twice; concurrent first fetches
+- T3 done in `c03223c`. RED 2 failing (fetch twice assessed twice; concurrent first fetches
   assessed three times). GREEN: `educational_result_test.exs` 12 passed,
   backend `mix test` 1672 passed. The assessment (the grade) is kept in the
   session (`Conversation.put_rubric_assessment/2`, never replaced); first
@@ -71,6 +71,15 @@ timeout lost all of them. The result was also recomputed on every fetch.
   attempt is not kept. Learner feedback keeps its own fingerprinted cache,
   so a feedback fallback still retries on the next fetch without regrading.
   The `Conversation` unit test was added after the implementation (no RED).
+
+- T4 live check (2026-10-20, `MIX_ENV=dev mix run --no-start`, scratch
+  script; Jev = TypeSafe, resolver = Anthropic `claude-opus-5-5`, deadline
+  30 000 ms). Transcript covering items 1, 2 and 4: Jev left two criteria
+  with undecided actions; resolver item-01 answered in 2459 ms (1 decision
+  for 1 undecided), item-02 in 2116 ms (1 for 1); all 2 answered in 2459 ms,
+  no timeout. Whole assessment 5321 ms. item-01, item-02 and item-04 are
+  `assessed adequado` with every authored action performed; the uncovered
+  items are `assessed inadequado`.
 
 ## Follow-ups (outside allowed edit surfaces)
 
@@ -81,4 +90,4 @@ timeout lost all of them. The result was also recomputed on every fetch.
 
 ## Next step
 
-T4 live check, then local CI and PR.
+Local CI, push and PR to `feat/237-clinician-demo-readiness`.
