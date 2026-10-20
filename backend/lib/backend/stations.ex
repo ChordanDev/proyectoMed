@@ -17,6 +17,9 @@ defmodule Backend.Stations do
   alias Backend.Stations.Evaluator
   alias Backend.Stations.Impressos
   alias Backend.Stations.JevDecision
+  alias Backend.Stations.LiveKit
+  alias Backend.Stations.LiveKit.RoomService
+  alias Backend.Stations.MediaSession
   alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
@@ -122,12 +125,13 @@ defmodule Backend.Stations do
     case Conversation.fetch(session_id) do
       {:ok, %{status: :active} = session} ->
         if timer_finish_allowed?(session) do
-          Conversation.complete(session_id, :timer)
+          complete_and_cleanup_voice_room(session_id, :timer)
         else
           {:error, :deadline_not_reached}
         end
 
       {:ok, %{status: :completed} = session} ->
+        cleanup_voice_room(session_id)
         {:ok, session}
 
       {:error, reason} ->
@@ -136,7 +140,18 @@ defmodule Backend.Stations do
   end
 
   def complete_session(session_id, reason) do
-    Conversation.complete(session_id, reason)
+    complete_and_cleanup_voice_room(session_id, reason)
+  end
+
+  defp complete_and_cleanup_voice_room(session_id, reason) do
+    case Conversation.complete(session_id, reason) do
+      {:ok, session} ->
+        cleanup_voice_room(session_id)
+        {:ok, session}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -484,7 +499,9 @@ defmodule Backend.Stations do
   """
   @spec discard_session(String.t()) :: :ok
   def discard_session(session_id) do
-    Conversation.discard(session_id)
+    :ok = Conversation.discard(session_id)
+    cleanup_voice_room(session_id)
+    :ok
   end
 
   @doc """
@@ -576,14 +593,217 @@ defmodule Backend.Stations do
   end
 
   @doc """
-  Creates or joins a real-time conversational voice session via LiveKit/WebRTC.
+  Issues a short-lived, session-scoped LiveKit access token so the learner's
+  browser can join the voice room over WebRTC.
 
-  Stable extension point for Ticket 13 / ADR-009 (#116, #117).
+  Requires an active, unexpired session with audio consent and a configured
+  LiveKit deployment; enforces a per-session issuance rate limit.
+
+  Ticket 13 / ADR-009 (#116, #117).
   """
   @spec create_voice_session(String.t(), keyword()) ::
-          {:ok, map()} | {:error, :not_implemented | term()}
-  def create_voice_session(_session_id, _opts \\ []) do
-    {:error, :not_implemented}
+          {:ok,
+           %{
+             url: String.t(),
+             token: String.t(),
+             room: String.t(),
+             identity: String.t(),
+             expires_at: DateTime.t()
+           }}
+          | {:error,
+             :not_found | :expired | :completed | :no_consent | :voice_unavailable | :rate_limited}
+  def create_voice_session(session_id, _opts \\ []) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(session),
+         :ok <- ensure_audio_consent(session),
+         {:ok, config} <- LiveKit.config(),
+         :ok <- MediaSession.check_rate_limit(session_id) do
+      {token, expires_at} = LiveKit.learner_token(config, session_id, session.expires_at)
+
+      {:ok,
+       %{
+         url: config.url,
+         token: token,
+         room: LiveKit.room_name(session_id),
+         identity: LiveKit.identity(session_id),
+         expires_at: expires_at
+       }}
+    else
+      {:error, :not_configured} -> {:error, :voice_unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Context the voice worker needs before streaming a session's audio to the
+  speech-to-text provider (#118). Only consented, active sessions qualify.
+  Keyterms come from the station package's optional `stt_keyterms`, so they
+  stay server-side.
+  `last_turn_id` is the committed learner cursor. `turn_id_floor` also covers
+  cancelled turn IDs; a fresh worker must allocate strictly above this floor.
+  """
+  @spec voice_worker_context(String.t()) ::
+          {:ok,
+           %{
+             session_id: String.t(),
+             language: String.t(),
+             keyterms: [String.t()],
+             last_turn_id: non_neg_integer(),
+             turn_id_floor: non_neg_integer()
+           }}
+          | {:error, :not_found | :expired | :completed | :no_consent}
+  def voice_worker_context(session_id) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(session),
+         :ok <- ensure_audio_consent(session) do
+      package = get_active_package()
+
+      {:ok,
+       %{
+         session_id: session_id,
+         language: package["language"] || "pt-BR",
+         keyterms: Enum.filter(List.wrap(package["stt_keyterms"]), &is_binary/1),
+         last_turn_id: Map.get(session, :last_voice_turn_id, 0),
+         turn_id_floor:
+           max(
+             Map.get(session, :last_voice_turn_id, 0),
+             Map.get(session, :cancelled_voice_turn_id, 0)
+           )
+       }}
+    end
+  end
+
+  @doc """
+  Commits one final learner transcript from the voice worker as a learner
+  turn, at most once per monotonic `turn_id` (#118). Generating the patient
+  reply is #119.
+
+  Follows the station deadline like `process_voice_turn/3`: a new turn at or
+  after the deadline, or any turn on a session the timer completed, returns
+  `{:error, :station_time_elapsed}` and appends nothing.
+  """
+  @spec commit_voice_transcript(String.t(), pos_integer(), String.t()) ::
+          {:ok, :committed | :duplicate}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :no_consent
+             | :stale_generation
+             | :station_time_elapsed}
+  def commit_voice_transcript(session_id, turn_id, text) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_voice_turn_open(session),
+         :ok <- ensure_audio_consent(session) do
+      Conversation.commit_voice_turn(session_id, turn_id, text)
+    end
+  end
+
+  @doc """
+  Processes a real-time learner voice turn (#119).
+
+  Encapsulates:
+    1. Validating active session state and audio consent.
+    2. Atomically committing the learner turn via `Conversation.begin_voice_turn/3`
+       which assigns a session-scoped monotonic generation identity and enforces
+       the station deadline.
+       Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn,
+       except retries of the latest failed generation preserve its technical failure.
+    3. Formatting role-labelled context from the active package and session messages.
+    4. Generating the next bounded patient reply via `StationAI.next_reply/2`.
+    5. Passing through the `verify_patient_reply/3` seam, the single authority on
+       what the patient may say on both channels. The verified reply is used as
+       returned, exactly as the text path does; there is no voice-only filter.
+    6. Failing closed: a reply that is denied, refused, or left without usable
+       text fails the generation as `:station_ai_unavailable` and commits no
+       patient content.
+    7. Atomically resolving only matching generation via `Conversation.resolve_patient_reply/3`.
+    8. Returning `{:ok, %{reply_text: text, turn_id: turn_id, generation_id: generation_id, used_facts: facts}}`
+       solely on success. Stale, cancelled, completed, or expired generations never return text.
+
+  The station deadline is enforced in `Backend.Stations.Conversation`, not here.
+  A new turn at or after the deadline, or any turn on a session the timer
+  completed, returns `{:error, :station_time_elapsed}` and appends nothing; a
+  session completed for any other reason still returns `{:error, :completed}`.
+  A generation in flight when the deadline fires keeps the grace window: a reply
+  resolved inside it is a normal success on a session that is then completed
+  with reason `:timer`, and one resolved after it returns
+  `{:error, :station_time_elapsed}` without being recorded as a failed generation.
+  """
+  @spec process_voice_turn(String.t(), pos_integer(), String.t()) ::
+          {:ok,
+           %{
+             reply_text: String.t(),
+             turn_id: pos_integer(),
+             generation_id: pos_integer(),
+             used_facts: StationAI.revealable_facts()
+           }}
+          | {:ok, :duplicate}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :no_consent
+             | :stale_generation
+             | :invalid_transcript
+             | :station_time_elapsed
+             | :station_ai_unavailable
+             | term()}
+  def process_voice_turn(session_id, turn_id, text)
+      when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
+    case String.trim(text) do
+      "" ->
+        {:error, :invalid_transcript}
+
+      trimmed_text ->
+        with {:ok, session} <- Conversation.fetch(session_id),
+             :ok <- ensure_voice_turn_open(session),
+             :ok <- ensure_audio_consent(session),
+             {:ok, :committed, generation_id} <-
+               Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
+          process_voice_reply(session_id, turn_id, generation_id)
+        else
+          {:ok, :duplicate} ->
+            {:ok, :duplicate}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
+
+  @doc """
+  Explicitly cancels a pending voice turn generation (#119).
+
+  Supports:
+    * `cancel_voice_turn(session_id)` — cancels active generation unconditionally.
+    * `cancel_voice_turn(session_id, generation_id)` when integer — cancels if generation matches (keeps generation cancel behavior for existing tests).
+    * `cancel_voice_turn(session_id, criteria)` when keyword list or map — cancels by expected `turn_id` and/or `generation_id`, e.g. `[turn_id: 1]`, `%{turn_id: 1}`, `%{expected_turn_id: 1}`.
+
+  Turn-only criteria atomically fence future admission through the monotonic turn
+  ID, including delayed POSTs and retries. `:stale_generation` still means there
+  was no matching active generation, but the admission fence is established.
+  Newer independent active turns are untouched. Generation-qualified criteria
+  install a fence only on a match; integer generation-only behavior is unchanged.
+  """
+  @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_voice_turn(session_id, criteria \\ nil)
+
+  def cancel_voice_turn(session_id, nil) do
+    Conversation.cancel_generation(session_id, nil)
+  end
+
+  def cancel_voice_turn(session_id, generation_id)
+      when is_integer(generation_id) and generation_id > 0 do
+    Conversation.cancel_generation(session_id, generation_id)
+  end
+
+  def cancel_voice_turn(session_id, criteria) when is_list(criteria) or is_map(criteria) do
+    Conversation.cancel_voice_turn(session_id, criteria)
   end
 
   @doc """
@@ -632,6 +852,86 @@ defmodule Backend.Stations do
   # ============================================================================
   # Internal Helpers
   # ============================================================================
+
+  # Best-effort LiveKit room cleanup: a RoomService failure never fails
+  # completion/discard. Only the session id and an error atom are noted,
+  # never the token, audio, or transcript.
+  defp cleanup_voice_room(session_id) do
+    if LiveKit.configured?() do
+      room = LiveKit.room_name(session_id)
+
+      case RoomService.delete_room(room) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "LiveKit room cleanup failed for session #{session_id}: #{inspect(reason)}"
+          )
+      end
+
+      MediaSession.clear_rate_limit(session_id)
+    end
+
+    :ok
+  end
+
+  defp ensure_active(%{status: :active}), do: :ok
+  defp ensure_active(%{status: :completed}), do: {:error, :completed}
+
+  # Voice turns name the timer as the reason a session is closed, as the
+  # conversation does. The deadline of a still-active session is checked there.
+  defp ensure_voice_turn_open(%{status: :completed, completion_reason: :timer}),
+    do: {:error, :station_time_elapsed}
+
+  defp ensure_voice_turn_open(session), do: ensure_active(session)
+
+  defp ensure_audio_consent(%{audio_consent: true}), do: :ok
+  defp ensure_audio_consent(_session), do: {:error, :no_consent}
+
+  defp process_voice_reply(session_id, turn_id, generation_id) do
+    package = get_active_package()
+
+    with {:ok, current_session} <- Conversation.fetch(session_id),
+         :ok <- ensure_voice_turn_open(current_session),
+         context = format_context(current_session, package),
+         {:ok, ai_reply} <- generate_patient_reply(package, context),
+         verify_opts = build_verify_opts(package, current_session, context, %{}),
+         {:ok, verified_reply} <- verify_patient_reply(package, ai_reply, verify_opts),
+         verified_text = extract_reply_text(verified_reply),
+         {:ok, _session} <-
+           Conversation.resolve_patient_reply(session_id, generation_id, verified_text) do
+      {:ok,
+       %{
+         reply_text: verified_text,
+         turn_id: turn_id,
+         generation_id: generation_id,
+         used_facts: extract_used_facts(verified_reply)
+       }}
+    else
+      {:error, :stale_generation} ->
+        {:error, :stale_generation}
+
+      # The deadline cut this generation off: an end of session, not a failure.
+      {:error, :station_time_elapsed} ->
+        {:error, :station_time_elapsed}
+
+      {:error, :completed} ->
+        {:error, :completed}
+
+      {:error, :expired} ->
+        {:error, :expired}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _reason} ->
+        case Conversation.fail_generation(session_id, generation_id, :station_ai_unavailable) do
+          {:ok, :failed} -> {:error, :station_ai_unavailable}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
 
   defp build_verify_opts(package, session, context, params) do
     deadline_at = resolve_verify_deadline(params)

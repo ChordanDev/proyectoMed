@@ -132,5 +132,6 @@
       ],
       "content": "### LAUDO DO ELETROCARDIOGRAMA DE 12 DERIVAÇÕES:\n- Ritmo: Sinusal, regular.\n- Frequência Cardíaca: 85 bpm.\n- Intervalo PR: 0,16 s (normal).\n- Complexo QRS: 0,08 s (normal).\n- Segmento ST: Supradesnivelamento convexo superior de 2,5 mm nas derivações DII, DIII e aVF, com infradesnivelamento recíproco em DI e aVL.\n- Conclusão: Infarto agudo do miocárdio com supradesnivelamento do segmento ST (IAMCSST) de parede inferior."
     }
-  ]
+  ],
+  "stt_keyterms": ["dor torácica", "precordial", "irradiação", "dispneia", "sudorese", "infarto", "angina", "eletrocardiograma"]
 }

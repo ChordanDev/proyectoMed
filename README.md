@@ -138,6 +138,277 @@ curl -s "$BASE/sessions/$SESSION_ID/impressos" | jq
 
 ---
 
+## Voice session (LiveKit) — manual test
+
+The real-time voice plane (#117) is not covered by the automated suites, which
+run without production credentials. Verify it manually against a local
+`livekit-server`.
+
+**Install:**
+
+```sh
+brew install livekit livekit-cli
+```
+
+**Run a dev LiveKit server** (uses the well-known dev keys `devkey` / `secret`,
+listening on `ws://127.0.0.1:7880`):
+
+```sh
+livekit-server --dev
+```
+
+**Start the backend** with LiveKit configured, then the web SPA as usual:
+
+```sh
+cd backend && LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey \
+  LIVEKIT_API_SECRET=secret mix phx.server
+
+npm --prefix web run dev
+```
+
+**Checklist:**
+
+1. Open the SPA, accept the audio consent checkbox, press **Conectar voz**.
+   The browser prompts for microphone permission; the panel status moves to
+   "Voz conectada" once granted.
+2. From another terminal, confirm the room and the learner's published track
+   (`lk room list` shows the room name, which carries the session id):
+
+   ```sh
+   lk room list --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ROOM=station-session-xxxx   # paste the Name column from the table above
+   lk room participants list "$ROOM" \
+     --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ```
+
+   One participant (`learner-` followed by the session id) should show one
+   published audio track.
+3. Simulate the patient's audio track and confirm you can hear it in the
+   browser:
+
+   ```sh
+   lk load-test --room "$ROOM" --audio-publishers 1 \
+     --identity-prefix patient-test \
+     --url ws://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ```
+
+   (`lk room join --publish-demo` only publishes a demo *video* track; use
+   `load-test --audio-publishers` for an audio track, or `room join --publish
+   <file>.ogg` to publish a specific pre-encoded audio file.)
+4. Press **Finalizar estação** and confirm the panel disconnects and the room
+   disappears from `lk room list` (Phoenix deletes it on completion). Closing
+   the tab also leaves the room; the periodic sweep (60 s) deletes rooms whose
+   session expired or no longer exists.
+5. Without `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` set on the
+   backend, confirm the panel shows "Falha na conexão de voz" /
+   `voice_unavailable`; session start and finish keep working.
+6. Press **Conectar voz** repeatedly in a short burst to see the `429`
+   rate-limit error surface in the panel.
+
+**No secret reaches the browser:** open DevTools → Network while connecting
+and confirm the only LiveKit-related payload is the short-lived
+`POST .../voice` response (`url`, `token`, `room`, `identity`, `expires_at`);
+`LIVEKIT_API_SECRET` never appears client-side.
+
+## Voice transcription (Deepgram worker) — manual test
+
+`voice-worker/` is a Python [LiveKit Agents](https://docs.livekit.io/agents/) worker
+(#118). It joins every `station-session-*` room, asks Phoenix whether the session is
+active and consented, streams only the learner microphone to Deepgram (`nova-3`,
+`pt-BR`, keyterms from the station package `stt_keyterms`), publishes interim
+transcripts to the room (data topic `transcript`) and POSTs each final utterance to
+Phoenix with a monotonic `turn_id`. Phoenix commits each turn at most once. The web
+does not render transcripts yet (#121). The patient reply Phoenix returns for each turn
+is spoken by the same worker; see
+["Patient speech (ElevenLabs)"](#patient-speech-elevenlabs--manual-test) below.
+
+**Prerequisites:** the LiveKit setup from the previous section, `brew install uv`, and
+a Deepgram API key.
+
+**Start the backend** with a worker secret, as an IEx session so you can read the
+committed turns:
+
+```sh
+cd backend && VOICE_WORKER_SECRET=dev-worker-secret LIVEKIT_URL=ws://127.0.0.1:7880 \
+  LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret iex -S mix phx.server
+```
+
+**Start the worker:**
+
+```sh
+cd voice-worker && uv sync
+LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
+  DEEPGRAM_API_KEY=<your-key> PHOENIX_URL=http://localhost:4000 \
+  VOICE_WORKER_SECRET=dev-worker-secret uv run python worker.py dev
+```
+
+The worker log shows it registered with the LiveKit server.
+
+**Checklist:**
+
+1. Open the SPA, accept audio consent, press **Conectar voz**. Then:
+
+   ```sh
+   lk room list --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ROOM=station-session-xxxx; SID=${ROOM#station-session-}
+   lk room participants list "$ROOM" \
+     --url http://127.0.0.1:7880 --api-key devkey --api-secret secret
+   ```
+
+   Two participants: `learner-$SID` and `voice-worker`.
+2. Say a short sentence in Portuguese (e.g. "Onde dói? Desde quando começou a dor
+   torácica?") and pause. Then:
+
+   ```sh
+   curl -s -H "authorization: Bearer dev-worker-secret" \
+     localhost:4000/api/internal/voice/sessions/$SID
+   ```
+
+   `last_turn_id` is `1` and `keyterms` lists the station terms. Speak again: it
+   becomes `2`. One utterance, even a long one, adds exactly one turn.
+3. In the IEx shell, read the committed text:
+
+   ```elixir
+   {:ok, s} = Backend.Stations.get_session("<SID>"); s.messages
+   ```
+
+   Each turn is a `%{role: :learner, modality: :voice, text: ...}` in order.
+4. Duplicates are ignored. Replay the last turn by hand:
+
+   ```sh
+   curl -s -X POST -H "authorization: Bearer dev-worker-secret" \
+     -H "content-type: application/json" -d '{"turn_id": 1, "text": "repetido"}' \
+     localhost:4000/api/internal/voice/sessions/$SID/transcripts
+   ```
+
+   It answers `{"status":"duplicate"}` and `s.messages` does not change.
+5. Without the header (or with a wrong secret) the same `curl` answers `401`.
+6. Reconnect: press **Desconectar voz**, then **Conectar voz**, speak again. The next
+   turn continues the numbering (no turn is reused or duplicated).
+7. Restart the worker (Ctrl-C, start again) and reconnect voice: numbering still
+   continues from Phoenix's `last_turn_id`.
+8. Start the worker with `DEEPGRAM_API_KEY=wrong`, connect and speak: the worker logs
+   `voice worker stopped for session <id>: auth`, with no key, transcript or audio in
+   the log. The station keeps working through text.
+9. Press **Finalizar estação**: the room is deleted, the worker job ends, and a
+   `curl` to the context endpoint answers `422` (`session_completed`).
+
+   When the station time runs out instead, the transcripts endpoint answers `409`
+   (`station_time_elapsed`): for a new turn at or after the deadline, for any turn on
+   a session the timer completed, and for a reply that missed the grace window left
+   to a turn already in flight at the deadline. It is a non-retryable end of session,
+   so the worker must stop instead of retrying. `409` (`stale_generation`) is
+   different: it drops one superseded or cancelled turn and the session keeps going.
+10. The worker never logs transcript text: scan its output from steps 2–7 and confirm
+    only lifecycle lines and session ids appear.
+
+Worker unit tests (no credentials): `cd voice-worker && uv run python -m unittest`.
+
+## Patient speech (ElevenLabs) — manual test
+
+When Phoenix commits a learner turn it returns the approved patient reply to the worker
+(`reply_text` with its `generation_id`, #119). The worker (#120) does two things with
+it, in this order:
+
+1. Publishes the approved text to the room (data topic `transcript`), so the reply can
+   be read whatever happens to the audio.
+2. Sends that text, and nothing else, to ElevenLabs streaming TTS and publishes the
+   audio frame by frame on one patient audio track (`patient-voice`) of the
+   `voice-worker` participant.
+
+Playback is fenced by the turn's generation: a newer accepted turn, a barge-in on a
+pending turn, a stale result or the learner disconnecting stops the provider stream,
+clears the buffered audio and drops any frame that arrives late. Phoenix remains the
+only text authority; the worker never composes, edits or retries reply text. Learner
+speech over an answer that is already playing does not stop it by itself until the next
+reply is accepted; that barge-in detection belongs to #121. The web
+does not render these events yet (#121); the patient audio is already audible because
+the SPA attaches the subscribed audio track.
+
+**Worker environment** (never sent to the browser or published to the room):
+
+| Variable              | Required | Purpose                                                                 |
+| --------------------- | -------- | ----------------------------------------------------------------------- |
+| `ELEVENLABS_API_KEY`  | yes      | ElevenLabs API key.                                                     |
+| `ELEVENLABS_VOICE_ID` | yes      | Voice used for the patient.                                             |
+| `ELEVENLABS_MODEL`    | no       | TTS model. Default `eleven_flash_v2_5` (low latency, supports pt-BR).   |
+
+If the key or the voice id is missing the worker keeps transcribing and delivers every
+reply as text followed by a `synthesis_failed` event.
+
+**Room events** (all on data topic `transcript`, reliable, JSON):
+
+| Event                 | Shape                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| Learner transcript    | `{"session_id", "turn_id", "final", "text"}`                                            |
+| Patient text          | `{"session_id", "turn_id", "generation_id", "role": "patient", "text"}`                 |
+| Speech failure        | `{"session_id", "turn_id", "generation_id", "failure": "synthesis_failed"}`             |
+| Text delivery failure | `{"session_id", "turn_id", "generation_id", "failure": "text_delivery_failed"}`         |
+| Worker stopped        | `{"session_id", "error": "<kind>"}`                                                     |
+
+`failure` is not fatal: the worker keeps serving the session. `synthesis_failed` covers
+any provider error, provider disconnect or track publication error, and carries no
+provider message; the patient text for that generation was already delivered.
+`text_delivery_failed` means the room rejected the patient text event: the reply is
+still spoken, and Phoenix keeps the approved text in the session transcript. `error`
+still means the worker job stopped. Reply text is never logged; worker logs carry the session id, turn
+id, generation id and failure kind only.
+
+**Prerequisites** (on top of the Deepgram checklist above):
+
+- The backend needs `OPENAI_API_KEY`: Station AI generates the reply text, and without
+  it no turn gets a reply to speak.
+- `LIVEKIT_URL` must be `ws://127.0.0.1:7880` for the local `livekit-server --dev`, in
+  both the backend and the worker; the `.env.example` value is a cloud placeholder.
+- `ELEVENLABS_VOICE_ID` must be a voice the API key may use. On the free plan, library
+  voices answer `402 paid_plan_required`; use a default voice. Check a voice before
+  starting the worker (expects `http 200`):
+
+  ```sh
+  curl -s -o /dev/null -w 'http %{http_code}\n' -X POST \
+    "https://api.elevenlabs.io/v1/text-to-speech/$ELEVENLABS_VOICE_ID/stream?output_format=pcm_24000" \
+    -H "xi-api-key: $ELEVENLABS_API_KEY" -H "content-type: application/json" \
+    -d '{"text":"Olá, tudo bem?","model_id":"eleven_flash_v2_5"}'
+  ```
+
+- An API key restricted to the Text to Speech endpoint is enough.
+- Browser extensions or VPNs that block local WebRTC make **Conectar voz** fail before
+  the microphone prompt; use a browser profile without them.
+
+Every voice reply passes through Jev verification (#127) before it is admitted. With the
+default `Backend.Stations.JevDecision.DisabledAdapter` the turn fails closed with
+`station_ai_unavailable` and nothing is spoken, so for this manual test start Phoenix
+with `JEV_E2E_APPROVING_ADAPTER=true` (see
+["E2E-only Jev adapter"](#e2e-only-jev-adapter)). Jev is the single gate on both
+channels: the voice path speaks the verified reply exactly as the text path would show
+it, and a reply that is denied or refused fails the turn with nothing spoken.
+
+**Manual test** (continues the Deepgram checklist above, same backend):
+
+1. Start the worker with the extra variables:
+
+   ```sh
+   LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
+     DEEPGRAM_API_KEY=<your-key> ELEVENLABS_API_KEY=<your-key> \
+     ELEVENLABS_VOICE_ID=<voice-id> PHOENIX_URL=http://localhost:4000 \
+     VOICE_WORKER_SECRET=dev-worker-secret uv run python worker.py dev
+   ```
+
+2. Connect voice in the SPA and ask a question the station can answer (e.g. "Onde
+   dói?"). The patient answers aloud in Portuguese shortly after you stop speaking.
+   `lk room participants list "$ROOM" ...` shows one audio track published by
+   `voice-worker`.
+3. Ask a second question while the first answer is still playing: when the new reply
+   is ready the old audio stops and only the new answer is heard.
+4. Press **Desconectar voz** mid-answer, then **Conectar voz**: the interrupted answer
+   does not resume and the next question is answered normally.
+5. Restart the worker with `ELEVENLABS_API_KEY=wrong` and ask a question: no audio, the
+   worker logs `speech stopped for session <id> turn <n> generation <n>:
+   synthesis_failed` and keeps running; the next learner turn is still committed.
+6. Scan the worker output: no reply text, API key or provider message appears.
+
+---
+
 ## Test
 
 The standard root command runs three explicit phases in order: web unit tests,
@@ -392,11 +663,21 @@ bash tests/scripts/test_red.sh
 
 ### Audio / voice input
 
-The web SPA accepts voice input through the browser Web Audio API /
-`MediaRecorder` or Web Speech API (`webkitSpeechRecognition`). When voice is
-unavailable (permissions denied, unsupported browser), the SPA falls back to
-text-only input. `NoticeScreen` requires explicit audio consent whenever voice
-support is enabled; callers can pass `voiceSupport={false}` for text-only mode.
+Voice runs over a LiveKit WebRTC room (#117): the browser publishes one
+microphone track and subscribes to one patient audio track through
+`livekit-client`, joined with a short-lived, session-scoped token minted by
+`Backend.Stations` (`POST /api/stations/active/sessions/:id/voice`). LiveKit
+carries media only; Phoenix stays the authority for session state and deletes
+the room on completion, expiry, or learner exit. When LiveKit is not
+configured on the backend, or the microphone permission is denied, the panel
+reports the failure and the text path keeps working unaffected.
+The `voice-worker/` Python process transcribes the learner microphone through
+Deepgram and commits final utterances to Phoenix (#118), then speaks each reply
+Phoenix approves through ElevenLabs on the patient audio track (#120).
+`NoticeScreen` requires explicit audio consent whenever voice support is
+enabled; callers can pass `voiceSupport={false}` for text-only mode. See
+["Voice session (LiveKit) — manual test"](#voice-session-livekit--manual-test)
+above for how to exercise it locally.
 
 ### Other known limitations
 
