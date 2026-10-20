@@ -48,6 +48,10 @@
 		{
 			"Name": "MetaHumanCoreTech",
 			"Enabled": true
+		},
+		{
+			"Name": "MetaHumanCharacter",
+			"Enabled": true
 		}
 	]
 }

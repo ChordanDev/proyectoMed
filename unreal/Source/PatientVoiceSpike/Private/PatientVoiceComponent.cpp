@@ -7,6 +7,8 @@
 #include "HAL/IConsoleManager.h"
 #include "ILiveLinkClient.h"
 #include "LiveKitPatientStream.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "PatientMouthSolver.h"
 #include "PatientVoiceLiveLinkSource.h"
 #include "PatientVoiceSpikeLog.h"
@@ -54,10 +56,19 @@ void UPatientVoiceComponent::Connect()
 	Disconnect();
 
 	const FString Url = CVarUrl.GetValueOnGameThread().IsEmpty() ? ServerUrl : CVarUrl.GetValueOnGameThread();
-	const FString RoomToken = CVarToken.GetValueOnGameThread().IsEmpty() ? Token : CVarToken.GetValueOnGameThread();
+	FString RoomToken = CVarToken.GetValueOnGameThread().IsEmpty() ? Token : CVarToken.GetValueOnGameThread();
 	if (RoomToken.IsEmpty())
 	{
-		SetStatus(TEXT("No token. Set patientvoice.Token in the console, then call Connect."));
+		// Written by scripts/spike-189/*.sh; Saved/ is git-ignored, so no token lands in a level.
+		const FString TokenFile = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("PatientVoiceSpike"), TEXT("token.txt"));
+		if (FFileHelper::LoadFileToString(RoomToken, *TokenFile))
+		{
+			RoomToken.TrimStartAndEndInline();
+		}
+	}
+	if (RoomToken.IsEmpty())
+	{
+		SetStatus(TEXT("No token. Run a scripts/spike-189 script or set patientvoice.Token, then call Connect."));
 		return;
 	}
 

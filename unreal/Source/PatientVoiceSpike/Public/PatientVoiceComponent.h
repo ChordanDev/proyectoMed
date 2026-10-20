@@ -25,7 +25,8 @@ enum class EPatientMouthDriver : uint8
  * subject. Point the MetaHuman's Live Link face subject at SubjectName.
  *
  * The URL and token can be overridden at runtime with the console variables
- * patientvoice.Url and patientvoice.Token, so no token needs to be saved in a level.
+ * patientvoice.Url and patientvoice.Token. Without either, the token is read from
+ * Saved/PatientVoiceSpike/token.txt, so no token needs to be saved in a level.
  */
 UCLASS(ClassGroup = (Spike), meta = (BlueprintSpawnableComponent))
 class PATIENTVOICESPIKE_API UPatientVoiceComponent : public UActorComponent

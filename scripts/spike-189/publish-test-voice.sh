@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Spike #189, stage 1: publishes a synthetic Brazilian Portuguese patient voice into
-# a local LiveKit dev server as participant "voice-worker", looping, and prints a
+# a local LiveKit dev server as participant "voice-worker", looping, and writes a
 # token for the Unreal client. Needs `livekit-server --dev` running, plus lk,
 # ffmpeg and the macOS `say` voice "Luciana" (pt_BR).
 set -euo pipefail
@@ -20,11 +20,13 @@ ffmpeg -loglevel error -f lavfi -t 1 -i anullsrc=r=48000:cl=mono -i "$WORK/voice
   -filter_complex "[0][1][0]concat=n=3:v=0:a=1,aresample=48000" -ac 1 \
   -c:a libopus -b:a 48k -frame_duration 20 -application voip "$WORK/patient-voice.ogg"
 
-echo "Unreal token (identity unreal-observer, room $ROOM):"
+# The Unreal component reads this file when no token is set; Saved/ is git-ignored.
+TOKEN_DIR="$(cd "$(dirname "$0")/../.." && pwd)/unreal/Saved/PatientVoiceSpike"
+mkdir -p "$TOKEN_DIR"
 lk token create --url "$URL" --api-key "$KEY" --api-secret "$SECRET" \
-  --join --room "$ROOM" --identity unreal-observer --valid-for 4h 2>/dev/null | grep -oE 'eyJ[A-Za-z0-9._-]+' | head -1
-echo
-echo "In the Unreal console: patientvoice.Token <token>"
+  --join --room "$ROOM" --identity unreal-observer --valid-for 4h 2>/dev/null \
+  | grep -oE 'eyJ[A-Za-z0-9._-]+' | head -1 > "$TOKEN_DIR/token.txt"
+echo "Unreal token (identity unreal-observer, room $ROOM) written to $TOKEN_DIR/token.txt"
 echo "Publishing $WORK/patient-voice.ogg as voice-worker in a loop (Ctrl+C to stop)..."
 
 while true; do
