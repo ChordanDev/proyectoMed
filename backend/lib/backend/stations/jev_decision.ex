@@ -435,36 +435,36 @@ defmodule Backend.Stations.JevDecision do
     request = Map.put_new(request, :deadline_ms, addressee_deadline_ms())
 
     with :ok <- validate_conversation(conversation),
-         {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
-      labelled =
-        conversation
-        |> Enum.with_index(1)
-        |> Enum.map(fn {item, idx} -> minimize_and_label_turn(item, idx) end)
-
-      latest = labelled |> Enum.filter(&(&1.role == :student)) |> List.last()
-      bounded = Enum.take(labelled, -(opts[:max_context_turns] || max_context_turns()))
-      max_chars = opts[:max_context_characters] || max_context_characters()
-
-      if is_nil(latest) or String.trim(latest.text) == "" do
-        {:error, {:invalid_request, :missing_learner_turn}}
-      else
-        texts = [latest.text | Enum.map(bounded, & &1.text)]
-
-        with :ok <- validate_context_size(texts, max_chars) do
-          {:ok,
-           %{
-             conversation: bounded,
-             latest_learner_turn: latest,
-             deadline_ms: deadline_ms,
-             deadline_at_monotonic_ms: deadline_at
-           }}
-        end
-      end
+         {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts),
+         labelled =
+           conversation
+           |> Enum.with_index(1)
+           |> Enum.map(fn {item, idx} -> minimize_and_label_turn(item, idx) end),
+         {:ok, latest} <- latest_learner_turn(labelled),
+         bounded = Enum.take(labelled, -(opts[:max_context_turns] || max_context_turns())),
+         max_chars = opts[:max_context_characters] || max_context_characters(),
+         :ok <- validate_context_size([latest.text | Enum.map(bounded, & &1.text)], max_chars) do
+      {:ok,
+       %{
+         conversation: bounded,
+         latest_learner_turn: latest,
+         deadline_ms: deadline_ms,
+         deadline_at_monotonic_ms: deadline_at
+       }}
     end
   end
 
   defp validate_addressee_request(_not_a_map, _opts),
     do: {:error, {:invalid_request, :expected_map}}
+
+  # The turn the addressee is decided for: the last learner turn, never blank.
+  defp latest_learner_turn(labelled_turns) do
+    latest = labelled_turns |> Enum.filter(&(&1.role == :student)) |> List.last()
+
+    if latest && String.trim(latest.text) != "",
+      do: {:ok, latest},
+      else: {:error, {:invalid_request, :missing_learner_turn}}
+  end
 
   @addressees %{
     :examiner => :examiner,
