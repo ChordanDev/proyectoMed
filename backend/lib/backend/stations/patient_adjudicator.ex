@@ -24,11 +24,13 @@ defmodule Backend.Stations.PatientAdjudicator do
   The adapter receives a map with the `candidate_reply`, the
   `latest_learner_message` and the bounded `conversation` (`speaker`, `text`;
   learner text is untrusted data), the `facts` involved (the facts named by an
-  undecided label, by `used_fact_ids` or by `not_asked_fact_ids`, each `id`,
-  `content`, `disclosure_condition`), the `disclosed_facts` earlier verified
-  turns disclosed (issue #286), every `undecided_labels` entry with its score,
-  the `not_asked_fact_ids`, the authored `response_rules` and its
-  `deadline_ms`.
+  undecided label, by `used_fact_ids`, `not_asked_fact_ids` or
+  `asked_fact_ids`, each `id`, `content`, `disclosure_condition` and
+  `requires_explicit_question`, see
+  `Backend.Stations.StationAI.explicit_question_fact?/1`), the
+  `disclosed_facts` earlier verified turns disclosed (issue #286), every
+  `undecided_labels` entry with its score, the `not_asked_fact_ids` and
+  `asked_fact_ids`, the authored `response_rules` and its `deadline_ms`.
 
   ## Hard limits, enforced in code
 
@@ -41,6 +43,9 @@ defmodule Backend.Stations.PatientAdjudicator do
       not) becomes `{:regenerate, not_asked_fact_ids}`, and a `regenerate`
       always withholds them too: the adjudicator never delivers a fact Jev
       clearly found unrequested.
+    * A `regenerate` never withholds a fact Jev reported in `asked_fact_ids`
+      (an `on_request` fact whose `fact_asked` answer is a clear yes): the
+      learner asked for it, so those ids are dropped from `withheld_fact_ids`.
     * A `deliver` is re-checked with
       `Backend.Stations.StationAI.BoundedReply.check_violations/2` (the gate
       already ran it before Jev): a deterministic violation is
@@ -58,6 +63,12 @@ defmodule Backend.Stations.PatientAdjudicator do
   deadline is enforced on the adapter task: a late answer is `{:refuse,
   :timeout}`. Errors and crashes are `{:refuse, :error}`, the disabled adapter
   `{:refuse, :disabled}`.
+
+  When the adjudicator asks for a regeneration, the gate extends the turn's
+  deadline by `regeneration_extension_ms/1` (`opts[:adjudicator_extension_ms]`
+  or the `:patient_adjudicator_regeneration_extension_ms` setting, default
+  1500 ms, so a 3 s verification budget becomes at most 4.5 s on that path
+  only): a new generation and its recheck seldom fit after an adjudication.
 
   ## Logging
 
@@ -79,9 +90,11 @@ defmodule Backend.Stations.PatientAdjudicator do
   require Logger
 
   alias Backend.Stations.JevDecision
+  alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.BoundedReply
 
   @default_deadline_ms 2_000
+  @default_regeneration_extension_ms 1_500
   @budget_margin_ms 100
   @min_budget_ms 200
   @decisions ~w(deliver regenerate refuse)
@@ -93,10 +106,18 @@ defmodule Backend.Stations.PatientAdjudicator do
           candidate_reply: String.t(),
           latest_learner_message: String.t(),
           conversation: [%{speaker: String.t(), text: String.t()}],
-          facts: [%{id: String.t(), content: String.t(), disclosure_condition: String.t()}],
+          facts: [
+            %{
+              id: String.t(),
+              content: String.t(),
+              disclosure_condition: String.t(),
+              requires_explicit_question: boolean()
+            }
+          ],
           disclosed_facts: [%{id: String.t(), content: String.t()}],
           undecided_labels: [JevDecision.undecided_label()],
           not_asked_fact_ids: [String.t()],
+          asked_fact_ids: [String.t()],
           response_rules: [String.t()],
           deadline_ms: pos_integer()
         }
@@ -116,12 +137,14 @@ defmodule Backend.Stations.PatientAdjudicator do
       with {:ok, labels} <- labels(decision),
            {:ok, budget_ms} <- budget(opts) do
         not_asked = fact_ids(decision, :not_asked_fact_ids)
+        asked = fact_ids(decision, :asked_fact_ids)
 
         decision
-        |> build_request(labels, not_asked, candidate, package, conversation, opts)
+        |> build_request(labels, {not_asked, asked}, candidate, package, conversation, opts)
         |> Map.put(:deadline_ms, budget_ms)
         |> run(adapter(opts), Keyword.get(opts, :adjudicator_opts, []), budget_ms)
         |> validate(package)
+        |> drop_asked(asked)
         |> enforce_limits(not_asked, candidate, package)
       end
 
@@ -141,6 +164,21 @@ defmodule Backend.Stations.PatientAdjudicator do
   def deadline_ms(opts \\ []) do
     opts[:adjudicator_deadline_ms] ||
       Application.get_env(:backend, :patient_adjudicator_deadline_ms, @default_deadline_ms)
+  end
+
+  @doc """
+  How much the gate extends the turn's verification deadline when the
+  adjudicator asks for a regeneration: `opts[:adjudicator_extension_ms]` or the
+  `:patient_adjudicator_regeneration_extension_ms` setting (default 1500 ms).
+  """
+  @spec regeneration_extension_ms(keyword()) :: non_neg_integer()
+  def regeneration_extension_ms(opts \\ []) do
+    opts[:adjudicator_extension_ms] ||
+      Application.get_env(
+        :backend,
+        :patient_adjudicator_regeneration_extension_ms,
+        @default_regeneration_extension_ms
+      )
   end
 
   # ============================================================================
@@ -176,11 +214,13 @@ defmodule Backend.Stations.PatientAdjudicator do
     end
   end
 
-  defp build_request(decision, labels, not_asked, candidate, package, conversation, opts) do
+  defp build_request(decision, labels, {not_asked, asked}, candidate, package, conversation, opts) do
     facts = package_facts(package)
 
     involved =
-      Enum.uniq(label_fact_ids(labels) ++ fact_ids(decision, :used_fact_ids) ++ not_asked)
+      Enum.uniq(
+        label_fact_ids(labels) ++ fact_ids(decision, :used_fact_ids) ++ not_asked ++ asked
+      )
 
     disclosed = opts |> Keyword.get(:disclosed_fact_ids, []) |> List.wrap()
     turns = conversation |> List.wrap() |> Enum.map(&turn/1)
@@ -195,12 +235,13 @@ defmodule Backend.Stations.PatientAdjudicator do
       conversation: Enum.take(turns, -JevDecision.max_context_turns()),
       facts:
         for fact <- facts, fact.id in involved do
-          Map.take(fact, [:id, :content, :disclosure_condition])
+          Map.take(fact, [:id, :content, :disclosure_condition, :requires_explicit_question])
         end,
       disclosed_facts:
         for(fact <- facts, fact.id in disclosed, do: Map.take(fact, [:id, :content])),
       undecided_labels: labels,
       not_asked_fact_ids: not_asked,
+      asked_fact_ids: asked,
       response_rules: response_rules(package)
     }
   end
@@ -216,7 +257,8 @@ defmodule Backend.Stations.PatientAdjudicator do
       %{
         id: id,
         content: to_string(field_value(fact, "content") || ""),
-        disclosure_condition: to_string(field_value(fact, "disclosure_condition") || "")
+        disclosure_condition: to_string(field_value(fact, "disclosure_condition") || ""),
+        requires_explicit_question: StationAI.explicit_question_fact?(fact)
       }
     end
   end
@@ -305,6 +347,11 @@ defmodule Backend.Stations.PatientAdjudicator do
   defp validate({:error, :malformed_output}, _package), do: {:refuse, :malformed_output}
   defp validate({:error, _reason}, _package), do: {:refuse, :error}
   defp validate(_other, _package), do: {:refuse, :malformed_output}
+
+  # The learner asked for these facts (Jev's clear yes), so withholding them
+  # would remove the answer to the question.
+  defp drop_asked({:regenerate, ids}, [_ | _] = asked), do: {:regenerate, ids -- asked}
+  defp drop_asked(outcome, _asked), do: outcome
 
   defp enforce_limits(:deliver, [_ | _] = not_asked, _candidate, _package),
     do: {:regenerate, not_asked, :not_asked}

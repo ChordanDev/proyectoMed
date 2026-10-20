@@ -388,6 +388,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                   used_fact_ids: ["fact-onset"],
                   undecided_fact_ids: ["fact-allergy"],
                   not_asked_fact_ids: ["fact-allergy"],
+                  asked_fact_ids: ["fact-onset"],
                   undecided_labels: [
                     %{question: "fact_stated", fact_id: "fact-allergy", score: 0.31}
                   ]
@@ -508,6 +509,22 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       assert decision.not_asked_fact_ids == ["fact-allergy"]
     end
 
+    test "names the on_request facts a clear-yes asked label says were requested" do
+      # The adjudicator may never withhold a fact that answers the question.
+      nouls =
+        nouls(%{
+          @stated_onset => 0.5,
+          @asked_onset => 0.92,
+          @stated_allergy => 0.45,
+          @asked_allergy => 0.03
+        })
+
+      assert {:ok, decision} = decide(AskedStub, nouls)
+      assert decision.status == :low_confidence
+      assert decision.asked_fact_ids == ["fact-onset"]
+      assert decision.not_asked_fact_ids == ["fact-allergy"]
+    end
+
     test "a verified or refused verdict carries no labels" do
       assert {:ok, verified} = decide(NoLabelsVerifiedStub, nouls())
       assert {:ok, refused} = decide(NoLabelsRefusedStub, nouls(%{@risk_unsupported => 0.9}))
@@ -515,6 +532,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       for decision <- [verified, refused] do
         refute Map.has_key?(decision, :undecided_labels)
         refute Map.has_key?(decision, :not_asked_fact_ids)
+        refute Map.has_key?(decision, :asked_fact_ids)
       end
     end
   end

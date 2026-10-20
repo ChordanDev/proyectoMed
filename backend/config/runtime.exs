@@ -200,6 +200,15 @@ if config_env() != :test do
        {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
     config :backend, :patient_adjudicator_deadline_ms, deadline_ms
   end
+
+  # `PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS` is added to the turn's
+  # verification deadline only when the adjudicator asks for a regeneration
+  # (default 1500 ms, so 4.5 s at most on that path; `0` turns it off). Anything
+  # but a non-negative integer keeps the default.
+  with raw when is_binary(raw) <- System.get_env("PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS"),
+       {extension_ms, ""} when extension_ms >= 0 <- Integer.parse(String.trim(raw)) do
+    config :backend, :patient_adjudicator_regeneration_extension_ms, extension_ms
+  end
 end
 
 # Rubric resolver (issue #214): an LLM that decides only the rubric actions Jev

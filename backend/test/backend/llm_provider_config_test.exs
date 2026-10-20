@@ -8,7 +8,7 @@ defmodule Backend.LLMProviderConfigTest do
   alias Backend.Stations.StationAI
 
   @runtime_config Path.expand("../../config/runtime.exs", __DIR__)
-  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_PATIENT_MODEL ANTHROPIC_ADJUDICATOR_MODEL PATIENT_ADJUDICATOR PATIENT_ADJUDICATOR_DEADLINE_MS)
+  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_PATIENT_MODEL ANTHROPIC_ADJUDICATOR_MODEL PATIENT_ADJUDICATOR PATIENT_ADJUDICATOR_DEADLINE_MS PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS)
 
   setup do
     previous = Map.new(@variables, &{&1, System.get_env(&1)})
@@ -85,6 +85,23 @@ defmodule Backend.LLMProviderConfigTest do
 
       assert backend[StationAI.AnthropicClient][:adjudicator_model] == "claude-haiku-5-5"
       assert backend[:patient_adjudicator_deadline_ms] == 900
+    end
+
+    test "PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS is read as a non-negative integer" do
+      assert runtime(%{"PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS" => "1200"})[
+               :patient_adjudicator_regeneration_extension_ms
+             ] == 1_200
+
+      assert runtime(%{"PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS" => "0"})[
+               :patient_adjudicator_regeneration_extension_ms
+             ] == 0
+
+      for raw <- ["-5", "fast", "1.5", ""] do
+        refute Keyword.has_key?(
+                 runtime(%{"PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS" => raw}),
+                 :patient_adjudicator_regeneration_extension_ms
+               )
+      end
     end
 
     test "a deadline that is not a positive integer keeps the default" do

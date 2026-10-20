@@ -74,6 +74,7 @@ defmodule Backend.Stations.JevDecision do
           optional(:unasked_fact_ids) => [String.t()],
           optional(:undecided_fact_ids) => [String.t()],
           optional(:not_asked_fact_ids) => [String.t()],
+          optional(:asked_fact_ids) => [String.t()],
           optional(:undecided_labels) => [undecided_label()]
         }
 
@@ -899,11 +900,14 @@ defmodule Backend.Stations.JevDecision do
     not_asked_fact_ids =
       Map.get(response, :not_asked_fact_ids) || Map.get(response, "not_asked_fact_ids")
 
+    asked_fact_ids = Map.get(response, :asked_fact_ids) || Map.get(response, "asked_fact_ids")
+
     with {:ok, status} <- normalize_patient_status(raw_status),
          {:ok, validated_fact_ids} <- validate_used_fact_ids(used_fact_ids, package),
          {:ok, validated_unasked_ids} <- validate_used_fact_ids(unasked_fact_ids, package),
          {:ok, validated_undecided_ids} <- validate_used_fact_ids(undecided_fact_ids, package),
-         {:ok, validated_not_asked_ids} <- validate_used_fact_ids(not_asked_fact_ids, package) do
+         {:ok, validated_not_asked_ids} <- validate_used_fact_ids(not_asked_fact_ids, package),
+         {:ok, validated_asked_ids} <- validate_used_fact_ids(asked_fact_ids, package) do
       rationale = Map.get(response, :rationale) || Map.get(response, "rationale")
 
       {:ok,
@@ -912,6 +916,7 @@ defmodule Backend.Stations.JevDecision do
        |> maybe_put(:unasked_fact_ids, validated_unasked_ids)
        |> maybe_put(:undecided_fact_ids, validated_undecided_ids)
        |> maybe_put(:not_asked_fact_ids, validated_not_asked_ids)
+       |> maybe_put(:asked_fact_ids, validated_asked_ids)
        |> maybe_put(:undecided_labels, validate_undecided_labels(response, package))}
     else
       :error -> {:error, {:invalid_response, :unrecognized_patient_status}}

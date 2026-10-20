@@ -99,7 +99,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       or the asked question of an `on_request` fact the reply states (yes, issue
       #284): their authored ids. `CandidateGate` withholds them in its single
       regeneration.
-    * `undecided_labels`, `not_asked_fact_ids` - only on a `:low_confidence`
+    * `undecided_labels`, `not_asked_fact_ids`, `asked_fact_ids` - only on a `:low_confidence`
       verdict: the evidence the undecided-verdict adjudicator reads (issue #290,
       see `put_adjudication_evidence/5`)
     * `:semantic_refusal` - a risk answer is a yes, or an `on_request` fact is stated
@@ -839,6 +839,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `not_asked_fact_ids` - present only when non-empty: the `on_request` facts
       whose `fact_asked` answer is a clear no while `fact_stated` is not, so a
       delivered reply could state a fact nobody asked for
+    * `asked_fact_ids` - present only when non-empty: the `on_request` facts
+      whose `fact_asked` answer is a clear yes, so the adjudicator never
+      withholds a fact the learner asked for
   """
   @spec put_adjudication_evidence(map(), [fact_plan()], [rule_plan()], map(), thresholds()) ::
           map()
@@ -881,9 +884,18 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       )
       |> Enum.uniq()
 
+    asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :yes,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
     decision
     |> Map.put(:undecided_labels, fact_labels ++ risk_labels ++ rule_labels)
     |> put_fact_ids(:not_asked_fact_ids, not_asked)
+    |> put_fact_ids(:asked_fact_ids, asked)
   end
 
   def put_adjudication_evidence(decision, _facts, _rules, _nouls, _thresholds), do: decision

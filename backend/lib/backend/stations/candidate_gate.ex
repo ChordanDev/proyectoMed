@@ -57,7 +57,9 @@ defmodule Backend.Stations.CandidateGate do
   described above (one regeneration withholding Jev's `undecided_fact_ids`).
   A regenerated candidate that Jev leaves undecided is adjudicated too, and is
   delivered only on `:deliver`. The adjudicator runs inside the same monotonic
-  deadline, never after a deterministic denial, and never delivers a fact
+  deadline, which only a `{:regenerate, ids}` answer extends, by
+  `Backend.Stations.PatientAdjudicator.regeneration_extension_ms/1` (1.5 s by
+  default), never after a deterministic denial, and never delivers a fact
   Jev's clear-no "asked" answer says was not requested. A `:verified` or
   `:semantic_refusal` decision is never adjudicated.
 
@@ -439,8 +441,13 @@ defmodule Backend.Stations.CandidateGate do
   defp resolve_adjudication(:deliver, text, decision, _package, _conversation, _deadline, _opts),
     do: {:ok, delivered(text, decision)}
 
-  defp resolve_adjudication({:regenerate, ids}, _text, _decision, package, conv, deadline, opts),
-    do: handle_refusal(:low_confidence, %{withheld_fact_ids: ids}, package, conv, deadline, opts)
+  # The adjudication already used part of the budget, so this path alone gets
+  # the extension: the regeneration, its recheck and that recheck's adjudication
+  # share the extended deadline. Every other path keeps the turn's deadline.
+  defp resolve_adjudication({:regenerate, ids}, _text, _decision, package, conv, deadline, opts) do
+    extended = deadline + PatientAdjudicator.regeneration_extension_ms(opts)
+    handle_refusal(:low_confidence, %{withheld_fact_ids: ids}, package, conv, extended, opts)
+  end
 
   # A refusal, a failure or no budget: today's low-confidence path.
   defp resolve_adjudication({:refuse, _reason}, _text, decision, package, conv, deadline, opts) do

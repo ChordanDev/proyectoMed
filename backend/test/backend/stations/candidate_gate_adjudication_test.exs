@@ -131,6 +131,28 @@ defmodule Backend.Stations.CandidateGateAdjudicationTest do
     assert_received {:regenerated, ["pergunta-explicita-02"]}
   end
 
+  test "only a regeneration the adjudicator asked for gets the extended budget" do
+    test_pid = self()
+
+    generator = fn _package, _conversation, remaining_ms, _guidance ->
+      send(test_pid, {:remaining_ms, remaining_ms})
+      {:ok, @regen_verified}
+    end
+
+    opts = [generator: generator, adjudicator_extension_ms: 1_500]
+
+    assert {:ok, _} =
+             verify(@medication, %{@medication => answer("regenerate", ["fact-key"])}, opts)
+
+    assert_received {:remaining_ms, extended}
+    assert extended > 3_000 and extended <= 4_500
+
+    # A refusal keeps today's path and today's budget.
+    assert {:ok, _} = verify(@medication, %{@medication => answer("refuse")}, opts)
+    assert_received {:remaining_ms, normal}
+    assert normal <= 3_000
+  end
+
   test "refuse keeps today's low-confidence path" do
     assert verify(@medication, %{@medication => answer("refuse")}) ==
              {:ok, %{text: @regen_verified, used_fact_ids: []}}

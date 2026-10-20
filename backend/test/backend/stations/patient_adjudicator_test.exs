@@ -150,8 +150,20 @@ defmodule Backend.Stations.PatientAdjudicatorTest do
       assert request.disclosed_facts == [%{id: "fact-name", content: "Chama-se Ana."}]
       assert request.undecided_labels == @decision.undecided_labels
       assert request.not_asked_fact_ids == []
+      assert request.asked_fact_ids == []
       assert request.response_rules == ["Responda apenas ao que foi perguntado."]
       assert is_integer(request.deadline_ms) and request.deadline_ms > 0
+    end
+
+    test "marks the facts that require an explicit question" do
+      adjudicate(answer("deliver"))
+      assert_received {:adjudication_request, request}
+
+      assert Map.new(request.facts, &{&1.id, &1.requires_explicit_question}) == %{
+               "hda-06-antitermico" => false,
+               "pergunta-explicita-02" => true,
+               "pergunta-explicita-02-anti-inflamatorios" => true
+             }
     end
 
     test "is not sent without undecided labels" do
@@ -186,6 +198,29 @@ defmodule Backend.Stations.PatientAdjudicatorTest do
 
       assert_received {:adjudication_request, %{deadline_ms: capped}}
       assert capped < 800
+    end
+  end
+
+  describe "regeneration_extension_ms/1" do
+    test "defaults to 1500 ms and reads options, then configuration" do
+      previous = Application.fetch_env(:backend, :patient_adjudicator_regeneration_extension_ms)
+      Application.delete_env(:backend, :patient_adjudicator_regeneration_extension_ms)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} ->
+            Application.put_env(:backend, :patient_adjudicator_regeneration_extension_ms, value)
+
+          :error ->
+            Application.delete_env(:backend, :patient_adjudicator_regeneration_extension_ms)
+        end
+      end)
+
+      assert PatientAdjudicator.regeneration_extension_ms() == 1_500
+      assert PatientAdjudicator.regeneration_extension_ms(adjudicator_extension_ms: 0) == 0
+
+      Application.put_env(:backend, :patient_adjudicator_regeneration_extension_ms, 900)
+      assert PatientAdjudicator.regeneration_extension_ms() == 900
     end
   end
 
@@ -240,6 +275,17 @@ defmodule Backend.Stations.PatientAdjudicatorTest do
                {:regenerate, ["pergunta-explicita-02", "fact-key"]}
 
       assert_received {:adjudication_request, %{not_asked_fact_ids: ["fact-key"]}}
+    end
+
+    test "never withholds a fact a clear-yes asked label says was requested" do
+      decision = Map.put(@decision, :asked_fact_ids, ["hda-06-antitermico"])
+
+      assert adjudicate(
+               answer("regenerate", ["hda-06-antitermico", "pergunta-explicita-02"]),
+               decision: decision
+             ) == {:regenerate, ["pergunta-explicita-02"]}
+
+      assert_received {:adjudication_request, %{asked_fact_ids: ["hda-06-antitermico"]}}
     end
 
     test "never delivers a candidate the deterministic checks reject" do
