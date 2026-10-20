@@ -36,7 +36,7 @@ and credited by the rubric.
 ## Progress
 
 - Worktree and feature document created.
-- T1 done (commit: see `git log`, subject `fix(stations): ignore impresso keywords the learner declines`).
+- T1 done (commit b295a1a).
   - RED: 8 new tests failed (6 in `impressos_test.exs`, 2 in `turn_addressee_test.exs`).
   - GREEN: focused 91 passed (impressos, turn addressee, phrasings);
     `mix compile --force --warnings-as-errors` clean.
