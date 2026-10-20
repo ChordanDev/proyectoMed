@@ -87,7 +87,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   `out_of_role_no_threshold` (default `0.5`) as its no threshold: with the full
   acute-appendicitis package it scores plainly in-role replies 0.22-0.47 (issue
   #284). Obvious out-of-role text is still caught deterministically by
-  `Backend.Stations.Conversation.BoundedReply` before Jev is asked.
+  `Backend.Stations.StationAI.BoundedReply` before Jev is asked.
 
     * `used_fact_ids` - the facts whose stated answer is a yes
     * `unasked_fact_ids` - present only when non-empty: the authored ids of the
