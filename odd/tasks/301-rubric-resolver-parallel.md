@@ -34,11 +34,11 @@ timeout lost all of them. The result was also recomputed on every fetch.
   concurrently (bounded), under one overall deadline; a criterion that fails
   or times out stays uncertain, the others keep their decisions; per-criterion
   outcome/latency logs. Route: inline (one module plus its test).
-- [ ] T2 - Default resolver deadline 30 000 ms; OpenAI adapter honours it as
+- [x] T2 - Default resolver deadline 30 000 ms; OpenAI adapter honours it as
   `receive_timeout`; feedback default and web timeout rebalanced; runtime caps
   keep resolver + feedback inside the budget; invariant test. Route: inline
   (small edits across config, adapter and client constant).
-- [ ] T3 - Educational result graded once per finished session and served from
+- [x] T3 - Educational result graded once per finished session and served from
   the session afterwards (assessment cached in `Conversation`, per-session
   serialization of concurrent first fetches). Route: inline.
 - [ ] T4 - Live check on acute-appendicitis with a transcript covering items
@@ -57,11 +57,20 @@ timeout lost all of them. The result was also recomputed on every fetch.
   request crashed the per-criterion double). GREEN: `mix test
   test/backend/stations` 1035 passed. `issue_228_regression_test` updated to
   expect one request per criterion.
-- T2: RED 6 failing (budget invariant x2, default 30 s, runtime caps, OpenAI
+- T2 done in `4786c49`. RED 6 failing (budget invariant x2, default 30 s, runtime caps, OpenAI
   receive timeout, feedback default 45 s). GREEN: backend `mix test` 1668
   passed; web `client.test.ts` 42 passed (its 80 s expectation moved to 95 s).
   Budget: resolver 30 s + feedback 45 s + 15 s margin <= web 95 s; runtime
   caps resolver at 40 s and feedback at 80 s minus the resolver deadline.
+
+- T3: RED 2 failing (fetch twice assessed twice; concurrent first fetches
+  assessed three times). GREEN: `educational_result_test.exs` 12 passed,
+  backend `mix test` 1672 passed. The assessment (the grade) is kept in the
+  session (`Conversation.put_rubric_assessment/2`, never replaced); first
+  fetches of one session are serialized with `:global.trans`; an invalid
+  attempt is not kept. Learner feedback keeps its own fingerprinted cache,
+  so a feedback fallback still retries on the next fetch without regrading.
+  The `Conversation` unit test was added after the implementation (no RED).
 
 ## Follow-ups (outside allowed edit surfaces)
 
@@ -72,4 +81,4 @@ timeout lost all of them. The result was also recomputed on every fetch.
 
 ## Next step
 
-T3.
+T4 live check, then local CI and PR.
