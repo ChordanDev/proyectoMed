@@ -3,7 +3,6 @@ import {
   BriefScreen,
   NoticeScreen,
   StationScreen,
-  VoicePanel,
   ResultScreen,
   useActiveStation,
   useStation,
@@ -19,6 +18,8 @@ export default function App(): React.JSX.Element {
   const [pendingConsent, setPendingConsent] = useState<boolean | null>(null);
   const title = activeStation.station?.display_title;
   const brief = activeStation.station?.candidate_brief ?? null;
+  // One voice experience per deployment (VOICE_MODE, #270).
+  const voiceMode = activeStation.station?.voice_mode ?? "turn";
 
   const handleEnter = useCallback(() => {
     if (pendingConsent === null) return;
@@ -66,7 +67,10 @@ export default function App(): React.JSX.Element {
         {station.status === "loading" ? (
           <p role="status">{strings.loadingStation}</p>
         ) : pendingConsent === null ? (
-          <NoticeScreen onStart={setPendingConsent} voiceSupport />
+          <NoticeScreen
+            onStart={setPendingConsent}
+            voiceSupport={voiceMode !== "off"}
+          />
         ) : (
           <BriefScreen
             title={title}
@@ -111,20 +115,25 @@ export default function App(): React.JSX.Element {
 
   // station.status === "active"
   const timeElapsed = station.remainingMs !== null && station.remainingMs <= 0;
+  const voice = station.audioConsent && voiceMode !== "off";
+  const turnVoice = voice && voiceMode === "turn";
   return (
     <main className="app-root">
-      {station.audioConsent && (
-        <VoicePanel sessionId={station.sessionId} active />
-      )}
       <StationScreen
         title={title}
         brief={brief}
         onSend={handleSend}
         onFinish={handleFinish}
-        audioConsent={station.audioConsent}
-        onTranscribe={station.transcribe}
-        onSendVoice={handleSendVoice}
-        onSynthesize={station.synthesize}
+        audioConsent={voice}
+        onTranscribe={turnVoice ? station.transcribe : undefined}
+        onSendVoice={turnVoice ? handleSendVoice : undefined}
+        onSynthesize={turnVoice ? station.synthesize : undefined}
+        realtimeVoice={
+          voice && voiceMode === "realtime"
+            ? { sessionId: station.sessionId }
+            : undefined
+        }
+        onFetchTranscript={station.fetchTranscript}
         error={station.error}
         disabled={timeElapsed}
         remainingMs={station.remainingMs}

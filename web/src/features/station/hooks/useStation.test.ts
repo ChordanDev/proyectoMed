@@ -1885,4 +1885,42 @@ describe("useStation", () => {
       expect(api.requestImpresso).not.toHaveBeenCalled();
     });
   });
+
+  describe("fetchTranscript (#270)", () => {
+    const detail: SessionDetail = {
+      ...session,
+      status: "active",
+      completion_reason: null,
+      messages: [
+        { role: "learner", text: "Onde dói?" },
+        { role: "patient", text: "No peito. (leva a mão ao peito)" },
+      ],
+    };
+
+    it("reads the stored transcript of the running session", async () => {
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+      await act(async () => {
+        await result.current.start(true);
+      });
+      vi.mocked(api.getSession).mockResolvedValueOnce(detail);
+
+      await expect(result.current.fetchTranscript()).resolves.toEqual(
+        detail.messages,
+      );
+      expect(api.getSession).toHaveBeenLastCalledWith("session-1");
+    });
+
+    it("returns null without a session or when the read fails", async () => {
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+      await expect(result.current.fetchTranscript()).resolves.toBeNull();
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("offline"));
+      await expect(result.current.fetchTranscript()).resolves.toBeNull();
+    });
+  });
 });

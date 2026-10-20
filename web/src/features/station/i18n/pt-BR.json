@@ -45,8 +45,6 @@
   "voiceConnectButton": "Conectar voz",
   "voiceDisconnectButton": "Desconectar voz",
   "voiceMicOnIndicator": "Microfone ativo",
-  "finishStationButton": "Finalizar estação",
-  "voiceOffNotice": "Voz desativada para esta estação. O texto continua funcionando normalmente.",
   "resultRestartButton": "Reiniciar estação",
   "loadingResult": "Gerando o resultado da estação...",
   "loadingResultFeedbackWait": "Gerando feedback da estação… isso pode levar até um minuto.",
