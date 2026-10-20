@@ -73,6 +73,9 @@ Route evidence: the parent delegated all four tasks to one bounded writer (2+ no
 
 - T4: RED 14 new worker tests (3 failures, 11 errors: `commit(on_sentence=)`, `accept_sentence`, `index`, chaining, first-audio log missing). GREEN `uv run python -m unittest` 144/144. README documents the NDJSON channel, room `segment` event and latency logs.
 
+- Close: dialyzer flagged `[acc | binary]` iodata in T1 code; fixed in `e021b27`. Local CI script: LOCAL CI PASSED (web 259/259, backend `mix test` 1513/1513, e2e 4/4, format, compile `--warnings-as-errors`, credo strict, dialyzer). Worker `uv run python -m unittest` 144/144. GitHub Actions is blocked by billing.
+- Commits: `2d854c7` T1, `60246d0` T2, `e59baa0` T3, `9c47a4d` T4, `e021b27` dialyzer fix.
+
 ## Follow-ups
 
 - Live check pending: time to first audio (target < 1.5 s after end of speech) from the worker's `first patient audio` log in a real session.
@@ -81,4 +84,4 @@ Route evidence: the parent delegated all four tasks to one bounded writer (2+ no
 
 ## Next step
 
-Local CI, push, PR.
+Review of the PR into `feat/237-clinician-demo-readiness`; live first-audio check.
