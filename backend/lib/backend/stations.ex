@@ -20,6 +20,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.LiveKit
   alias Backend.Stations.LiveKit.RoomService
   alias Backend.Stations.MediaSession
+  alias Backend.Stations.PatientVerification
   alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
@@ -379,6 +380,80 @@ defmodule Backend.Stations do
          ai_reply,
          params
        ) do
+    case PatientVerification.mode() do
+      :blocking ->
+        verify_and_resolve_blocking_turn(
+          session_id,
+          token,
+          package,
+          current_session,
+          context,
+          ai_reply,
+          params
+        )
+
+      _audit_or_off ->
+        deliver_bounded_turn(session_id, token, package, current_session, context, ai_reply)
+    end
+  end
+
+  # `audit` and `off` (#307): the reply is delivered once BoundedReply passes;
+  # in `audit` Jev verifies it after delivery, which never changes it.
+  defp deliver_bounded_turn(session_id, token, package, current_session, context, ai_reply) do
+    candidate_text = extract_reply_text(ai_reply)
+
+    case PatientVerification.check_delivery(candidate_text, package, fn ->
+           bounded_regeneration(package, context)
+         end) do
+      {:ok, text} ->
+        reply = if text == candidate_text, do: ai_reply, else: %{text: text, used_facts: []}
+
+        commit_patient_reply(session_id, token, reply, [], fn session ->
+          audit_delivered_reply(session_id, session, package, current_session)
+        end)
+
+      {:error, {:refused, refusal}} ->
+        keep_learner_turn(session_id, token, refusal)
+    end
+  end
+
+  # The single regeneration after a BoundedReply rejection; it never sees the
+  # rejected text.
+  defp bounded_regeneration(package, context) do
+    case regenerate(package, context, %{withheld_fact_ids: []}) do
+      {:ok, %{text: text}} -> {:ok, text}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Starts the after-delivery audit of the patient message just stored, the
+  # last one of `session`, against the conversation it answered.
+  defp audit_delivered_reply(session_id, session, package, answered_session) do
+    case List.last(session.messages) do
+      %{role: :patient, at: at, text: text} ->
+        PatientVerification.start_audit(%{
+          session_id: session_id,
+          message_at: at,
+          text: text,
+          package: package,
+          conversation: answered_session.messages,
+          disclosed_fact_ids: Conversation.disclosed_fact_ids(answered_session)
+        })
+
+      _other ->
+        :ok
+    end
+  end
+
+  defp verify_and_resolve_blocking_turn(
+         session_id,
+         token,
+         package,
+         current_session,
+         context,
+         ai_reply,
+         params
+       ) do
     params = Map.put_new(params, :deadline_ms, patient_reply_deadline_ms())
     verify_opts = build_verify_opts(package, current_session, context, params)
 
@@ -409,7 +484,14 @@ defmodule Backend.Stations do
 
   # The verdict's facts are stored on the patient message (issue #286), so the
   # session remembers what its verified patient turns disclosed.
-  defp commit_patient_reply(session_id, token, verified_reply, verified_fact_ids) do
+  # `on_commit` runs with the session once the reply is stored (#307's audit).
+  defp commit_patient_reply(
+         session_id,
+         token,
+         verified_reply,
+         verified_fact_ids,
+         on_commit \\ fn _session -> :ok end
+       ) do
     verified_text = extract_reply_text(verified_reply)
     used_facts = extract_used_facts(verified_reply)
 
@@ -421,7 +503,9 @@ defmodule Backend.Stations do
     }
 
     case Conversation.resolve_turn(session_id, token, {:ok, patient_message}) do
-      {:ok, _session} ->
+      {:ok, session} ->
+        on_commit.(session)
+
         {:ok,
          %{
            outcome: :patient_reply,
@@ -1052,6 +1136,18 @@ defmodule Backend.Stations do
   """
   @spec refusal_cause_counts() :: %{atom() => non_neg_integer()}
   defdelegate refusal_cause_counts, to: CandidateGate
+
+  @doc """
+  The after-delivery Jev audits of the session's patient replies (issue #307),
+  in the order they landed; `[]` when none has (`blocking` and `off` modes
+  record none). See `Backend.Stations.PatientVerification` for the fields.
+  """
+  @spec patient_audits(String.t()) :: {:ok, [map()]} | {:error, :not_found | :expired}
+  def patient_audits(session_id) do
+    with {:ok, session} <- Conversation.fetch(session_id) do
+      {:ok, Map.get(session, :patient_audits, [])}
+    end
+  end
 
   @doc """
   Verification seam for generated patient replies before display or synthesis.
