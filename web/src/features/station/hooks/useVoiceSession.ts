@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import { ApiError, type VoiceSession } from "../api/client";
+import {
+  parseVoiceTranscriptEvent,
+  VOICE_TRANSCRIPT_TOPIC,
+  VOICE_WORKER_IDENTITY,
+  type VoiceTranscriptEvent,
+} from "./voiceTranscriptEvents";
 
 export type VoiceSessionStatus =
   | "idle"
@@ -45,6 +51,8 @@ export interface UseVoiceSessionOptions {
   sessionId: string | null;
   active: boolean;
   createRoom?: () => VoiceRoom;
+  /** Receives each transcript event the voice worker publishes (#270). */
+  onTranscriptEvent?: (event: VoiceTranscriptEvent) => void;
 }
 
 const defaultCreateRoom = (): VoiceRoom =>
@@ -84,6 +92,7 @@ export const useVoiceSession = ({
   sessionId,
   active,
   createRoom = defaultCreateRoom,
+  onTranscriptEvent,
 }: UseVoiceSessionOptions) => {
   const [status, setStatus] = useState<VoiceSessionStatus>("idle");
   const [error, setError] = useState<VoiceSessionError | null>(null);
@@ -92,6 +101,11 @@ export const useVoiceSession = ({
   const roomRef = useRef<VoiceRoom | null>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const patientTrackRef = useRef<VoiceTrack | null>(null);
+  // Latest callback, so a new handler never forces a reconnect.
+  const onTranscriptEventRef = useRef(onTranscriptEvent);
+  useEffect(() => {
+    onTranscriptEventRef.current = onTranscriptEvent;
+  }, [onTranscriptEvent]);
 
   const setStatusSafe = useCallback((next: VoiceSessionStatus) => {
     statusRef.current = next;
@@ -117,6 +131,7 @@ export const useVoiceSession = ({
       room.off(RoomEvent.Reconnecting, onReconnecting.current);
       room.off(RoomEvent.Reconnected, onReconnected.current);
       room.off(RoomEvent.Disconnected, onDisconnected.current);
+      room.off(RoomEvent.DataReceived, onDataReceived.current);
       void room.disconnect();
     },
     [],
@@ -128,6 +143,7 @@ export const useVoiceSession = ({
   const onReconnecting = useRef((..._args: unknown[]) => {});
   const onReconnected = useRef((..._args: unknown[]) => {});
   const onDisconnected = useRef((..._args: unknown[]) => {});
+  const onDataReceived = useRef((..._args: unknown[]) => {});
 
   const disconnect = useCallback(() => {
     generationRef.current += 1;
@@ -201,7 +217,29 @@ export const useVoiceSession = ({
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed.current);
     room.on(RoomEvent.Reconnecting, onReconnecting.current);
     room.on(RoomEvent.Reconnected, onReconnected.current);
+    // Only the voice worker's transcript topic feeds the transcript; any other
+    // participant or topic is ignored.
+    onDataReceived.current = (...args: unknown[]) => {
+      if (generationRef.current !== generation) return;
+      const [payload, participant, , topic] = args as [
+        unknown,
+        { identity?: unknown } | undefined,
+        unknown,
+        unknown,
+      ];
+      if (topic !== VOICE_TRANSCRIPT_TOPIC) return;
+      if (participant?.identity !== VOICE_WORKER_IDENTITY) return;
+      // Duck-typed: a Uint8Array from another realm fails `instanceof`.
+      if (!ArrayBuffer.isView(payload)) return;
+      const event = parseVoiceTranscriptEvent(
+        payload as Uint8Array,
+        sessionId,
+      );
+      if (event) onTranscriptEventRef.current?.(event);
+    };
+
     room.on(RoomEvent.Disconnected, onDisconnected.current);
+    room.on(RoomEvent.DataReceived, onDataReceived.current);
 
     setStatusSafe("connecting");
 

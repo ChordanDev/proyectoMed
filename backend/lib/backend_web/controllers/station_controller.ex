@@ -3,8 +3,11 @@ defmodule BackendWeb.StationController do
 
   alias Backend.Stations
 
+  # `voice_mode` (#270) tells the web which single voice experience to offer:
+  # "realtime", "turn" or "off" (config/runtime.exs resolves VOICE_MODE).
   def active(conn, _params) do
-    json(conn, Stations.get_active_station())
+    voice_mode = Application.get_env(:backend, :voice_mode, "turn")
+    json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
   end
 
   def create_session(conn, params) do

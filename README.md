@@ -90,12 +90,14 @@ $ curl -i http://localhost:4000/api/stations/active
 HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
 
-{"station_id":"chest-pain-initial-assessment","version":"2.0.0","language":"pt-BR","display_title":"Avaliação inicial de dor torácica","candidate_brief":{"scenario":"Você é o médico ou a médica de plantão…","tasks":["Apresentar-se ao paciente…","…"]}}
+{"station_id":"chest-pain-initial-assessment","version":"2.0.0","language":"pt-BR","display_title":"Avaliação inicial de dor torácica","candidate_brief":{"scenario":"Você é o médico ou a médica de plantão…","tasks":["Apresentar-se ao paciente…","…"]},"voice_mode":"turn"}
 ```
 
 `candidate_brief` is the learner-facing "cenário de atuação" and the ordered
 tasks. The web client shows it before the timer starts and keeps it reachable
 during the station. It never carries rubric, answer-key or impresso content.
+`voice_mode` is the voice experience the web offers (`VOICE_MODE`, see
+["Real-time voice demo runbook"](#real-time-voice-demo-runbook)).
 
 During local development, Vite proxies `/api` requests to the Phoenix backend
 at `http://localhost:4000`, avoiding a separate CORS dependency. Set
@@ -137,6 +139,116 @@ curl -s "$BASE/sessions/$SESSION_ID/impressos" | jq
 ```
 
 ---
+
+## Real-time voice demo runbook
+
+This runbook brings up the spoken consultation end to end (#270): the learner
+talks, and the station transcript shows what was transcribed, the verified patient
+reply and the examiner's "Anotado." for a kept turn. Four processes run side by
+side: LiveKit, Phoenix, the voice worker and Vite.
+
+### 1. Install once
+
+```sh
+brew install livekit livekit-cli uv   # livekit-server, lk, uv
+uv python install 3.12                # the worker needs Python >= 3.12
+npm --prefix web install
+( cd backend && mix deps.get )
+( cd voice-worker && uv sync )
+```
+
+### 2. Choose the voice experience: `VOICE_MODE`
+
+The web offers exactly one voice experience. Phoenix reads `VOICE_MODE` at boot and
+serves it as `voice_mode` on `GET /api/stations/active`.
+
+| Value | What the learner gets |
+|---|---|
+| `realtime` | The LiveKit voice panel inside the station screen, after the brief. Spoken turns appear in the transcript. No "Usar voz" or "Ouvir resposta" buttons. |
+| `turn` | The turn-based "Usar voz" and "Ouvir resposta" buttons (`VOICE_PROVIDER`, see "Turn-based voice providers"). No voice panel. |
+| `off` | Text only. The notice asks no audio consent and no voice control is shown. |
+
+**Default:** unset or unknown, `VOICE_MODE` is `realtime` when `LIVEKIT_URL`,
+`LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are all set, and `turn` otherwise.
+
+### 3. Fill in the environment
+
+Copy the names from `.env.example` (names only, no values) into `.env` at the
+repository root, fill them in and load them in each terminal with
+`set -a; source .env; set +a`. Generate the worker secret once:
+
+```sh
+openssl rand -hex 32   # paste as VOICE_WORKER_SECRET
+```
+
+**Phoenix (`backend`):**
+
+| Variable | Demo value or purpose |
+|---|---|
+| `VOICE_MODE` | `realtime` |
+| `LIVEKIT_URL` | `ws://127.0.0.1:7880` (the local dev server) |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | `devkey` / `secret` (the dev server's keys) |
+| `VOICE_WORKER_SECRET` | The generated secret; the same value in the worker. |
+| `LLM_PROVIDER` | `anthropic` to run the patient on Claude; unset keeps OpenAI. |
+| `ANTHROPIC_API_KEY` | Claude key, when `LLM_PROVIDER=anthropic`. |
+| `OPENAI_API_KEY` | OpenAI key, when the patient runs on OpenAI. |
+| `JEV_ADAPTER` / `TYPESAFE_API_KEY` | `typesafe` and its key: every patient reply is verified by Jev (see "Live Jev adapter"). Without Jev every voice turn fails closed. |
+| `RUBRIC_RESOLVER` | Optional, `on` turns the rubric resolver on. |
+| `ACTIVE_STATION_ID` | Optional, e.g. `acute-appendicitis`. |
+
+**Voice worker (`voice-worker`):**
+
+| Variable | Demo value or purpose |
+|---|---|
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | The same three values as Phoenix. |
+| `PHOENIX_URL` | `http://localhost:4000` |
+| `VOICE_WORKER_SECRET` | The same secret as Phoenix. |
+| `DEEPGRAM_API_KEY` | Learner speech-to-text. |
+| `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` | Patient voice. Without them the reply is still shown as text. |
+| `ELEVENLABS_MODEL` | Optional, default `eleven_flash_v2_5`. |
+| `PHOENIX_TURN_TIMEOUT_S` / `PHOENIX_TURN_RETRIES` | Optional, defaults `35` and `1`. |
+
+Never commit `.env`. No secret reaches the browser: it only receives a short-lived
+LiveKit token.
+
+### 4. Start the four processes, in this order
+
+```sh
+# Terminal 1 — LiveKit (dev keys devkey/secret on ws://127.0.0.1:7880).
+livekit-server --dev
+
+# Terminal 2 — Phoenix on http://localhost:4000.
+set -a; source .env; set +a
+( cd backend && mix phx.server )
+
+# Terminal 3 — the voice worker; its log shows it registered with LiveKit.
+set -a; source .env; set +a
+( cd voice-worker && uv run python worker.py dev )
+
+# Terminal 4 — Vite on http://localhost:5173.
+npm --prefix web run dev
+```
+
+### 5. Smoke test
+
+1. `curl -s http://localhost:4000/api/stations/active` ends with
+   `"voice_mode":"realtime"`.
+2. Open http://localhost:5173, accept the audio consent, read the brief and enter
+   the station. The voice panel sits under the station header and there is no
+   "Usar voz" button.
+3. Press **Conectar voz** and allow the microphone: the panel reads "Voz conectada"
+   and "Microfone ativo". `lk room participants list` (see "Voice session
+   (LiveKit)") shows `learner-<session>` and `voice-worker`.
+4. Ask "Onde dói?" and pause. A live caption follows your speech; then your question
+   and the patient's reply appear in the transcript, and the reply is heard.
+5. Say a physical exam finding to the examiner (e.g. "Abdome flácido, doloroso à
+   palpação"): the transcript shows your turn followed by **Examinador: Anotado.**,
+   and nothing is spoken.
+6. Press **Finalizar estação**: the voice session ends, the room disappears from
+   `lk room list` and the result screen loads.
+
+Interim captions are never stored, and neither the browser console nor the worker
+log shows transcript or patient text.
 
 ## Voice session (LiveKit) — manual test
 
@@ -217,8 +329,9 @@ and confirm the only LiveKit-related payload is the short-lived
 active and consented, streams only the learner microphone to Deepgram (`nova-3`,
 `pt-BR`, keyterms from the station package `stt_keyterms`), publishes interim
 transcripts to the room (data topic `transcript`) and POSTs each final utterance to
-Phoenix with a monotonic `turn_id`. Phoenix commits each turn at most once. The web
-does not render transcripts yet (#121). The patient reply Phoenix returns for each turn
+Phoenix with a monotonic `turn_id`. Phoenix commits each turn at most once. With
+`VOICE_MODE=realtime` the web shows the final transcripts in the station transcript and
+the interim ones as a live caption (#270). The patient reply Phoenix returns for each turn
 is spoken by the same worker; see
 ["Patient speech (ElevenLabs)"](#patient-speech-elevenlabs--manual-test) below.
 
@@ -321,9 +434,11 @@ pending turn, a stale result or the learner disconnecting stops the provider str
 clears the buffered audio and drops any frame that arrives late. Phoenix remains the
 only text authority; the worker never composes, edits or retries reply text. Learner
 speech over an answer that is already playing does not stop it by itself until the next
-reply is accepted; that barge-in detection belongs to #121. The web
-does not render these events yet (#121); the patient audio is already audible because
-the SPA attaches the subscribed audio track.
+reply is accepted; that barge-in detection belongs to #121. With `VOICE_MODE=realtime`
+the web renders these events in the station transcript (#270): it shows the stored
+patient reply (the full verified text, as on the text path) for each patient event,
+"Anotado." for a kept learner turn, and failures as notices; the patient audio plays
+through the subscribed audio track.
 
 **Worker environment** (never sent to the browser or published to the room):
 
@@ -374,7 +489,7 @@ id, generation id and failure kind only.
 - The backend needs `OPENAI_API_KEY`: Station AI generates the reply text, and without
   it no turn gets a reply to speak.
 - `LIVEKIT_URL` must be `ws://127.0.0.1:7880` for the local `livekit-server --dev`, in
-  both the backend and the worker; the `.env.example` value is a cloud placeholder.
+  both the backend and the worker.
 - `ELEVENLABS_VOICE_ID` must be a voice the API key may use. On the free plan, library
   voices answer `402 paid_plan_required`; use a default voice. Check a voice before
   starting the worker (expects `http 200`):

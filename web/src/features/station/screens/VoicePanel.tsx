@@ -6,6 +6,7 @@ import {
   type VoiceSessionApi,
   type VoiceSessionStatus,
 } from "../hooks/useVoiceSession";
+import type { VoiceTranscriptEvent } from "../hooks/voiceTranscriptEvents";
 import strings from "../i18n/pt-BR.json";
 
 const defaultApi: VoiceSessionApi = { createVoiceSession };
@@ -15,6 +16,8 @@ export interface VoicePanelProps {
   active: boolean;
   api?: VoiceSessionApi;
   createRoom?: () => VoiceRoom;
+  /** Receives the voice worker's transcript events (#270). */
+  onTranscriptEvent?: (event: VoiceTranscriptEvent) => void;
 }
 
 const statusText: Record<VoiceSessionStatus, string> = {
@@ -41,9 +44,10 @@ export function VoicePanel({
   active,
   api = defaultApi,
   createRoom,
+  onTranscriptEvent,
 }: VoicePanelProps): React.JSX.Element {
   const { status, error, connect, disconnect, attachAudioElement } =
-    useVoiceSession({ api, sessionId, active, createRoom });
+    useVoiceSession({ api, sessionId, active, createRoom, onTranscriptEvent });
 
   const isConnected = connectedStatuses.has(status);
   const isPending = pendingStatuses.has(status);
@@ -67,7 +71,7 @@ export function VoicePanel({
         type="button"
         data-testid="voice-toggle-button"
         onClick={handleClick}
-        disabled={isPending}
+        disabled={isPending || !active}
       >
         {isConnected ? strings.voiceDisconnectButton : strings.voiceConnectButton}
       </button>

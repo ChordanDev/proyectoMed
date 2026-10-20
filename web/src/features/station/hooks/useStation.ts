@@ -464,6 +464,21 @@ export const useStation = (api: StationApi = defaultApi) => {
     [api],
   );
 
+  // Reads the stored transcript, e.g. to show a real-time voice reply as it
+  // was stored (#270). Read-only: it never changes the session state.
+  const fetchTranscript = useCallback(async (): Promise<
+    SessionMessage[] | null
+  > => {
+    const session = sessionRef.current;
+    if (!session) return null;
+    try {
+      const detail = await api.getSession(session.session_id);
+      return sessionRef.current === session ? detail.messages : null;
+    } catch {
+      return null;
+    }
+  }, [api]);
+
   const synthesize = useCallback(
     async (text: string): Promise<Blob | null> => {
       const session = sessionRef.current;
@@ -677,6 +692,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     send,
     transcribe,
     synthesize,
+    fetchTranscript,
     requestImpresso,
     finish,
     reset,

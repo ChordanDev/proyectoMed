@@ -12,6 +12,7 @@ const mockFinish = vi.fn();
 const mockReset = vi.fn();
 const mockTranscribe = vi.fn();
 const mockSynthesize = vi.fn();
+const mockFetchTranscript = vi.fn();
 
 let mockStationState = {
   status: "idle",
@@ -24,11 +25,20 @@ let mockStationState = {
   send: mockSend,
   transcribe: mockTranscribe,
   synthesize: mockSynthesize,
+  fetchTranscript: mockFetchTranscript,
   finish: mockFinish,
   reset: mockReset,
+  sessionId: "session-1" as string | null,
 };
 
-const activeStation = {
+const activeStation: {
+  station_id: string;
+  version: string;
+  display_title: string;
+  language: string;
+  candidate_brief: { scenario: string; tasks: string[] };
+  voice_mode?: "realtime" | "turn" | "off";
+} = {
   station_id: "acute-appendicitis",
   version: "2.0.0",
   display_title: "Abdome agudo inflamatório — apendicite aguda",
@@ -72,9 +82,103 @@ describe("App", () => {
       send: mockSend,
       transcribe: mockTranscribe,
       synthesize: mockSynthesize,
+      fetchTranscript: mockFetchTranscript,
       finish: mockFinish,
       reset: mockReset,
+      sessionId: "session-1",
     };
+  });
+
+  describe("VOICE_MODE (#270)", () => {
+    const withVoiceMode = (voiceMode: "realtime" | "turn" | "off") => {
+      mockActiveStationState = {
+        station: { ...activeStation, voice_mode: voiceMode },
+        error: null,
+      };
+    };
+    const installVoiceBrowser = () => {
+      vi.stubGlobal("navigator", {
+        ...navigator,
+        mediaDevices: { getUserMedia: vi.fn() },
+      });
+      vi.stubGlobal("MediaRecorder", class {});
+    };
+
+    it("realtime: the voice panel is part of the station screen, with no turn-based buttons", () => {
+      installVoiceBrowser();
+      withVoiceMode("realtime");
+      mockStationState.status = "active";
+      mockStationState.audioConsent = true;
+      mockStationState.initialMessages = [
+        { role: "learner", text: "Onde dói?" },
+        { role: "patient", text: "No peito." },
+      ];
+      render(<App />);
+
+      const panel = screen.getByTestId("voice-panel");
+      expect(screen.getByTestId("station-screen")).toContainElement(panel);
+      expect(screen.queryByTestId("voice-button")).toBeNull();
+      expect(screen.queryByTestId("play-button")).toBeNull();
+    });
+
+    it("turn: the record and play buttons, and no voice panel", () => {
+      installVoiceBrowser();
+      withVoiceMode("turn");
+      mockStationState.status = "active";
+      mockStationState.audioConsent = true;
+      mockStationState.initialMessages = [
+        { role: "learner", text: "Onde dói?" },
+        { role: "patient", text: "No peito." },
+      ];
+      render(<App />);
+
+      expect(screen.queryByTestId("voice-panel")).toBeNull();
+      expect(screen.getByTestId("voice-button")).toBeInTheDocument();
+      expect(screen.getByTestId("play-button")).toBeInTheDocument();
+    });
+
+    it("off: no audio consent is asked and no voice control is offered", async () => {
+      installVoiceBrowser();
+      const user = userEvent.setup();
+      withVoiceMode("off");
+      const view = render(<App />);
+
+      expect(screen.queryByRole("checkbox")).toBeNull();
+      await user.click(screen.getByRole("button", { name: strings.noticeButton }));
+      await user.click(screen.getByRole("button", { name: strings.briefEnterButton }));
+      expect(mockStart).toHaveBeenCalledWith(false);
+
+      mockStationState.status = "active";
+      mockStationState.audioConsent = true;
+      mockStationState.initialMessages = [
+        { role: "learner", text: "Onde dói?" },
+        { role: "patient", text: "No peito." },
+      ];
+      view.rerender(<App />);
+      expect(screen.queryByTestId("voice-panel")).toBeNull();
+      expect(screen.queryByTestId("voice-button")).toBeNull();
+      expect(screen.queryByTestId("play-button")).toBeNull();
+    });
+
+    it("realtime: the voice session exists only between the brief and the finish", async () => {
+      const user = userEvent.setup();
+      withVoiceMode("realtime");
+      const view = render(<App />);
+      expect(screen.queryByTestId("voice-panel")).toBeNull();
+
+      await user.click(screen.getByRole("checkbox"));
+      await user.click(screen.getByRole("button", { name: strings.noticeButton }));
+      expect(screen.queryByTestId("voice-panel")).toBeNull();
+
+      mockStationState.status = "active";
+      mockStationState.audioConsent = true;
+      view.rerender(<App />);
+      expect(screen.getByTestId("voice-panel")).toBeInTheDocument();
+
+      mockStationState.status = "finishing";
+      view.rerender(<App />);
+      expect(screen.queryByTestId("voice-panel")).toBeNull();
+    });
   });
 
   it("renders NoticeScreen when station status is idle", async () => {

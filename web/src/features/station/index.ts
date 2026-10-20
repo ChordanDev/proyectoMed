@@ -13,6 +13,7 @@ export {
   type DiscardSessionOptions,
   ApiError,
   type ActiveStation,
+  type VoiceMode,
   type CandidateBrief,
   type StartSessionRequest,
   type Session,
@@ -59,6 +60,11 @@ export {
 } from "./hooks/useVoiceSession";
 
 export {
+  parseVoiceTranscriptEvent,
+  type VoiceTranscriptEvent,
+} from "./hooks/voiceTranscriptEvents";
+
+export {
   NoticeScreen,
   type NoticeScreenProps,
 } from "./screens/NoticeScreen";
@@ -67,11 +73,10 @@ export { BriefScreen, type BriefScreenProps } from "./screens/BriefScreen";
 
 export { VoicePanel, type VoicePanelProps } from "./screens/VoicePanel";
 
-export { StationSession } from "./screens/StationSession";
-
 export {
   StationScreen,
   type StationScreenProps,
+  type RealtimeVoiceOptions,
   type DisplayMessage,
 } from "./screens/StationScreen";
 

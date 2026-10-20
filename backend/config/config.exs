@@ -23,7 +23,9 @@ config :backend,
   rubric_resolver_adapter: Backend.Stations.RubricAssessment.Resolver.DisabledAdapter,
   rubric_resolver_deadline_ms: 10_000,
   learner_message_max_characters: 2_000,
-  active_station_id: "chest-pain-initial-assessment"
+  active_station_id: "chest-pain-initial-assessment",
+  # Resolved from VOICE_MODE in runtime.exs outside :test (#270).
+  voice_mode: "turn"
 
 # Configure the endpoint
 config :backend, BackendWeb.Endpoint,

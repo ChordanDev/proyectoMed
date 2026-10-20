@@ -45,8 +45,6 @@
   "voiceConnectButton": "Conectar voz",
   "voiceDisconnectButton": "Desconectar voz",
   "voiceMicOnIndicator": "Microfone ativo",
-  "finishStationButton": "Finalizar estação",
-  "voiceOffNotice": "Voz desativada para esta estação. O texto continua funcionando normalmente.",
   "resultRestartButton": "Reiniciar estação",
   "loadingResult": "Gerando o resultado da estação...",
   "loadingResultFeedbackWait": "Gerando feedback da estação… isso pode levar até um minuto.",
@@ -96,5 +94,9 @@
   "briefDialogTitle": "Cenário e tarefas da estação",
   "briefCloseButton": "Voltar à estação",
   "briefUnavailable": "Não foi possível carregar o cenário e as tarefas da estação.",
-  "discardError": "Não foi possível encerrar a sessão no servidor. Tente novamente."
+  "discardError": "Não foi possível encerrar a sessão no servidor. Tente novamente.",
+  "voiceCaptionLabel": "Transcrição ao vivo",
+  "voicePatientAudioFailed": "Não foi possível tocar a voz do paciente. Leia a resposta na transcrição.",
+  "voiceTextDeliveryFailed": "A resposta do paciente não chegou à transcrição. Continue a consulta.",
+  "voiceRealtimeStopped": "A voz em tempo real foi interrompida. Reconecte a voz ou continue pelo texto."
 }

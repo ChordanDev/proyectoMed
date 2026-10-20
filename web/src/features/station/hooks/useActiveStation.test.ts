@@ -13,6 +13,7 @@ const activeStation: ActiveStation = {
     scenario: "Você é o médico de plantão.",
     tasks: ["Obter anamnese dirigida."],
   },
+  voice_mode: "turn",
 };
 
 describe("useActiveStation", () => {
