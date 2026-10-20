@@ -27,17 +27,17 @@ covers.
 
 ## Tasks
 
-- [ ] T1 — `risk:speaks_out_of_role` gets its own no threshold
+- [x] T1 — `risk:speaks_out_of_role` gets its own no threshold
   (`:out_of_role_no_threshold`, env `TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD`, default
   0.5), validated like the global no threshold; README documents it.
   Route: inline (one adapter + runtime config + tests; already understood).
-- [ ] T2 — a stated-yes / asked-undecided on-request fact is named in
+- [x] T2 — a stated-yes / asked-undecided on-request fact is named in
   `undecided_fact_ids`, so `CandidateGate` regenerates once with it withheld.
   Route: inline (one function in the adapter + tests).
-- [ ] T3 — the patient instruction keeps sibling facts of the same subject unsaid
+- [x] T3 — the patient instruction keeps sibling facts of the same subject unsaid
   (where the pain started vs. where it went later).
   Route: inline (one prompt sentence + test).
-- [ ] T4 — live check on acute-appendicitis: "Qual é seu nome?", "Onde começou a
+- [x] T4 — live check on acute-appendicitis: "Qual é seu nome?", "Onde começou a
   dor?", "Há quanto tempo começou?" each get a patient answer.
 
 ## Checks
@@ -48,8 +48,31 @@ covers.
 
 ## Progress
 
-(updated per task)
+| Task | Commit | RED | GREEN |
+|---|---|---|---|
+| T1 | `eb6cce5` | 4 failing in `typesafe_adapter_test.exs` (default band, invalid config, two runtime.exs) | `test/backend/stations/jev_decision/`: 202 passed |
+| T2 | `0630886` | 2 failing (adapter naming, CandidateGate end to end through TypesafeAdapter) | `test/backend/stations/`: 935 passed |
+| T3 | `ff65b52` | 1 failing in `station_ai_test.exs` | `test/backend/stations/`: 936 passed |
+| T4 | no code | — | live, see below |
+
+T1 note: unset, the out-of-role no threshold is `0.5`, or the global no threshold
+when `yes_threshold` is itself `0.5`, so a valid global config never becomes
+invalid through the default.
+
+T4 live check (TypeSafe Jev + configured patient LLM, `TYPESAFE_NO_THRESHOLD`
+unset, single-turn, through `Backend.Stations.verify_patient_reply/3`):
+
+| Question | Candidate | Verdict | `speaks_out_of_role` |
+|---|---|---|---|
+| Qual é seu nome? | Meu nome é Rafael Nogueira. | verified, delivered | 0.200 |
+| Onde começou a dor? | A dor começou ao redor do umbigo. | verified, delivered | 0.220 |
+| Há quanto tempo começou? | Começou há umas 18 horas. | verified, delivered | 0.180 |
+
+Refusal causes: verified 3, none refused. The 0.220 turn would have been
+`undecided_other` under the old global 0.2.
+
+Review: native RDD not run by this bounded writer; the parent owns it.
 
 ## Next step
 
-T1.
+Local CI, push, PR to `feat/237-clinician-demo-readiness`.
