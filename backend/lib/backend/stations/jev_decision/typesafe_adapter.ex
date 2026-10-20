@@ -99,6 +99,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       or the asked question of an `on_request` fact the reply states (yes, issue
       #284): their authored ids. `CandidateGate` withholds them in its single
       regeneration.
+    * `undecided_labels`, `not_asked_fact_ids`, `asked_fact_ids`,
+      `stated_not_asked_fact_ids`, `fact_scores` - only on a `:low_confidence`
+      verdict: the evidence the undecided-verdict adjudicator reads (issue #290,
+      see `put_adjudication_evidence/5`)
     * `:semantic_refusal` - a risk answer is a yes, or an `on_request` fact is stated
       (yes) while the learner did not ask for it (no)
     * `:verified` - every risk answer is a no and no answer the verdict depends on is
@@ -238,7 +242,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
          payload = build_payload(request, facts, questions, config.model),
          {:ok, body} <- execute_request(config, payload, budget_ms),
          {:ok, nouls} <- parse_answers(body, Map.keys(questions)) do
-      decision = verdict(facts, risk_ids(rules), nouls, thresholds)
+      decision =
+        facts
+        |> verdict(risk_ids(rules), nouls, thresholds)
+        |> put_adjudication_evidence(facts, rules, nouls, thresholds)
+
       log_classifications(decision.status, nouls, thresholds)
       {:ok, decision}
     end
@@ -819,6 +827,116 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     |> put_fact_ids(:unasked_fact_ids, unasked_fact_ids)
     |> put_fact_ids(:undecided_fact_ids, undecided_fact_ids(status, risks, facts, disclosures))
   end
+
+  @doc """
+  Adds to a `:low_confidence` verdict the evidence the undecided-verdict
+  adjudicator reads (issue #290); any other verdict is returned unchanged.
+
+    * `undecided_labels` - every answer strictly between its thresholds, in
+      question order (facts, then the fixed risks, then the rules): `question`
+      (`"fact_stated"`, `"fact_asked"`, a `risk:` id or `"rule_broken"`), the
+      `fact_id` of a fact question or the authored `rule` instruction of a rule
+      question, and the `score` rounded to 3 decimals
+    * `not_asked_fact_ids` - present only when non-empty: the `on_request` facts
+      whose `fact_asked` answer is a clear no while `fact_stated` is not, so a
+      delivered reply could state a fact nobody asked for
+    * `asked_fact_ids` - present only when non-empty: the `on_request` facts
+      whose `fact_asked` answer is a clear yes, so the adjudicator never
+      withholds a fact the learner asked for
+    * `stated_not_asked_fact_ids` - present only when non-empty: the facts
+      whose `fact_stated` answer is a clear yes and `fact_asked` a clear no, the
+      only facts the adjudicator's hard limit blocks (a defense in depth: this
+      verdict is normally already a `:semantic_refusal`)
+    * `fact_scores` - present only when non-empty: every fact whose
+      `fact_stated` answer is not a clear no, in question order, with its
+      `stated` and `asked` scores rounded to 3 decimals (`asked` is `nil` for a
+      fact that is not `on_request`), so the adjudicator can judge whether the
+      reply really states it
+  """
+  @spec put_adjudication_evidence(map(), [fact_plan()], [rule_plan()], map(), thresholds()) ::
+          map()
+  def put_adjudication_evidence(
+        %{status: :low_confidence} = decision,
+        facts,
+        rules,
+        nouls,
+        thresholds
+      ) do
+    fact_labels =
+      Enum.flat_map(facts, fn fact ->
+        [{"fact_stated", fact.stated}, {"fact_asked", fact.asked}]
+        |> Enum.filter(fn {_question, id} -> id != nil and undecided?(id, nouls, thresholds) end)
+        |> Enum.map(fn {question, id} ->
+          %{question: question, fact_id: fact.id, score: rounded(nouls[id])}
+        end)
+      end)
+
+    risk_labels =
+      for {id, _instructions} <- @risk_questions,
+          undecided?(id, nouls, thresholds),
+          do: %{question: id, score: rounded(nouls[id])}
+
+    rule_labels =
+      for rule <- rules,
+          undecided?(rule.broken, nouls, thresholds),
+          do: %{
+            question: "rule_broken",
+            rule: rule.instruction,
+            score: rounded(nouls[rule.broken])
+          }
+
+    not_asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :no,
+        classify(nouls[fact.stated], thresholds) != :no,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
+    asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :yes,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
+    stated_not_asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :no,
+        classify(nouls[fact.stated], thresholds) == :yes,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
+    fact_scores =
+      for(
+        fact <- facts,
+        classify(nouls[fact.stated], thresholds) != :no,
+        do: %{
+          fact_id: fact.id,
+          stated: rounded(nouls[fact.stated]),
+          asked: if(fact.asked, do: rounded(nouls[fact.asked]))
+        }
+      )
+      |> Enum.uniq_by(& &1.fact_id)
+
+    decision
+    |> Map.put(:undecided_labels, fact_labels ++ risk_labels ++ rule_labels)
+    |> put_fact_ids(:not_asked_fact_ids, not_asked)
+    |> put_fact_ids(:asked_fact_ids, asked)
+    |> put_fact_ids(:stated_not_asked_fact_ids, stated_not_asked)
+    |> put_fact_ids(:fact_scores, fact_scores)
+  end
+
+  def put_adjudication_evidence(decision, _facts, _rules, _nouls, _thresholds), do: decision
+
+  defp undecided?(id, nouls, thresholds),
+    do: classify(nouls[id], question_thresholds(id, thresholds)) == :undecided
+
+  defp rounded(noul), do: Float.round(noul / 1, 3)
 
   defp put_fact_ids(decision, _key, []), do: decision
   defp put_fact_ids(decision, key, ids), do: Map.put(decision, key, ids)

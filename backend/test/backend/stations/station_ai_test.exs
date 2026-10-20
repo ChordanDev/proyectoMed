@@ -111,6 +111,61 @@ defmodule Backend.StationAI.SystemPromptTest do
     end
   end
 
+  describe "system_prompt/1 facts that require an explicit question (issue #290)" do
+    @explicit_heading "FATOS QUE SÓ PODEM SER DITOS COM PERGUNTA EXPLÍCITA"
+
+    defp explicit?(fact), do: Backend.Stations.StationAI.explicit_question_fact?(fact)
+
+    test "names every explicit-question fact of the package, and only those", %{prompt: prompt} do
+      package = @package_path |> File.read!() |> Jason.decode!()
+      [_, section] = String.split(prompt, @explicit_heading)
+      [section | _] = String.split(section, "REGRAS DE RESPOSTA")
+
+      explicit = Enum.filter(package["revealable_facts"], &explicit?/1)
+      assert length(explicit) == 6
+
+      for fact <- package["revealable_facts"] do
+        if fact in explicit,
+          do: assert(section =~ "(#{fact["id"]}) #{fact["content"]}"),
+          else: refute(section =~ "(#{fact["id"]})")
+      end
+
+      assert section =~
+               "Uma pergunta mais ampla ou sobre um assunto vizinho não conta como pergunta explícita"
+    end
+
+    test "is derived from package data: a structured flag, the authored topic or id convention" do
+      flagged = %{
+        "id" => "f1",
+        "topic" => "x",
+        "content" => "c",
+        "requires_explicit_question" => true
+      }
+
+      by_topic = %{"id" => "f2", "topic" => "Só revela se perguntar explicitamente"}
+      by_id = %{"id" => "pergunta-explicita-09", "topic" => "x", "content" => "c"}
+      plain = %{"id" => "hda-01", "topic" => "HDA", "content" => "c"}
+      opted_out = Map.put(by_id, "requires_explicit_question", false)
+
+      assert explicit?(flagged)
+      assert explicit?(by_topic)
+      assert explicit?(by_id)
+      refute explicit?(plain)
+      refute explicit?(opted_out)
+      refute explicit?(nil)
+    end
+
+    test "a package without such facts keeps the prompt without the section" do
+      package =
+        @package_path
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.update!("revealable_facts", &Enum.reject(&1, fn fact -> explicit?(fact) end))
+
+      refute StationAI.system_prompt(package) =~ @explicit_heading
+    end
+  end
+
   describe "system_prompt/1 patient identity" do
     test "keeps the examiner-facing context and says the patient is the person it describes",
          %{prompt: prompt} do

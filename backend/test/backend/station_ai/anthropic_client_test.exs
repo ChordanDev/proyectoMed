@@ -56,6 +56,57 @@ defmodule Backend.Stations.StationAI.AnthropicClientTest do
     end
   end
 
+  describe "Claude Haiku 5.5 (issue #290)" do
+    defp haiku_request do
+      %{
+        system: "Stable rules.",
+        messages: [%{"role" => "user", "content" => "Q."}],
+        max_tokens: 16
+      }
+    end
+
+    test "the adjudicator model key defaults to Claude Haiku 5.5" do
+      config = AnthropicClient.config([api_key: "k"], model_key: :adjudicator_model)
+      assert config.model == "claude-haiku-5-5"
+    end
+
+    test "sends no server-side fallback and turns thinking off at the lowest setting" do
+      config =
+        AnthropicClient.config([api_key: "k", model: "claude-haiku-5-5"],
+          effort: "low",
+          thinking: :lowest
+        )
+
+      body = AnthropicClient.body(config, haiku_request())
+
+      refute Map.has_key?(body, "fallbacks")
+      assert body["thinking"] == %{"type" => "disabled"}
+      assert body["output_config"] == %{"effort" => "low"}
+    end
+
+    test "sends no fallback beta header" do
+      test_pid = self()
+
+      Req.Test.stub(HaikuHeaderStub, fn conn ->
+        send(test_pid, {:beta, Plug.Conn.get_req_header(conn, "anthropic-beta")})
+
+        Req.Test.json(conn, %{
+          "content" => [%{"type" => "text", "text" => "ok"}],
+          "stop_reason" => "end_turn"
+        })
+      end)
+
+      config =
+        AnthropicClient.config(
+          [api_key: "k", model: "claude-haiku-5-5", plug: {Req.Test, HaikuHeaderStub}],
+          []
+        )
+
+      assert {:ok, "ok"} = AnthropicClient.create_message(config, haiku_request())
+      assert_received {:beta, []}
+    end
+  end
+
   describe "create_message/2 usage log (issue #272)" do
     setup do
       previous = Logger.level()

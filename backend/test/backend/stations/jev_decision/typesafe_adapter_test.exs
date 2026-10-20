@@ -350,7 +350,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                 %{
                   status: :low_confidence,
                   used_fact_ids: ["fact-onset"],
-                  undecided_fact_ids: ["fact-onset"]
+                  undecided_fact_ids: ["fact-onset"],
+                  fact_scores: [%{fact_id: "fact-onset", stated: 0.97, asked: 0.5}],
+                  undecided_labels: [%{question: "fact_asked", fact_id: "fact-onset", score: 0.5}]
                 }}
     end
 
@@ -362,7 +364,12 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                 %{
                   status: :low_confidence,
                   used_fact_ids: [],
-                  undecided_fact_ids: ["fact-allergy"]
+                  undecided_fact_ids: ["fact-allergy"],
+                  not_asked_fact_ids: ["fact-allergy"],
+                  fact_scores: [%{fact_id: "fact-allergy", stated: 0.5, asked: 0.03}],
+                  undecided_labels: [
+                    %{question: "fact_stated", fact_id: "fact-allergy", score: 0.5}
+                  ]
                 }}
     end
 
@@ -381,7 +388,16 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                 %{
                   status: :low_confidence,
                   used_fact_ids: ["fact-onset"],
-                  undecided_fact_ids: ["fact-allergy"]
+                  undecided_fact_ids: ["fact-allergy"],
+                  not_asked_fact_ids: ["fact-allergy"],
+                  asked_fact_ids: ["fact-onset"],
+                  fact_scores: [
+                    %{fact_id: "fact-onset", stated: 0.97, asked: 0.95},
+                    %{fact_id: "fact-allergy", stated: 0.31, asked: 0.03}
+                  ],
+                  undecided_labels: [
+                    %{question: "fact_stated", fact_id: "fact-allergy", score: 0.31}
+                  ]
                 }}
     end
 
@@ -462,6 +478,90 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                  yes_threshold: 0.6,
                  no_threshold: 0.4
                )
+    end
+  end
+
+  describe "decide_patient/2 undecided labels (issue #290)" do
+    test "a low-confidence verdict lists every undecided answer with its score" do
+      nouls =
+        nouls(%{
+          @stated_onset => 0.97,
+          @asked_onset => 0.45678,
+          @risk_unsupported => 0.5,
+          @rule_broken => 0.3,
+          # Below its own no threshold (0.5): a clear no, not a label.
+          @risk_speaks_out_of_role => 0.3
+        })
+
+      assert {:ok, decision} = decide(LabelsStub, nouls)
+      assert decision.status == :low_confidence
+
+      assert decision.undecided_labels == [
+               %{question: "fact_asked", fact_id: "fact-onset", score: 0.457},
+               %{question: @risk_unsupported, score: 0.5},
+               %{question: "rule_broken", rule: @rule["instruction"], score: 0.3}
+             ]
+
+      refute Map.has_key?(decision, :not_asked_fact_ids)
+    end
+
+    test "names the on_request facts a clear-no asked label says were not requested" do
+      # Stated undecided, clearly not asked: the adjudicator may never deliver it.
+      nouls =
+        nouls(%{@stated_allergy => 0.45, @asked_allergy => 0.03, @risk_unsupported => 0.5})
+
+      assert {:ok, decision} = decide(NotAskedStub, nouls)
+      assert decision.status == :low_confidence
+      assert decision.not_asked_fact_ids == ["fact-allergy"]
+    end
+
+    test "names the on_request facts a clear-yes asked label says were requested" do
+      # The adjudicator may never withhold a fact that answers the question.
+      nouls =
+        nouls(%{
+          @stated_onset => 0.5,
+          @asked_onset => 0.92,
+          @stated_allergy => 0.45,
+          @asked_allergy => 0.03
+        })
+
+      assert {:ok, decision} = decide(AskedStub, nouls)
+      assert decision.status == :low_confidence
+      assert decision.asked_fact_ids == ["fact-onset"]
+      assert decision.not_asked_fact_ids == ["fact-allergy"]
+    end
+
+    test "scores every fact the reply may state, for the adjudicator" do
+      nouls =
+        nouls(%{
+          @stated_onset => 0.5,
+          @asked_onset => 0.92,
+          @stated_allergy => 0.31,
+          @asked_allergy => 0.19
+        })
+
+      assert {:ok, decision} = decide(FactScoresStub, nouls)
+      assert decision.status == :low_confidence
+
+      assert decision.fact_scores == [
+               %{fact_id: "fact-onset", stated: 0.5, asked: 0.92},
+               %{fact_id: "fact-allergy", stated: 0.31, asked: 0.19}
+             ]
+
+      # Stated is undecided, so the hard limit does not apply.
+      refute Map.has_key?(decision, :stated_not_asked_fact_ids)
+    end
+
+    test "a verified or refused verdict carries no labels" do
+      assert {:ok, verified} = decide(NoLabelsVerifiedStub, nouls())
+      assert {:ok, refused} = decide(NoLabelsRefusedStub, nouls(%{@risk_unsupported => 0.9}))
+
+      for decision <- [verified, refused] do
+        refute Map.has_key?(decision, :undecided_labels)
+        refute Map.has_key?(decision, :not_asked_fact_ids)
+        refute Map.has_key?(decision, :asked_fact_ids)
+        refute Map.has_key?(decision, :fact_scores)
+      end
     end
   end
 
@@ -923,8 +1023,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
     test "accepts the extreme thresholds 0 and 1" do
       nouls = nouls(%{@stated_onset => 1.0, @asked_onset => 1.0})
 
-      assert decide(ExtremeStub, nouls, yes_threshold: 1, no_threshold: 0) ==
-               {:ok, %{status: :low_confidence, used_fact_ids: ["fact-onset"]}}
+      assert {:ok, %{status: :low_confidence, used_fact_ids: ["fact-onset"]}} =
+               decide(ExtremeStub, nouls, yes_threshold: 1, no_threshold: 0)
     end
   end
 
@@ -1387,7 +1487,12 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                 %{
                   status: :low_confidence,
                   used_fact_ids: [],
-                  undecided_fact_ids: ["fact-allergy"]
+                  undecided_fact_ids: ["fact-allergy"],
+                  not_asked_fact_ids: ["fact-allergy"],
+                  fact_scores: [%{fact_id: "fact-allergy", stated: 0.3, asked: 0.03}],
+                  undecided_labels: [
+                    %{question: "fact_stated", fact_id: "fact-allergy", score: 0.3}
+                  ]
                 }}
     end
 
@@ -1573,7 +1678,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                 %{
                   status: :low_confidence,
                   used_fact_ids: ["fact-allergy"],
-                  undecided_fact_ids: ["fact-allergy"]
+                  undecided_fact_ids: ["fact-allergy"],
+                  fact_scores: [%{fact_id: "fact-allergy", stated: 0.97, asked: 0.5}],
+                  undecided_labels: [
+                    %{question: "fact_asked", fact_id: "fact-allergy", score: 0.5}
+                  ]
                 }}
     end
 

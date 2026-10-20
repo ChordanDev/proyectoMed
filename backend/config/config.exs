@@ -22,6 +22,12 @@ config :backend,
   learner_feedback_deadline_ms: 60_000,
   rubric_resolver_adapter: Backend.Stations.RubricAssessment.Resolver.DisabledAdapter,
   rubric_resolver_deadline_ms: 10_000,
+  # Undecided-verdict adjudicator (issue #290): off unless runtime.exs selects it.
+  patient_adjudicator_adapter: Backend.Stations.PatientAdjudicator.DisabledAdapter,
+  patient_adjudicator_deadline_ms: 2_000,
+  # Added to the turn's verification deadline only when the adjudicator asks for
+  # a regeneration (3 s + 1.5 s = 4.5 s at most on that path).
+  patient_adjudicator_regeneration_extension_ms: 1_500,
   learner_message_max_characters: 2_000,
   active_station_id: "chest-pain-initial-assessment",
   # Resolved from VOICE_MODE in runtime.exs outside :test (#270).
