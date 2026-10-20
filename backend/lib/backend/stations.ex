@@ -338,56 +338,6 @@ defmodule Backend.Stations do
     )
   end
 
-  # Decides who the latest learner turn of the session is addressed to (#274),
-  # before any generation. Only a confident examiner answer is `:examiner`; an
-  # undecided answer or any failure of the check is `:patient`, the behaviour
-  # before #274. Logs the decision and its latency, never any content.
-  defp turn_addressee(session_id, channel, params) do
-    started_at = JevDecision.monotonic_now_ms()
-
-    decision =
-      with {:ok, session} <- Conversation.fetch(session_id),
-           {:ok, addressee} <-
-             JevDecision.decide_addressee(
-               %{conversation: session.messages},
-               addressee_opts(params)
-             ) do
-        addressee
-      else
-        _failure -> :error
-      end
-
-    Logger.info(
-      "[Stations] turn_addressee decision=#{decision} channel=#{channel} " <>
-        "latency_ms=#{JevDecision.monotonic_now_ms() - started_at}"
-    )
-
-    if decision == :examiner, do: :examiner, else: :patient
-  end
-
-  # Starts `turn_addressee/3` alongside the patient generation (#294); its
-  # decision is taken once with `await_turn_addressee/1`.
-  defp start_turn_addressee(session_id, channel, params) do
-    Task.async(fn -> turn_addressee(session_id, channel, params) end)
-  end
-
-  # The check has its own deadline inside `JevDecision`; the extra margin only
-  # guards against a stuck task, which is patient-addressed like any failure.
-  defp await_turn_addressee(task) do
-    case Task.yield(task, JevDecision.addressee_deadline_ms() + 1_000) ||
-           Task.shutdown(task, :brutal_kill) do
-      {:ok, :examiner} -> :examiner
-      _patient_or_failure -> :patient
-    end
-  end
-
-  defp addressee_opts(params) do
-    case Map.get(params, :adapter) || Map.get(params, "adapter") do
-      adapter when is_atom(adapter) and not is_nil(adapter) -> [adapter: adapter]
-      _ -> []
-    end
-  end
-
   defp generate_patient_turn(session_id, token, params, started_at) do
     package = get_active_package()
 
@@ -1122,10 +1072,11 @@ defmodule Backend.Stations do
     * A turn cancelled or superseded mid-reply hands nothing more over, stores
       nothing and returns `{:error, :stale_generation}`.
 
-  The addressee check (#274) runs alongside the generation (#294) and is
-  decided before the first sentence is verified: an examiner-addressed turn
-  stops the generation, hands nothing over, stores nothing of it and is kept as
-  `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
+  The addressee (#274) is decided by the marker the generation starts with
+  (#309), read before the first sentence is verified; a turn naming an
+  authored impresso is examiner-addressed without any generation. An
+  examiner-addressed turn hands nothing over, stores nothing of the generation
+  and is kept as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
 
   Returns `{result, acc}`, where `result` has the shape of
   `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
@@ -1411,59 +1362,101 @@ defmodule Backend.Stations do
   end
 
   defp stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink) do
-    package = get_active_package()
+    started_at = JevDecision.monotonic_now_ms()
 
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(session) do
-      context = format_context(session, package)
-      # The addressee check runs alongside the generation (#294) and gates the
-      # first sentence: an examiner turn stops the generation before anything
-      # of it is verified, handed over or stored.
-      addressee = start_turn_addressee(session_id, :voice, %{})
-      mode = PatientVerification.mode()
-
-      %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
-        SentenceStream.run(
-          gate: fn -> addressee_gate(addressee) end,
-          generate:
-            &stream_patient_reply(package, context, &1, fn _addressee, _source -> :ok end),
-          verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
-          deliver: fn sentence, index, acc ->
-            deliver_voice_sentence(
-              session_id,
-              turn_id,
-              generation_id,
-              {sentence, index},
-              acc,
-              sink
-            )
-          end,
-          acc: acc
+      if impresso_request?(learner_text) do
+        log_turn_addressee(:examiner, :impresso, :voice, started_at)
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+      else
+        stream_marked_voice_reply(
+          session,
+          {turn_id, generation_id, learner_text},
+          started_at,
+          acc,
+          sink
         )
-
-      case outcome do
-        {:closed, :examiner_addressed} ->
-          {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
-
-        outcome ->
-          {resolve_streamed_reply(
-             session_id,
-             turn_id,
-             generation_id,
-             outcome,
-             {delivered, fact_ids},
-             fn stored -> audit_delivered_reply(session_id, stored, package, session) end
-           ), acc}
       end
     else
       {:error, reason} -> {fail_voice_reply(session_id, generation_id, reason), acc}
     end
   end
 
-  defp addressee_gate(addressee) do
-    case await_turn_addressee(addressee) do
-      :examiner -> {:closed, :examiner_addressed}
-      :patient -> :open
+  # The generation's addressee marker (#309) gates the first sentence: the
+  # stream hands the decision over before any text, so an examiner turn stops
+  # before anything of the generation is verified, handed over or stored.
+  defp stream_marked_voice_reply(
+         %{session_id: session_id} = session,
+         {turn_id, generation_id, learner_text},
+         started_at,
+         acc,
+         sink
+       ) do
+    package = get_active_package()
+    context = format_context(session, package)
+    mode = PatientVerification.mode()
+    parent = self()
+    marker = make_ref()
+    on_addressee = fn addressee, source -> send(parent, {marker, addressee, source}) end
+
+    %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
+      SentenceStream.run(
+        gate: fn -> marker_gate(marker, started_at) end,
+        generate: &stream_patient_reply(package, context, &1, on_addressee),
+        verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
+        deliver: fn sentence, index, acc ->
+          deliver_voice_sentence(
+            session_id,
+            turn_id,
+            generation_id,
+            {sentence, index},
+            acc,
+            sink
+          )
+        end,
+        acc: acc
+      )
+
+    flush_marker(marker)
+
+    case outcome do
+      {:closed, :examiner_addressed} ->
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+
+      outcome ->
+        {resolve_streamed_reply(
+           session_id,
+           turn_id,
+           generation_id,
+           outcome,
+           {delivered, fact_ids},
+           fn stored -> audit_delivered_reply(session_id, stored, package, session) end
+         ), acc}
+    end
+  end
+
+  # The gate runs before the first sentence, which the generation sends only
+  # after its marker decision, or when the stream stops; a generation that
+  # failed before deciding is patient-addressed, like a missing marker.
+  defp marker_gate(marker, started_at) do
+    {addressee, source} =
+      receive do
+        {^marker, addressee, source} -> {addressee, source}
+      after
+        0 -> {:patient, :missing_marker}
+      end
+
+    log_turn_addressee(addressee, source, :voice, started_at)
+    if addressee == :examiner, do: {:closed, :examiner_addressed}, else: :open
+  end
+
+  # A decision sent after the gate (a generation that timed out) is dropped.
+  defp flush_marker(marker) do
+    receive do
+      {^marker, _addressee, _source} -> :ok
+    after
+      0 -> :ok
     end
   end
 

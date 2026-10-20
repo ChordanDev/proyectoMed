@@ -32,7 +32,7 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
       send(Application.fetch_env!(:backend, :marker_turn_test_pid), :patient_generation)
       reply = Application.fetch_env!(:backend, :marker_turn_reply)
       Enum.each(Application.get_env(:backend, :marker_turn_pieces, [reply]), on_text)
-      {:ok, %{text: reply}}
+      Application.get_env(:backend, :marker_turn_stream_result, {:ok, %{text: reply}})
     end
   end
 
@@ -57,13 +57,24 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
     end
   end
 
+  defmodule RefusingJev do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :semantic_refusal}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup do
     keys = [
       :station_ai_adapter,
       :jev_decision_adapter,
       :marker_turn_test_pid,
       :marker_turn_reply,
-      :marker_turn_pieces
+      :marker_turn_pieces,
+      :marker_turn_stream_result
     ]
 
     previous = Map.new(keys, &{&1, Application.fetch_env(:backend, &1)})
@@ -275,6 +286,84 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
                Stations.process_voice_turn(session.session_id, 1, @question)
 
       refute_received :addressee_check
+    end
+  end
+
+  describe "streamed voice turns" do
+    test "an examiner marker stops the reply with nothing verified, spoken or stored" do
+      reply("[EXAMINADOR] Anotado.", ["[EXAMIN", "ADOR]", " Anotado."])
+      session = Stations.create_session(%{audio_consent: true})
+
+      log =
+        info_log(fn ->
+          assert {{:ok, {:kept, %{addressee: :examiner, refusal: :examiner_addressed}}}, []} =
+                   Stations.stream_voice_turn(session.session_id, 1, @finding, [], collect_sink())
+        end)
+
+      assert_received :patient_generation
+      refute_received :patient_verification
+      refute_received :addressee_check
+      refute log =~ "voice_sentence"
+
+      assert log =~
+               ~r/turn_addressee decision=examiner source=marker channel=voice latency_ms=\d+/
+
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: @finding} = learner] = stored.messages
+      refute Map.get(learner, :verified_fact_ids)
+    end
+
+    test "an examiner marker wins over a generation that failed after it" do
+      reply("[EXAMINADOR]")
+      Application.put_env(:backend, :marker_turn_stream_result, {:error, :network_error})
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {{:ok, {:kept, %{addressee: :examiner}}}, []} =
+               Stations.stream_voice_turn(session.session_id, 1, @finding, [], collect_sink())
+    end
+
+    test "an authored impresso is released as an examiner turn without the model" do
+      reply("[PACIENTE] " <> @reply)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {{:ok, {:kept, %{addressee: :examiner}}}, []} =
+               Stations.stream_voice_turn(session.session_id, 1, @lab_request, [], collect_sink())
+
+      refute_received :patient_generation
+
+      assert {:ok, %{released_impressos: [%{id: @lab_impresso}]}} =
+               Stations.list_impressos(session.session_id)
+    end
+
+    test "a missing marker streams the patient reply" do
+      reply(@reply, ["Meu nome", " é Ana."])
+      session = Stations.create_session(%{audio_consent: true})
+
+      log =
+        info_log(fn ->
+          assert {{:ok, %{reply_text: @reply}}, [@reply]} =
+                   Stations.stream_voice_turn(
+                     session.session_id,
+                     1,
+                     @question,
+                     [],
+                     collect_sink()
+                   )
+        end)
+
+      assert log =~ "turn_addressee decision=patient source=missing_marker channel=voice"
+      refute_received :addressee_check
+    end
+
+    test "a refused patient reply is kept with addressee patient" do
+      reply("[PACIENTE] " <> @reply)
+      Application.put_env(:backend, :jev_decision_adapter, RefusingJev)
+      session = Stations.create_session(%{audio_consent: true})
+
+      capture_log(fn ->
+        assert {{:ok, {:kept, %{addressee: :patient, refusal: :semantic_refusal}}}, []} =
+                 Stations.stream_voice_turn(session.session_id, 1, @question, [], collect_sink())
+      end)
     end
   end
 
