@@ -69,6 +69,31 @@ defmodule Backend.Stations.JevDecisionTest do
       {:ok, %{status: :low_confidence, undecided_fact_ids: "fact-1"}}
     end
 
+    defp decide_text("undecided_labels", _req) do
+      {:ok,
+       %{
+         status: :low_confidence,
+         used_fact_ids: [],
+         not_asked_fact_ids: ["fact-1"],
+         undecided_labels: [
+           %{question: "fact_stated", fact_id: "fact-1", score: 0.31},
+           %{"question" => "risk:unsupported_information", "score" => 0.5}
+         ]
+       }}
+    end
+
+    defp decide_text("malformed_labels", _req) do
+      {:ok,
+       %{
+         status: :low_confidence,
+         undecided_labels: [%{question: "fact_stated", fact_id: "nonexistent-fact-99", score: 2}]
+       }}
+    end
+
+    defp decide_text("not_asked_unknown_fact", _req) do
+      {:ok, %{status: :low_confidence, not_asked_fact_ids: ["nonexistent-fact-99"]}}
+    end
+
     defp decide_text("nonexistent_fact", _req) do
       {:ok, %{status: :verified, used_fact_ids: ["nonexistent-fact-99"]}}
     end
@@ -405,6 +430,46 @@ defmodule Backend.Stations.JevDecisionTest do
       }
 
       assert {:ok, %{status: :low_confidence, undecided_fact_ids: ["fact-1"]}} =
+               JevDecision.decide_patient(request, adapter: DeterministicDouble)
+    end
+
+    # Issue #290: the adjudicator reads Jev's undecided labels and scores.
+    test "passes the undecided labels and the clear-no asked facts through" do
+      request = %{
+        candidate_text: "undecided_labels",
+        package: sample_package(),
+        conversation: sample_conversation()
+      }
+
+      assert {:ok, decision} = JevDecision.decide_patient(request, adapter: DeterministicDouble)
+      assert decision.not_asked_fact_ids == ["fact-1"]
+
+      assert decision.undecided_labels == [
+               %{question: "fact_stated", fact_id: "fact-1", score: 0.31},
+               %{question: "risk:unsupported_information", score: 0.5}
+             ]
+    end
+
+    test "drops malformed undecided labels instead of failing the decision" do
+      request = %{
+        candidate_text: "malformed_labels",
+        package: sample_package(),
+        conversation: sample_conversation()
+      }
+
+      assert {:ok, decision} = JevDecision.decide_patient(request, adapter: DeterministicDouble)
+      assert decision.status == :low_confidence
+      refute Map.has_key?(decision, :undecided_labels)
+    end
+
+    test "rejects clear-no asked fact ids that are not canonical package fact ids" do
+      request = %{
+        candidate_text: "not_asked_unknown_fact",
+        package: sample_package(),
+        conversation: sample_conversation()
+      }
+
+      assert {:error, {:invalid_response, _reason}} =
                JevDecision.decide_patient(request, adapter: DeterministicDouble)
     end
 
