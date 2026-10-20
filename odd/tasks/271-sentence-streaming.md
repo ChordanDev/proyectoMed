@@ -44,7 +44,7 @@ and verified, so the learner waits for all of it.
 | ID | Task | Route | Status |
 |----|------|-------|--------|
 | T1 | Sentence splitter + Anthropic SSE streaming client + `stream_reply` adapter callback | delegated direct (this writer) | [x] |
-| T2 | `SentenceStream` orchestrator + `Stations.stream_voice_turn/5` (verify per sentence, stop on refusal, store spoken, kept rules, latency logs) | delegated direct (this writer) | [ ] |
+| T2 | `SentenceStream` orchestrator + `Stations.stream_voice_turn/5` (verify per sentence, stop on refusal, store spoken, kept rules, latency logs) | delegated direct (this writer) | [x] |
 | T3 | `VoiceWorkerController` NDJSON sentence channel | delegated direct (this writer) | [ ] |
 | T4 | Worker: stream sentences from Phoenix, speak them in order, first-audio latency log, docs | delegated direct (this writer) | [ ] |
 
@@ -67,6 +67,8 @@ Route evidence: the parent delegated all four tasks to one bounded writer (2+ no
 
 - T1: RED 16 new tests failing (splitter undefined, `stream_message/3`, `stream_reply/4` undefined); one splitter expectation corrected (an ellipsis run ends a sentence by design). GREEN `mix test test/backend/station_ai` 77/77; `mix compile --warnings-as-errors` clean. Commit: see git log (`feat(stations): stream patient replies from the Messages API`).
 
+- T2: RED 14/14 new tests failing (`stream_voice_turn/5` undefined); one GREEN-phase bug found by the tests (a duplicate turn matched the generation-id clause) and fixed. GREEN `mix test` 1508/1508 (14 new); `mix compile --warnings-as-errors` clean. Design notes: the candidate verified for sentence N is the reply so far (sentences 0..N), with the full conversation; the gate's regeneration runs only for sentence 0 (`can_retry?: false` afterwards); a turn cancelled mid-reply stores nothing (Conversation's generation fence) — see follow-ups.
+
 ## Next step
 
-T2.
+T3.
