@@ -51,7 +51,7 @@ defmodule Backend.Stations.PatientAdjudicator do
   ## Deadline
 
   The call has its own deadline, `opts[:adjudicator_deadline_ms]` or the
-  `:patient_adjudicator_deadline_ms` setting (default 1500 ms), capped by the
+  `:patient_adjudicator_deadline_ms` setting (default 2000 ms: Claude Haiku 5.5 measured 1.3-2.6 s live, issue #290), capped by the
   turn's remaining verification budget (`opts[:deadline_at_monotonic_ms]`)
   minus a margin, so the whole turn stays inside the existing bounded deadline.
   With less than 200 ms left no call is made (`{:refuse, :no_budget}`). The
@@ -81,7 +81,7 @@ defmodule Backend.Stations.PatientAdjudicator do
   alias Backend.Stations.JevDecision
   alias Backend.Stations.StationAI.BoundedReply
 
-  @default_deadline_ms 1_500
+  @default_deadline_ms 2_000
   @budget_margin_ms 100
   @min_budget_ms 200
   @decisions ~w(deliver regenerate refuse)

@@ -194,7 +194,7 @@ if config_env() != :test do
   end
 
   # `PATIENT_ADJUDICATOR_DEADLINE_MS` overrides the adjudicator's own deadline
-  # (1.5 s); the turn's verification budget still caps it. Anything but a
+  # (2 s); the turn's verification budget still caps it. Anything but a
   # positive integer keeps the default.
   with raw when is_binary(raw) <- System.get_env("PATIENT_ADJUDICATOR_DEADLINE_MS"),
        {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do

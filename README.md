@@ -768,9 +768,21 @@ voice is not affected.
 | `ANTHROPIC_API_KEY` | Claude API key. Without it every Claude call is a technical failure: the patient turn takes its existing technical-failure path, the resolver leaves actions uncertain and feedback keeps the authored texts. | unset |
 | `ANTHROPIC_MODEL` | Model for the rubric resolver and learner feedback (effort `medium`, model-default thinking). | `claude-opus-5-5` |
 | `ANTHROPIC_PATIENT_MODEL` | Model for the simulated patient (issue #256, chosen for latency). Effort `low`; on Sonnet 5.5 thinking is turned off with `between_tools`, and any other model gets no thinking field. | `claude-sonnet-5-5` |
+| `ANTHROPIC_ADJUDICATOR_MODEL` | Model of the undecided-verdict adjudicator (issue #290): one call when Jev leaves a patient reply `low_confidence`. Effort `low`; thinking off on Haiku 5.5; no server-side fallback (Haiku 5.5 has none). | `claude-haiku-5-5` |
+| `PATIENT_ADJUDICATOR` | `off` keeps a `low_confidence` verdict on its refusal path. Otherwise the adjudicator runs whenever `LLM_PROVIDER=anthropic`. | unset (on with Claude) |
+| `PATIENT_ADJUDICATOR_DEADLINE_MS` | The adjudicator's own deadline, always capped by the 3 s verification budget of the turn. Anything but a positive integer keeps the default. | `2000` |
 | `ANTHROPIC_BASE_URL` | API base URL. | `https://api.anthropic.com` |
 | `RUBRIC_RESOLVER` | `on` (or `openai`, kept for compatibility) turns the rubric resolver on; `LLM_PROVIDER` picks who serves it. Unset keeps it off. | unset |
 | `RUBRIC_RESOLVER_MODEL` | OpenAI model of the resolver; ignored on Claude, where `ANTHROPIC_MODEL` applies. | `OPENAI_MODEL` |
+
+With Claude selected, a patient reply Jev leaves undecided (`low_confidence`) is
+adjudicated once by `ANTHROPIC_ADJUDICATOR_MODEL` instead of being refused: it
+delivers the reply, asks for the single regeneration withholding named facts, or
+refuses. A failure, a timeout or a malformed answer keeps today's refusal path.
+It never delivers a reply the deterministic checks reject or a fact Jev clearly
+found unrequested. Each call logs `[PatientAdjudicator] adjudication
+outcome=... latency_ms=...` with no text. See
+`docs/design/undecided-adjudicator.md`.
 
 So `LLM_PROVIDER=anthropic RUBRIC_RESOLVER=on` runs the patient, the resolver
 and feedback on Claude; `LLM_PROVIDER=anthropic` alone leaves the resolver off.

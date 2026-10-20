@@ -23,9 +23,11 @@ A `low_confidence` Jev verdict (any undecided label) is no longer an automatic r
 - [x] T2 `PatientAdjudicator` seam: behaviour, disabled and Anthropic adapters, output validation, deadline, logging; `AnthropicClient` Haiku 5.5 support; configuration (RED→GREEN) — `4bc040c`
   - RED: 25 of 46 failing (module undefined, Haiku body/header, runtime config). GREEN: 46 passed; `mix compile --warnings-as-errors` and `mix credo --strict` clean.
   - Haiku 5.5 facts (claude-api skill): no server-side fallback (omit `fallbacks` and the beta), `thinking: disabled` accepted at effort `high` or below, effort default `medium` (we send `low`), 512-token cache minimum (the system prompt may sit below it and then silently does not cache).
-- [x] T3 `CandidateGate` routes `low_confidence` through the adjudicator under the hard limits (first candidate and recheck; text and voice share the path) (RED→GREEN) — commit recorded in T4
+- [x] T3 `CandidateGate` routes `low_confidence` through the adjudicator under the hard limits (first candidate and recheck; text and voice share the path) (RED→GREEN) — `46a7a98`
   - RED: 4 of 9 failing in `candidate_gate_adjudication_test.exs` (the 5 passing ones assert today's path is kept). GREEN: 9 passed; full `mix test` 1642 passed; warnings-as-errors and `credo --strict` clean.
-- [ ] T4 Design doc in `docs/design/`, README configuration rows, ADR-011 amendment draft, live check
+- [x] T4 Design doc in `docs/design/`, README configuration rows, ADR-011 amendment draft, live check — this commit
+  - No runnable RED for docs; the measured latency changed the default deadline from 1500 ms to 2000 ms (tests re-run green).
+  - Live check: two runs of the 10-turn replay. Run 2 (2000 ms): turns 1-8 and 10 answered; turn 9 "Toma algum remédio?" refused (adjudicator `deliver` in 1.0 s, hard limit `not_asked` on `pergunta-explicita-02` (`fact_asked` 0.19) turned it into `regenerate`; the recheck had about 0.2 s and timed out). Run 1 (1500 ms): turn 1 also refused after an adjudication timeout.
 
 ## Routing
 All tasks: delegated direct (this worker is the single bounded writer). Mapping done in-session with CodeGraph-free targeted reads (codegraph index initialised for the worktree).
@@ -41,5 +43,11 @@ All tasks: delegated direct (this worker is the single bounded writer). Mapping 
 
 - T3 done: `CandidateGate` sends each `:low_confidence` decision (first candidate and recheck) to `PatientAdjudicator`; deliver delivers, regenerate uses the single regeneration with the adjudicator's ids, anything else keeps today's path. Voice sentences go through the same `verify_candidate/3`, so index > 0 (`can_retry?: false`) can only deliver or refuse.
 
+- T4 done: `docs/design/undecided-adjudicator.md` (decision, limits, latency table, live check, trade-offs, follow-ups, proposed ADR-011 amendment), README rows, amendment draft outside the repository.
+
+## Open concerns
+- Acceptance "Toma algum remédio? gets a patient answer" is not met live: the decided hard limit blocks it whenever Jev puts a narrow fact's `fact_asked` at or below 0.2. Needs a product decision (limit only key findings, or a band).
+- Haiku 5.5 latency is 1.3-1.6 s typical, so a regeneration after an adjudication seldom fits the 3 s budget.
+
 ## Next step
-T4.
+Local CI, push, PR to `feat/237-clinician-demo-readiness`; product decision on the hard limit.

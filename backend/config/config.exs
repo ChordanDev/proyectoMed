@@ -24,7 +24,7 @@ config :backend,
   rubric_resolver_deadline_ms: 10_000,
   # Undecided-verdict adjudicator (issue #290): off unless runtime.exs selects it.
   patient_adjudicator_adapter: Backend.Stations.PatientAdjudicator.DisabledAdapter,
-  patient_adjudicator_deadline_ms: 1_500,
+  patient_adjudicator_deadline_ms: 2_000,
   learner_message_max_characters: 2_000,
   active_station_id: "chest-pain-initial-assessment",
   # Resolved from VOICE_MODE in runtime.exs outside :test (#270).
