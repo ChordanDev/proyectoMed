@@ -12,6 +12,11 @@ defmodule Backend.Stations.LearnerFeedback.AnthropicAdapter do
   are passed through as-is: `Backend.Stations.LearnerFeedback` validates each
   one and falls back to the authored text per criterion.
 
+  The fixed system prompt is the cached prompt prefix (issue #272, see
+  `Backend.Stations.StationAI.AnthropicClient`); the graded record stays in the
+  user message, after the breakpoint. The prompt alone may be shorter than the
+  512-token minimum, in which case it silently does not cache.
+
   The effort is `medium`. The HTTP receive timeout sits just below
   `:learner_feedback_deadline_ms`, which `Backend.Stations.LearnerFeedback`
   enforces as the hard deadline. Configuration and errors are those of

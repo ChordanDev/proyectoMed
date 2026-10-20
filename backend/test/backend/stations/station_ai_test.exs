@@ -46,6 +46,32 @@ defmodule Backend.StationAI.SystemPromptTest do
     end
   end
 
+  describe "system_prompt_parts/2 cache split (issue #272)" do
+    setup do
+      %{package: @package_path |> File.read!() |> Jason.decode!()}
+    end
+
+    test "the stable part is the plain prompt and the parts join into system_prompt/2", %{
+      package: package
+    } do
+      [withheld | _] =
+        Enum.filter(package["revealable_facts"], &(&1["disclosure_condition"] == "on_request"))
+
+      context = %{withheld_fact_ids: [withheld["id"]]}
+      {stable, per_turn} = Backend.Stations.StationAI.system_prompt_parts(package, context)
+
+      assert stable == StationAI.system_prompt(package)
+      assert stable <> per_turn == StationAI.system_prompt(package, context)
+      assert per_turn =~ "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR"
+      refute stable =~ "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR"
+    end
+
+    test "without withheld facts the per-turn part is empty", %{package: package} do
+      assert Backend.Stations.StationAI.system_prompt_parts(package, %{}) ==
+               {StationAI.system_prompt(package), ""}
+    end
+  end
+
   describe "system_prompt/1 answers only what was asked (issue #242)" do
     test "a multi-part question is answered part by part without pulling adjacent facts",
          %{prompt: prompt} do

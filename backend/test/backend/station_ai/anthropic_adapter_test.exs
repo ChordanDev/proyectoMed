@@ -77,7 +77,15 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       # thinking is a 400 and `between_tools` (alone) is the lowest setting.
       assert payload["model"] == "claude-sonnet-5-5"
       assert payload["thinking"] == %{"type" => "between_tools"}
-      assert payload["system"] == StationAI.system_prompt(@package, @context)
+
+      assert payload["system"] == [
+               %{
+                 "type" => "text",
+                 "text" => StationAI.system_prompt(@package, @context),
+                 "cache_control" => %{"type" => "ephemeral"}
+               }
+             ]
+
       assert payload["output_config"] == %{"effort" => "low"}
       assert payload["fallbacks"] == "default"
       assert is_integer(payload["max_tokens"]) and payload["max_tokens"] > 0
@@ -105,8 +113,51 @@ defmodule Backend.Stations.StationAI.AnthropicAdapterTest do
       context = Map.put(@context, :withheld_fact_ids, ["f1"])
       assert {:ok, _} = reply(PatientWithheldStub, context: context)
       assert_receive {:system, system}
-      assert system == StationAI.system_prompt(@package, context)
-      assert system =~ "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR"
+      assert Enum.map_join(system, & &1["text"]) == StationAI.system_prompt(@package, context)
+
+      # Issue #272: the withheld section is per-turn, so it follows the cached
+      # base prompt as an unmarked block.
+      assert [
+               %{
+                 "text" => stable,
+                 "cache_control" => %{"type" => "ephemeral"}
+               },
+               %{"type" => "text", "text" => per_turn} = suffix
+             ] = system
+
+      assert stable == StationAI.system_prompt(@package)
+      assert per_turn =~ "FATOS QUE VOCÊ AINDA NÃO PODE MENCIONAR"
+      refute Map.has_key?(suffix, "cache_control")
+    end
+
+    test "keeps the cached prefix byte-identical across two turns of a session (issue #272)" do
+      test_pid = self()
+
+      Req.Test.stub(PatientCacheStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:body, Jason.decode!(body)})
+        Req.Test.json(conn, message([%{"type" => "text", "text" => "Há duas horas."}]))
+      end)
+
+      first_turn = %{@context | conversation: Enum.take(@context.conversation, 1)}
+      assert {:ok, _} = reply(PatientCacheStub, context: first_turn)
+      assert_receive {:body, first}
+
+      assert {:ok, _} = reply(PatientCacheStub)
+      assert_receive {:body, second}
+
+      assert [%{"cache_control" => %{"type" => "ephemeral"}} = cached] = first["system"]
+      assert Jason.encode!(second["system"]) == Jason.encode!(first["system"])
+      assert cached["text"] == StationAI.system_prompt(@package)
+
+      # Per-turn content lives only in `messages`, after the breakpoint, and the
+      # earlier turn reappears unchanged as a prefix of the next request.
+      assert List.starts_with?(second["messages"], first["messages"])
+      refute cached["text"] =~ "Quando começou a dor?"
+
+      for key <- ["model", "output_config", "thinking", "fallbacks", "max_tokens"] do
+        assert second[key] == first[key]
+      end
     end
 
     test "honours base url, model and effort overrides" do

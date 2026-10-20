@@ -125,7 +125,22 @@ defmodule Backend.Stations.StationAI do
   """
   @spec system_prompt(package(), map()) :: String.t()
   def system_prompt(package, context) when is_map(context) do
-    base_prompt(package) <> withheld_section(package, Map.get(context, :withheld_fact_ids, []))
+    {stable, per_turn} = system_prompt_parts(package, context)
+    stable <> per_turn
+  end
+
+  @doc """
+  Splits `system_prompt/2` into its stable part and its per-turn part, for
+  prompt caching (issue #272).
+
+  The stable part is `system_prompt/1`: it depends only on the package, so it
+  stays byte-identical across every turn of a station. The per-turn part is
+  the withheld-facts section of a regeneration (`""` without withheld facts).
+  Joined, they equal `system_prompt/2`.
+  """
+  @spec system_prompt_parts(package(), map()) :: {String.t(), String.t()}
+  def system_prompt_parts(package, context) when is_map(context) do
+    {base_prompt(package), withheld_section(package, Map.get(context, :withheld_fact_ids, []))}
   end
 
   defp base_prompt(package) do
