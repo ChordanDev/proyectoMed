@@ -41,9 +41,12 @@ evidence. Clear verdicts stay deterministic.
 - the authored response rules.
 
 `TypesafeAdapter` adds `undecided_labels`, `not_asked_fact_ids` and `asked_fact_ids` to a
-`low_confidence` verdict only. `not_asked_fact_ids` lists the on-request facts whose
-`fact_asked` answer is a clear no while `fact_stated` is not. `asked_fact_ids` lists the
-on-request facts whose `fact_asked` answer is a clear yes. Each fact in the request also
+`low_confidence` verdict only, with `stated_not_asked_fact_ids` and `fact_scores`.
+`not_asked_fact_ids` lists the on-request facts whose `fact_asked` answer is a clear no
+while `fact_stated` is not. `asked_fact_ids` lists the on-request facts whose `fact_asked`
+answer is a clear yes. `stated_not_asked_fact_ids` lists the facts whose `fact_stated` is a
+clear yes and `fact_asked` a clear no. `fact_scores` gives, for every fact whose
+`fact_stated` is not a clear no, its `stated` and `asked` scores. Each fact in the request also
 carries `requires_explicit_question` (see "Facts that require an explicit question").
 
 ### Hard limits, enforced in code
@@ -51,7 +54,7 @@ carries `requires_explicit_question` (see "Facts that require an explicit questi
 | Limit | Enforcement |
 |---|---|
 | BoundedReply deterministic checks run first. | `CandidateGate` runs them before Jev, and the adjudicator is reached only after Jev. A `deliver` is checked again; a violation is a refusal. |
-| Never deliver a fact Jev's clear-no "asked" label says was not requested. | A `deliver` while `not_asked_fact_ids` is non-empty becomes `regenerate` withholding those facts. A `regenerate` always withholds them too. |
+| Never deliver a fact Jev found clearly stated (`fact_stated` >= yes threshold) and clearly not requested (`fact_asked` <= no threshold). | A `deliver` while `stated_not_asked_fact_ids` is non-empty becomes `regenerate` withholding those facts. A `regenerate` always withholds them too. When `fact_stated` is undecided, the adjudicator's decision stands: it reads `fact_scores` and the reply to judge whether the fact is really stated. Amended on 2026-10-20 after runs 3-4 (product decision on #299). With TypesafeAdapter, a clear-yes stated and clear-no asked fact already makes the verdict a `semantic_refusal`, so this limit is defense in depth. |
 | Never withhold a fact Jev's clear-yes "asked" label says was requested. | The ids in `asked_fact_ids` are dropped from a `regenerate`'s `withheld_fact_ids`: withholding them would remove the answer the learner asked for. |
 | Structured output only. | JSON schema `{decision: deliver\|regenerate\|refuse, withheld_fact_ids: [...]}`. Exactly those two keys, every id an authored fact id of the package, and a `deliver` names no facts. Anything else is malformed. |
 | Malformed output, timeout or error. | Refuse, which keeps today's path: one regeneration withholding Jev's `undecided_fact_ids`, then a refusal. |
@@ -196,6 +199,32 @@ the turn is still refused:
 
 The hard limit was not changed. The remaining cause is Jev's "maybe stated" answer for a
 narrow negative fact when the reply is a generic denial that does not name it.
+
+### Live check after the hard-limit amendment (runs 5 and 6)
+
+The hard limit applies only to clearly stated facts, and Haiku reads `fact_scores`.
+
+| Turn | Run 5 | Run 6 |
+|---|---|---|
+| 1 Qual é seu nome? | answered, 2208 ms | refused, 5587 ms |
+| 2 Onde começou a toa? | answered, 2040 ms | answered, 2141 ms |
+| 3 Há quanto tempo começou? | answered, 2058 ms | answered, 2121 ms |
+| 4 A dor mudou de lugar? | answered, 2377 ms | answered, 2643 ms |
+| 5 Ela piorou com o tempo? | answered, 2618 ms | answered, 2370 ms |
+| 6 A dor vai para outro lugar? | answered, 1798 ms | answered, 1727 ms |
+| 7 Teve febre? | answered, 2393 ms | answered, 2152 ms |
+| 8 Teve náusea ou vômito? | answered, 2261 ms | answered, 2243 ms |
+| 9 Toma algum remédio? | answered, 4307 ms | answered, 3799 ms |
+| 10 Tem alergia a algum medicamento? | answered, 2745 ms | answered, 2231 ms |
+
+- Turn 9: "Não tomo nenhum remédio regularmente, doutor." in both runs. Jev: `fact_stated`
+  for `pergunta-explicita-02` 0.30/0.33 with `fact_asked` 0.14/0.17, so it is in
+  `not_asked_fact_ids` but not in `stated_not_asked_fact_ids`. Haiku answered `deliver`
+  (1326 ms, 1862 ms), and the reply was delivered.
+- Run 6 turn 1 is a different case. Jev was undecided on `risk:speaks_out_of_role` (0.67) for
+  "Meu nome é Rafael Nogueira, doutor."; Haiku answered `refuse` (1507 ms). Today's path
+  then regenerated within the plain 3 s budget, and the recheck did not fit, so the turn kept
+  the refusal. The extension applies only to a `regenerate` answer.
 
 ## Trade-offs
 

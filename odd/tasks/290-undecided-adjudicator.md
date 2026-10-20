@@ -39,6 +39,11 @@ A `low_confidence` Jev verdict (any undecided label) is no longer an automatic r
 - [x] T7 Live check after T5/T6 and docs — this commit
   - Runs 3 and 4: turns 1-8 and 10 answered (1.6-5.0 s); turn 9 "Toma algum remédio?" refused both times (6.9 s, 6.2 s). The patient no longer volunteers antibiotics; the candidate is a generic "Não tomo remédio regularmente". Jev keeps `fact_stated(pergunta-explicita-02)` 0.31-0.32 with a clear-no `fact_asked`, so the unchanged hard limit converts Haiku's `deliver` into `regenerate`; the recheck's adjudication timed out (1140 ms, 1823 ms). In run 4 the recheck had no not-asked fact, so only the adjudication latency blocked it.
 
+- [x] T8 Product decision (PR #299): the not-asked hard limit applies only when `fact_stated` is a clear yes; Haiku reads per-fact scores (RED→GREEN) — `0bb89be`
+  - TypesafeAdapter adds `stated_not_asked_fact_ids` (stated clear yes, asked clear no) and `fact_scores` (stated/asked per fact not clearly unstated); `JevDecision` validates both (unknown ids are invalid; malformed scores are dropped). `PatientAdjudicator` blocks only `stated_not_asked_fact_ids`; BoundedReply still re-checks every deliver.
+  - RED: 8 of 201 failing across the 5 touched test files: (a) stated 0.31 + asked 0.19 + deliver → delivered, at both the adjudicator and the gate; (b) stated 0.9 + asked 0.19 + deliver → regenerate already passed, which is the unchanged behaviour. GREEN: 201 passed; full `mix test` 1656 passed; format, warnings-as-errors and `credo --strict` clean.
+  - Live runs 5 and 6: turn 9 answered both times (4307 ms, 3799 ms; Haiku deliver 1326/1862 ms; `pergunta-explicita-02` stated 0.30/0.33, asked 0.14/0.17). Turn 10 answered (2745, 2231 ms). Run 6 turn 1 refused (out-of-role 0.67, Haiku refuse, then the 3 s budget ran out on the regeneration).
+
 ## Routing
 All tasks: delegated direct (this worker is the single bounded writer). Mapping done in-session with CodeGraph-free targeted reads (codegraph index initialised for the worktree).
 
@@ -56,11 +61,14 @@ All tasks: delegated direct (this worker is the single bounded writer). Mapping 
 - T4 done: `docs/design/undecided-adjudicator.md` (decision, limits, latency table, live check, trade-offs, follow-ups, proposed ADR-011 amendment), README rows, amendment draft outside the repository.
 
 ## Open concerns
-- Acceptance "Toma algum remédio? gets a patient answer" is still not met live. The hard limit (kept by decision) fires because Jev scores a generic denial as "maybe stating" the narrow explicit-question fact `pergunta-explicita-02` (`fact_stated` 0.31-0.32, `fact_asked` clear no).
+- Resolved by T8: "Toma algum remédio?" is answered live (runs 5 and 6).
+- An adjudicator `refuse` keeps the plain 3 s budget, so its regeneration seldom fits (run 6 turn 1, out-of-role 0.67). Extending it too would need a product decision.
 - Even with 4.5 s, the recheck's adjudication (Haiku 1.0-1.9 s) can time out after Jev + adjudication + regeneration + recheck (about 2.6-3.3 s).
 - The voice worker's default transcript timeout (35 s) has 2 s of headroom over a 3 s verification budget; the 1.5 s extension uses most of it in the worst case (voice-worker is outside this change).
 
 - T5-T7 done (PR #299 follow-up): prevention in the patient prompt, asked facts never withheld, extended regeneration budget, live runs 3 and 4 recorded in the design doc.
 
+- T8 done: amended hard limit, per-fact scores for Haiku, live runs 5 and 6.
+
 ## Next step
-Product decision on the remaining turn-9 cause (Jev's undecided `fact_stated` for a generic denial against a clear-no `fact_asked`), and on the recheck adjudication latency.
+Review of PR #299; product decision on whether an adjudicator `refuse` also gets the extended budget.
