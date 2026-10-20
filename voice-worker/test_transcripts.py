@@ -2293,6 +2293,46 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(client.commit_calls), 2)
         self.assertEqual(client.commit_calls[1][0], 2)
 
+    # Issue #281: a streamed reply is announced as ended once Phoenix settles it.
+    async def test_turn_end_callback_runs_only_after_a_settled_streamed_reply(self):
+        client = ControllablePhoenixClient()
+        client.streams[2] = ["Começou ontem.", "Ainda dói."]
+        tracker = TurnTracker("s1", last_turn_id=0)
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+        log: list[tuple] = []
+
+        async def on_reply(reply: VoiceTurnReply) -> None:
+            log.append(("reply", reply.turn_id, reply.index))
+
+        async def on_turn_end(reply: VoiceTurnReply) -> None:
+            log.append(("end", reply.turn_id, reply.generation_id))
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue),
+                tracker,
+                client,
+                on_reply=on_reply,
+                on_turn_end=on_turn_end,
+            )
+        )
+        for text in ("não transmitida", "transmitida"):
+            queue.put_nowait(event(FINAL, text))
+            queue.put_nowait(event(END))
+            await asyncio.sleep(0.01)
+        queue.put_nowait(None)
+        await stream_task
+
+        self.assertEqual(
+            log,
+            [
+                ("reply", 1, None),
+                ("reply", 2, 0),
+                ("reply", 2, 1),
+                ("end", 2, 2),
+            ],
+        )
+
     async def test_reply_callback_failure_uses_stream_error_pipeline(self):
         client = ControllablePhoenixClient()
         tracker = TurnTracker("s1", last_turn_id=0)

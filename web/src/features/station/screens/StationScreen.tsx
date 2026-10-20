@@ -19,7 +19,10 @@ import { StationBrief } from "./StationBrief";
 import { VoicePanel } from "./VoicePanel";
 import {
   addVoiceLearnerTurn,
+  dropSupersededVoiceTurns,
+  joinVoiceSegments,
   resolveVoiceTurn,
+  showVoiceReplySoFar,
   storedReplyFor,
 } from "./voiceTranscript";
 import "./StationScreen.css";
@@ -35,6 +38,8 @@ export interface DisplayMessage {
   text: string;
   /** Worker turn id of a real-time voice entry (#270); absent for text turns. */
   voiceTurnId?: number;
+  /** A streamed voice reply still growing sentence by sentence (#281). */
+  voicePartial?: boolean;
 }
 
 const roleLabels: Readonly<Record<DisplayMessage["role"], string>> = {
@@ -165,6 +170,12 @@ export function StationScreen({
   const voiceLearnerTextsRef = useRef<Map<number, string>>(new Map());
   const voiceResolvingRef = useRef<Set<number>>(new Set());
   const voiceResolvedRef = useRef<Set<number>>(new Set());
+  // Sentences of each streamed reply by `segment` index (#281).
+  const voiceSegmentsRef = useRef<Map<number, Map<number, string>>>(new Map());
+  // The newest voice turn seen: an older streamed turn was superseded (#281).
+  const voiceLatestTurnRef = useRef(0);
+  // Turns whose reply could not be shown: their learner line stays (#280 C2).
+  const voiceUndeliveredRef = useRef<Set<number>>(new Set());
   const realtime = realtimeVoice !== undefined;
 
   const stopStream = useCallback(() => {
@@ -373,8 +384,16 @@ export function StationScreen({
     [pauseCurrentAudio],
   );
 
+  // Learner voice turns that stay without an outcome: never dropped as barge-in.
+  const keptVoiceTurns = useCallback(
+    (): ReadonlySet<number> =>
+      new Set([...voiceResolvingRef.current, ...voiceUndeliveredRef.current]),
+    [],
+  );
+
   // The patient entry shows the stored reply (the full verified text, as on
   // the text path); the spoken text, without stage directions, is the fallback.
+  // A streamed reply is resolved only once its turn has ended (#281).
   const resolveVoiceReply = useCallback(
     async (turnId: number, spokenText: string | null) => {
       if (
@@ -396,28 +415,62 @@ export function StationScreen({
       }
       replyText ??= spokenText;
       if (!mountedRef.current) return;
+      voiceResolvingRef.current.delete(turnId);
       if (replyText === null) {
-        voiceResolvingRef.current.delete(turnId);
+        voiceUndeliveredRef.current.add(turnId);
         setVoiceNotice(strings.voiceTextDeliveryFailed);
         return;
       }
       const text = replyText;
-      voiceResolvingRef.current.delete(turnId);
+      voiceUndeliveredRef.current.delete(turnId);
       voiceResolvedRef.current.add(turnId);
+      voiceSegmentsRef.current.delete(turnId);
       setMessages((previous) =>
-        resolveVoiceTurn(
-          previous,
-          turnId,
-          { role: "patient", text },
-          voiceResolvingRef.current,
-        ),
+        resolveVoiceTurn(previous, turnId, { role: "patient", text }, keptVoiceTurns()),
       );
     },
-    [onFetchTranscript],
+    [keptVoiceTurns, onFetchTranscript],
+  );
+
+  const showVoiceSegment = useCallback(
+    (turnId: number, segment: number, text: string) => {
+      if (
+        voiceResolvedRef.current.has(turnId) ||
+        turnId < voiceLatestTurnRef.current
+      ) {
+        return;
+      }
+      const segments = voiceSegmentsRef.current.get(turnId) ?? new Map();
+      segments.set(segment, text);
+      voiceSegmentsRef.current.set(turnId, segments);
+      const soFar = joinVoiceSegments(segments);
+      setMessages((previous) =>
+        showVoiceReplySoFar(previous, turnId, soFar, keptVoiceTurns()),
+      );
+    },
+    [keptVoiceTurns],
+  );
+
+  // A newer turn supersedes the streamed replies of older unresolved turns:
+  // the worker cancelled them, so their end event never comes (#281).
+  const supersedeOlderVoiceTurns = useCallback(
+    (turnId: number) => {
+      if (turnId <= voiceLatestTurnRef.current) return;
+      voiceLatestTurnRef.current = turnId;
+      const kept = keptVoiceTurns();
+      for (const olderTurn of [...voiceSegmentsRef.current.keys()]) {
+        if (olderTurn < turnId && !kept.has(olderTurn)) {
+          voiceSegmentsRef.current.delete(olderTurn);
+        }
+      }
+      setMessages((previous) => dropSupersededVoiceTurns(previous, turnId, kept));
+    },
+    [keptVoiceTurns],
   );
 
   const handleVoiceEvent = useCallback(
     (event: VoiceTranscriptEvent) => {
+      if (event.type !== "fatal") supersedeOlderVoiceTurns(event.turnId);
       switch (event.type) {
         case "learner":
           if (!event.final) {
@@ -432,8 +485,20 @@ export function StationScreen({
           return;
         case "patient":
           setVoiceNotice(null);
-          void resolveVoiceReply(event.turnId, event.text);
+          if (event.segment === undefined) {
+            void resolveVoiceReply(event.turnId, event.text);
+          } else {
+            showVoiceSegment(event.turnId, event.segment, event.text);
+          }
           return;
+        case "patient-complete": {
+          const segments = voiceSegmentsRef.current.get(event.turnId);
+          void resolveVoiceReply(
+            event.turnId,
+            segments ? joinVoiceSegments(segments) : null,
+          );
+          return;
+        }
         case "examiner-acknowledged":
         case "patient-unanswered":
           setVoiceNotice(null);
@@ -444,13 +509,16 @@ export function StationScreen({
               event.type === "examiner-acknowledged"
                 ? { role: "examiner", text: strings.examinerAcknowledgement }
                 : { role: "notice", text: strings.patientDidNotAnswerNotice },
-              voiceResolvingRef.current,
+              keptVoiceTurns(),
             ),
           );
           return;
         case "turn-failure":
           if (event.failure === "text_delivery_failed") {
-            void resolveVoiceReply(event.turnId, null);
+            // A streamed reply is read once its end event arrives (#281).
+            if (!voiceSegmentsRef.current.has(event.turnId)) {
+              void resolveVoiceReply(event.turnId, null);
+            }
           } else {
             setVoiceNotice(strings.voicePatientAudioFailed);
           }
@@ -461,7 +529,7 @@ export function StationScreen({
           return;
       }
     },
-    [resolveVoiceReply],
+    [keptVoiceTurns, resolveVoiceReply, showVoiceSegment, supersedeOlderVoiceTurns],
   );
 
   const handleSend = useCallback(async () => {

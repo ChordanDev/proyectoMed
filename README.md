@@ -493,6 +493,7 @@ reply as text followed by a `synthesis_failed` event.
 | Learner transcript    | `{"session_id", "turn_id", "final", "text"}`                                            |
 | Patient text          | `{"session_id", "turn_id", "generation_id", "role": "patient", "text"}`                 |
 | Patient sentence      | `{"session_id", "turn_id", "generation_id", "role": "patient", "text", "segment"}` (#271) |
+| Streamed reply ended  | `{"session_id", "turn_id", "generation_id", "role": "patient", "status": "complete"}` (#281) |
 | Kept learner turn     | `{"session_id", "turn_id", "generation_id", "role": "examiner", "status": "kept"}`      |
 | Speech failure        | `{"session_id", "turn_id", "generation_id", "failure": "synthesis_failed"}`             |
 | Text delivery failure | `{"session_id", "turn_id", "generation_id", "failure": "text_delivery_failed"}`         |
@@ -507,7 +508,11 @@ any provider error, provider disconnect or track publication error, and carries 
 provider message; the patient text for that generation was already delivered.
 `text_delivery_failed` means the room rejected the patient text event: the reply is
 still spoken, and Phoenix keeps the approved text in the session transcript. `error`
-still means the worker job stopped. Reply text is never logged; worker logs carry the session id, turn
+still means the worker job stopped. A streamed reply ends with one `status: "complete"`
+event once Phoenix settled the turn, after all its sentences; it carries no text. The
+station transcript grows one patient bubble per turn as sentences arrive and reads the
+stored reply only after that event (#281). A reply that was not streamed, or that a
+barge-in cut, gets no end event. Reply text is never logged; worker logs carry the session id, turn
 id, generation id and failure kind only.
 
 **Prerequisites** (on top of the Deepgram checklist above):

@@ -518,10 +518,13 @@ class TurnManager:
         on_reply=None,
         cleanup_timeout: float = 1.0,
         on_cancel=None,
+        on_turn_end=None,
     ):
         self.tracker = tracker
         self.phoenix = phoenix
         self.on_reply = on_reply
+        # Told when Phoenix settled a reply streamed sentence by sentence (#281).
+        self.on_turn_end = on_turn_end
         # Synchronous consumer told which turn was cancelled or went stale (#120).
         self.on_cancel = on_cancel
         self.pending_turn_id: int | None = None
@@ -760,6 +763,11 @@ class TurnManager:
                     result = self.on_reply(accepted)
                     if asyncio.iscoroutine(result):
                         await result
+                if accepted is not None and streamed and self.on_turn_end is not None:
+                    # Every sentence was handed over: the reply is complete (#281).
+                    result = self.on_turn_end(accepted)
+                    if asyncio.iscoroutine(result):
+                        await result
                 if accepted is None and reply.is_settled_receipt():
                     # A committed result the tracker refuses is a stale generation.
                     self._notify_cancel(turn_id)
@@ -900,6 +908,7 @@ async def process_speech_stream(
     cleanup_timeout: float = 1.0,
     eof_timeout: float = 15.0,
     on_cancel=None,
+    on_turn_end=None,
 ) -> None:
     turn_manager = TurnManager(
         tracker=tracker,
@@ -907,6 +916,7 @@ async def process_speech_stream(
         on_reply=on_reply,
         cleanup_timeout=cleanup_timeout,
         on_cancel=on_cancel,
+        on_turn_end=on_turn_end,
     )
     turn_manager.set_main_task(asyncio.current_task())
     try:

@@ -1,14 +1,20 @@
 /**
  * Events the real-time voice worker publishes on the LiveKit data topic
- * `transcript` (voice-worker/worker.py and transcripts.py, #118, #120, #269).
+ * `transcript` (voice-worker/worker.py and transcripts.py, #118, #120, #269, #271,
+ * #281).
  * Parsing is strict: anything malformed, or bound to another session, is
  * dropped. Nothing here logs transcript or patient text.
  */
 export type VoiceTranscriptEvent =
   /** The learner's speech: an interim caption, or the final turn transcript. */
   | { type: "learner"; turnId: number; final: boolean; text: string }
-  /** The verified patient reply, as spoken (stage directions removed). */
-  | { type: "patient"; turnId: number; text: string }
+  /**
+   * The verified patient reply, as spoken (stage directions removed). A streamed
+   * reply arrives one sentence at a time, each with its `segment` index (#271).
+   */
+  | { type: "patient"; turnId: number; text: string; segment?: number }
+  /** Every sentence of a streamed reply was published; carries no text (#281). */
+  | { type: "patient-complete"; turnId: number }
   /** The turn was addressed to the examiner; Phoenix kept it unanswered (#274). */
   | { type: "examiner-acknowledged"; turnId: number }
   /** The patient reply was refused; Phoenix kept the learner turn (#269). */
@@ -25,6 +31,9 @@ const decoder = new TextDecoder();
 
 const isTurnId = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value > 0;
+
+const isSegment = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 const nonBlank = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
@@ -56,7 +65,12 @@ export const parseVoiceTranscriptEvent = (
     return { type: "turn-failure", turnId, failure: event.failure };
   }
   if (event.role === "patient") {
-    return nonBlank(event.text) ? { type: "patient", turnId, text: event.text } : null;
+    if (event.status === "complete") return { type: "patient-complete", turnId };
+    if (!nonBlank(event.text)) return null;
+    if (event.segment === undefined) return { type: "patient", turnId, text: event.text };
+    return isSegment(event.segment)
+      ? { type: "patient", turnId, text: event.text, segment: event.segment }
+      : null;
   }
   if (event.role === "examiner") {
     if (event.status === "acknowledged") return { type: "examiner-acknowledged", turnId };

@@ -246,6 +246,33 @@ class PatientVoice:
         except Exception:
             await self._publish_failure(reply, "text_delivery_failed")
 
+    async def on_turn_end(self, reply: VoiceTurnReply) -> None:
+        """Phoenix settled a reply streamed sentence by sentence (#281).
+
+        The end event carries no text: it tells the learner's screen that every
+        sentence was published, so the stored reply can be read. A room publish error
+        is logged content-free and never stops the job; it is not a failure event,
+        since the sentences were delivered.
+        """
+        try:
+            await publish(
+                self.room,
+                {
+                    "session_id": self.session_id,
+                    "turn_id": reply.turn_id,
+                    "generation_id": reply.generation_id,
+                    "role": "patient",
+                    "status": "complete",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "turn end not published for session %s turn %d generation %d",
+                self.session_id,
+                reply.turn_id,
+                reply.generation_id,
+            )
+
     def cancel_turn(self, turn_id: int) -> None:
         """Stop the playback bound to a cancelled or stale turn (or an earlier one)."""
         if self.player is None:
@@ -342,6 +369,7 @@ async def transcribe(
 ) -> None:
     if voice is not None and on_reply is None:
         on_reply = voice.on_reply
+    on_turn_end = voice.on_turn_end if voice is not None else None
     if stt is None:
         stt = deepgram.STT(
             model="nova-3",
@@ -411,6 +439,7 @@ async def transcribe(
             cleanup_timeout=cleanup_timeout,
             eof_timeout=phoenix.eof_timeout,
             on_cancel=voice.cancel_turn if voice is not None else None,
+            on_turn_end=on_turn_end,
         )
     finally:
         primary = sys.exception()

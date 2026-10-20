@@ -194,7 +194,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.sources[0].frames, ["s1", "s2"])
         self.assertEqual(
-            [(e["turn_id"], e["segment"], e["text"]) for e in self.room.patient_events()],
+            [(e["turn_id"], e["segment"], e["text"]) for e in self.room.patient_events() if "segment" in e],
             [(1, 0, "Começou ontem."), (1, 1, "Ainda dói.")],
         )
         # Each sentence's text event precedes its audio.
@@ -205,6 +205,75 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tracker.last_accepted_turn_id, 1)
         await self.disconnect(task)
         self.assertEqual(len(self.tts.texts), 2)
+
+    # Issue #281: the web reconciles a streamed reply only once its turn has ended.
+    def completions(self) -> list[dict]:
+        return [e for e in self.room.patient_events() if e.get("status") == "complete"]
+
+    async def test_a_settled_streamed_reply_ends_with_a_content_free_end_event(self):
+        self.client.streams[1] = ["Começou ontem.", "Ainda dói.", "Muito."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+
+        self.assertEqual(
+            self.completions(),
+            [
+                {
+                    "session_id": "s1",
+                    "turn_id": 1,
+                    "generation_id": 1,
+                    "role": "patient",
+                    "status": "complete",
+                }
+            ],
+        )
+        # It follows every sentence of the reply.
+        events = self.room.patient_events()
+        self.assertEqual(events[-1], self.completions()[0])
+        self.assertEqual([e.get("segment") for e in events[:-1]], [0, 1, 2])
+        await self.disconnect(task)
+
+    async def test_a_reply_that_was_not_streamed_publishes_no_end_event(self):
+        task = self.connect()
+        await self.say("onde dói")
+        await settle()
+        self.assertEqual(len(self.room.patient_events()), 1)
+        self.assertEqual(self.completions(), [])
+        await self.disconnect(task)
+
+    async def test_a_reply_cut_by_barge_in_publishes_no_end_event(self):
+        more = asyncio.Event()
+        self.client.streams[1] = ["Começou ontem.", more, "Ainda dói."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        self.queue.put_nowait(event(INTERIM, "espera"))
+        await asyncio.sleep(0.01)
+        more.set()
+        await asyncio.sleep(0.01)
+        await self.disconnect(task)
+        self.assertEqual(self.completions(), [])
+
+    async def test_an_end_event_the_room_rejects_is_logged_without_content(self):
+        self.client.streams[1] = ["Começou ontem."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            self.room.text_error = RuntimeError(PROVIDER_SECRET)
+            await self.voice.on_turn_end(self.client.replies[1])
+            self.room.text_error = None
+        self.assertFalse(task.done())
+        await self.disconnect(task)
+        output = "\n".join(logs.output)
+        self.assertIn("turn end not published for session s1 turn 1", output)
+        self.assertNotIn(PROVIDER_SECRET, output)
+        self.assertNotIn("Começou", output)
+        # Not a failure event: the web keeps the streamed sentences it has.
+        self.assertEqual(
+            [e for e in self.room.patient_events() if "failure" in e], []
+        )
 
     async def test_barge_in_mid_stream_stops_the_reply_and_its_later_sentences(self):
         more = asyncio.Event()
