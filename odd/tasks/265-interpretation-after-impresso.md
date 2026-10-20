@@ -44,7 +44,7 @@ unrelated turn is not filtered, and this run shows Jev is the source.
   that are not learner turns after a release of a declared impresso, applied in
   `RubricAssessment` sub-action validation; docs in `educational-result-api.md`.
 - [x] T3 - Authoring and regression: declare the dependencies on items 5, 7 and 8 of
-  acute-appendicitis, document them (package mapping D22, checklist), and extend the
+  acute-appendicitis, document them (package mapping D23, checklist), and extend the
   #243 regression harness with the second rehearsal evidence for item 7.
 
 ## Routing
@@ -80,7 +80,7 @@ Decisions:
   sends none).
 - Authored on item 5 `criterio-2`-`4`, item 7 `criterio-1`-`4`, item 8 `criterio-2`-`4`
   (including the mandatory hypothesis, per the issue). Flagged for clinical review in
-  checklist row D22.
+  checklist row D23.
 
 Checks: local CI passed (web 229 + 4 tests, backend 1271 tests, typecheck, lint,
 format, compile with warnings as errors, credo strict, dialyzer 0 errors). Live

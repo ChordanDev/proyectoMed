@@ -37,8 +37,12 @@ Rows are generated from the package. If the package changes, this checklist must
 
 | Fact id | Topic | Content | Disclosure condition | Confirmed | Change requested | Reviewer | Date |
 |---|---|---|---|---|---|---|---|
-| `hda-01` | HDA — respostas padronizadas | A dor começou há 18 horas, inicialmente ao redor do umbigo; há cerca de 10 horas migrou para a parte inferior direita do abdome. | `on_request` | [ ] | [ ] | | |
-| `hda-02` | HDA — respostas padronizadas | É uma dor contínua, que foi aumentando progressivamente, atualmente 7/10. | `on_request` | [ ] | [ ] | | |
+| `hda-01` | HDA — respostas padronizadas | A dor começou ao redor do umbigo. | `on_request` | [ ] | [ ] | | |
+| `hda-01-migracao` | HDA — respostas padronizadas | Há cerca de 10 horas, a dor migrou para a parte inferior direita do abdome. | `on_request` | [ ] | [ ] | | |
+| `hda-01-tempo` | HDA — respostas padronizadas | A dor começou há 18 horas. | `on_request` | [ ] | [ ] | | |
+| `hda-02` | HDA — respostas padronizadas | É uma dor contínua. | `on_request` | [ ] | [ ] | | |
+| `hda-02-progressao` | HDA — respostas padronizadas | A dor foi aumentando progressivamente. | `on_request` | [ ] | [ ] | | |
+| `hda-02-intensidade` | HDA — respostas padronizadas | Atualmente, a dor é 7/10. | `on_request` | [ ] | [ ] | | |
 | `hda-03` | HDA — respostas padronizadas | Piora ao caminhar, tossir ou mudar de posição. Não encontrou posição ou medida que alivie significativamente. | `on_request` | [ ] | [ ] | | |
 | `hda-04` | HDA — respostas padronizadas | Teve náusea e vomitou uma vez, sem sangue ou bile. | `on_request` | [ ] | [ ] | | |
 | `hda-05` | HDA — respostas padronizadas | Refere falta de apetite desde o início do quadro. | `on_request` | [ ] | [ ] | | |
@@ -46,13 +50,15 @@ Rows are generated from the package. If the package changes, this checklist must
 | `hda-07` | HDA — respostas padronizadas | Evacuou no dia anterior e eliminou gases hoje. Nega diarreia e constipação importante. | `on_request` | [ ] | [ ] | | |
 | `hda-08` | HDA — respostas padronizadas | Nega ardor ao urinar, urgência, aumento da frequência urinária ou sangue na urina. | `on_request` | [ ] | [ ] | | |
 | `hda-09` | HDA — respostas padronizadas | Nega dor testicular ou secreção uretral. | `on_request` | [ ] | [ ] | | |
-| `antecedentes-01` | Antecedentes, medicações e hábitos — respostas padronizadas | Nega doenças crônicas, internações anteriores e cirurgias. | `on_request` | [ ] | [ ] | | |
+| `antecedentes-01` | Antecedentes, medicações e hábitos — respostas padronizadas | Nega doenças crônicas. | `on_request` | [ ] | [ ] | | |
+| `antecedentes-01-internacoes-cirurgias` | Antecedentes, medicações e hábitos — respostas padronizadas | Nega internações anteriores e cirurgias. | `on_request` | [ ] | [ ] | | |
 | `antecedentes-02` | Antecedentes, medicações e hábitos — respostas padronizadas | Não usa medicamentos regularmente. | `on_request` | [ ] | [ ] | | |
 | `antecedentes-03` | Antecedentes, medicações e hábitos — respostas padronizadas | Nega alergias medicamentosas conhecidas. | `on_request` | [ ] | [ ] | | |
 | `antecedentes-04` | Antecedentes, medicações e hábitos — respostas padronizadas | Nega tabagismo e uso de drogas; refere consumo ocasional de bebida alcoólica. | `on_request` | [ ] | [ ] | | |
 | `antecedentes-05` | Antecedentes, medicações e hábitos — respostas padronizadas | Mora com a companheira; trabalha em escritório. Não há informação adicional relevante sobre histórico familiar, a menos que perguntado. | `on_request` | [ ] | [ ] | | |
 | `pergunta-explicita-01` | Informações que o ator só revela se o candidato perguntar explicitamente | Nega episódio semelhante anterior. | `on_request` | [ ] | [ ] | | |
-| `pergunta-explicita-02` | Informações que o ator só revela se o candidato perguntar explicitamente | Nega uso recente de antibióticos, anti-inflamatórios ou anticoagulantes. | `on_request` | [ ] | [ ] | | |
+| `pergunta-explicita-02` | Informações que o ator só revela se o candidato perguntar explicitamente | Nega uso recente de antibióticos ou anticoagulantes. | `on_request` | [ ] | [ ] | | |
+| `pergunta-explicita-02-anti-inflamatorios` | Informações que o ator só revela se o candidato perguntar explicitamente | Nega uso recente de anti-inflamatórios. | `on_request` | [ ] | [ ] | | |
 | `pergunta-explicita-03` | Informações que o ator só revela se o candidato perguntar explicitamente | Nega dor lombar, icterícia, dor no peito, falta de ar ou síncope. | `on_request` | [ ] | [ ] | | |
 | `pergunta-explicita-04` | Informações que o ator só revela se o candidato perguntar explicitamente | Nega perda de peso ou alteração intestinal persistente nas últimas semanas. | `on_request` | [ ] | [ ] | | |
 | `pergunta-explicita-05` | Informações que o ator só revela se o candidato perguntar explicitamente | Se perguntado sobre hidratação e ingestão oral, relata que bebeu água pela última vez há duas horas, mas não conseguiu se alimentar desde a manhã. | `on_request` | [ ] | [ ] | | |
@@ -589,7 +595,7 @@ Copied from the mapping record, which has the full description of each gap.
 | G6 | One impresso. Full phrases plus common abdominal phrasings (#241): "TC de abdome", "tomografia de abdome", "USG", "ultrassom", "exame de imagem". An ultrasound request releases the CT report, as in the source. | **Lower** only for wordings not authored. A CT request that does not name the abdomen releases nothing. | The keywords, whether "de abdome e pelve" applies to the ultrasound, and whether an ultrasound request should get a CT report. | [ ] | | |
 | G7 | No keywords (`[]`): the impresso is in the package and is intentionally never released. Its content is the expected initial conduct scored in Items 9 and 10 (jejum, cristaloide, dipirona, ondansetrona, ceftriaxona + metronidazol, avaliação cirúrgica), so releasing it would hand the learner the answer key. The learner verbalizes the conduct instead; a prescription-style request ("prescrição", "receita", "receituário", "conduta inicial", "medidas de suporte") releases nothing. | **Lower or equal.** Items 9 and 10 are scored from what the learner says. | Whether and how this impresso is shown. | [ ] | | |
 | G8 | `exame físico` plus common phrasings (#241): "exame do abdome", "examinar o abdome", "palpação abdominal", "sinais vitais". "Exame" alone releases nothing. | **Lower** only for wordings not authored. Any mention of a phrase releases it, including a negated one. | The keywords. | [ ] | | |
-| G9 | All 19 answers `on_request`; the source heading is kept in `topic`. | No scoring rule depends on it. The patient prompt lists every fact without its condition (`backend/lib/backend/stations/station_ai.ex:176`); the condition is only forwarded to the decision model. | Whether the distinction must be enforced. | [ ] | | |
+| G9 | All 25 answers `on_request`; the source heading is kept in `topic`. | No scoring rule depends on it. The patient prompt lists every fact without its condition (`backend/lib/backend/stations/station_ai.ex:176`); the condition is only forwarded to the decision model. | Whether the distinction must be enforced. | [ ] | | |
 | G10 | Two `timed` facts holding the quoted questions. No approved template, because a turn count would be invented. | **Lower.** If the patient never asks, Item 11 criterion 3 cannot be met; "Adequado" stays reachable through criteria 1, 2 and 4. | How and when the questions are asked. | [ ] | | |
 | G11 | One response rule, verbatim. | None on scoring. | Whether this behaviour is needed in a voice or text station. | [ ] | | |
 | G12 | Scenario paragraph in `presenting_context`, which feeds the patient model's prompt. Área, Nível de atenção, Infraestrutura and the duration are not carried. | None on scoring. The learner sees the vital signs only through Impresso 1. | Where the scenario and tasks are shown. | [ ] | | |
@@ -609,8 +615,8 @@ These were derived by the transcriber and are not partner-authored.
 | D2 | `patient_profile.age` | `27`, read from the scenario paragraph. | [ ] | [ ] | | |
 | D3 | `patient_profile.persona`, `.tone` | The split of the "Perfil do paciente" paragraph across the two required fields. | [ ] | [ ] | | |
 | D4 | `patient_profile.presenting_context` | The choice of the scenario paragraph for this field (it is written to the participant, in the second person). | [ ] | [ ] | | |
-| D5 | `revealable_facts[].id`, `.topic` | Positional ids; `topic` is the source section heading. One fact per bullet. | [ ] | [ ] | | |
-| D6 | `revealable_facts[].disclosure_condition` | `on_request` for the 19 answers, `timed` for the two final doubts. | [ ] | [ ] | | |
+| D5 | `revealable_facts[].id`, `.topic` | Positional ids; `topic` is the source section heading. One fact per bullet, except the splits of D22. | [ ] | [ ] | | |
+| D6 | `revealable_facts[].disclosure_condition` | `on_request` for the 25 answers, `timed` for the two final doubts. | [ ] | [ ] | | |
 | D7 | `response_rules` | The id and the choice of this field for "Comportamento durante o exame". | [ ] | [ ] | | |
 | D8 | `expected_actions` | The ids and the choice of this field for the five tasks and the answer guidance. | [ ] | [ ] | | |
 | D9 | `rubric[].id`, `rubric[].actions[].id` | Positional ids. | [ ] | [ ] | | |
@@ -626,7 +632,8 @@ These were derived by the transcriber and are not partner-authored.
 | D19 | `impressos[].keywords` | Every keyword (table below). | [ ] | [ ] | | |
 | D20 | `approved_templates` | `null`. The source authors no template. | [ ] | [ ] | | |
 | D21 | `rubric[].actions[].impresso_ids` on `item-06` `criterio-1`–`4` and `item-08` `criterio-1` (issue #228) | Each lab group names the Impresso 2 parts that answer it (`criterio-4`: `-ureia`, `-creatinina`, `-eletrolitos`); the imaging request names `impresso-3-exame-de-imagem`. A verified request that releases one of them grades the action performed without a provider. `item-05` names none. | [ ] | [ ] | | |
-| D22 | `rubric[].actions[].interprets_impresso_ids` on `item-05` `criterio-2`–`4`, `item-07` `criterio-1`–`4` and `item-08` `criterio-2`–`4` (issue #265) | A learner cannot interpret an exam before receiving it: these actions accept only learner turns sent after the named impresso was released. Item 5 findings name `impresso-1-exame-fisico`; each item 7 action names the Impresso 2 parts it reads (`criterio-4`: `-ureia`, `-creatinina`, `-eletrolitos`); item 8 interpretation and hypothesis (`criterio-4`, mandatory) name `impresso-3-exame-de-imagem`, so a hypothesis stated only before the imaging release does not count. `item-05` `criterio-1` (authorization) and the `item-07` forbidden attribution name none. | [ ] | [ ] | | |
+| D22 | `revealable_facts` split per rubric characteristic (issue #264) | Source bullets that answer several rubric characteristics are split into one fact per characteristic, so a reply to one question cannot volunteer another criterion. Each part keeps the source wording of its clause, reordered into a sentence; no fact is added. The first part keeps the positional id and the others get a suffixed id: `hda-01` (initial location), `hda-01-migracao` (migration), `hda-01-tempo` (time since onset); `hda-02` (character), `hda-02-progressao` (progression), `hda-02-intensidade` (intensity). Items 3 and 4: `antecedentes-01` (comorbidities), `antecedentes-01-internacoes-cirurgias` (prior hospitalizations and surgeries); `pergunta-explicita-02` (recent antibiotics or anticoagulants, item-04 criterion 5), `pergunta-explicita-02-anti-inflamatorios` (recent anti-inflammatories, criterion 3). Kept whole because each answers one criterion: `hda-03`, `hda-04`, `hda-06`, `hda-07`, `pergunta-explicita-03`, `-04`. | [ ] | [ ] | | |
+| D23 | `rubric[].actions[].interprets_impresso_ids` on `item-05` `criterio-2`–`4`, `item-07` `criterio-1`–`4` and `item-08` `criterio-2`–`4` (issue #265) | A learner cannot interpret an exam before receiving it: these actions accept only learner turns sent after the named impresso was released. Item 5 findings name `impresso-1-exame-fisico`; each item 7 action names the Impresso 2 parts it reads (`criterio-4`: `-ureia`, `-creatinina`, `-eletrolitos`); item 8 interpretation and hypothesis (`criterio-4`, mandatory) name `impresso-3-exame-de-imagem`, so a hypothesis stated only before the imaging release does not count. `item-05` `criterio-1` (authorization) and the `item-07` forbidden attribution name none. | [ ] | [ ] | | |
 
 ## 9. Sign-off
 

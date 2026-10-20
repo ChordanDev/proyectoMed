@@ -25,7 +25,7 @@
           "semantic_refusal",
           "low_confidence"
         ],
-        "note": "The learner request has no referent. The candidate reply discloses on_request fact hda-01, which was not clearly requested. Proposed: the gate does not deliver it."
+        "note": "The learner request has no referent. The candidate reply discloses on_request facts hda-01, hda-01-migracao and hda-01-tempo, which were not clearly requested. Proposed: the gate does not deliver it."
       },
       "adjudication": {
         "status": "pending",
