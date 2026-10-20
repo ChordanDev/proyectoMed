@@ -29,6 +29,16 @@ A `low_confidence` Jev verdict (any undecided label) is no longer an automatic r
   - No runnable RED for docs; the measured latency changed the default deadline from 1500 ms to 2000 ms (tests re-run green).
   - Live check: two runs of the 10-turn replay. Run 2 (2000 ms): turns 1-8 and 10 answered; turn 9 "Toma algum remédio?" refused (adjudicator `deliver` in 1.0 s, hard limit `not_asked` on `pergunta-explicita-02` (`fact_asked` 0.19) turned it into `regenerate`; the recheck had about 0.2 s and timed out). Run 1 (1500 ms): turn 1 also refused after an adjudication timeout.
 
+- [x] T5 Prevention (PR #299 follow-up): the patient prompt lists the facts that require an explicit question, derived from package data (RED→GREEN) — `608c9c7`
+  - `StationAI.explicit_question_fact?/1`: authored `requires_explicit_question` boolean, else topic "perguntar explicitamente"/"pergunta explícita", else id prefix `pergunta-explicita`. New stable section "FATOS QUE SÓ PODEM SER DITOS COM PERGUNTA EXPLÍCITA" (absent without such facts).
+  - RED: 3 failing in `station_ai_test.exs`. GREEN: 15 passed.
+- [x] T6 Adjudicator never withholds asked facts; extended budget only after a `regenerate` adjudication; config (RED→GREEN) — `d2a6fe8`
+  - `asked_fact_ids` (clear-yes `fact_asked`) on low-confidence verdicts, validated in `JevDecision`; dropped from `withheld_fact_ids`; prompt rule "never list a fact that answers the latest learner message"; per-fact `requires_explicit_question` in the request.
+  - `PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS` (default 1500, non-negative integer, else default) extends the deadline on the `{:regenerate, ids}` path only.
+  - RED: 15 of 224 failing across the 7 touched test files (3 of them T5). GREEN: 224 passed; full `mix test` 1652 passed; `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict` clean.
+- [x] T7 Live check after T5/T6 and docs — this commit
+  - Runs 3 and 4: turns 1-8 and 10 answered (1.6-5.0 s); turn 9 "Toma algum remédio?" refused both times (6.9 s, 6.2 s). The patient no longer volunteers antibiotics; the candidate is a generic "Não tomo remédio regularmente". Jev keeps `fact_stated(pergunta-explicita-02)` 0.31-0.32 with a clear-no `fact_asked`, so the unchanged hard limit converts Haiku's `deliver` into `regenerate`; the recheck's adjudication timed out (1140 ms, 1823 ms). In run 4 the recheck had no not-asked fact, so only the adjudication latency blocked it.
+
 ## Routing
 All tasks: delegated direct (this worker is the single bounded writer). Mapping done in-session with CodeGraph-free targeted reads (codegraph index initialised for the worktree).
 
@@ -46,8 +56,11 @@ All tasks: delegated direct (this worker is the single bounded writer). Mapping 
 - T4 done: `docs/design/undecided-adjudicator.md` (decision, limits, latency table, live check, trade-offs, follow-ups, proposed ADR-011 amendment), README rows, amendment draft outside the repository.
 
 ## Open concerns
-- Acceptance "Toma algum remédio? gets a patient answer" is not met live: the decided hard limit blocks it whenever Jev puts a narrow fact's `fact_asked` at or below 0.2. Needs a product decision (limit only key findings, or a band).
-- Haiku 5.5 latency is 1.3-1.6 s typical, so a regeneration after an adjudication seldom fits the 3 s budget.
+- Acceptance "Toma algum remédio? gets a patient answer" is still not met live. The hard limit (kept by decision) fires because Jev scores a generic denial as "maybe stating" the narrow explicit-question fact `pergunta-explicita-02` (`fact_stated` 0.31-0.32, `fact_asked` clear no).
+- Even with 4.5 s, the recheck's adjudication (Haiku 1.0-1.9 s) can time out after Jev + adjudication + regeneration + recheck (about 2.6-3.3 s).
+- The voice worker's default transcript timeout (35 s) has 2 s of headroom over a 3 s verification budget; the 1.5 s extension uses most of it in the worst case (voice-worker is outside this change).
+
+- T5-T7 done (PR #299 follow-up): prevention in the patient prompt, asked facts never withheld, extended regeneration budget, live runs 3 and 4 recorded in the design doc.
 
 ## Next step
-Local CI, push, PR to `feat/237-clinician-demo-readiness`; product decision on the hard limit.
+Product decision on the remaining turn-9 cause (Jev's undecided `fact_stated` for a generic denial against a clear-no `fact_asked`), and on the recheck adjudication latency.

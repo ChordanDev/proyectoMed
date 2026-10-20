@@ -40,9 +40,11 @@ evidence. Clear verdicts stay deterministic.
   question, `rule_broken` with the rule text);
 - the authored response rules.
 
-`TypesafeAdapter` adds `undecided_labels` and `not_asked_fact_ids` to a `low_confidence`
-verdict only. `not_asked_fact_ids` lists the on-request facts whose `fact_asked` answer is
-a clear no while `fact_stated` is not.
+`TypesafeAdapter` adds `undecided_labels`, `not_asked_fact_ids` and `asked_fact_ids` to a
+`low_confidence` verdict only. `not_asked_fact_ids` lists the on-request facts whose
+`fact_asked` answer is a clear no while `fact_stated` is not. `asked_fact_ids` lists the
+on-request facts whose `fact_asked` answer is a clear yes. Each fact in the request also
+carries `requires_explicit_question` (see "Facts that require an explicit question").
 
 ### Hard limits, enforced in code
 
@@ -50,6 +52,7 @@ a clear no while `fact_stated` is not.
 |---|---|
 | BoundedReply deterministic checks run first. | `CandidateGate` runs them before Jev, and the adjudicator is reached only after Jev. A `deliver` is checked again; a violation is a refusal. |
 | Never deliver a fact Jev's clear-no "asked" label says was not requested. | A `deliver` while `not_asked_fact_ids` is non-empty becomes `regenerate` withholding those facts. A `regenerate` always withholds them too. |
+| Never withhold a fact Jev's clear-yes "asked" label says was requested. | The ids in `asked_fact_ids` are dropped from a `regenerate`'s `withheld_fact_ids`: withholding them would remove the answer the learner asked for. |
 | Structured output only. | JSON schema `{decision: deliver\|regenerate\|refuse, withheld_fact_ids: [...]}`. Exactly those two keys, every id an authored fact id of the package, and a `deliver` names no facts. Anything else is malformed. |
 | Malformed output, timeout or error. | Refuse, which keeps today's path: one regeneration withholding Jev's `undecided_fact_ids`, then a refusal. |
 | Separate from the patient generator. | Its own seam (`PatientAdjudicator` behaviour), model and prompt. Jev stays the mandatory, independent check for clear outcomes. |
@@ -67,8 +70,28 @@ system block). The model is `ANTHROPIC_ADJUDICATOR_MODEL`, default `claude-haiku
 effort `low`, thinking off (`{type: "disabled"}`, accepted on Haiku 5.5 at effort `high`
 or below), and no `fallbacks` parameter or fallback beta (Haiku 5.5 has no server-side
 fallback). The system prompt states the decision rules, including "a broad question asks
-for every narrow fact that answers it", and that learner text is untrusted data. All
-learner text sits in the user content under `untrusted_learner_text`.
+for every narrow fact that answers it, except a fact that requires an explicit question",
+"never list in `withheld_fact_ids` a fact that answers the latest learner message, nor any
+fact in `asked_fact_ids`", and that learner text is untrusted data. All learner text sits
+in the user content under `untrusted_learner_text`.
+
+### Facts that require an explicit question
+
+Some rubric criteria credit a fact only when the learner asks for it explicitly. The
+acute-appendicitis package authors them under the topic "Informações que o ator só revela
+se o candidato perguntar explicitamente", with ids starting `pergunta-explicita-`. The live
+check showed the patient volunteering them ("no antibiotics or anticoagulants") in answer
+to the broad "Toma algum remédio?", which Jev then scored as clearly not asked.
+
+`Backend.Stations.StationAI.explicit_question_fact?/1` derives the mark from package data,
+never from a station id: an authored boolean `requires_explicit_question` decides when
+present; otherwise a topic saying the actor reveals the fact only when asked explicitly
+("perguntar explicitamente", "pergunta explícita"), or an id starting
+`pergunta-explicita`, marks it. The patient's system prompt lists these facts again under
+"FATOS QUE SÓ PODEM SER DITOS COM PERGUNTA EXPLÍCITA": they may appear only when the latest
+learner message asks about their subject directly, and a broader or neighbouring question
+does not count. The section is part of the stable, cached prompt and is absent for a
+package without such facts. The adjudicator receives the same mark per fact.
 
 ### Configuration
 
@@ -76,13 +99,18 @@ learner text sits in the user content under `untrusted_learner_text`.
 |---|---|
 | `:patient_adjudicator_adapter` | `DisabledAdapter` (refuses, so today's behaviour). `runtime.exs` selects the Anthropic adapter with `LLM_PROVIDER=anthropic` unless `PATIENT_ADJUDICATOR=off`. |
 | `:patient_adjudicator_deadline_ms` / `PATIENT_ADJUDICATOR_DEADLINE_MS` | 2000 ms |
+| `:patient_adjudicator_regeneration_extension_ms` / `PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS` | 1500 ms (a non-negative integer; `0` turns the extension off) |
 | `ANTHROPIC_ADJUDICATOR_MODEL` | `claude-haiku-5-5` |
 
 ### Latency and the turn budget
 
 The call happens only on `low_confidence` turns. It runs inside the existing verification
 budget (`jev_decision_default_deadline_ms`, 3 s), which Jev, the adjudication, the single
-regeneration and its recheck all share, for text and for each voice sentence. The
+regeneration and its recheck all share, for text and for each voice sentence. When the
+adjudicator answers `regenerate` (the hard limit's conversion included), the gate extends
+that deadline by `regeneration_extension_ms` (1.5 s), so the verification of such a turn
+takes at most 4.5 s; the regeneration, its recheck and the recheck's adjudication share
+the extended deadline. Every other path, normal turns included, keeps the 3 s budget. The
 adjudicator's deadline is the smaller of its own deadline and the remaining budget minus
 100 ms; with less than 200 ms left no call is made. A regeneration that no longer fits the
 budget ends with the original refusal (#256), so the learner turn is kept.
@@ -131,6 +159,44 @@ case still fails live. The cause is the hard limit, not the adjudicator: for the
 question, Jev puts one narrow fact's "asked" score at or below the no threshold. This
 needs a product decision (see Follow-ups). Lowering the hard limit is outside this change.
 
+### Follow-up live check (2026-10-20, after the prevention and the budget extension)
+
+Two more runs of the same replay, with the explicit-question section in the patient prompt,
+`asked_fact_ids`, the tuned adjudicator prompt and the 1.5 s extension.
+
+| Turn | Run 3 | Run 4 |
+|---|---|---|
+| 1 Qual é seu nome? | answered, 3992 ms | answered, 3027 ms |
+| 2 Onde começou a toa? | answered, 2286 ms | answered, 2162 ms |
+| 3 Há quanto tempo começou? | answered, 2100 ms | answered, 2024 ms |
+| 4 A dor mudou de lugar? | answered, 2371 ms | answered, 2354 ms |
+| 5 Ela piorou com o tempo? | answered, 2123 ms | answered, 2371 ms |
+| 6 A dor vai para outro lugar? | answered, 1649 ms | answered, 1741 ms |
+| 7 Teve febre? | answered, 2611 ms | answered, 2488 ms |
+| 8 Teve náusea ou vômito? | answered, 2164 ms | answered, 2173 ms |
+| 9 Toma algum remédio? | refused, 6862 ms | refused, 6226 ms |
+| 10 Tem alergia a algum medicamento? | answered, 3079 ms | answered, 4950 ms |
+
+Turn times include the addressee check and the first generation (1.0-4.4 s).
+
+The prevention works: the patient no longer volunteers the explicit-question facts. Every
+candidate for turn 9 was a plain "Não tomo/uso nenhum remédio regularmente, doutor." But
+the turn is still refused:
+
+- Jev keeps `fact_stated` for `pergunta-explicita-02` ("Nega uso recente de antibióticos ou
+  anticoagulantes") undecided at 0.31-0.32 for a generic denial, while `fact_asked` is a
+  clear no. So `not_asked_fact_ids` names it, the hard limit turns Haiku's `deliver`
+  (1.0-1.2 s) into `regenerate`, and the regeneration produces the same kind of reply.
+- Run 3: the recheck was the same verdict (`not_asked` again), so even a `deliver` would
+  have been blocked; the second adjudication timed out at 1140 ms.
+- Run 4: the recheck had no `not_asked` fact (`fact_stated` for `pergunta-explicita-02` fell
+  below the band), so a `deliver` would have answered the turn, but the second adjudication
+  timed out at 1823 ms: Jev 254 ms + adjudication 1009 ms + regeneration 1066 ms + recheck
+  247 ms left about 1.8 s of the 4.5 s.
+
+The hard limit was not changed. The remaining cause is Jev's "maybe stated" answer for a
+narrow negative fact when the reply is a generic denial that does not name it.
+
 ## Trade-offs
 
 - Gain: undecided turns can now be delivered, and only those turns pay the extra call.
@@ -140,8 +206,8 @@ needs a product decision (see Follow-ups). Lowering the hard limit is outside th
 - Risk: a language model now decides the undecided band. Every clear outcome is still
   Jev's, the hard limits are code, and anything unexpected falls back to the refusal.
 - In isolated runs Haiku sometimes asked to withhold the very facts that answer the
-  question. That is a quality signal for the prompt, and the hard limits keep it from
-  being unsafe.
+  question. The prompt now forbids it, and the code drops any id in `asked_fact_ids` from
+  `withheld_fact_ids`; a fact Jev could not tell was asked can still be withheld.
 
 ## Follow-ups
 
@@ -149,8 +215,14 @@ needs a product decision (see Follow-ups). Lowering the hard limit is outside th
   (`fact_asked` <= 0.2) on a narrow fact blocks the delivery the adjudicator chose. Two
   options: apply the limit only to facts marked as key findings, or let the adjudicator
   overrule a clear no inside a band (for example 0.1-0.2).
-- Budget: decide whether a `low_confidence` turn may get a longer budget, or whether
-  `regenerate` should skip the adjudication of the regenerated candidate.
+- Budget: the 1.5 s extension is in place for the `regenerate` path. Haiku 5.5 still takes
+  1.0-1.9 s, so the recheck's adjudication can time out even with 4.5 s.
+- A generic denial ("não tomo remédio") leaves `fact_stated` undecided for a narrow negative
+  fact that requires an explicit question; with its clear-no `fact_asked`, the hard limit
+  blocks the reply although it does not name the fact.
+- The explicit-question mark is derived from authoring conventions (topic text, id
+  prefix). A structured `requires_explicit_question` field, validated by
+  `StationPackage`, would make it explicit; the predicate already honours it.
 - Facts the adjudicator delivers but Jev found only "maybe stated" are not added to the
   session's disclosed facts (#286). Only Jev's clear `used_fact_ids` are.
 
