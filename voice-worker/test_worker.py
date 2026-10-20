@@ -541,6 +541,8 @@ class PhoenixTurnSettingsTest(unittest.TestCase):
             {"PHOENIX_TURN_TIMEOUT_S": "abc", "PHOENIX_TURN_RETRIES": "-1"},
             {"PHOENIX_TURN_TIMEOUT_S": "0", "PHOENIX_TURN_RETRIES": "1.5"},
             {"PHOENIX_TURN_TIMEOUT_S": "nan", "PHOENIX_TURN_RETRIES": ""},
+            # Non-ASCII digits pass str.isdigit() but int() rejects them.
+            {"PHOENIX_TURN_TIMEOUT_S": "", "PHOENIX_TURN_RETRIES": "²"},
         ):
             with self.assertLogs("voice-worker", level="WARNING"):
                 self.assertEqual(

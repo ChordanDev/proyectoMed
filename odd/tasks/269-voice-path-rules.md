@@ -53,6 +53,7 @@ Today a refused voice reply fails the generation as `station_ai_unavailable` (50
 - T5: 5a7fa16. Worker accepts a generation-bound `kept` receipt, speaks nothing, publishes `{role: "examiner", status: "kept"}` and releases cancel ownership. RED: 2 failures + 1 error; GREEN: worker 124 tests OK.
 - T6: bc9a486. Transcript POST waits `DEFAULT_TURN_TIMEOUT_S` = 15 + 3 + 15 + 2 = 35 s (configurable `PHOENIX_TURN_TIMEOUT_S`, `PHOENIX_TURN_RETRIES`); context/cancel keep 5 s; EOF wait = timeout x attempts + 5 s. README updated. RED: 3 import/attribute errors; GREEN: worker 130 tests OK.
 - T7: local CI PASSED — web 259 + e2e 4, backend 1457 ExUnit, typecheck, lint, format, credo (no issues), dialyzer 0 errors. Worker `uv run python -m unittest`: 130 OK.
+- Review round 1 (Jorge C1, merged TR-2/SP-1): `phoenix_turn_settings` crashed on a non-ASCII digit such as `PHOENIX_TURN_RETRIES=²` (`isdigit()` true, `int()` raises). Guarded with `isascii()`; it now keeps the default and logs the warning. Caps and defaults unchanged. RED: 1 error (ValueError); GREEN: worker 130 tests OK.
 
 ## Pending / follow-ups
 

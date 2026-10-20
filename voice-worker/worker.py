@@ -122,7 +122,8 @@ def phoenix_turn_settings(environ) -> tuple[float, int]:
     raw_retries = environ.get("PHOENIX_TURN_RETRIES")
     if raw_retries is not None:
         stripped = raw_retries.strip()
-        if stripped.isdigit():
+        # isascii(): str.isdigit() also accepts digits such as "²" that int() rejects.
+        if stripped.isascii() and stripped.isdigit():
             retries = int(stripped)
         else:
             logger.warning("invalid PHOENIX_TURN_RETRIES; using the default")
