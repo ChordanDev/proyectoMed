@@ -45,7 +45,7 @@ and verified, so the learner waits for all of it.
 |----|------|-------|--------|
 | T1 | Sentence splitter + Anthropic SSE streaming client + `stream_reply` adapter callback | delegated direct (this writer) | [x] |
 | T2 | `SentenceStream` orchestrator + `Stations.stream_voice_turn/5` (verify per sentence, stop on refusal, store spoken, kept rules, latency logs) | delegated direct (this writer) | [x] |
-| T3 | `VoiceWorkerController` NDJSON sentence channel | delegated direct (this writer) | [ ] |
+| T3 | `VoiceWorkerController` NDJSON sentence channel | delegated direct (this writer) | [x] |
 | T4 | Worker: stream sentences from Phoenix, speak them in order, first-audio latency log, docs | delegated direct (this writer) | [ ] |
 
 Route evidence: the parent delegated all four tasks to one bounded writer (2+ non-trivial files).
@@ -69,6 +69,8 @@ Route evidence: the parent delegated all four tasks to one bounded writer (2+ no
 
 - T2: RED 14/14 new tests failing (`stream_voice_turn/5` undefined); one GREEN-phase bug found by the tests (a duplicate turn matched the generation-id clause) and fixed. GREEN `mix test` 1508/1508 (14 new); `mix compile --warnings-as-errors` clean. Design notes: the candidate verified for sentence N is the reply so far (sentences 0..N), with the full conversation; the gate's regeneration runs only for sentence 0 (`can_retry?: false` afterwards); a turn cancelled mid-reply stores nothing (Conversation's generation fence) — see follow-ups.
 
+- T3: RED 5/5 new controller tests failing (no NDJSON channel). Found during GREEN: the `:api` pipeline only accepts JSON, so the worker sends `Accept: application/x-ndjson, application/json`. GREEN controller suite 31/31, full `mix test` green, format and warnings clean.
+
 ## Next step
 
-T3.
+T4.
