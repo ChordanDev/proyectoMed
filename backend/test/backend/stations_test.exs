@@ -187,6 +187,20 @@ defmodule Backend.StationsTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  defmodule DeadlineProbeJevAdapter do
+    @moduledoc "Reports the verification budget each patient decision receives (issue #269)."
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(request) do
+      send(Application.fetch_env!(:backend, :jev_probe_pid), {:deadline_ms, request.deadline_ms})
+      {:ok, %{status: :verified}}
+    end
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   defmodule TemplateReplyAIAdapter do
     @behaviour Backend.Stations.StationAI
 
@@ -1285,6 +1299,29 @@ defmodule Backend.StationsTest do
       assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
       assert stored.failed_voice_turn == nil
       assert {:ok, nil} = Conversation.active_generation(id)
+    end
+
+    test "voice and text verification share the configured patient reply deadline" do
+      Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, DeadlineProbeJevAdapter)
+      Application.put_env(:backend, :jev_probe_pid, self())
+      prev_deadline = Application.get_env(:backend, :jev_decision_default_deadline_ms)
+      Application.put_env(:backend, :jev_decision_default_deadline_ms, 2_345)
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :jev_probe_pid)
+        Application.put_env(:backend, :jev_decision_default_deadline_ms, prev_deadline)
+      end)
+
+      voice = Stations.create_session(%{audio_consent: true})
+      assert {:ok, %{turn_id: 1}} = Stations.process_voice_turn(voice.session_id, 1, "Quando?")
+      assert_receive {:deadline_ms, voice_budget}
+
+      text = Stations.create_session()
+      assert {:ok, _reply} = Stations.create_message(text.session_id, %{text: "Quando?"})
+      assert_receive {:deadline_ms, text_budget}
+
+      for budget <- [voice_budget, text_budget], do: assert(budget in 2_000..2_345)
     end
 
     test "provider and model errors remain technical failures on retry without text or regeneration" do

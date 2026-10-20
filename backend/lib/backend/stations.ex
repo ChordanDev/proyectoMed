@@ -266,6 +266,7 @@ defmodule Backend.Stations do
          ai_reply,
          params
        ) do
+    params = Map.put_new(params, :deadline_ms, patient_reply_deadline_ms())
     verify_opts = build_verify_opts(package, current_session, context, params)
 
     case verify_patient_reply(package, ai_reply, verify_opts) do
@@ -908,7 +909,10 @@ defmodule Backend.Stations do
          :ok <- ensure_voice_turn_open(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context),
-         verify_opts = build_verify_opts(package, current_session, context, %{}),
+         verify_opts =
+           build_verify_opts(package, current_session, context, %{
+             deadline_ms: patient_reply_deadline_ms()
+           }),
          {:ok, result} <-
            package
            |> verify_patient_reply(ai_reply, verify_opts)
@@ -970,6 +974,10 @@ defmodule Backend.Stations do
       {:ok, {:kept, %{turn_id: turn_id, generation_id: generation_id, refusal: refusal}}}
     end
   end
+
+  # One verification budget for text and voice turns (#256, #269): Jev, the
+  # single regeneration after a refusal and its recheck all share it.
+  defp patient_reply_deadline_ms, do: JevDecision.default_deadline_ms()
 
   defp build_verify_opts(package, session, context, params) do
     deadline_at = resolve_verify_deadline(params)
