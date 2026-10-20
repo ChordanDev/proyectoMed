@@ -78,7 +78,13 @@
     {
       "id": "hda-06",
       "topic": "HDA — respostas padronizadas",
-      "content": "Mediu a temperatura em casa e teve “febre baixa”; não tomou antitérmico.",
+      "content": "Mediu a temperatura em casa e teve “febre baixa”.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-06-antitermico",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Não tomou antitérmico.",
       "disclosure_condition": "on_request"
     },
     {
