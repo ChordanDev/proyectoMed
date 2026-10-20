@@ -338,6 +338,39 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reply.reply_text)
         self.assertTrue(reply.is_kept_receipt())
 
+    async def test_commit_reads_the_addressee_of_a_kept_reply(self):
+        # Issue #274: a turn addressed to the examiner is kept before any
+        # generation; a refused patient reply is kept with addressee `patient`.
+        for addressee, acknowledged in (("examiner", True), ("patient", False)):
+
+            def handler(request, addressee=addressee):
+                return httpx.Response(
+                    201,
+                    json={
+                        "turn_id": 1,
+                        "status": "kept",
+                        "generation_id": 1,
+                        "addressee": addressee,
+                    },
+                )
+
+            async with phoenix(handler) as client:
+                reply = await client.commit(1, "Blumberg positivo.")
+            self.assertTrue(reply.is_kept_receipt())
+            self.assertEqual(reply.addressee, addressee)
+            self.assertIs(reply.is_examiner_acknowledgement(), acknowledged)
+
+    async def test_a_kept_reply_from_an_older_server_is_not_an_acknowledgement(self):
+        def handler(request):
+            return httpx.Response(
+                201, json={"turn_id": 1, "status": "kept", "generation_id": 1}
+            )
+
+        async with phoenix(handler) as client:
+            reply = await client.commit(1, "Blumberg positivo.")
+        self.assertIsNone(reply.addressee)
+        self.assertFalse(reply.is_examiner_acknowledgement())
+
     async def test_commit_waits_for_the_server_budget_other_calls_stay_short(self):
         # Issue #269: generation + verification + one regeneration, plus headroom.
         self.assertGreaterEqual(

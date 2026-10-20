@@ -497,6 +497,33 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         # The kept receipt settles the turn: cleanup has nothing to fence.
         self.assertEqual(self.client.cancel_calls, [])
 
+    async def test_examiner_addressed_turn_publishes_an_acknowledgement_and_speaks_nothing(
+        self,
+    ):
+        # Issue #274: Phoenix kept a turn addressed to the examiner before any
+        # generation. The examiner acknowledges it; nothing is spoken.
+        self.client.replies[1] = VoiceTurnReply(
+            turn_id=1, status="kept", generation_id=1, addressee="examiner"
+        )
+        task = self.connect()
+        with self.assertNoLogs("voice-worker", level="WARNING"):
+            await self.say("blumberg positivo")
+            await settle()
+            await self.disconnect(task)
+
+        self.assertEqual(
+            self.room.patient_events()[0],
+            {
+                "session_id": "s1",
+                "turn_id": 1,
+                "generation_id": 1,
+                "role": "examiner",
+                "status": "acknowledged",
+            },
+        )
+        self.assertEqual(self.tts.texts, [])
+        self.assertEqual(self.client.cancel_calls, [])
+
     async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
         self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
         task = self.connect()

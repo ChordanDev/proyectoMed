@@ -82,7 +82,10 @@ class VoiceTurnReply:
     `status` is `committed` (a verified reply to speak), `kept` (the patient reply
     was refused and Phoenix kept the learner turn without one, #269) or `duplicate`.
     A streamed sentence (#271) is a `committed` reply carrying one verified sentence
-    and its `index`. `speech_ended_at` is the event-loop time the learner's
+    and its `index`. A kept reply carries `addressee` (#274): `examiner` when
+    Phoenix kept a turn addressed to the examiner before any generation, `patient`
+    when the patient reply was refused, and `None` from an older server.
+    `speech_ended_at` is the event-loop time the learner's
     utterance ended, set by `TurnManager` for the first-audio latency log.
     """
 
@@ -93,12 +96,14 @@ class VoiceTurnReply:
         generation_id: int | None = None,
         reply_text: str | None = None,
         index: int | None = None,
+        addressee: str | None = None,
     ):
         self.turn_id = turn_id
         self.status = status
         self.generation_id = generation_id
         self.reply_text = reply_text
         self.index = index
+        self.addressee = addressee
         self.speech_ended_at: float | None = None
 
     def is_committed_receipt(self) -> bool:
@@ -124,6 +129,10 @@ class VoiceTurnReply:
             and self.reply_text is None
         )
 
+    def is_examiner_acknowledgement(self) -> bool:
+        """A kept turn addressed to the examiner (#274), not a refused reply."""
+        return self.is_kept_receipt() and self.addressee == "examiner"
+
     def is_settled_receipt(self) -> bool:
         """Server evidence that this turn was admitted and resolved."""
         return self.is_committed_receipt() or self.is_kept_receipt()
@@ -135,6 +144,7 @@ class VoiceTurnReply:
                 and self.status == other.status
                 and self.generation_id == other.generation_id
                 and self.reply_text == other.reply_text
+                and self.addressee == other.addressee
             )
         return False
 
@@ -370,6 +380,7 @@ class PhoenixClient:
             status=result["status"],
             generation_id=result.get("generation_id"),
             reply_text=result.get("reply_text"),
+            addressee=result.get("addressee"),
         )
 
     async def _stream_turn(self, path: str, body: dict, on_sentence) -> dict:

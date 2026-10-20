@@ -31,7 +31,7 @@ only then shows "Examinador: Anotado.". A refused patient question shows the sam
 - [x] T2 Jev addressee decision: optional adapter callback, TypeSafe question, `JevDecision.decide_addressee/2` with deadline and content-free log (RED→GREEN) — route: inline writer (this worker)
 - [x] T3 Text path: classify before generation; examiner → keep learner turn, `200 outcome: examiner_acknowledged`; regression check that evidence is unchanged (RED→GREEN)
 - [x] T4 Voice path (backend): classify before generation/stream; kept receipts carry `addressee` (RED→GREEN)
-- [ ] T5 Voice worker: examiner-addressed kept receipt publishes `status: acknowledged`, refusal keeps `status: kept` (RED→GREEN, unittest)
+- [x] T5 Voice worker: examiner-addressed kept receipt publishes `status: acknowledged`, refusal keeps `status: kept` (RED→GREEN, unittest)
 - [ ] T6 Web: examiner acknowledgement shows "Anotado."; kept refusal (text and voice) shows the neutral notice (RED→GREEN)
 
 Route note: this whole issue runs inside one delegated bounded writer (the parent
@@ -71,7 +71,12 @@ patient-addressed; grading and evidence unchanged; live check (pending, human).
   `addressee: :patient`. Worker API kept receipts (single and NDJSON) carry `addressee`.
   RED: 7/43 failing (3 Stations voice tests, 2 new and 2 updated controller assertions);
   GREEN: 43 passed; the two exact-map assertions in `stations_test.exs` were updated for
-  the added key. Full backend `mix test`: 1547 passed.
+  the added key. Full backend `mix test`: 1547 passed. Commit `3901af1`.
+- T5: `VoiceTurnReply.addressee` read from the receipt; `is_examiner_acknowledgement()`;
+  the worker publishes `{role: examiner, status: acknowledged}` for an examiner-addressed
+  kept turn and keeps `status: kept` for a refused reply (and for older servers).
+  RED: 3 errors (`unexpected keyword argument 'addressee'`); GREEN: `uv run python -m
+  unittest` 147 tests OK.
 
 ## Next step
 T1.
