@@ -19,8 +19,8 @@ In the 2026-10-20 rehearsal, item 2 ("Anamnese — caracterização da dor") was
 - `not_observable` and `not_applicable` keep no evidence.
 
 ## Tasks
-- [ ] T1 Backend assessment: an uncertain criterion whose criterion and sub-action evidence validated keeps its sub-actions and its evidence (criterion evidence plus performed actions' evidence, pool order). Route: inline (2 files: rubric_assessment.ex + its test).
-- [ ] T2 Backend recommendation: `LearnerFeedback` writes a deterministic recommendation for an uncertain criterion with sub-actions ("Você investigou: …. Ainda falta investigar: …."), keeps the authored text otherwise; educational result serializes evidence for uncertain items. Route: inline.
+- [x] T1 Backend assessment: an uncertain criterion whose criterion and sub-action evidence validated keeps its sub-actions and its evidence (criterion evidence plus performed actions' evidence, pool order). Route: inline (2 files: rubric_assessment.ex + its test).
+- [x] T2 Backend recommendation: `LearnerFeedback` writes a deterministic recommendation for an uncertain criterion with sub-actions ("Você investigou: …. Ainda falta investigar: …."), keeps the authored text otherwise; educational result serializes evidence for uncertain items. Route: inline.
 - [ ] T3 Web: decoder accepts evidence on uncertain criteria (still rejects it on not_observable/not_applicable); ResultScreen test shows the evidence and the recommendation for an uncertain item. Route: inline.
 
 ## Acceptance
@@ -36,7 +36,15 @@ In the 2026-10-20 rehearsal, item 2 ("Anamnese — caracterização da dor") was
 Forecast ~300 authored changed lines, single PR to `feat/237-clinician-demo-readiness`.
 
 ## Progress / evidence
-(pending)
+
+### T1 (done, commit a7489f6)
+- `RubricAssessment.rule/4` now keeps a `partial` (validated sub-actions + criterion and performed-action evidence, pool order) and returns it with an uncertain outcome from the rules, proven-zero or unsupported-credit checks. Evidence that fails validation (criterion, action or first-N answers) reports nothing.
+- `Qualification.rubric_outcome/2` keeps observing an uncertain criterion as `"uncertain"` (its sub-actions are now reported), so qualification results do not change.
+- RED: new test "an uncertain criterion keeps its validated sub-actions and evidence, unscored" failed (`sub_actions` was `[]`). GREEN: `rubric_assessment_test.exs` 103 passed. Updated assertions that encoded the old empty sub-actions/evidence (`assert_unscored/1` for uncertain, two resolver tests). Full `mix test` 1573 passed.
+
+### T2 (done, commit in this task's commit)
+- `LearnerFeedback.attach/3` writes a deterministic text for an uncertain criterion that reports authored actions: "Você investigou: …. Ainda falta investigar: …." (English labels for non-pt packages). Performed with evidence counts as asked; everything else is missing. No provider call; assessed criteria unchanged.
+- RED: 3 new `learner_feedback_test.exs` tests failed with the authored text; the HTTP rehearsal test (`educational_result_test.exs`, appendicitis item-02, location + duration asked) failed with `"Anamnese — caracterização da dor"` when the fix was stashed. GREEN: learner feedback 35 passed, educational result 9 passed, full `mix test` 1578 passed, `mix format --check-formatted` clean, `mix credo --strict` no issues.
 
 ## Next
-T1.
+T3 (web decoder + ResultScreen).

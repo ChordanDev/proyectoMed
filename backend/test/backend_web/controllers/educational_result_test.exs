@@ -37,6 +37,49 @@ defmodule BackendWeb.EducationalResultTest do
     end
   end
 
+  # The 2026-10-20 rehearsal (issue #291): on the appendicitis item 2 the
+  # learner asked the initial location (turn-1) and the duration (turn-3) and
+  # nothing else, and the migration stayed undecided.
+  defmodule RehearsalDouble do
+    @behaviour Backend.Stations.JevDecision.Adapter
+    def decide_patient(_), do: {:ok, %{status: :verified}}
+    def decide_rubric(_), do: {:error, :not_implemented}
+
+    @item_two %{
+      "criterio-1" => {"performed", ["turn-1"]},
+      "criterio-2" => {"uncertain", []},
+      "criterio-4" => {"performed", ["turn-3"]}
+    }
+
+    def decide_rubric_batch(request) do
+      {:ok, %{decisions: Enum.map(request.questions, &decision/1)}}
+    end
+
+    defp decision(%{criterion: %{id: "item-02"}} = question) do
+      %{
+        criterion_id: "item-02",
+        classification: "uncertain",
+        evidence_ids: ["turn-1"],
+        actions:
+          Enum.map(question.actions, fn %{id: id} ->
+            {classification, evidence_ids} = Map.get(@item_two, id, {"not_performed", []})
+            %{id: id, classification: classification, evidence_ids: evidence_ids}
+          end)
+      }
+    end
+
+    defp decision(question) do
+      %{
+        criterion_id: question.criterion.id,
+        classification: "uncertain",
+        evidence_ids: [],
+        actions:
+          Enum.map(question.actions, &%{id: &1.id, classification: "uncertain", evidence_ids: []})
+      }
+      |> Map.merge(if question[:enumerate_answers], do: %{answers: []}, else: %{})
+    end
+  end
+
   defmodule TechnicalFailureDouble do
     @behaviour Backend.Stations.JevDecision.Adapter
     def decide_patient(_), do: {:error, :not_implemented}
@@ -182,6 +225,56 @@ defmodule BackendWeb.EducationalResultTest do
     refute Map.has_key?(session, :assessment)
     :ok = Stations.discard_session(id)
     assert {:error, :not_found} = Stations.get_educational_result(id)
+  end
+
+  test "an uncertain item shows its evidence and a recommendation, not its title", %{
+    conn: conn
+  } do
+    package = File.read!("priv/stations/acute-appendicitis/package.json") |> Jason.decode!()
+    :sys.replace_state(StationLoader, fn _ -> package end)
+    Application.put_env(:backend, :jev_decision_adapter, RehearsalDouble)
+    session = Stations.create_session(audio_consent: false)
+    on_exit(fn -> Stations.discard_session(session.session_id) end)
+
+    for {role, text} <- [
+          learner: "Onde começou a dor?",
+          patient: "Em volta do umbigo.",
+          learner: "Há quanto tempo está com essa dor?"
+        ] do
+      {:ok, _} =
+        Backend.Stations.Conversation.append_message(session.session_id, %{
+          role: role,
+          modality: :text,
+          text: text
+        })
+    end
+
+    {:ok, _} = Stations.complete_session(session.session_id)
+
+    body =
+      conn
+      |> get("/api/v2/stations/active/sessions/#{session.session_id}/result")
+      |> json_response(200)
+
+    item = Enum.find(body["criteria"], &(&1["id"] == "item-02"))
+
+    assert item["status"] == "uncertain"
+    refute Map.has_key?(item, "points")
+    refute item["recommendation"] == "Anamnese — caracterização da dor"
+
+    assert item["recommendation"] ==
+             "Você investigou: Localização inicial; tempo de evolução. " <>
+               "Ainda falta investigar: migração para fossa ilíaca direita; " <>
+               "caráter e progressão; intensidade; fatores de piora ou melhora."
+
+    assert item["evidence_ids"] == ["turn-1", "turn-3"]
+
+    assert Enum.map(item["evidence"], &{&1["id"], &1["role"], &1["text"]}) == [
+             {"turn-1", "learner", "Onde começou a dor?"},
+             {"turn-3", "learner", "Há quanto tempo está com essa dor?"}
+           ]
+
+    assert item["id"] in Enum.map(body["estimates"]["unresolved"], & &1["id"])
   end
 
   defp install_fixture do
