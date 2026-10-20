@@ -8,6 +8,11 @@
 			"Name": "ProyectoMed",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "PatientVoiceSpike",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
 		}
 	],
 	"Plugins": [
@@ -31,6 +36,18 @@
 			"TargetAllowList": [
 				"Editor"
 			]
+		},
+		{
+			"Name": "LiveLink",
+			"Enabled": true
+		},
+		{
+			"Name": "StreamingADA",
+			"Enabled": true
+		},
+		{
+			"Name": "MetaHumanCoreTech",
+			"Enabled": true
 		}
 	]
 }
