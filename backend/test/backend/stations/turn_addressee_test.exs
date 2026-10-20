@@ -55,6 +55,11 @@ defmodule Backend.Stations.TurnAddresseeTest do
         {:addressee_check, request.latest_learner_turn.text}
       )
 
+      case Application.get_env(:backend, :addressee_hook) do
+        hook when is_function(hook, 0) -> hook.()
+        _no_hook -> :ok
+      end
+
       Process.sleep(Application.get_env(:backend, :addressee_delay_ms, 0))
 
       case Application.fetch_env!(:backend, :addressee_answer) do
@@ -84,7 +89,8 @@ defmodule Backend.Stations.TurnAddresseeTest do
       :addressee_patient_status,
       :addressee_delay_ms,
       :addressee_generation_delay_ms,
-      :addressee_generation_result
+      :addressee_generation_result,
+      :addressee_hook
     ]
 
     previous = Map.new(keys, &{&1, Application.fetch_env(:backend, &1)})
@@ -306,6 +312,33 @@ defmodule Backend.Stations.TurnAddresseeTest do
       assert stored.released_impressos == [@lab_impresso]
 
       assert [%{text: @lab_request, decision: :released, released_ids: [@lab_impresso]}] =
+               stored.impresso_requests
+    end
+
+    test "an examiner voice turn releases from its own text, not a later learner turn" do
+      answer(:examiner)
+      session = Stations.create_session(%{audio_consent: true})
+      later_text = "Solicito raio-x de tórax"
+
+      # Another learner turn lands while the voice turn is being classified.
+      Application.put_env(:backend, :addressee_hook, fn ->
+        Application.delete_env(:backend, :addressee_hook)
+
+        {:ok, _session, _token} =
+          Backend.Stations.Conversation.begin_turn(session.session_id, %{
+            role: :learner,
+            modality: "text",
+            text: later_text
+          })
+      end)
+
+      assert {:ok, {:kept, %{addressee: :examiner}}} =
+               Stations.process_voice_turn(session.session_id, 1, @lab_request)
+
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert stored.released_impressos == [@lab_impresso]
+
+      assert [%{text: @lab_request, request_id: "voice-turn-1", released_ids: [@lab_impresso]}] =
                stored.impresso_requests
     end
 
