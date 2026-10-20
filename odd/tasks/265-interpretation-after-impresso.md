@@ -37,13 +37,13 @@ unrelated turn is not filtered, and this run shows Jev is the source.
 
 ## Checklist
 
-- [ ] T1 - Package contract: `actions[].interprets_impresso_ids` in the schema and
+- [x] T1 - Package contract: `actions[].interprets_impresso_ids` in the schema and
   `StationPackage` validation (non-empty list of authored impresso ids; not together
   with `impresso_ids` on one action), with the authoring guide row.
-- [ ] T2 - Assessment rule: `RubricAssessment.InterpretationEvidence` drops citations
+- [x] T2 - Assessment rule: `RubricAssessment.InterpretationEvidence` drops citations
   that are not learner turns after a release of a declared impresso, applied in
   `RubricAssessment` sub-action validation; docs in `educational-result-api.md`.
-- [ ] T3 - Authoring and regression: declare the dependencies on items 5, 7 and 8 of
+- [x] T3 - Authoring and regression: declare the dependencies on items 5, 7 and 8 of
   acute-appendicitis, document them (package mapping D22, checklist), and extend the
   #243 regression harness with the second rehearsal evidence for item 7.
 
@@ -59,8 +59,34 @@ unrelated turn is not filtered, and this run shows Jev is the source.
 
 ## Progress
 
-(updated per task)
+| Task | Commit | RED | GREEN |
+|---|---|---|---|
+| T1 | `1dccb80` | 4/66 failing (schema field, invalid values, no impressos, both fields) | 71 passed (with the #228 `impresso_ids` tests) |
+| T2 | `656c740` | 8/9 failing (module undefined; the "unaffected" test passed as expected) | 9 passed; `test/backend/stations` 842 passed |
+| T3 | `6af5571` | package unauthored: 2/16 failing (package test, #265 harness case) | 16 passed; full backend 1268 passed |
+| Refactor | `4cc721d` | credo `--strict`: 3 nesting findings in new test helpers | credo clean |
+
+Decisions:
+
+- Field name `interprets_impresso_ids`; any listed impresso's first verified release
+  opens the window. An action authors at most one of `impresso_ids` and
+  `interprets_impresso_ids`.
+- Only learner turns count after the release; the request event itself is not
+  interpretation evidence. Ties (`at` equal) sort turns before events, so a turn at the
+  release instant does not count.
+- A performed action whose citations are all dropped becomes `not_performed` (the
+  issue's wording), not "performed without evidence".
+- Criterion-level citations are not filtered (no action dependency to apply; TypeSafe
+  sends none).
+- Authored on item 5 `criterio-2`-`4`, item 7 `criterio-1`-`4`, item 8 `criterio-2`-`4`
+  (including the mandatory hypothesis, per the issue). Flagged for clinical review in
+  checklist row D22.
+
+Checks: local CI passed (web 229 + 4 tests, backend 1271 tests, typecheck, lint,
+format, compile with warnings as errors, credo strict, dialyzer 0 errors). Live
+rehearsal re-run: pending.
 
 ## Next step
 
-T1.
+Push and open the PR to `feat/237-clinician-demo-readiness`; live re-run of the
+rehearsal transcript stays pending.
