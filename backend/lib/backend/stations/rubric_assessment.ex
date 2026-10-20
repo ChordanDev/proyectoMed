@@ -78,6 +78,7 @@ defmodule Backend.Stations.RubricAssessment do
 
   @uncertain_class "uncertain"
   @not_performed_class "not_performed"
+  @performed_class "performed"
   @task_order "task_order"
   @own_opts [
     :max_questions_per_call,
@@ -106,6 +107,9 @@ defmodule Backend.Stations.RubricAssessment do
   @typedoc """
   The result of one criterion. `:level` (the authored label) and `:points` are
   present only when the status is `:assessed`; `:reason` is `nil` only then.
+  An `:uncertain` criterion whose evidence validated keeps its `:sub_actions`
+  and the evidence of its criterion and performed actions (issue #291); every
+  other unscored criterion reports none.
   """
   @type criterion_result :: %{
           required(:id) => String.t(),
@@ -170,6 +174,10 @@ defmodule Backend.Stations.RubricAssessment do
   @typep level :: %{label: String.t(), points: Points.t()}
 
   @typep draft :: %{level: level(), evidence: [Evidence.item()], sub_actions: [sub_action()]}
+
+  # What an uncertain criterion still reports: its validated actions and the
+  # evidence of its criterion and performed actions (issue #291).
+  @typep partial :: %{evidence: [Evidence.item()], sub_actions: [sub_action()]}
 
   @doc """
   Assesses a completed session against the rubric of its v2 Station Package.
@@ -509,6 +517,7 @@ defmodule Backend.Stations.RubricAssessment do
     case judge(plan, Map.fetch!(decisions, plan.id), pool) do
       {:assessed, draft} -> assessed(plan, draft)
       {:uncertain, reason} -> unscored(plan, :uncertain, reason)
+      {:uncertain, reason, partial} -> plan |> unscored(:uncertain, reason) |> reported(partial)
     end
   end
 
@@ -516,7 +525,7 @@ defmodule Backend.Stations.RubricAssessment do
   # actions. The criterion stays uncertain at once only when no rule field
   # could decide the level without the classifier's class.
   @spec judge(plan(), RubricBatch.decision(), Evidence.pool()) ::
-          {:assessed, draft()} | {:uncertain, reason()}
+          {:assessed, draft()} | {:uncertain, reason()} | {:uncertain, reason(), partial()}
   defp judge(%{criterion: criterion} = plan, %{classification: @uncertain_class} = decision, pool) do
     if AuthoredRules.decides?(criterion) do
       rule(plan, :uncertain, decision, pool)
@@ -529,21 +538,42 @@ defmodule Backend.Stations.RubricAssessment do
     rule(plan, level(criterion, decision.classification), decision, pool)
   end
 
+  # Once the criterion and action evidence validated, an uncertain outcome
+  # still reports them, so its recommendation can say what was asked. Any
+  # evidence that fails validation, the first-N answers' included, reports
+  # nothing.
   defp rule(%{requirement: requirement} = plan, jev_level, decision, pool) do
     with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
-         {:ok, sub_actions} <- sub_actions(plan, decision.actions, pool),
-         {:ok, level, grounding} <- decide(plan, jev_level, sub_actions, decision, pool),
+         {:ok, sub_actions} <- sub_actions(plan, decision.actions, pool) do
+      partial = %{
+        evidence: with_actions(evidence, performed(sub_actions), pool),
+        sub_actions: sub_actions
+      }
+
+      case level_from(plan, jev_level, evidence, sub_actions, decision, pool) do
+        {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
+        {:uncertain, reason} -> {:uncertain, reason, partial}
+        {:assessed, _draft} = assessed -> assessed
+      end
+    else
+      {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
+      {:uncertain, _reason} = uncertain -> uncertain
+    end
+  end
+
+  defp level_from(plan, jev_level, evidence, sub_actions, decision, pool) do
+    with {:ok, level, grounding} <- decide(plan, jev_level, sub_actions, decision, pool),
          :ok <- proven_zero(plan, jev_level, level, sub_actions, decision, pool) do
       grounded(%{
         level: level,
         evidence: with_actions(evidence, grounding, pool),
         sub_actions: sub_actions
       })
-    else
-      {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
-      {:uncertain, _reason} = uncertain -> uncertain
     end
   end
+
+  defp performed(sub_actions),
+    do: Enum.filter(sub_actions, &(&1.classification == @performed_class))
 
   defp decide(
          %{criterion: criterion, requirement: requirement},
@@ -706,6 +736,15 @@ defmodule Backend.Stations.RubricAssessment do
   end
 
   defp unscored(plan, status, reason), do: base_result(plan, status, reason)
+
+  defp reported(result, %{evidence: evidence, sub_actions: sub_actions}) do
+    %{
+      result
+      | evidence_ids: Evidence.ids(evidence),
+        evidence: Enum.map(evidence, &Map.take(&1, [:id, :role, :text])),
+        sub_actions: sub_actions
+    }
+  end
 
   defp base_result(%{id: id, criterion: criterion, max_points: max_points}, status, reason) do
     %{
