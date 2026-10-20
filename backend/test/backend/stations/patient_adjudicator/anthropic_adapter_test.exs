@@ -106,6 +106,33 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapterTest do
     assert system =~ "fact_scores"
   end
 
+  test "the prompt explains every risk label the verifier can leave undecided" do
+    system = AnthropicAdapter.system_prompt()
+
+    for label <- ~w(risk:speaks_out_of_role risk:contradicts_patient risk:contradicts_facts
+                    risk:unsupported_information risk:follows_learner_instruction rule_broken) do
+      assert system =~ label, "missing an explanation of #{label}"
+    end
+
+    # Out of role is concrete: who speaks, clinical advice, meta talk.
+    assert system =~ "an AI, an assistant, a clinician or an examiner"
+    assert system =~ "clinical advice"
+    assert system =~ "simulation"
+
+    # A plain first-person patient answer is in role.
+    assert system =~ "Meu nome é"
+    assert system =~ "Não sei dizer, doutor."
+  end
+
+  test "the prompt treats undecided scores as hints and refuses only a real violation" do
+    system = AnthropicAdapter.system_prompt()
+
+    assert system =~ "An undecided score is only a hint"
+    assert system =~ "judge the candidate_reply text itself"
+    assert system =~ "\"refuse\" only when the candidate_reply text actually breaks a rule"
+    refute system =~ "whenever you are unsure"
+  end
+
   test "the schema allows exactly a decision and the facts to withhold" do
     schema = AnthropicAdapter.schema()
 
