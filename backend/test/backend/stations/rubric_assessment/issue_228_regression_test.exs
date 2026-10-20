@@ -214,8 +214,15 @@ defmodule Backend.Stations.RubricAssessment.Issue228RegressionTest do
 
     test "the reason names an action the resolver answered not_performed",
          %{fixture: fixture, assessment: assessment} do
-      assert_received {:resolver_request, request}
-      assert Enum.map(request.criteria, & &1.id) == @wrongly_zeroed
+      # One resolver request per criterion (issue #301).
+      requested =
+        for _id <- @wrongly_zeroed do
+          assert_received {:resolver_request, %{criteria: [%{id: id}]}}
+          id
+        end
+
+      refute_received {:resolver_request, _request}
+      assert Enum.sort(requested) == @wrongly_zeroed
 
       for id <- @wrongly_zeroed do
         {:uncertain_sub_action, action_id} = criterion(assessment, id).reason
