@@ -1488,9 +1488,14 @@ defmodule Backend.Stations do
       @early_timer_finish_tolerance_ms
   end
 
+  # The generator answers only the latest learner question (issue #286): a
+  # learner turn that never got a patient reply (refused, cancelled or
+  # examiner-addressed, so the next message is another learner turn) is left
+  # out of its context. Jev still judges against the full history.
   defp format_context(session, package) do
     conversation =
-      Enum.map(session.messages, fn msg ->
+      session.messages
+      |> Enum.map(fn msg ->
         role =
           case msg.role do
             r when r in [:learner, "learner", :student, "student"] -> :student
@@ -1500,11 +1505,21 @@ defmodule Backend.Stations do
 
         %{role: role, text: msg.text}
       end)
+      |> drop_unanswered_learner_turns()
 
     %{
       conversation: conversation,
       language: package["language"] || "pt-BR"
     }
+  end
+
+  defp drop_unanswered_learner_turns(turns) do
+    turns
+    |> Enum.chunk_every(2, 1)
+    |> Enum.flat_map(fn
+      [%{role: :student}, %{role: :student}] -> []
+      [turn | _next] -> [turn]
+    end)
   end
 
   defp normalize_modality("voice"), do: :voice
