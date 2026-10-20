@@ -6,7 +6,10 @@ defmodule Backend.Stations.StationAI.AnthropicAdapter do
   The system prompt is the package safety prompt built by
   `Backend.Stations.StationAI.system_prompt/2` (withheld facts included), and
   the conversation is sent as alternating `user` (learner) and `assistant`
-  (patient) messages. The reply is a plain text candidate: the caller still
+  (patient) messages. The package part of the prompt is the cached prompt
+  prefix (issue #272): it is byte-identical on every turn of a station, while
+  the withheld-facts section of a regeneration follows it uncached and the
+  conversation stays in `messages`. The reply is a plain text candidate: the caller still
   bounds it (`BoundedReply`) and the CandidateGate and Jev still verify it.
 
   The patient runs on its own model setting (`:patient_model`, default
@@ -37,8 +40,11 @@ defmodule Backend.Stations.StationAI.AnthropicAdapter do
     config =
       AnthropicClient.config(opts, effort: @effort, model_key: :patient_model, thinking: :lowest)
 
+    {stable_prompt, per_turn_prompt} = StationAI.system_prompt_parts(package, context)
+
     request = %{
-      system: StationAI.system_prompt(package, context),
+      system: stable_prompt,
+      system_suffix: per_turn_prompt,
       messages: messages(context),
       max_tokens: @max_tokens
     }
