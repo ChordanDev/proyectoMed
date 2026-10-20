@@ -111,6 +111,18 @@ defmodule Backend.Stations.CandidateGateTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  # Issue #293: refuses every candidate, so a delivered text proves Jev was
+  # never asked about it.
+  defmodule RefuseAllAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :semantic_refusal}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   defmodule ExplosiveAdapter do
     @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -1473,6 +1485,59 @@ defmodule Backend.Stations.CandidateGateTest do
                adapter: DisclosedEchoAdapter,
                disclosed_fact_ids: ["fact-1"]
              ) == {:ok, "Começou há 2 horas."}
+    end
+  end
+
+  describe "no-information answer (issue #293)" do
+    defp no_information, do: Backend.Stations.StationAI.refusal_text()
+
+    test "is delivered without a Jev call and discloses nothing" do
+      package = base_package(%{"approved_templates" => nil})
+
+      assert CandidateGate.verify(no_information(), package, sample_conversation(),
+               adapter: ExplosiveAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, %{text: no_information(), used_fact_ids: []}}
+    end
+
+    test "surrounding whitespace still matches the phrase" do
+      candidate = " " <> no_information() <> "\n"
+
+      assert CandidateGate.verify_and_deliver(candidate, base_package(), [],
+               adapter: ExplosiveAdapter
+             ) == {:ok, candidate}
+    end
+
+    test "a regenerated no-information answer is delivered without a Jev call" do
+      assert CandidateGate.verify(
+               "Acho que a dor vai para as costas.",
+               base_package(%{"approved_templates" => nil}),
+               sample_conversation(),
+               adapter: RefuseAllAdapter,
+               generator: fn -> {:ok, no_information()} end
+             ) == {:ok, %{text: no_information(), used_fact_ids: []}}
+    end
+
+    test "any other text still goes through Jev" do
+      for text <- [
+            no_information() <> " A dor começou há 2 horas.",
+            "Sobre isso: " <> no_information(),
+            String.trim_trailing(no_information(), ".")
+          ] do
+        assert CandidateGate.verify_and_deliver(text, base_package(), [],
+                 adapter: RefuseAllAdapter,
+                 can_retry?: false
+               ) == {:error, {:refused, :semantic_refusal}}
+      end
+    end
+
+    test "the deterministic checks still run first" do
+      package =
+        base_package(%{"response_rules" => [%{"id" => "length-cap", "max_length" => 5}]})
+
+      assert CandidateGate.verify_and_deliver(no_information(), package, [],
+               adapter: ExplosiveAdapter
+             ) == {:error, {:denied, :response_rules}}
     end
   end
 end
