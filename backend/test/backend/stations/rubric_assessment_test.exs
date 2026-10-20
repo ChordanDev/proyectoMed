@@ -180,6 +180,14 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
   defp asked_ids(request), do: Enum.map(request.questions, & &1.criterion.id)
 
+  # An uncertain criterion may still report the validated evidence of its
+  # criterion and performed actions (issue #291); no other unscored one does.
+  defp assert_unscored(%{status: :uncertain} = result) do
+    refute Map.has_key?(result, :level)
+    refute Map.has_key?(result, :points)
+    assert result.evidence_ids == Enum.map(result.evidence, & &1.id)
+  end
+
   defp assert_unscored(result) do
     refute Map.has_key?(result, :level)
     refute Map.has_key?(result, :points)
@@ -548,9 +556,55 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert result.status == :uncertain
       assert result.reason == {:uncertain_sub_action, "ask-intensity"}
-      assert result.sub_actions == []
-      assert_unscored(result)
+      refute Map.has_key?(result, :level)
+      refute Map.has_key?(result, :points)
       assert %{id: @history, status: :uncertain} in assessment.estimates.unresolved
+    end
+
+    # Issue #291: the recommendation of an uncertain criterion is written from
+    # what the learner asked, so its validated actions and evidence are kept.
+    test "an uncertain criterion keeps its validated sub-actions and evidence, unscored" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration", ["turn-3"]),
+        uncertain("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      assessment = assess!(rules(), session(), history_answer("adequado", ["turn-1"], actions))
+      result = criterion(assessment, @history)
+
+      assert result.status == :uncertain
+      assert result.sub_actions == actions
+      assert result.evidence_ids == ["turn-1", "turn-3"]
+
+      assert Enum.map(result.evidence, &{&1.id, &1.role}) == [
+               {"turn-1", :learner},
+               {"turn-3", :learner}
+             ]
+
+      refute Map.has_key?(result, :level)
+      refute Map.has_key?(result, :points)
+      assert assessment.estimates.scored_subtotal == Points.zero()
+    end
+
+    test "an uncertain criterion whose evidence fails validation keeps none" do
+      actions = [
+        performed("ask-onset"),
+        performed("ask-duration"),
+        uncertain("ask-intensity"),
+        not_performed("ask-relief")
+      ]
+
+      result =
+        rules()
+        |> assess!(session(), history_answer("adequado", ["turn-2"], actions))
+        |> criterion(@history)
+
+      assert result.status == :uncertain
+      assert result.sub_actions == []
+      assert result.evidence_ids == []
+      assert result.evidence == []
     end
 
     test "an uncertain sub-action that cannot change the level leaves it assessed" do
@@ -1911,6 +1965,8 @@ defmodule Backend.Stations.RubricAssessmentTest do
 
       assert wrong_channel.status == :uncertain
       assert wrong_channel.reason == {:invalid_evidence, :wrong_channel, "turn-1"}
+      assert wrong_channel.evidence == []
+      assert wrong_channel.sub_actions == []
     end
 
     test "a structurally invalid enumeration invalidates the attempt" do

@@ -431,7 +431,8 @@ const decodeEducationalCriterion = (value: unknown): ResultCriterion => {
     if (fortieths(points) > fortieths(base.max_points)) invalid("educational criterion");
     return { ...base, status, reason: null, level: stringValue(body, "level", "educational criterion"), level_description: stringValue(body, "level_description", "educational criterion"), points };
   }
-  if ("points" in body || "level" in body || "level_description" in body || evidence.length > 0) invalid("educational criterion");
+  // Only an uncertain criterion may report evidence: what the learner asked (issue #291).
+  if ("points" in body || "level" in body || "level_description" in body || (status !== "uncertain" && evidence.length > 0)) invalid("educational criterion");
   const reasons = { uncertain: "assessment_unresolved", not_observable: "required_modality_unavailable", not_applicable: "authored_exclusion" };
   if (body.reason !== reasons[status]) invalid("educational criterion");
   return { ...base, status, reason: reasons[status] };

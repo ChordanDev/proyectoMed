@@ -8,6 +8,7 @@ defmodule Backend.Stations.LearnerFeedbackTest do
 
   alias Backend.Stations
   alias Backend.Stations.LearnerFeedback
+  alias Backend.Stations.LearnerFeedback.DisabledAdapter
 
   @moduletag capture_log: true
 
@@ -365,6 +366,88 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       text = String.duplicate("é", 400)
       respond_with(fn _request -> {:ok, %{"history" => "  #{text}\n", "exam" => "Bom."}} end)
       assert recommendations(attach(id))["history"] == text
+    end
+  end
+
+  # Issue #291: an uncertain criterion never showed more than its authored
+  # text, which can be the bare item title.
+  describe "attach/3 on an uncertain criterion" do
+    defp uncertain_history(sub_actions) do
+      %{
+        @history
+        | status: :uncertain,
+          reason: {:uncertain_sub_action, "duration"},
+          sub_actions: sub_actions
+      }
+      |> Map.drop([:level, :points])
+    end
+
+    defp with_criterion(criterion), do: %{@assessment | criteria: [criterion, @exam, @unclear]}
+
+    test "writes what was asked and what is still missing from its actions", %{session_id: id} do
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "radiation", classification: "not_performed", evidence_ids: []},
+          %{id: "duration", classification: "uncertain", evidence_ids: []}
+        ])
+
+      result = attach(id, with_criterion(history))
+
+      assert recommendations(result)["history"] ==
+               "Você investigou: Asks about onset. " <>
+                 "Ainda falta investigar: Asks about radiation; Asks about duration."
+
+      assert recommendations(result)["unclear"] == "Authored unclear recommendation."
+      assert recommendations(result)["exam"] == @generated["exam"]
+
+      assert_received {:feedback_request, request}
+      assert Enum.map(request.criteria, & &1.id) == ["exam"]
+    end
+
+    test "a performed action without evidence is still missing", %{session_id: id} do
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: []},
+          %{id: "radiation", classification: "not_performed", evidence_ids: []},
+          %{id: "duration", classification: "not_performed", evidence_ids: []}
+        ])
+
+      assert recommendations(attach(id, with_criterion(history)))["history"] ==
+               "Ainda falta investigar: Asks about onset; Asks about radiation; " <>
+                 "Asks about duration."
+    end
+
+    test "is written even when the provider is disabled", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_adapter, DisabledAdapter)
+
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "radiation", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "duration", classification: "performed", evidence_ids: ["turn-1"]}
+        ])
+
+      result = attach(id, with_criterion(history))
+
+      assert recommendations(result)["history"] ==
+               "Você investigou: Asks about onset; Asks about radiation; Asks about duration."
+
+      assert recommendations(result)["exam"] == "Authored exam recommendation."
+    end
+
+    test "changes nothing but the recommendation", %{session_id: id} do
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "radiation", classification: "not_performed", evidence_ids: []},
+          %{id: "duration", classification: "uncertain", evidence_ids: []}
+        ])
+
+      assessment = with_criterion(history)
+      result = attach(id, assessment)
+
+      assert without_recommendations(result) == without_recommendations(assessment)
     end
   end
 

@@ -344,7 +344,11 @@ defmodule Backend.Stations.Qualification do
   defp rubric_outcome(%{status: :assessed, level: level}, nil), do: "assessed:#{level}"
   defp rubric_outcome(%{status: status}, nil), do: Atom.to_string(status)
 
-  # A criterion skipped before Jev has no action decisions to read.
+  # A criterion skipped before Jev has no action decisions to read, and an
+  # uncertain one is observed as uncertain even though it reports the actions
+  # it validated (issue #291).
+  defp rubric_outcome(%{status: :uncertain}, _action_id), do: "uncertain"
+
   defp rubric_outcome(%{sub_actions: sub_actions} = criterion, action_id) do
     case Enum.find(sub_actions, &(&1.id == action_id)) do
       %{classification: classification} -> "action:#{classification}"

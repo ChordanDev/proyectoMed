@@ -268,7 +268,15 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
         |> history()
 
       assert result.reason == {:uncertain_sub_action, "ask-intensity"}
-      assert result.sub_actions == []
+
+      # The uncertain criterion reports its actions (issue #291): Jev's clear
+      # answers stand over the resolver's.
+      assert Map.new(result.sub_actions, &{&1.id, &1.classification}) == %{
+               "ask-onset" => "performed",
+               "ask-duration" => "performed",
+               "ask-intensity" => "uncertain",
+               "ask-relief" => "not_performed"
+             }
     end
 
     test "decisions on unknown actions or criteria are ignored" do
@@ -480,7 +488,9 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
       assert result.reason == {:uncertain_sub_action, "ask-duration"}
       refute Map.has_key?(result, :level)
       refute Map.has_key?(result, :points)
-      assert result.sub_actions == []
+
+      assert Enum.map(result.sub_actions, & &1.classification) ==
+               ["performed", "not_performed", "not_performed", "not_performed"]
     end
 
     test "a missing mandatory action the resolver decided is uncertain" do
