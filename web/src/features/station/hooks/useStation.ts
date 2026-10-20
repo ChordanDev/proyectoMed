@@ -104,7 +104,14 @@ export const isKeptLearnerTurn = (cause: unknown): boolean => {
  * travels the same path as a kept refusal, so the screen decides what to show.
  */
 export class ExaminerAcknowledgement extends Error {
-  constructor(readonly learnerTurn: SessionMessage) {
+  /**
+   * `newlyReleased` holds the impressos the turn released by asking the
+   * examiner for them (#302), empty when it released none.
+   */
+  constructor(
+    readonly learnerTurn: SessionMessage,
+    readonly newlyReleased: Impresso[] = [],
+  ) {
     super("Examiner acknowledgement");
     this.name = "ExaminerAcknowledgement";
   }
@@ -167,6 +174,8 @@ export const useStation = (api: StationApi = defaultApi) => {
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [initialMessages, setInitialMessages] = useState<SessionMessage[]>([]);
   const [impressos, setImpressos] = useState<Impresso[]>([]);
+  // The released impressos the latest refresh compared against (#302).
+  const impressosRef = useRef<Impresso[]>([]);
   const [impressoError, setImpressoError] = useState<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const hasStartedRef = useRef(false);
@@ -385,6 +394,35 @@ export const useStation = (api: StationApi = defaultApi) => {
     [anchorClock, api, fail, updateStatus],
   );
 
+  useEffect(() => {
+    impressosRef.current = impressos;
+  }, [impressos]);
+
+  /**
+   * Re-reads the released impressos of the live session and returns the ones
+   * that were not released before (#302): an examiner acknowledgement may have
+   * released impressos the learner asked for out loud. A failed read leaves the
+   * drawer as it was and returns none.
+   */
+  const refreshImpressos = useCallback(async (): Promise<Impresso[]> => {
+    const session = sessionRef.current;
+    if (!session || isResettingRef.current) return [];
+
+    try {
+      const response = await api.getImpressos(session.session_id);
+      if (sessionRef.current !== session) return [];
+
+      const known = new Set(impressosRef.current.map((impresso) => impresso.id));
+      impressosRef.current = response.released_impressos;
+      setImpressos(response.released_impressos);
+      return response.released_impressos.filter(
+        (impresso) => !known.has(impresso.id),
+      );
+    } catch {
+      return [];
+    }
+  }, [api]);
+
   const send = useCallback(
     (message: SendMessageRequest): Promise<MessageReply | null> => {
       const session = sessionRef.current;
@@ -411,7 +449,10 @@ export const useStation = (api: StationApi = defaultApi) => {
           }
           anchorClock(messageReply.server_now);
           if (messageReply.outcome === "examiner_acknowledged") {
-            throw new ExaminerAcknowledgement(messageReply.learner_turn);
+            throw new ExaminerAcknowledgement(
+              messageReply.learner_turn,
+              await refreshImpressos(),
+            );
           }
           return messageReply;
         } catch (cause) {
@@ -452,7 +493,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       pendingSendRef.current = pendingSend;
       return pendingSend;
     },
-    [anchorClock, api, fail, finish],
+    [anchorClock, api, fail, finish, refreshImpressos],
   );
 
   const transcribe = useCallback(
@@ -717,6 +758,7 @@ export const useStation = (api: StationApi = defaultApi) => {
     synthesize,
     fetchTranscript,
     requestImpresso,
+    refreshImpressos,
     finish,
     reset,
     result,

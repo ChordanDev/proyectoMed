@@ -73,6 +73,29 @@ and the input stays empty for a rephrased message. Neither entry is stored or gr
 Compatibility: a response without `outcome` is read as `patient_reply`. A worker
 event `status: "kept"` from a worker built before #274 now shows the neutral notice.
 
+## Exam requests to the examiner (#302)
+
+An examiner-addressed turn (text or voice) whose text names at least one authored
+impresso is also an impresso request: the backend matches it with `Impressos.match`
+over `Impressos.normalize(text)` (deterministic, no model) and, when anything
+matches, records it through `Stations.request_impresso/2`, the path of the impressos
+modal. The release and its `impresso_requests` event are therefore those of a modal
+request, and the rubric counts them the same way. A voice turn uses the request id
+`voice-turn-<turn_id>`, so a retried turn is not recorded twice.
+
+A remark that matches nothing records nothing: unlike a modal request, it is not an
+`unavailable` request. A repeated request is recorded as `already_released`, as from
+the modal. A patient-addressed turn never releases impressos.
+
+- Text API: the `examiner_acknowledged` response carries `newly_released` (impresso
+  objects, empty when nothing was released).
+- Voice: the receipt and the worker event are unchanged; the web learns of the release
+  by listing the session impressos after the examiner acknowledgement.
+- Web: after an examiner acknowledgement (text reply or voice event) `useStation`
+  re-reads the released impressos (`getImpressos`). When new ones appear, the examiner's
+  existing hand-over entry ("Entrega: <títulos>") follows "Anotado." and the impressos
+  drawer opens; with none, only "Anotado." shows. The impressos modal is unchanged.
+
 ## Grading
 
 Grading does not change. An examiner-addressed turn is stored exactly as a refused
@@ -80,7 +103,8 @@ patient-addressed turn is stored since #235: one learner message with the same r
 modality and text, and no patient message. The evidence pool and rubric assessment
 read learner turns without any addressee, so the same learner turns give the same
 evidence and the same grade (tested in
-`backend/test/backend/stations/turn_addressee_evidence_test.exs`).
+`backend/test/backend/stations/turn_addressee_evidence_test.exs`). Since #302 the only
+addition is the impresso events of exam requests made to the examiner.
 
 ## Open points
 

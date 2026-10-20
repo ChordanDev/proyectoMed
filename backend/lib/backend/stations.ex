@@ -179,7 +179,9 @@ defmodule Backend.Stations do
   Before any generation, Jev decides who the turn is addressed to (#274,
   `docs/design/turn-addressee.md`). An examiner-addressed turn is kept without a
   patient reply, nothing is generated or verified, and the result is
-  `{:ok, %{outcome: :examiner_acknowledged, learner_turn: message, reply_text: nil}}`.
+  `{:ok, %{outcome: :examiner_acknowledged, learner_turn: message, reply_text: nil,
+  newly_released: impressos}}`, where `impressos` are those the turn released by
+  naming an authored impresso (#302), empty otherwise.
   An undecided answer, or any failure of the check, is patient-addressed, and the
   turn continues as below; its result carries `outcome: :patient_reply`.
 
@@ -255,23 +257,47 @@ defmodule Backend.Stations do
 
   # An examiner-addressed turn (#274) is real rubric evidence, stored exactly as
   # a refused patient-addressed turn is (#235): the learner message, no reply.
-  # Nothing is generated or verified.
+  # Nothing is generated or verified. An exam request in it releases the
+  # matching impressos (#302), returned as `newly_released`.
   defp acknowledge_examiner_turn(session_id, token) do
     case Conversation.resolve_turn(session_id, token, :keep_learner_turn) do
       {:ok, session} ->
+        learner_turn = List.last(session.messages)
+
         {:ok,
          %{
            outcome: :examiner_acknowledged,
            reply_text: nil,
            reply_audio_url: nil,
            used_facts: [],
-           learner_turn: List.last(session.messages)
+           learner_turn: learner_turn,
+           newly_released: release_requested_impressos(session_id, learner_turn.text, %{})
          }}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  # An examiner-addressed turn that names at least one authored impresso is an
+  # impresso request (#302): it goes through `request_impresso/2`, so the
+  # release and its rubric event are those of a modal request. A remark that
+  # matches nothing records nothing, unlike an unavailable modal request.
+  # `params` may carry a stable `request_id` for an idempotent retry.
+  # Returns the newly released impressos; a failure releases nothing.
+  defp release_requested_impressos(session_id, text, params) when is_binary(text) do
+    package = get_active_package()
+
+    with [_ | _] <- Impressos.match(package["impressos"] || [], Impressos.normalize(text)),
+         {:ok, %{newly_released: newly_released}} <-
+           request_impresso(session_id, Map.put(params, :text, text)) do
+      newly_released
+    else
+      _nothing_released -> []
+    end
+  end
+
+  defp release_requested_impressos(_session_id, _text, _params), do: []
 
   # Decides who the latest learner turn of the session is addressed to (#274),
   # before any generation. Only a confident examiner answer is `:examiner`; an
@@ -903,8 +929,8 @@ defmodule Backend.Stations do
   def process_voice_turn(session_id, turn_id, text)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
     case admit_voice_turn(session_id, turn_id, text) do
-      {:ok, generation_id} when is_integer(generation_id) ->
-        process_voice_reply(session_id, turn_id, generation_id)
+      {:ok, generation_id, learner_text} ->
+        process_voice_reply(session_id, turn_id, generation_id, learner_text)
 
       other ->
         other
@@ -976,8 +1002,8 @@ defmodule Backend.Stations do
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) and
              is_function(sink, 2) do
     case admit_voice_turn(session_id, turn_id, text) do
-      {:ok, generation_id} when is_integer(generation_id) ->
-        stream_voice_reply(session_id, turn_id, generation_id, acc, sink)
+      {:ok, generation_id, learner_text} ->
+        stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
 
       other ->
         {other, acc}
@@ -1118,11 +1144,11 @@ defmodule Backend.Stations do
   defp ensure_audio_consent(%{audio_consent: true}), do: :ok
   defp ensure_audio_consent(_session), do: {:error, :no_consent}
 
-  defp process_voice_reply(session_id, turn_id, generation_id) do
+  defp process_voice_reply(session_id, turn_id, generation_id, learner_text) do
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(session) do
       case turn_addressee(session_id, :voice, %{}) do
-        :examiner -> keep_examiner_voice_turn(session_id, turn_id, generation_id)
+        :examiner -> keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
         :patient -> generate_voice_reply(session_id, turn_id, generation_id)
       end
     else
@@ -1131,11 +1157,22 @@ defmodule Backend.Stations do
   end
 
   # An examiner-addressed voice turn (#274) is kept like a refused one, with
-  # nothing generated, verified or spoken.
-  defp keep_examiner_voice_turn(session_id, turn_id, generation_id) do
+  # nothing generated, verified or spoken. An exam request in it releases the
+  # matching impressos (#302); the web learns of them by listing impressos
+  # after the examiner acknowledgement. The release reads the turn's own
+  # admitted text, never the latest learner message: another learner turn may
+  # have landed while this one was being classified.
+  defp keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text) do
     case keep_voice_turn(session_id, turn_id, generation_id, :examiner_addressed, :examiner) do
-      {:ok, kept} -> {:ok, kept}
-      {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
+      {:ok, kept} ->
+        release_requested_impressos(session_id, learner_text, %{
+          request_id: "voice-turn-#{turn_id}"
+        })
+
+        {:ok, kept}
+
+      {:error, reason} ->
+        fail_voice_reply(session_id, generation_id, reason)
     end
   end
 
@@ -1162,7 +1199,8 @@ defmodule Backend.Stations do
   end
 
   # Commits the learner voice turn and opens its generation, at most once per
-  # turn: `{:ok, generation_id}`, `{:ok, :duplicate}` or an error.
+  # turn: `{:ok, generation_id, learner_text}` (the admitted, trimmed text),
+  # `{:ok, :duplicate}` or an error.
   defp admit_voice_turn(session_id, turn_id, text) do
     case String.trim(text) do
       "" ->
@@ -1174,7 +1212,7 @@ defmodule Backend.Stations do
              :ok <- ensure_audio_consent(session),
              {:ok, :committed, generation_id} <-
                Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
-          {:ok, generation_id}
+          {:ok, generation_id, trimmed_text}
         end
     end
   end
@@ -1192,7 +1230,7 @@ defmodule Backend.Stations do
     end
   end
 
-  defp stream_voice_reply(session_id, turn_id, generation_id, acc, sink) do
+  defp stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink) do
     package = get_active_package()
 
     with {:ok, session} <- Conversation.fetch(session_id),
@@ -1223,7 +1261,7 @@ defmodule Backend.Stations do
 
       case outcome do
         {:closed, :examiner_addressed} ->
-          {keep_examiner_voice_turn(session_id, turn_id, generation_id), acc}
+          {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
 
         outcome ->
           {resolve_streamed_reply(

@@ -9,7 +9,9 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     * with the check: the same turns are examiner-addressed and acknowledged with
       no generation.
 
-  Both sessions yield the same evidence pool (apart from timestamps).
+  Both sessions yield the same transcript evidence (apart from timestamps).
+  Since #302 an examiner-addressed turn that names an authored impresso also
+  releases it, so the addressee session adds only those impresso events.
   """
   use ExUnit.Case, async: false
 
@@ -121,9 +123,15 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     assert Enum.count(addressee_outcomes, &(&1 == :examiner_acknowledged)) ==
              length(@examiner_keys)
 
-    assert addressee_pool == baseline_pool
+    {addressee_turns, released_by_examiner} =
+      Enum.split_with(addressee_pool, &(&1.kind == :turn))
 
-    learner_items = Enum.filter(addressee_pool, &(&1.role == :learner))
+    assert addressee_turns == Enum.filter(baseline_pool, &(&1.kind == :turn))
+    assert Enum.reject(baseline_pool, &(&1.kind == :turn)) == []
+    assert released_by_examiner != []
+    assert Enum.all?(released_by_examiner, &(&1.kind == :impresso_event))
+
+    learner_items = Enum.filter(addressee_turns, &(&1.role == :learner))
     assert Enum.map(learner_items, & &1.text) == Enum.map(learner_texts(), & &1["text"])
   end
 end

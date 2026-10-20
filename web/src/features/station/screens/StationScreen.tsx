@@ -95,7 +95,26 @@ export interface StationScreenProps {
   realtimeVoice?: RealtimeVoiceOptions;
   /** Reads the stored session transcript, to show a spoken reply as stored. */
   onFetchTranscript?: () => Promise<SessionMessage[] | null>;
+  /**
+   * Re-reads the released impressos and returns the newly released ones, after
+   * a spoken turn the examiner acknowledged (#302).
+   */
+  onRefreshImpressos?: () => Promise<Impresso[]>;
 }
+
+/** The examiner's display-only hand-over entry, titles only. */
+const handOverMessage = (released: Impresso[]): DisplayMessage => ({
+  role: "examiner",
+  text: `${strings.examinerHandsOver} ${released
+    .map((impresso) => impresso.title)
+    .join(", ")}`,
+});
+
+/** The examiner impressos an acknowledgement released (#302), if any. */
+const releasedByAcknowledgement = (cause: unknown): Impresso[] => {
+  const released = (cause as { newlyReleased?: unknown }).newlyReleased;
+  return Array.isArray(released) ? (released as Impresso[]) : [];
+};
 
 const isStationTimeElapsedError = (cause: unknown): boolean =>
   typeof cause === "object" &&
@@ -127,6 +146,7 @@ export function StationScreen({
   impressoError = null,
   realtimeVoice,
   onFetchTranscript,
+  onRefreshImpressos,
 }: StationScreenProps): React.JSX.Element {
   const [messages, setMessages] = useState<DisplayMessage[]>(
     () => initialMessages ?? [],
@@ -313,6 +333,14 @@ export function StationScreen({
     scrollToBottom();
   }, [messages, sending, scrollToBottom]);
 
+  // An examiner acknowledgement that released impressos the learner asked
+  // for (#302): the examiner hands them over and the drawer opens.
+  const handOverImpressos = useCallback((released: Impresso[]) => {
+    if (released.length === 0 || !mountedRef.current) return;
+    setMessages((previous) => [...previous, handOverMessage(released)]);
+    setImpressoDrawerOpen(true);
+  }, []);
+
   const sendTurn = useCallback(
     async (
       text: string,
@@ -345,6 +373,7 @@ export function StationScreen({
               ...previous,
               { role: "examiner", text: strings.examinerAcknowledgement },
             ]);
+            handOverImpressos(releasedByAcknowledgement(cause));
           }
         } else if (isKeptLearnerTurn(cause)) {
           // The patient reply was refused, but the backend kept the learner
@@ -381,7 +410,7 @@ export function StationScreen({
         if (mountedRef.current) setSending(false);
       }
     },
-    [pauseCurrentAudio],
+    [handOverImpressos, pauseCurrentAudio],
   );
 
   // Learner voice turns that stay without an outcome: never dropped as barge-in.
@@ -512,6 +541,9 @@ export function StationScreen({
               keptVoiceTurns(),
             ),
           );
+          if (event.type === "examiner-acknowledged" && onRefreshImpressos) {
+            void onRefreshImpressos().then(handOverImpressos, () => undefined);
+          }
           return;
         case "turn-failure":
           if (event.failure === "text_delivery_failed") {
@@ -529,7 +561,14 @@ export function StationScreen({
           return;
       }
     },
-    [keptVoiceTurns, resolveVoiceReply, showVoiceSegment, supersedeOlderVoiceTurns],
+    [
+      handOverImpressos,
+      keptVoiceTurns,
+      onRefreshImpressos,
+      resolveVoiceReply,
+      showVoiceSegment,
+      supersedeOlderVoiceTurns,
+    ],
   );
 
   const handleSend = useCallback(async () => {
@@ -560,13 +599,8 @@ export function StationScreen({
       if (response.decision === "released" && response.newly_released.length > 0) {
         // The examiner hands the impresso over: show it in the transcript as a
         // display-only examiner entry (titles only), next to the drawer.
-        const titles = response.newly_released
-          .map((impresso) => impresso.title)
-          .join(", ");
-        setMessages((previous) => [
-          ...previous,
-          { role: "examiner", text: `${strings.examinerHandsOver} ${titles}` },
-        ]);
+        const handOver = handOverMessage(response.newly_released);
+        setMessages((previous) => [...previous, handOver]);
         setImpressoFeedback(null);
       } else {
         setImpressoFeedback(response.feedback_message);

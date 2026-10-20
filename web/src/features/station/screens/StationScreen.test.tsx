@@ -692,6 +692,50 @@ describe("StationScreen", () => {
         "message-examiner",
       ]);
       expect(screen.queryByTestId("message-notice")).not.toBeInTheDocument();
+      expect(screen.getByTestId("impresso-drawer-toggle")).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+    });
+
+    it("hands over the impressos an examiner acknowledgement released and opens the drawer (#302)", async () => {
+      const user = userEvent.setup();
+      const text = "Solicito hemograma e PCR.";
+      const labs = {
+        id: "labs",
+        title: "Exames laboratoriais",
+        category: "laboratory",
+        content: "Hemoglobina 13,5 g/dL.",
+      };
+      const acknowledgement = Object.assign(new Error("Anotado."), {
+        name: "ExaminerAcknowledgement",
+        learnerTurn: { role: "learner", text },
+        newlyReleased: [labs],
+      });
+      const onSend = vi.fn().mockRejectedValueOnce(acknowledgement);
+      render(
+        <StationScreen {...defaultProps} onSend={onSend} impressos={[labs]} />,
+      );
+
+      await user.type(screen.getByTestId("message-input"), text);
+      await user.click(screen.getByTestId("send-button"));
+
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId("message-list"))
+            .getAllByTestId(/^message-/)
+            .map((item) => [item.dataset.testid, item.lastChild?.textContent]),
+        ).toEqual([
+          ["message-learner", text],
+          ["message-examiner", strings.examinerAcknowledgement],
+          ["message-examiner", `${strings.examinerHandsOver} ${labs.title}`],
+        ]),
+      );
+      expect(screen.getByTestId("impresso-drawer-toggle")).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByTestId("impresso-drawer")).toHaveTextContent(labs.title);
     });
 
     it("sends the next message after the kept turn without resending it", async () => {

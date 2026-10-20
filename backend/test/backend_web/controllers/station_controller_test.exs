@@ -859,6 +859,27 @@ defmodule BackendWeb.StationControllerTest do
              } = body
 
       assert {:ok, %{messages: [%{role: :learner}]}} = Conversation.fetch(session.session_id)
+      assert body["newly_released"] == []
+    end
+
+    test "an examiner-addressed exam request answers with the newly released impressos (#302)",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :examiner)
+
+      body =
+        conn |> post_learner_text(session, "Solicito hemograma e PCR") |> json_response(200)
+
+      assert %{
+               "outcome" => "examiner_acknowledged",
+               "newly_released" => [
+                 %{
+                   "id" => "laboratorio-sangue-enzimas",
+                   "title" => "IMPRESSO" <> _,
+                   "category" => _,
+                   "content" => _
+                 }
+               ]
+             } = body
     end
 
     test "a patient-addressed turn answers 200 patient_reply with the reply",
