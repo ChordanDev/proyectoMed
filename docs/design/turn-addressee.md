@@ -87,6 +87,14 @@ A remark that matches nothing records nothing: unlike a modal request, it is not
 `unavailable` request. A repeated request is recorded as `already_released`, as from
 the modal. A patient-addressed turn never releases impressos.
 
+An exam named only to decline it is not a request (#305). `Impressos.match` splits
+the text into clauses (sentence punctuation, `;`, `,`, "mas", "porém", "e solicito",
+"e peço") and ignores a keyword occurrence preceded in its clause by a negation cue
+("não", "nem", "sem", "dispenso", "dispensa") or followed by a clause-ending "não" /
+"não é necessário(a)" / "não precisa". So "não preciso do ECG, mas solicito hemograma"
+releases only the hemograma, and an examiner turn whose every exam mention is declined
+releases and records nothing; from the modal it is an `unavailable` request.
+
 - Text API: the `examiner_acknowledged` response carries `newly_released` (impresso
   objects, empty when nothing was released).
 - Voice: the receipt and the worker event are unchanged; the web learns of the release

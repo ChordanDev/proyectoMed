@@ -54,6 +54,72 @@ defmodule Backend.Stations.ImpressosTest do
     end
   end
 
+  # Issue #305: a keyword the learner names only to decline it does not match.
+  describe "match/2 with negated mentions" do
+    @exams [
+      %{"id" => "hemograma", "keywords" => ["hemograma"]},
+      %{"id" => "pcr", "keywords" => ["PCR"]},
+      %{"id" => "ecg", "keywords" => ["eletrocardiograma", "ECG"]},
+      %{"id" => "ultrassonografia", "keywords" => ["ultrassonografia"]},
+      %{"id" => "tomografia", "keywords" => ["tomografia"]}
+    ]
+
+    defp matched(text), do: Impressos.match(@exams, Impressos.normalize(text))
+
+    test "a negation earlier in the clause does not release, a later clause still does" do
+      assert matched("não preciso do ECG, mas solicito hemograma") == ["hemograma"]
+    end
+
+    test "a plain request still releases every named exam" do
+      assert matched("Solicito hemograma e PCR") == ["hemograma", "pcr"]
+    end
+
+    test "sem governs the exam it precedes" do
+      assert matched("sem tomografia por enquanto") == []
+      assert matched("sem necessidade de tomografia") == []
+    end
+
+    test "a trailing não governs the exam that opens its clause" do
+      assert matched("solicito ultrassonografia; tomografia não é necessária") ==
+               ["ultrassonografia"]
+
+      assert matched("Tomografia não.") == []
+    end
+
+    test "nem governs every exam it lists" do
+      assert matched("nem hemograma nem PCR") == []
+    end
+
+    test "each authored negation cue governs the exam that follows it" do
+      for text <- [
+            "Não quero hemograma",
+            "Dispenso o hemograma",
+            "Dispensa hemograma",
+            "Não precisa de hemograma",
+            "Não vou pedir hemograma",
+            "Não vou solicitar hemograma",
+            "Não é necessário hemograma",
+            "Não é necessária a tomografia"
+          ] do
+        assert matched(text) == [], text
+      end
+    end
+
+    test "a connector that starts a new request ends the negated clause" do
+      assert matched("Não preciso de ECG e solicito hemograma") == ["hemograma"]
+      assert matched("Não preciso de ECG e peço PCR") == ["pcr"]
+      assert matched("Sem tomografia porém solicito ultrassonografia") == ["ultrassonografia"]
+    end
+
+    test "a negation in an earlier sentence does not govern the next one" do
+      assert matched("O paciente não tem febre. Solicito hemograma.") == ["hemograma"]
+    end
+
+    test "an exam named both negated and requested is released" do
+      assert matched("Não preciso de ECG agora. Solicito ECG depois da dor.") == ["ecg"]
+    end
+  end
+
   describe "decide/2" do
     test "no matches is unavailable" do
       assert Impressos.decide([], ["ecg"]) == {:unavailable, []}
