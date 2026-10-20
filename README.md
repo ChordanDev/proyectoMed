@@ -327,7 +327,10 @@ and confirm the only LiveKit-related payload is the short-lived
 `voice-worker/` is a Python [LiveKit Agents](https://docs.livekit.io/agents/) worker
 (#118). It joins every `station-session-*` room, asks Phoenix whether the session is
 active and consented, streams only the learner microphone to Deepgram (`nova-3`,
-`pt-BR`, keyterms from the station package `stt_keyterms`), publishes interim
+`pt-BR`, keyterms derived from the station package: authored `stt_keyterms` first,
+then eponyms such as McBurney or Blumberg, shared pt-BR clinical lexicon terms the
+package mentions and impresso keywords, capped at 50 terms within Deepgram's
+500-token keyterm limit, #292), publishes interim
 transcripts to the room (data topic `transcript`) and POSTs each final utterance to
 Phoenix with a monotonic `turn_id`. Phoenix commits each turn at most once. With
 `VOICE_MODE=realtime` the web shows the final transcripts in the station transcript and
