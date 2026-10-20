@@ -13,6 +13,7 @@ export {
   type DiscardSessionOptions,
   ApiError,
   type ActiveStation,
+  type VoiceMode,
   type CandidateBrief,
   type StartSessionRequest,
   type Session,

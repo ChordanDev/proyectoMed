@@ -43,6 +43,30 @@ describe("station API client", () => {
     });
   });
 
+  it.each([
+    ["realtime", "realtime"],
+    ["turn", "turn"],
+    ["off", "off"],
+    [undefined, "turn"],
+    ["loud", "turn"],
+  ])("decodes voice_mode %s as %s (#270)", async (voiceMode, expected) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        station_id: "station-1",
+        version: "2.0.0",
+        display_title: "Dor torácica",
+        language: "pt-BR",
+        candidate_brief: { scenario: "Cenário.", tasks: ["Anamnese."] },
+        voice_mode: voiceMode,
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.getActiveStation()).resolves.toMatchObject({
+      voice_mode: expected,
+    });
+  });
+
   it("models every station flow request and decodes its response", async () => {
     const activeStation = {
       station_id: "station-1",
@@ -53,6 +77,7 @@ describe("station API client", () => {
         scenario: "Você é o médico de plantão.",
         tasks: ["Obter anamnese dirigida.", "Indicar a conduta inicial."],
       },
+      voice_mode: "realtime",
     };
     const session = {
       session_id: "session-1",

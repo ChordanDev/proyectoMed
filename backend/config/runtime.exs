@@ -71,6 +71,29 @@ if secret = System.get_env("VOICE_WORKER_SECRET") do
   config :backend, :voice_worker_secret, secret
 end
 
+# Voice experience the web offers (#270): `realtime` (LiveKit voice panel and the
+# voice worker), `turn` (record and "Ouvir resposta" buttons through
+# `VOICE_PROVIDER`) or `off` (text only, no audio consent). Unset or unknown, it is
+# `realtime` when LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET are all set,
+# otherwise `turn`. Served as `voice_mode` on GET /api/stations/active. `:test`
+# keeps the compiled default from config.exs.
+if config_env() != :test do
+  livekit_configured? =
+    Enum.all?(
+      ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"],
+      &(String.trim(System.get_env(&1, "")) != "")
+    )
+
+  voice_mode =
+    case System.get_env("VOICE_MODE", "") |> String.trim() |> String.downcase() do
+      mode when mode in ["realtime", "turn", "off"] -> mode
+      _ when livekit_configured? -> "realtime"
+      _ -> "turn"
+    end
+
+  config :backend, :voice_mode, voice_mode
+end
+
 with timeout when is_binary(timeout) <- System.get_env("CONVERSATION_TIMEOUT_MS"),
      {timeout_ms, ""} when timeout_ms > 0 <- Integer.parse(timeout) do
   config :backend, :conversation_timeout_ms, timeout_ms

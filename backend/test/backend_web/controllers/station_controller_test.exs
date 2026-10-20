@@ -93,8 +93,20 @@ defmodule BackendWeb.StationControllerTest do
                "version" => "2.0.0",
                "language" => "pt-BR",
                "display_title" => "Avaliação inicial de dor torácica",
-               "candidate_brief" => package["candidate_brief"]
+               "candidate_brief" => package["candidate_brief"],
+               "voice_mode" => "turn"
              }
+    end
+
+    test "serves the configured voice mode (#270)", %{conn: conn} do
+      previous = Application.get_env(:backend, :voice_mode)
+      on_exit(fn -> Application.put_env(:backend, :voice_mode, previous) end)
+
+      for mode <- ["realtime", "turn", "off"] do
+        Application.put_env(:backend, :voice_mode, mode)
+        body = conn |> recycle() |> get(~p"/api/stations/active") |> json_response(200)
+        assert body["voice_mode"] == mode
+      end
     end
 
     test "returns the brief and nothing examiner-only (#239)", %{conn: conn} do

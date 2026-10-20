@@ -4,12 +4,21 @@ export interface CandidateBrief {
   tasks: string[];
 }
 
+/**
+ * The single voice experience the deployment offers (#270): the real-time
+ * LiveKit panel, the turn-based record/play buttons, or no voice at all.
+ */
+export type VoiceMode = "realtime" | "turn" | "off";
+
+const voiceModes: readonly VoiceMode[] = ["realtime", "turn", "off"];
+
 export interface ActiveStation {
   station_id: string;
   version: string;
   display_title: string;
   language: string;
   candidate_brief: CandidateBrief;
+  voice_mode: VoiceMode;
 }
 
 export interface StartSessionRequest {
@@ -215,6 +224,10 @@ const decodeActiveStation = (value: unknown): ActiveStation => {
     display_title: stringValue(body, "display_title", "active station"),
     language: stringValue(body, "language", "active station"),
     candidate_brief: decodeCandidateBrief(body.candidate_brief),
+    // An older backend sends no voice_mode: keep the turn-based experience.
+    voice_mode: voiceModes.includes(body.voice_mode as VoiceMode)
+      ? (body.voice_mode as VoiceMode)
+      : "turn",
   };
 };
 
