@@ -354,6 +354,42 @@ defmodule Backend.Stations.TurnAddresseeTest do
       assert stored.impresso_requests == []
     end
 
+    # Issue #305: an exam named only to decline it is not a request.
+    test "an examiner voice turn declining an exam releases, records and credits nothing" do
+      answer(:examiner)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, {:kept, %{addressee: :examiner}}} =
+               Stations.process_voice_turn(session.session_id, 1, "Não preciso do ECG")
+
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert stored.released_impressos == []
+      assert stored.impresso_requests == []
+
+      package =
+        Map.put(Stations.get_active_package(), "rubric", [
+          %{
+            "id" => "requests-ecg",
+            "description" => "Requests the ECG.",
+            "evidence_questions" => [],
+            "practice_recommendation" => "Ask for the ECG.",
+            "weight" => 1,
+            "impresso_ids" => ["laudo-eletrocardiograma"]
+          }
+        ])
+
+      [criterion] = Backend.Evaluator.evaluate(package, stored).criteria
+      refute criterion.status == :met
+      assert for(%{role: :impresso} = evidence <- criterion.evidence, do: evidence) == []
+    end
+
+    test "a modal request declining every exam it names is unavailable" do
+      session = Stations.create_session(%{audio_consent: false})
+
+      assert {:ok, %{decision: "unavailable", newly_released: []}} =
+               Stations.request_impresso(session.session_id, %{"text" => "Sem ECG por enquanto"})
+    end
+
     test "a matching examiner text turn returns the newly released impressos" do
       answer(:examiner)
       session = Stations.create_session(%{audio_consent: false})
