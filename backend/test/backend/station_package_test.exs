@@ -727,6 +727,14 @@ defmodule Backend.StationPackageTest do
 
       refute "impresso_ids" in action["required"]
 
+      assert action["properties"]["interprets_impresso_ids"] == %{
+               "type" => "array",
+               "minItems" => 1,
+               "items" => %{"type" => "string", "minLength" => 1}
+             }
+
+      refute "interprets_impresso_ids" in action["required"]
+
       assert criterion["properties"]["rule"] == %{"enum" => [nil, "task_order"], "default" => nil}
       refute "rule" in criterion["required"]
 
