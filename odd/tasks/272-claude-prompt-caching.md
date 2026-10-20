@@ -46,7 +46,7 @@ in the 2026-10-20 rehearsal).
 
 - [x] T1 Client: cached stable system block, optional uncached suffix, debug usage/latency log; resolver and feedback carry the breakpoint (tests: client body + log, adapter payloads).
 - [x] T2 Patient: split base prompt (cached) from withheld section (uncached); prefix byte-identical across two turns (tests).
-- [ ] T3 Docs: README Claude section on caching and the debug log; live check recorded as pending.
+- [x] T3 Docs: README Claude section on caching and the debug log; live check recorded as pending.
 
 ## Routing
 
@@ -65,7 +65,7 @@ All tasks inline in this bounded writer (one writer, issue-scoped surfaces).
   RED: 7 failures (5 new client tests, resolver and feedback payload asserts).
   GREEN: focused 25/25; full backend 1277/1279 until the two patient asserts
   moved to the block form, then station_ai 60/60.
-- T2 (inline) split the patient prompt. RED: 3 failures (2 `system_prompt_parts/2`
+- T2 (inline) `15006d0` split the patient prompt. RED: 3 failures (2 `system_prompt_parts/2`
   tests, the withheld suffix assert); the byte-identical two-turn test already
   passed after T1 and stays as a guard. GREEN: full backend 1282/1282.
 - Measured stable prefixes (chars): appendicitis patient 6292 (caches),
@@ -82,6 +82,12 @@ All tasks inline in this bounded writer (one writer, issue-scoped surfaces).
 - Patient conversation tail: top-level automatic caching would also cache the
   growing history; left out so per-turn content stays outside the cache.
 
+- T3 (inline) README section on caching and the debug log (passive docs, no
+  RED; structural readback).
+- Local CI: LOCAL CI PASSED (see PR evidence).
+
 ## Next step
 
-T3 docs, then local CI and the PR. Live check stays pending.
+Live check (pending, needs `ANTHROPIC_API_KEY`): run a station with the logger
+at debug, confirm `cache_read_input_tokens > 0` from the second patient turn,
+and report patient `latency_ms` before/after.
