@@ -50,7 +50,7 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
     @impl true
     def decide_rubric(_request), do: {:error, :not_implemented}
 
-    @impl true
+    # No longer a Jev callback (#309); defined to catch any stray request.
     def decide_addressee(_request) do
       send(Application.fetch_env!(:backend, :marker_turn_test_pid), :addressee_check)
       {:ok, %{addressee: :patient}}

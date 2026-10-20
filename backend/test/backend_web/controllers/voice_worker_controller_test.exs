@@ -953,9 +953,6 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       @behaviour Backend.Stations.JevDecision.Adapter
 
       @impl true
-      def decide_addressee(_request), do: {:ok, %{addressee: :examiner}}
-
-      @impl true
       def decide_patient(_request), do: raise("no patient verification on the examiner path")
 
       @impl true

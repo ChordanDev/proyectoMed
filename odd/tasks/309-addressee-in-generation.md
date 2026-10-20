@@ -29,7 +29,7 @@ rehearsal) and runs beside a generation that is thrown away on examiner turns
 - [x] T2 Prompt asks for the marker; `StationAI.next_reply/2` strips it before BoundedReply.
 - [x] T3 Text and non-streamed voice paths decide from the marker / impresso match; no Jev addressee call.
 - [x] T4 Streamed voice path decides from the streamed marker / impresso match; no Jev addressee call.
-- [ ] T5 Delete `JevDecision.decide_addressee` (adapters, config, tests); update `docs/design/turn-addressee.md`.
+- [x] T5 Delete `JevDecision.decide_addressee` (adapters, config, tests); update `docs/design/turn-addressee.md`.
 
 ## Routing
 
@@ -59,6 +59,12 @@ All tasks: delegated direct (this worker is the bounded writer); inline within t
   Jev `turn_addressee` helpers and `turn_addressee_test.exs` (its streamed Jev tests are obsolete; their
   behaviours are covered by marker tests); full backend suite 1740 passed.
 
+- T4 `85ad210`.
+- T5 (this commit): deletion and docs, no meaningful RED (the "no Jev addressee request" tests went green in
+  T3/T4). Removed `JevDecision.decide_addressee/2`, `addressee_deadline_ms/0`, the adapter callback, the
+  Disabled/TypeSafe implementations and `jev_decision/addressee_test.exs`; rewrote
+  `docs/design/turn-addressee.md`. `mix compile --warnings-as-errors` clean; full backend suite 1727 passed.
+
 ## Next step
 
-T5.
+Local CI, live Haiku check, PR.

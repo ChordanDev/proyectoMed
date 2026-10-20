@@ -60,7 +60,7 @@ Any other value fails the boot, naming it. The adjudicator runs only in `blockin
 
 ## Unchanged
 
-- Rubric grading by Jev, the turn addressee check (#274) and impresso release (#302).
+- Rubric grading by Jev, the turn addressee (#274; decided by the patient generation since #309) and impresso release (#302).
 - `blocking` mode: today's CandidateGate, adjudicator and regeneration tests run unchanged.
   The backend suite pins `blocking` in `test/test_helper.exs`; audit and off tests set the
   mode themselves.
