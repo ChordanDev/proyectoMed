@@ -24,13 +24,37 @@
     {
       "id": "hda-01",
       "topic": "HDA — respostas padronizadas",
-      "content": "A dor começou há 18 horas, inicialmente ao redor do umbigo; há cerca de 10 horas migrou para a parte inferior direita do abdome.",
+      "content": "A dor começou ao redor do umbigo.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-01-migracao",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Há cerca de 10 horas, a dor migrou para a parte inferior direita do abdome.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-01-tempo",
+      "topic": "HDA — respostas padronizadas",
+      "content": "A dor começou há 18 horas.",
       "disclosure_condition": "on_request"
     },
     {
       "id": "hda-02",
       "topic": "HDA — respostas padronizadas",
-      "content": "É uma dor contínua, que foi aumentando progressivamente, atualmente 7/10.",
+      "content": "É uma dor contínua.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-02-progressao",
+      "topic": "HDA — respostas padronizadas",
+      "content": "A dor foi aumentando progressivamente.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-02-intensidade",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Atualmente, a dor é 7/10.",
       "disclosure_condition": "on_request"
     },
     {
