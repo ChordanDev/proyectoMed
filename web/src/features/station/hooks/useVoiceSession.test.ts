@@ -435,4 +435,94 @@ describe("useVoiceSession", () => {
     expect(room.disconnectCalls).toBe(1);
     expect(result.current.status).toBe("disconnected");
   });
+
+  describe("transcript data events (#270)", () => {
+    const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+    const worker = { identity: "voice-worker" };
+
+    const connectWithEvents = async () => {
+      const room = new FakeRoom();
+      const api: VoiceSessionApi = {
+        createVoiceSession: vi.fn().mockResolvedValue(voiceSession),
+      };
+      const onTranscriptEvent = vi.fn();
+      const rendered = await renderHook(() =>
+        useVoiceSession({
+          api,
+          sessionId: "session-1",
+          active: true,
+          createRoom: () => room,
+          onTranscriptEvent,
+        }),
+      );
+      await act(async () => {
+        await rendered.result.current.connect();
+      });
+      return { room, onTranscriptEvent, ...rendered };
+    };
+
+    it("hands the worker's transcript events to the callback, in order", async () => {
+      const { room, onTranscriptEvent } = await connectWithEvents();
+
+      act(() => {
+        room.emit(
+          RoomEvent.DataReceived,
+          encode({ session_id: "session-1", turn_id: 1, final: true, text: "Onde dói?" }),
+          worker,
+          undefined,
+          "transcript",
+        );
+        room.emit(
+          RoomEvent.DataReceived,
+          encode({
+            session_id: "session-1",
+            turn_id: 1,
+            generation_id: 1,
+            role: "patient",
+            text: "No peito.",
+          }),
+          worker,
+          undefined,
+          "transcript",
+        );
+      });
+
+      expect(onTranscriptEvent.mock.calls).toEqual([
+        [{ type: "learner", turnId: 1, final: true, text: "Onde dói?" }],
+        [{ type: "patient", turnId: 1, text: "No peito." }],
+      ]);
+    });
+
+    it("ignores other topics, other senders and malformed payloads", async () => {
+      const { room, onTranscriptEvent } = await connectWithEvents();
+      const event = encode({ session_id: "session-1", turn_id: 1, final: true, text: "Oi" });
+
+      act(() => {
+        room.emit(RoomEvent.DataReceived, event, worker, undefined, "chat");
+        room.emit(RoomEvent.DataReceived, event, { identity: "learner-session-1" }, undefined, "transcript");
+        room.emit(RoomEvent.DataReceived, event, undefined, undefined, "transcript");
+        room.emit(RoomEvent.DataReceived, new TextEncoder().encode("{"), worker, undefined, "transcript");
+      });
+
+      expect(onTranscriptEvent).not.toHaveBeenCalled();
+    });
+
+    it("stops listening once the session disconnects", async () => {
+      const { room, onTranscriptEvent, result } = await connectWithEvents();
+
+      act(() => {
+        result.current.disconnect();
+      });
+      room.emit(
+        RoomEvent.DataReceived,
+        encode({ session_id: "session-1", turn_id: 1, final: true, text: "Oi" }),
+        worker,
+        undefined,
+        "transcript",
+      );
+
+      expect(room.listeners.get(RoomEvent.DataReceived)?.size ?? 0).toBe(0);
+      expect(onTranscriptEvent).not.toHaveBeenCalled();
+    });
+  });
 });
