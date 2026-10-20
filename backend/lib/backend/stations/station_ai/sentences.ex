@@ -42,7 +42,7 @@ defmodule Backend.Stations.StationAI.Sentences do
   end
 
   defp push(state, grapheme) do
-    state = %{state | current: [state.current | grapheme]}
+    state = %{state | current: [state.current, grapheme]}
 
     state =
       case grapheme do

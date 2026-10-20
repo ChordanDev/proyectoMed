@@ -341,7 +341,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
        )
        when is_binary(text) do
     on_text.(text)
-    %{state | text: [state.text | text]}
+    %{state | text: [state.text, text]}
   end
 
   defp apply_decoded(%{"type" => "message_start", "message" => %{"usage" => usage}}, state, _)
