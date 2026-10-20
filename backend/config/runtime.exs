@@ -155,7 +155,7 @@ end
 # (TypeSafe) and voice are not affected. `ANTHROPIC_API_KEY`,
 # `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (resolver and feedback, default
 # `claude-opus-5-5`) and `ANTHROPIC_PATIENT_MODEL` (patient, default
-# `claude-sonnet-5-5`, issue #256) and `ANTHROPIC_ADJUDICATOR_MODEL`
+# `claude-haiku-5-5`, issues #256 and #308) and `ANTHROPIC_ADJUDICATOR_MODEL`
 # (undecided-verdict adjudicator, default `claude-haiku-5-5`, issue #290) are
 # written to `Backend.Stations.StationAI.AnthropicClient`; the adapters never
 # read the operating system environment. Selecting Claude without a key boots

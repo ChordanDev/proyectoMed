@@ -270,10 +270,11 @@ defmodule Backend.Stations.StationAI.AnthropicClientTest do
       assert_received {:request_body, body}
 
       assert body["stream"] == true
-      assert body["model"] == "claude-sonnet-5-5"
-      assert body["thinking"] == %{"type" => "between_tools"}
+      # Issue #308: the patient model defaults to Haiku 5.5.
+      assert body["model"] == "claude-haiku-5-5"
+      assert body["thinking"] == %{"type" => "disabled"}
       assert body["output_config"] == %{"effort" => "low"}
-      assert body["fallbacks"] == "default"
+      refute Map.has_key?(body, "fallbacks")
 
       assert body["system"] == [
                %{"type" => "text", "text" => "Stable rules.", "cache_control" => @cache_control},
