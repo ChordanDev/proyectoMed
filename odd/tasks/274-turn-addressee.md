@@ -28,8 +28,8 @@ only then shows "Examinador: Anotado.". A refused patient question shows the sam
 
 ## Tasks
 - [x] T1 Design note `docs/design/turn-addressee.md` (ADR-011/ADR-008 addendum) — route: inline (one passive doc)
-- [ ] T2 Jev addressee decision: optional adapter callback, TypeSafe question, `JevDecision.decide_addressee/2` with deadline and content-free log (RED→GREEN) — route: inline writer (this worker)
-- [ ] T3 Text path: classify before generation; examiner → keep learner turn, `200 outcome: examiner_acknowledged`; regression check that evidence is unchanged (RED→GREEN)
+- [x] T2 Jev addressee decision: optional adapter callback, TypeSafe question, `JevDecision.decide_addressee/2` with deadline and content-free log (RED→GREEN) — route: inline writer (this worker)
+- [x] T3 Text path: classify before generation; examiner → keep learner turn, `200 outcome: examiner_acknowledged`; regression check that evidence is unchanged (RED→GREEN)
 - [ ] T4 Voice path (backend): classify before generation/stream; kept receipts carry `addressee` (RED→GREEN)
 - [ ] T5 Voice worker: examiner-addressed kept receipt publishes `status: acknowledged`, refusal keeps `status: kept` (RED→GREEN, unittest)
 - [ ] T6 Web: examiner acknowledgement shows "Anotado."; kept refusal (text and voice) shows the neutral notice (RED→GREEN)
@@ -50,6 +50,21 @@ patient-addressed; grading and evidence unchanged; live check (pending, human).
 
 ## Progress
 - Worktree created, deps fetched, CodeGraph initialized.
+- T1 `325342e`: design note `docs/design/turn-addressee.md` (passive doc, structural readback).
+- T2 `838fc07`: `JevDecision.decide_addressee/2` (own 1 s budget, minimized trust-labelled
+  conversation, no package content), optional `decide_addressee/1` adapter callback,
+  `TypesafeAdapter` question `addressee:examiner` (0.8/0.2), disabled adapter returns
+  `adapter_disabled`. RED: 13/13 failing in `addressee_test.exs`; GREEN: 13 passed;
+  Jev suites 260 passed.
+- T3: text path classifies before generation; examiner → `Conversation.resolve_turn(:keep_learner_turn)`,
+  `{:ok, %{outcome: :examiner_acknowledged, learner_turn}}`, controller `200` with
+  `outcome`/`learner_turn`/`reply_text: null`; patient replies carry `outcome: "patient_reply"`.
+  Log `[Stations] turn_addressee decision= channel= latency_ms=` (info, no content).
+  RED: `turn_addressee_test.exs` 5/6 failing (the refusal case already held), controller 2/65
+  failing; GREEN: 6 and 65 passed. Evidence regression `turn_addressee_evidence_test.exs`
+  (#228 fixture turns, baseline kept-refusals vs examiner acknowledgements give the same pool)
+  written after GREEN as a characterization test: passed (no RED by design). Full backend
+  `mix test`: 1541 passed.
 
 ## Next step
 T1.

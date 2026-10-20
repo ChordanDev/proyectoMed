@@ -175,6 +175,13 @@ defmodule Backend.Stations do
   `{:error, :message_too_long}` before it enters the conversation or reaches
   Jev. It is never truncated.
 
+  Before any generation, Jev decides who the turn is addressed to (#274,
+  `docs/design/turn-addressee.md`). An examiner-addressed turn is kept without a
+  patient reply, nothing is generated or verified, and the result is
+  `{:ok, %{outcome: :examiner_acknowledged, learner_turn: message, reply_text: nil}}`.
+  An undecided answer, or any failure of the check, is patient-addressed, and the
+  turn continues as below; its result carries `outcome: :patient_reply`.
+
   Encapsulates:
     1. Appending the learner's message to the session conversation.
     2. Preparing the conversation context with active package rules.
@@ -239,6 +246,67 @@ defmodule Backend.Stations do
   end
 
   defp generate_and_resolve_turn(session_id, token, params) do
+    case turn_addressee(session_id, :text, params) do
+      :examiner -> acknowledge_examiner_turn(session_id, token)
+      :patient -> generate_patient_turn(session_id, token, params)
+    end
+  end
+
+  # An examiner-addressed turn (#274) is real rubric evidence, stored exactly as
+  # a refused patient-addressed turn is (#235): the learner message, no reply.
+  # Nothing is generated or verified.
+  defp acknowledge_examiner_turn(session_id, token) do
+    case Conversation.resolve_turn(session_id, token, :keep_learner_turn) do
+      {:ok, session} ->
+        {:ok,
+         %{
+           outcome: :examiner_acknowledged,
+           reply_text: nil,
+           reply_audio_url: nil,
+           used_facts: [],
+           learner_turn: List.last(session.messages)
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Decides who the latest learner turn of the session is addressed to (#274),
+  # before any generation. Only a confident examiner answer is `:examiner`; an
+  # undecided answer or any failure of the check is `:patient`, the behaviour
+  # before #274. Logs the decision and its latency, never any content.
+  defp turn_addressee(session_id, channel, params) do
+    started_at = JevDecision.monotonic_now_ms()
+
+    decision =
+      with {:ok, session} <- Conversation.fetch(session_id),
+           {:ok, addressee} <-
+             JevDecision.decide_addressee(
+               %{conversation: session.messages},
+               addressee_opts(params)
+             ) do
+        addressee
+      else
+        _failure -> :error
+      end
+
+    Logger.info(
+      "[Stations] turn_addressee decision=#{decision} channel=#{channel} " <>
+        "latency_ms=#{JevDecision.monotonic_now_ms() - started_at}"
+    )
+
+    if decision == :examiner, do: :examiner, else: :patient
+  end
+
+  defp addressee_opts(params) do
+    case Map.get(params, :adapter) || Map.get(params, "adapter") do
+      adapter when is_atom(adapter) and not is_nil(adapter) -> [adapter: adapter]
+      _ -> []
+    end
+  end
+
+  defp generate_patient_turn(session_id, token, params) do
     package = get_active_package()
 
     with {:ok, current_session} <- Conversation.fetch(session_id),
@@ -305,6 +373,7 @@ defmodule Backend.Stations do
       {:ok, _session} ->
         {:ok,
          %{
+           outcome: :patient_reply,
            reply_text: verified_text,
            reply_audio_url: nil,
            used_facts: used_facts

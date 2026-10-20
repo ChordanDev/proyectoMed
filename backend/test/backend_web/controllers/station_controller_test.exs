@@ -65,6 +65,21 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  # Answers the addressee check from :controller_test_addressee (#274).
+  defmodule AddresseeJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_addressee(_request),
+      do: {:ok, %{addressee: Application.fetch_env!(:backend, :controller_test_addressee)}}
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :verified}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup do
     prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
     Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
@@ -804,6 +819,56 @@ defmodule BackendWeb.StationControllerTest do
       assert msg1.role == :learner
       assert msg2.role == :patient
       assert msg2.text == "Resposta do paciente gerada durante conclusão"
+    end
+  end
+
+  describe "POST /api/stations/active/sessions/:id/messages addressee (#274)" do
+    setup do
+      prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+      Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, AddresseeJevAdapter)
+
+      on_exit(fn ->
+        Application.put_env(:backend, :station_ai_adapter, prev_adapter)
+        Application.delete_env(:backend, :controller_test_addressee)
+      end)
+
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: false
+        })
+
+      {:ok, session: session}
+    end
+
+    test "an examiner-addressed turn answers 200 examiner_acknowledged with the kept turn",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :examiner)
+
+      body = conn |> post_learner_text(session, "Blumberg positivo.") |> json_response(200)
+
+      assert %{
+               "outcome" => "examiner_acknowledged",
+               "reply_text" => nil,
+               "learner_turn" => %{"role" => "learner", "text" => "Blumberg positivo."},
+               "server_now" => _
+             } = body
+
+      assert {:ok, %{messages: [%{role: :learner}]}} = Conversation.fetch(session.session_id)
+    end
+
+    test "a patient-addressed turn answers 200 patient_reply with the reply",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :patient)
+
+      assert %{
+               "outcome" => "patient_reply",
+               "reply_text" => "Estou com um aperto forte no peito há duas horas."
+             } = conn |> post_learner_text(session, "Bom dia.") |> json_response(200)
     end
   end
 
