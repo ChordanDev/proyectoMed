@@ -32,7 +32,11 @@ defmodule Backend.Stations.RubricAssessment do
        reach other outcomes too), the criterion is `:uncertain`.
     5. **Deterministic post-processing** validates each cited evidence
        identifier and fails closed per criterion: nothing is repaired, dropped
-       or substituted.
+       or substituted. The one exception is an action authored with
+       `interprets_impresso_ids`: a learner cannot interpret an exam before
+       receiving it, so its citations that are not learner turns sent after the
+       release are dropped, and it is `"not_performed"` when none remains
+       (`Backend.Stations.RubricAssessment.InterpretationEvidence`).
     6. **The task-order criterion** (`rule: "task_order"`) is assessed in code
        from the results of the ranked criteria and the position of their
        earliest evidence (`Backend.Stations.RubricAssessment.TaskOrder`). It is
@@ -67,6 +71,7 @@ defmodule Backend.Stations.RubricAssessment do
   alias Backend.Stations.RubricAssessment.Evidence
   alias Backend.Stations.RubricAssessment.FirstN
   alias Backend.Stations.RubricAssessment.ImpressoActions
+  alias Backend.Stations.RubricAssessment.InterpretationEvidence
   alias Backend.Stations.RubricAssessment.Points
   alias Backend.Stations.RubricAssessment.Resolver
   alias Backend.Stations.RubricAssessment.TaskOrder
@@ -526,7 +531,7 @@ defmodule Backend.Stations.RubricAssessment do
 
   defp rule(%{requirement: requirement} = plan, jev_level, decision, pool) do
     with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
-         {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement),
+         {:ok, sub_actions} <- sub_actions(plan, decision.actions, pool),
          {:ok, level, grounding} <- decide(plan, jev_level, sub_actions, decision, pool),
          :ok <- proven_zero(plan, jev_level, level, sub_actions, decision, pool) do
       grounded(%{
@@ -611,17 +616,27 @@ defmodule Backend.Stations.RubricAssessment do
   # performed action left without evidence is unresolved, as any evidence-less one.
   # Every other rejection (an unknown id, a patient turn, an unverified event)
   # still fails the criterion closed.
-  defp sub_actions(action_decisions, pool, requirement) do
+  #
+  # An action that interprets an impresso then keeps only the learner turns sent
+  # after its release (`InterpretationEvidence`, issue #265). The resolver's
+  # answers are already merged here, so the rule covers its citations and Jev's.
+  defp sub_actions(%{criterion: criterion, requirement: requirement}, action_decisions, pool) do
+    interprets = InterpretationEvidence.dependencies(criterion)
+
     map_ok(action_decisions, fn action ->
       cited = Enum.reject(action.evidence_ids, &wrong_channel?(pool, &1, requirement))
 
       with {:ok, evidence} <- Evidence.validate(pool, cited, requirement) do
         {:ok,
-         %{
-           id: action.id,
-           classification: action.classification,
-           evidence_ids: Evidence.ids(evidence)
-         }}
+         InterpretationEvidence.restrict(
+           %{
+             id: action.id,
+             classification: action.classification,
+             evidence_ids: Evidence.ids(evidence)
+           },
+           interprets[action.id],
+           pool
+         )}
       end
     end)
   end

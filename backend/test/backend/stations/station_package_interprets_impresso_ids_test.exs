@@ -19,7 +19,11 @@ defmodule Backend.Stations.StationPackageInterpretsImpressoIdsTest do
   defp without_dependencies do
     Map.update!(package(), "rubric", fn rubric ->
       Enum.map(rubric, fn criterion ->
-        Map.update!(criterion, "actions", &Enum.map(&1, fn action -> Map.delete(action, @key) end))
+        Map.update!(
+          criterion,
+          "actions",
+          &Enum.map(&1, fn action -> Map.delete(action, @key) end)
+        )
       end)
     end)
   end
