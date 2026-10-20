@@ -1051,6 +1051,10 @@ defmodule Backend.Stations do
   `verify_patient_reply/3` with the whole conversation and the sentences of
   this reply already verified (the candidate is the reply so far), before it
   is handed over. Nothing unverified is handed over, stored or logged.
+  This is the `blocking` verification mode; in `audit` and `off` (#307,
+  `Backend.Stations.PatientVerification`) each sentence is checked by
+  BoundedReply only, with the same single regeneration rule, and in `audit` Jev
+  audits the stored reply after delivery.
 
     * The first refused sentence stops the reply. The verified sentences
       already handed over are stored as the patient turn and the rest is
@@ -1279,18 +1283,39 @@ defmodule Backend.Stations do
          :ok <- ensure_voice_turn_open(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context),
-         verify_opts =
-           build_verify_opts(package, current_session, context, %{
-             deadline_ms: patient_reply_deadline_ms()
-           }),
          {:ok, result} <-
            package
-           |> verify_candidate(ai_reply, verify_opts)
-           |> resolve_voice_reply(session_id, turn_id, generation_id) do
+           |> check_voice_reply(current_session, context, ai_reply)
+           |> resolve_voice_reply(session_id, turn_id, generation_id, fn session ->
+             audit_delivered_reply(session_id, session, package, current_session)
+           end) do
       {:ok, result}
     else
       {:error, reason} ->
         fail_voice_reply(session_id, generation_id, reason)
+    end
+  end
+
+  # The whole voice reply's pre-delivery check: the CandidateGate in `blocking`,
+  # BoundedReply with one regeneration otherwise (#307).
+  defp check_voice_reply(package, session, context, ai_reply) do
+    case PatientVerification.mode() do
+      :blocking ->
+        verify_opts =
+          build_verify_opts(package, session, context, %{deadline_ms: patient_reply_deadline_ms()})
+
+        verify_candidate(package, ai_reply, verify_opts)
+
+      _audit_or_off ->
+        candidate_text = extract_reply_text(ai_reply)
+
+        case PatientVerification.check_delivery(candidate_text, package, fn ->
+               bounded_regeneration(package, context)
+             end) do
+          {:ok, ^candidate_text} -> {:ok, ai_reply, []}
+          {:ok, text} -> {:ok, %{text: text, used_facts: []}, []}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
@@ -1336,12 +1361,13 @@ defmodule Backend.Stations do
       # first sentence: an examiner turn stops the generation before anything
       # of it is verified, handed over or stored.
       addressee = start_turn_addressee(session_id, :voice, %{})
+      mode = PatientVerification.mode()
 
       %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
         SentenceStream.run(
           gate: fn -> addressee_gate(addressee) end,
           generate: &stream_patient_reply(package, context, &1),
-          verify: &verify_voice_sentence(package, session, context, &1, &2),
+          verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
           deliver: fn sentence, index, acc ->
             deliver_voice_sentence(
               session_id,
@@ -1365,7 +1391,8 @@ defmodule Backend.Stations do
              turn_id,
              generation_id,
              outcome,
-             {delivered, fact_ids}
+             {delivered, fact_ids},
+             fn stored -> audit_delivered_reply(session_id, stored, package, session) end
            ), acc}
       end
     else
@@ -1381,7 +1408,24 @@ defmodule Backend.Stations do
   end
 
   # The gate's single regeneration is allowed only for the first sentence,
-  # when nothing has been spoken yet.
+  # when nothing has been spoken yet. Outside `blocking` (#307) a sentence is
+  # checked by BoundedReply only, with the same single regeneration rule.
+  defp verify_voice_sentence(:blocking, package, session, context, candidate, index),
+    do: verify_voice_sentence(package, session, context, candidate, index)
+
+  defp verify_voice_sentence(_audit_or_off, package, _session, context, candidate, index) do
+    regenerate =
+      if index == 0,
+        do: fn -> bounded_regeneration(package, context) end,
+        else: fn -> {:error, :no_regeneration} end
+
+    case PatientVerification.check_delivery(candidate, package, regenerate) do
+      {:ok, ^candidate} -> {:verified, []}
+      {:ok, regenerated} -> {:regenerated, regenerated, []}
+      {:error, {:refused, refusal}} -> {:refused, refusal}
+    end
+  end
+
   defp verify_voice_sentence(package, session, context, candidate, index) do
     params = %{deadline_ms: patient_reply_deadline_ms()}
     params = if index > 0, do: Map.put(params, :verify_opts, can_retry?: false), else: params
@@ -1420,7 +1464,14 @@ defmodule Backend.Stations do
     end
   end
 
-  defp resolve_streamed_reply(session_id, turn_id, generation_id, outcome, {delivered, fact_ids}) do
+  defp resolve_streamed_reply(
+         session_id,
+         turn_id,
+         generation_id,
+         outcome,
+         {delivered, fact_ids},
+         on_commit
+       ) do
     spoken =
       delivered
       |> Enum.map(&StageDirections.strip/1)
@@ -1430,13 +1481,15 @@ defmodule Backend.Stations do
       spoken != [] ->
         stored_text = delivered |> Enum.join() |> String.trim()
 
-        with {:ok, _session} <-
+        with {:ok, stored_session} <-
                Conversation.resolve_patient_reply(
                  session_id,
                  generation_id,
                  stored_text,
                  fact_ids
                ) do
+          on_commit.(stored_session)
+
           {:ok,
            %{
              reply_text: Enum.join(spoken, " "),
@@ -1480,7 +1533,8 @@ defmodule Backend.Stations do
          {:ok, verified_reply, verified_fact_ids},
          session_id,
          turn_id,
-         generation_id
+         generation_id,
+         on_commit
        ) do
     verified_text = extract_reply_text(verified_reply)
 
@@ -1489,13 +1543,15 @@ defmodule Backend.Stations do
         keep_voice_turn(session_id, turn_id, generation_id, :unspeakable)
 
       spoken_text ->
-        with {:ok, _session} <-
+        with {:ok, session} <-
                Conversation.resolve_patient_reply(
                  session_id,
                  generation_id,
                  verified_text,
                  verified_fact_ids
                ) do
+          on_commit.(session)
+
           {:ok,
            %{
              reply_text: spoken_text,
@@ -1510,11 +1566,11 @@ defmodule Backend.Stations do
   # A refused patient reply keeps the learner voice turn, as the text path does
   # (#235, #256): no patient text is stored or spoken. The refused text is
   # never stored or returned.
-  defp resolve_voice_reply({:error, {:refused, refusal}}, session_id, turn_id, generation_id) do
+  defp resolve_voice_reply({:error, {:refused, refusal}}, session_id, turn_id, generation_id, _) do
     keep_voice_turn(session_id, turn_id, generation_id, refusal)
   end
 
-  defp resolve_voice_reply({:error, reason}, _session_id, _turn_id, _generation_id),
+  defp resolve_voice_reply({:error, reason}, _session_id, _turn_id, _generation_id, _on_commit),
     do: {:error, reason}
 
   # A verified reply without usable text stays a technical failure.

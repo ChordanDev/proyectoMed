@@ -33,15 +33,15 @@ points by itself.
 
 ## Tasks
 
-- [ ] T1 Mode setting: `Backend.Stations.PatientVerification.mode/0` (validated),
+- [x] T1 Mode setting: `Backend.Stations.PatientVerification.mode/0` (validated),
   config default `:audit`, `PATIENT_VERIFICATION` parsed in `runtime.exs` (invalid
   value fails the boot).
   Route: inline (config plus one small module, understood).
-- [ ] T2 Text path in `audit`/`off`: BoundedReply-only delivery with one regeneration;
+- [x] T2 Text path in `audit`/`off`: BoundedReply-only delivery with one regeneration;
   asynchronous Jev audit after commit, logged and recorded on the session
   (`Conversation.record_patient_audit/3`).
   Route: inline (Stations + new internal module + Conversation; seams mapped).
-- [ ] T3 Voice paths (`process_voice_turn/3`, `stream_voice_turn/5`) in `audit`/`off`.
+- [x] T3 Voice paths (`process_voice_turn/3`, `stream_voice_turn/5`) in `audit`/`off`.
   Route: inline (same seams as T2).
 - [ ] T4 Design note `docs/design/patient-audit-verification.md`, ADR-011 amendment
   comment on #123, live check on acute-appendicitis.
@@ -65,7 +65,10 @@ points by itself.
 
 | Task | Commit | RED | GREEN |
 | --- | --- | --- | --- |
+| T1 | `99c5f68` | 6 of 8 failed (mode/0 undefined, no runtime parsing) | 8 passed; backend 1700 passed |
+| T2 | `37aad8c` | 8 of 8 failed (`patient_audits/1` undefined, gate still blocking) | 8 passed; backend 1708 passed |
+| T3 | this commit | 6 of 6 failed (voice paths still blocking) | 6 passed; backend 1714 passed |
 
 ## Next step
 
-T1.
+T4: design note, ADR-011 amendment on #123, live check.
