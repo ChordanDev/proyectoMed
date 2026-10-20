@@ -87,6 +87,14 @@ defmodule Backend.StationAI.SystemPromptTest do
                "Não acrescente fatos relacionados que não foram perguntados, mesmo que pareçam ligados ao assunto: espere o estudante perguntar."
     end
 
+    test "facts on the same subject stay separate answers (issue #284)", %{prompt: prompt} do
+      assert prompt =~
+               "Cada fato da lista é uma resposta separada, mesmo quando vários tratam do mesmo assunto: diga só o fato que responde à pergunta."
+
+      assert prompt =~
+               "Por exemplo, se perguntarem onde a dor começou, diga só onde ela começou, não para onde ela foi depois nem há quanto tempo começou."
+    end
+
     test "lists every revealable fact with its authored id", %{prompt: prompt} do
       package = @package_path |> File.read!() |> Jason.decode!()
 

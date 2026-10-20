@@ -33,7 +33,8 @@ defmodule Backend.Stations.CandidateGate do
        `%{withheld_fact_ids: ids}`, and the default generator puts the same ids in
        the StationAI context. A `:low_confidence` refusal that Jev reports with
        `undecided_fact_ids` (on-request facts it could not tell were stated while the
-       learner did not ask, issue #273) is targeted the same way with those ids.
+       learner did not ask, issue #273, or stated facts it could not tell the
+       learner asked for, issue #284) is targeted the same way with those ids.
        Every other refusal passes `withheld_fact_ids: []`, so the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
        If the second candidate fails for any reason, no text is released and
        `{:error, {:refused, status}}` or `{:error, reason}` is returned.

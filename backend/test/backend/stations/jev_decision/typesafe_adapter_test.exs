@@ -302,15 +302,56 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
     test "is low confidence when a risk answer falls between the thresholds" do
       for {risk, idx} <- Enum.with_index(@risk_ids) do
         stub = Module.concat(__MODULE__, "UnsureRiskStub#{idx}")
-        assert {:ok, %{status: :low_confidence}} = decide(stub, nouls(%{risk => 0.5}))
+        assert {:ok, %{status: :low_confidence}} = decide(stub, nouls(%{risk => 0.65}))
       end
     end
 
-    test "is low confidence when it is unclear whether a stated on_request fact was asked for" do
+    # Issue #284: in-role replies score 0.22-0.47 on this risk with large packages.
+    test "speaks_out_of_role has its own no threshold, 0.5 by default" do
+      assert decide(OutOfRoleLowStub, nouls(%{@risk_speaks_out_of_role => 0.3})) ==
+               {:ok, %{status: :verified, used_fact_ids: []}}
+
+      assert decide(OutOfRoleAtStub, nouls(%{@risk_speaks_out_of_role => 0.5})) ==
+               {:ok, %{status: :verified, used_fact_ids: []}}
+
+      assert {:ok, %{status: :low_confidence}} =
+               decide(OutOfRoleUnsureStub, nouls(%{@risk_speaks_out_of_role => 0.6}))
+
+      assert {:ok, %{status: :semantic_refusal}} =
+               decide(OutOfRoleHighStub, nouls(%{@risk_speaks_out_of_role => 0.8}))
+    end
+
+    test "every other risk keeps the global no threshold" do
+      for {risk, idx} <- Enum.with_index(@risk_ids -- [@risk_speaks_out_of_role]) do
+        stub = Module.concat(__MODULE__, "OtherRiskAtPointThreeStub#{idx}")
+        assert {:ok, %{status: :low_confidence}} = decide(stub, nouls(%{risk => 0.3}))
+      end
+    end
+
+    test "fact labels keep the global no threshold" do
+      # An unasked on-request fact stated at 0.3 is still undecided, not a no.
+      assert {:ok, %{status: :low_confidence, undecided_fact_ids: ["fact-allergy"]}} =
+               decide(FactAtPointThreeStub, nouls(%{@stated_allergy => 0.3}))
+    end
+
+    test "the out-of-role no threshold is configurable" do
+      nouls = nouls(%{@risk_speaks_out_of_role => 0.3})
+
+      assert {:ok, %{status: :low_confidence}} =
+               decide(OutOfRoleOptStub, nouls, out_of_role_no_threshold: 0.2)
+    end
+
+    test "names a stated on_request fact when it is unclear whether it was asked for" do
+      # Issue #284: "Onde começou a dor?" answered with the migration as well.
       nouls = nouls(%{@stated_onset => 0.97, @asked_onset => 0.5})
 
       assert decide(UnsureAskedStub, nouls) ==
-               {:ok, %{status: :low_confidence, used_fact_ids: ["fact-onset"]}}
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: ["fact-onset"],
+                  undecided_fact_ids: ["fact-onset"]
+                }}
     end
 
     test "is low confidence when it is unclear whether an unrequested on_request fact is stated" do
@@ -352,6 +393,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
         {UndecidedWithRiskStub, Map.put(undecided_stated, @risk_unsupported, 0.5)},
         # It is unclear whether the learner asked.
         {UndecidedAskedStub, %{@stated_allergy => 0.31, @asked_allergy => 0.5}},
+        # Stated, unclear whether asked, and a risk is also undecided.
+        {StatedUnsureAskedWithRiskStub,
+         %{@stated_allergy => 0.9, @asked_allergy => 0.5, @risk_unsupported => 0.5}},
         # Another fact is a clear disclosure violation.
         {UndecidedWithViolationStub,
          Map.merge(undecided_stated, %{@stated_onset => 0.96, @asked_onset => 0.03})},
@@ -814,6 +858,33 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       assert {:ok, %{status: :verified}} = decide(AppEnvHalfOkStub, nouls())
     end
 
+    test "an invalid out-of-role no threshold is rejected like the global ones" do
+      opts = never_called(BadOutOfRoleStub)
+
+      for value <- [0.6, -0.1, "0.5", :low, "", 0.8] do
+        assert TypesafeAdapter.decide_patient(
+                 request(),
+                 opts ++ [out_of_role_no_threshold: value]
+               ) == {:error, {:technical_failure, :invalid_thresholds}}
+      end
+
+      # Never at or above the yes threshold either.
+      assert TypesafeAdapter.decide_patient(
+               request(),
+               opts ++ [out_of_role_no_threshold: 0.5, yes_threshold: 0.5, no_threshold: 0.2]
+             ) == {:error, {:technical_failure, :invalid_thresholds}}
+
+      Application.put_env(:backend, TypesafeAdapter, out_of_role_no_threshold: 0.25)
+
+      assert {:ok, %{status: :low_confidence}} =
+               decide(OutOfRoleAppEnvStub, nouls(%{@risk_speaks_out_of_role => 0.3}))
+
+      Application.put_env(:backend, TypesafeAdapter, out_of_role_no_threshold: "abc")
+
+      assert TypesafeAdapter.decide_patient(request(), never_called(AppEnvBadOutOfRoleStub)) ==
+               {:error, {:technical_failure, :invalid_thresholds}}
+    end
+
     test "a base URL that is not https with a host is rejected before the provider" do
       opts = never_called(BaseUrlStub)
 
@@ -1166,7 +1237,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
   describe "config/runtime.exs" do
     @runtime_config Path.expand("../../../../config/runtime.exs", __DIR__)
     @runtime_vars ~w(JEV_ADAPTER JEV_E2E_APPROVING_ADAPTER TYPESAFE_API_KEY TYPESAFE_BASE_URL
-                     TYPESAFE_MODEL TYPESAFE_YES_THRESHOLD TYPESAFE_NO_THRESHOLD)
+                     TYPESAFE_MODEL TYPESAFE_YES_THRESHOLD TYPESAFE_NO_THRESHOLD
+                     TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD)
 
     # Evaluates the runtime configuration for `env` with exactly `vars` set, without
     # touching the running application's environment.
@@ -1190,7 +1262,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       "TYPESAFE_BASE_URL" => "https://typesafe.example",
       "TYPESAFE_MODEL" => "jev-latest",
       "TYPESAFE_YES_THRESHOLD" => "0.9",
-      "TYPESAFE_NO_THRESHOLD" => " 0.1 "
+      "TYPESAFE_NO_THRESHOLD" => " 0.1 ",
+      "TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD" => "0.4"
     }
 
     test "without variables it selects no adapter and configures nothing" do
@@ -1210,6 +1283,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                base_url: "https://typesafe.example",
                model: "jev-latest",
                no_threshold: 0.1,
+               out_of_role_no_threshold: 0.4,
                yes_threshold: 0.9
              ]
     end
@@ -1225,11 +1299,13 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       config =
         runtime_backend_config(:dev, %{
           "TYPESAFE_YES_THRESHOLD" => "high",
-          "TYPESAFE_NO_THRESHOLD" => ""
+          "TYPESAFE_NO_THRESHOLD" => "",
+          "TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD" => "half"
         })
 
       assert config[TypesafeAdapter][:yes_threshold] == "high"
       assert config[TypesafeAdapter][:no_threshold] == ""
+      assert config[TypesafeAdapter][:out_of_role_no_threshold] == "half"
 
       assert TypesafeAdapter.decide_patient(
                request(),
@@ -1313,6 +1389,45 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                   used_fact_ids: [],
                   undecided_fact_ids: ["fact-allergy"]
                 }}
+    end
+
+    test "a stated fact the learner may not have asked for gets one regeneration that withholds it" do
+      # Issue #284, end to end through CandidateGate: the first candidate states the
+      # on-request onset while `fact_asked` is undecided; the regeneration is verified.
+      test_pid = self()
+      calls = :counters.new(1, [])
+
+      Req.Test.stub(GateUnsureAskedStub, fn conn ->
+        :counters.add(calls, 1, 1)
+
+        nouls =
+          if :counters.get(calls, 1) == 1,
+            do: nouls(%{@stated_onset => 0.97, @asked_onset => 0.5}),
+            else: nouls()
+
+        Req.Test.json(conn, success_body(nouls))
+      end)
+
+      generator = fn _package, _conversation, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "Começou durante uma caminhada."}
+      end
+
+      %{package: package, conversation: conversation} = seam_request()
+
+      assert Backend.Stations.CandidateGate.verify_and_deliver(
+               @candidate,
+               package,
+               conversation,
+               adapter: TypesafeAdapter,
+               generator: generator,
+               api_key: "ts-test-key",
+               plug: {Req.Test, GateUnsureAskedStub}
+             ) == {:ok, "Começou durante uma caminhada."}
+
+      assert_received {:guidance, %{withheld_fact_ids: ["fact-onset"]}}
+      refute_received {:guidance, _}
+      assert :counters.get(calls, 1) == 2
     end
 
     test "returns a sanitized error for an overloaded provider, with a log free of payload text" do

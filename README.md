@@ -721,6 +721,7 @@ to the provider. Do not select it in any environment before that acceptance.
 | `TYPESAFE_BASE_URL` | API base URL. | `https://api.typesafe.ai` |
 | `TYPESAFE_YES_THRESHOLD` | A probability at or above it is a yes. | `0.8` |
 | `TYPESAFE_NO_THRESHOLD` | A probability at or below it is a no. | `0.2` |
+| `TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD` | The no threshold of `risk:speaks_out_of_role` alone, which scores plainly in-role replies 0.22–0.47 with the full acute-appendicitis package (#284). Same bounds as `TYPESAFE_NO_THRESHOLD`. Obvious out-of-role text is still refused deterministically before Jev. | `0.5` |
 
 `backend/config/runtime.exs` reads these variables once, at boot, in `dev` and
 `prod`; the adapter itself never reads the operating system environment, and
