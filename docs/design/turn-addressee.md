@@ -18,7 +18,9 @@ question showed the same "Anotado.", which reads as if the examiner had answered
 
 ## Decision
 
-Before any generation, each learner turn, text or voice, is classified once by Jev.
+Each learner turn, text or voice, is classified once by Jev. Since #294 the check runs
+alongside the patient generation and is decided before anything of the generation is
+verified (see "Running alongside the generation").
 
 | Item | Decision |
 |---|---|
@@ -29,13 +31,25 @@ Before any generation, each learner turn, text or voice, is classified once by J
 | Patient | noul ≤ 0.2. |
 | Undecided | 0.2 < noul < 0.8: **patient-addressed**. |
 | Failure | Timeout, disabled adapter, an adapter without the check, malformed output: **patient-addressed**, the behaviour before #274. The check never blocks or fails a turn. |
-| Deadline | Its own budget (`:jev_addressee_deadline_ms`, default 1,000 ms). It runs before the patient reply's 3 s verification budget starts, so it never shortens that budget. |
+| Deadline | Its own budget (`:jev_addressee_deadline_ms`, default 1,000 ms). It is decided before the patient reply's 3 s verification budget starts, so it never shortens that budget. |
 | Logging | One line per turn: `[Stations] turn_addressee decision=<examiner\|patient\|undecided\|error> channel=<text\|voice> latency_ms=<n>`. No learner text, no noul. |
 
-The check runs sequentially before generation and on its own on the examiner path:
-an examiner turn makes no generation and no verification call. A patient turn pays
-about 0.3 s more. Starting generation in parallel would hide that cost but would spend
-a generation on every examiner turn, which is exactly what #274 removes.
+### Running alongside the generation (#294)
+
+#274 first ran the check before the generation, so every patient turn paid it (0.2-0.7 s
+in the 2026-10-20 rehearsal) on top of a 1.0-2.6 s generation. #294 accepts the other
+trade-off: the generation starts at the same time as the check, and an examiner turn
+spends a generation that is then thrown away.
+
+- Streamed voice (`stream_voice_turn/5`): the decision gates the first sentence. The
+  stream waits for it before verifying its first sentence, or when it stops before
+  having one. Examiner stops the generation; nothing of it is verified, handed to the
+  worker, stored or logged as a `voice_sentence`, and the learner turn is kept as above.
+  Patient, undecided or a failed check keep the generation already running.
+- An examiner decision wins over a generation that failed before it was taken: the
+  turn is acknowledged, not failed.
+- The verification of an examiner turn is never spent, and no `verified_fact_ids` are
+  recorded for it (#286).
 
 ## What each outcome shows
 

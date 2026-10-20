@@ -299,6 +299,22 @@ defmodule Backend.Stations do
     if decision == :examiner, do: :examiner, else: :patient
   end
 
+  # Starts `turn_addressee/3` alongside the patient generation (#294); its
+  # decision is taken once with `await_turn_addressee/1`.
+  defp start_turn_addressee(session_id, channel, params) do
+    Task.async(fn -> turn_addressee(session_id, channel, params) end)
+  end
+
+  # The check has its own deadline inside `JevDecision`; the extra margin only
+  # guards against a stuck task, which is patient-addressed like any failure.
+  defp await_turn_addressee(task) do
+    case Task.yield(task, JevDecision.addressee_deadline_ms() + 1_000) ||
+           Task.shutdown(task, :brutal_kill) do
+      {:ok, :examiner} -> :examiner
+      _patient_or_failure -> :patient
+    end
+  end
+
   defp addressee_opts(params) do
     case Map.get(params, :adapter) || Map.get(params, "adapter") do
       adapter when is_atom(adapter) and not is_nil(adapter) -> [adapter: adapter]
@@ -905,6 +921,11 @@ defmodule Backend.Stations do
     * A turn cancelled or superseded mid-reply hands nothing more over, stores
       nothing and returns `{:error, :stale_generation}`.
 
+  The addressee check (#274) runs alongside the generation (#294) and is
+  decided before the first sentence is verified: an examiner-addressed turn
+  stops the generation, hands nothing over, stores nothing of it and is kept as
+  `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
+
   Returns `{result, acc}`, where `result` has the shape of
   `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
   joined by a space. Each sentence logs its generation and verification
@@ -1142,12 +1163,16 @@ defmodule Backend.Stations do
     package = get_active_package()
 
     with {:ok, session} <- Conversation.fetch(session_id),
-         :ok <- ensure_voice_turn_open(session),
-         :patient <- turn_addressee(session_id, :voice, %{}) do
+         :ok <- ensure_voice_turn_open(session) do
       context = format_context(session, package)
+      # The addressee check runs alongside the generation (#294) and gates the
+      # first sentence: an examiner turn stops the generation before anything
+      # of it is verified, handed over or stored.
+      addressee = start_turn_addressee(session_id, :voice, %{})
 
       %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
         SentenceStream.run(
+          gate: fn -> addressee_gate(addressee) end,
           generate: &stream_patient_reply(package, context, &1),
           verify: &verify_voice_sentence(package, session, context, &1, &2),
           deliver: fn sentence, index, acc ->
@@ -1163,12 +1188,28 @@ defmodule Backend.Stations do
           acc: acc
         )
 
-      {resolve_streamed_reply(session_id, turn_id, generation_id, outcome, {delivered, fact_ids}),
-       acc}
+      case outcome do
+        {:closed, :examiner_addressed} ->
+          {keep_examiner_voice_turn(session_id, turn_id, generation_id), acc}
+
+        outcome ->
+          {resolve_streamed_reply(
+             session_id,
+             turn_id,
+             generation_id,
+             outcome,
+             {delivered, fact_ids}
+           ), acc}
+      end
     else
-      # Classified before the stream starts (#274): nothing is handed over.
-      :examiner -> {keep_examiner_voice_turn(session_id, turn_id, generation_id), acc}
       {:error, reason} -> {fail_voice_reply(session_id, generation_id, reason), acc}
+    end
+  end
+
+  defp addressee_gate(addressee) do
+    case await_turn_addressee(addressee) do
+      :examiner -> {:closed, :examiner_addressed}
+      :patient -> :open
     end
   end
 
