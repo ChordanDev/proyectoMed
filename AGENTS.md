@@ -39,7 +39,7 @@ This is a single-context repository with root-level domain documentation and ADR
 
 `main` is release-only. After repository administrators configure it, `develop` is the intended default integration branch: create `develop` from `main`; create each parent issue branch from `develop`; and create parallel child branches from their parent issue branch. Child PRs target their parent issue branch, while the parent maintains a Draft PR targeting `develop`. When all required children have merged and checks pass, merge the parent into `develop`.
 
-CI runs only on non-draft PRs to `develop` and on pushes to `develop`, to save GitHub Actions minutes: child PRs into a parent issue branch run no CI, and the parent's Draft PR runs it once marked ready for review.
+CI runs on every non-draft PR, whatever its base, and on pushes to `develop`: the parent's Draft PR runs it once marked ready for review.
 
 Issues without children (for example #23, #25, #27, #32, and #33) branch directly from and PR directly to `develop`. Independent children are sibling branches; chain them only for a genuine native blocker. Promote `develop` to `main` only for a release, then tag that release.
 

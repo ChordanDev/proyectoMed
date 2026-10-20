@@ -1,16 +1,13 @@
 name: Pull Request Validation
 
-# Pull requests are checked only when they target develop, the integration
-# branch: child pull requests into a parent issue branch are not, the parent's
-# pull request to develop is. Draft pull requests are skipped until marked
-# ready for review.
+# Every pull request is checked, whatever its base. Draft pull requests are
+# skipped until they are marked ready for review.
 #
 # Pushes to develop also run, so the dependency, build and Dialyzer PLT caches
 # are saved on develop, where every pull request to develop can restore them.
 # A cache saved by a pull request is visible only to that pull request.
 on:
   pull_request:
-    branches: [develop]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [develop]
