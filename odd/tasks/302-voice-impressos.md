@@ -34,6 +34,9 @@ the modal.
   refresh impressos; when new ones appear open the drawer and add the
   hands-over bubble instead of only "Anotado.".
 - [x] T3 ADR-008 amendment comment on #104.
+- [x] T4 Wire `onRefreshImpressos={station.refreshImpressos}` in `web/src/App.tsx`.
+- [x] T5 Jorge advisory review and confirmed repairs.
+- [x] T6 Drawer screenshots (desktop + mobile).
 
 ## Routing
 
@@ -72,7 +75,30 @@ the modal.
 - Pending: App.tsx wiring (approval), drawer screenshots after a spoken
   request (desktop + mobile) need a live run.
 
+- T4 done: App.tsx wiring in b784455 (merged with the parent at 3083300).
+  Local CI: LOCAL CI PASSED.
+- T5 done: Jorge advisory review on PR #303 (base e251636, head 3083300).
+  Advisory approval, no blockers. One CONFIRMED finding (Cluster A): the voice
+  release re-read the latest learner message instead of the turn's own text,
+  so a learner turn committed during classification could drive the release
+  under `voice-turn-<N>`. Fixed test-first in 9b8c381 (RED: released
+  `imagem-radiografia-torax` instead of the lab impresso; GREEN: 20/20 in
+  `turn_addressee_test.exs`). Local CI: LOCAL CI PASSED (web 337, backend
+  1681). Non-blocking follow-ups: the web drops the text reply's
+  `newly_released` and re-reads with an extra GET (Cluster B); refresh
+  responses replace the list without ordering (Cluster C, display only);
+  failed releases are silent and voice transcripts are not length-checked
+  before matching (Cluster D). Negated mentions releasing impressos (Cluster F)
+  follow the spec and are a product question. No duplicated code or tests from
+  the concurrent writers.
+- T6 done: headless Firefox, text path ("Solicito hemograma e PCR" routed to
+  the examiner by a scratch-only addressee adapter, because the E2E approving
+  adapter has no `decide_addressee`). The drawer opened with 2 impressos and
+  one hands-over entry. Saved outside the repository as
+  `shots-302/desktop-impressos-drawer.png` and
+  `shots-302/mobile-impressos-drawer.png` in the session scratchpad.
+  Pre-existing: on mobile (390px) the input row overflows horizontally.
+
 ## Next step
 
-Wire `onRefreshImpressos={station.refreshImpressos}` in `web/src/App.tsx` once
-approved; take the live screenshots.
+Human review and merge of PR #303 into `feat/237-clinician-demo-readiness`.
