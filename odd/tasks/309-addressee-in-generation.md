@@ -27,7 +27,7 @@ rehearsal) and runs beside a generation that is thrown away on examiner turns
 
 - [x] T1 `StationAI.Addressee`: marker parser (whole text and streamed prefix) + unit tests.
 - [x] T2 Prompt asks for the marker; `StationAI.next_reply/2` strips it before BoundedReply.
-- [ ] T3 Text and non-streamed voice paths decide from the marker / impresso match; no Jev addressee call.
+- [x] T3 Text and non-streamed voice paths decide from the marker / impresso match; no Jev addressee call.
 - [ ] T4 Streamed voice path decides from the streamed marker / impresso match; no Jev addressee call.
 - [ ] T5 Delete `JevDecision.decide_addressee` (adapters, config, tests); update `docs/design/turn-addressee.md`.
 
@@ -47,6 +47,12 @@ All tasks: delegated direct (this worker is the bounded writer); inline within t
 - T2 (this commit): RED 5 failing (prompt + `next_reply` strip) and 3/3 failing in `addressee_marker_turn_test.exs`
   -> GREEN 26 + 3 passed; full backend suite 1745 passed. The `next_reply/2` boundary keeps `%{text, used_facts}`.
 
+- T2 `af921a0`.
+- T3 (this commit): RED 9/12 failing in `addressee_marker_turn_test.exs` (examiner marker, impresso shortcut,
+  missing-marker log, no Jev addressee request, text and non-streamed voice) -> GREEN 12 passed; then migrated
+  the Jev-addressee text/voice tests (controller, evidence, gate-contract texts that now name an impresso)
+  and moved the #302/#305 impresso tests into the new file; full backend suite 1740 passed.
+
 ## Next step
 
-T3.
+T4.

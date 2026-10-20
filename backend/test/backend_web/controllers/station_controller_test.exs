@@ -65,13 +65,23 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
-  # Answers the addressee check from :controller_test_addressee (#274).
-  defmodule AddresseeJevAdapter do
-    @behaviour Backend.Stations.JevDecision.Adapter
+  # Starts its reply with the addressee marker of :controller_test_addressee
+  # (#309): the generation decides the addressee.
+  defmodule MarkedAddresseeAdapter do
+    @behaviour Backend.Stations.StationAI
 
     @impl true
-    def decide_addressee(_request),
-      do: {:ok, %{addressee: Application.fetch_env!(:backend, :controller_test_addressee)}}
+    def next_reply(_package, _context) do
+      case Application.fetch_env!(:backend, :controller_test_addressee) do
+        :examiner -> {:ok, %{text: "[EXAMINADOR]"}}
+        :patient -> {:ok, %{text: "[PACIENTE] Estou com um aperto forte no peito há duas horas."}}
+      end
+    end
+  end
+
+  # Verifies every patient reply of the addressee tests.
+  defmodule AddresseeJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
 
     @impl true
     def decide_patient(_request), do: {:ok, %{status: :verified}}
@@ -822,10 +832,10 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
-  describe "POST /api/stations/active/sessions/:id/messages addressee (#274)" do
+  describe "POST /api/stations/active/sessions/:id/messages addressee (#274, #309)" do
     setup do
       prev_adapter = Application.get_env(:backend, :station_ai_adapter)
-      Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+      Application.put_env(:backend, :station_ai_adapter, MarkedAddresseeAdapter)
       Application.put_env(:backend, :jev_decision_adapter, AddresseeJevAdapter)
 
       on_exit(fn ->

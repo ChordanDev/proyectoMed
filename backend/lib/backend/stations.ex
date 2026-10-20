@@ -178,14 +178,16 @@ defmodule Backend.Stations do
   `{:error, :message_too_long}` before it enters the conversation or reaches
   Jev. It is never truncated.
 
-  Before any generation, Jev decides who the turn is addressed to (#274,
-  `docs/design/turn-addressee.md`). An examiner-addressed turn is kept without a
-  patient reply, nothing is generated or verified, and the result is
-  `{:ok, %{outcome: :examiner_acknowledged, learner_turn: message, reply_text: nil,
-  newly_released: impressos}}`, where `impressos` are those the turn released by
-  naming an authored impresso (#302), empty otherwise.
-  An undecided answer, or any failure of the check, is patient-addressed, and the
-  turn continues as below; its result carries `outcome: :patient_reply`.
+  The patient generation decides who the turn is addressed to (#274, #309,
+  `docs/design/turn-addressee.md`): its reply starts with `[PACIENTE]` or
+  `[EXAMINADOR]`, stripped before anything else reads the text. A turn naming
+  an authored impresso is examiner-addressed without any generation. An
+  examiner-addressed turn is kept without a patient reply, nothing is verified,
+  and the result is `{:ok, %{outcome: :examiner_acknowledged, learner_turn:
+  message, reply_text: nil, newly_released: impressos}}`, where `impressos` are
+  those the turn released by naming an authored impresso (#302), empty
+  otherwise. A missing or unknown marker is patient-addressed (and logged), and
+  the turn continues as below; its result carries `outcome: :patient_reply`.
 
   Encapsulates:
     1. Appending the learner's message to the session conversation.
@@ -250,10 +252,17 @@ defmodule Backend.Stations do
     )
   end
 
+  # An exam request that names an authored impresso is examiner-addressed
+  # without asking the model (#309); any other turn is decided by the marker
+  # the patient generation starts with.
   defp generate_and_resolve_turn(session_id, token, params) do
-    case turn_addressee(session_id, :text, params) do
-      :examiner -> acknowledge_examiner_turn(session_id, token)
-      :patient -> generate_patient_turn(session_id, token, params)
+    started_at = JevDecision.monotonic_now_ms()
+
+    if impresso_request?(Map.get(params, :text) || Map.get(params, "text")) do
+      log_turn_addressee(:examiner, :impresso, :text, started_at)
+      acknowledge_examiner_turn(session_id, token)
+    else
+      generate_patient_turn(session_id, token, params, started_at)
     end
   end
 
@@ -300,6 +309,34 @@ defmodule Backend.Stations do
   end
 
   defp release_requested_impressos(_session_id, _text, _params), do: []
+
+  # Whether the learner text names an authored impresso (#302, #305), which
+  # makes the turn an exam request to the examiner (#309).
+  defp impresso_request?(text) when is_binary(text) do
+    package = get_active_package()
+    Impressos.match(package["impressos"] || [], Impressos.normalize(text)) != []
+  end
+
+  defp impresso_request?(_text), do: false
+
+  # Splits the addressee decided by the generation's marker (#309) from the
+  # reply, logging it.
+  defp take_addressee(ai_reply, channel, started_at) do
+    {addressee, ai_reply} = Map.pop(ai_reply, :addressee, :patient)
+    {source, ai_reply} = Map.pop(ai_reply, :addressee_source, :missing_marker)
+    log_turn_addressee(addressee, source, channel, started_at)
+    {addressee, ai_reply}
+  end
+
+  # One line per learner turn: the addressee, what decided it (`marker`,
+  # `missing_marker` or `impresso`), the channel and the time from the start of
+  # the turn to the decision. Never any content.
+  defp log_turn_addressee(addressee, source, channel, started_at) do
+    Logger.info(
+      "[Stations] turn_addressee decision=#{addressee} source=#{source} channel=#{channel} " <>
+        "latency_ms=#{JevDecision.monotonic_now_ms() - started_at}"
+    )
+  end
 
   # Decides who the latest learner turn of the session is addressed to (#274),
   # before any generation. Only a confident examiner answer is `:examiner`; an
@@ -351,21 +388,27 @@ defmodule Backend.Stations do
     end
   end
 
-  defp generate_patient_turn(session_id, token, params) do
+  defp generate_patient_turn(session_id, token, params, started_at) do
     package = get_active_package()
 
     with {:ok, current_session} <- Conversation.fetch(session_id),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
-      verify_and_resolve_turn(
-        session_id,
-        token,
-        package,
-        current_session,
-        context,
-        ai_reply,
-        params
-      )
+      case take_addressee(ai_reply, :text, started_at) do
+        {:examiner, _ai_reply} ->
+          acknowledge_examiner_turn(session_id, token)
+
+        {:patient, ai_reply} ->
+          verify_and_resolve_turn(
+            session_id,
+            token,
+            package,
+            current_session,
+            context,
+            ai_reply,
+            params
+          )
+      end
     else
       {:error, _reason} ->
         rollback_turn(session_id, token, :station_ai_unavailable)
@@ -970,10 +1013,12 @@ defmodule Backend.Stations do
        A verified reply made only of stage directions has nothing to speak and
        is kept the same way with reason `:unspeakable`. Every kept result
        carries `addressee: :patient`, except the examiner-addressed turn below.
-    2a. Before generation, Jev decides who the turn is addressed to (#274): an
-       examiner-addressed turn is kept with nothing generated, verified or
-       spoken, as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
-       An undecided answer or a failed check continues as patient-addressed.
+    4a. The generation's addressee marker (#309) decides who the turn is
+       addressed to, and a turn naming an authored impresso is examiner-addressed
+       before any generation: an examiner-addressed turn is kept with nothing
+       verified or spoken, as
+       `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
+       A missing marker continues as patient-addressed.
     7. Failing closed on technical failures: a reply that is denied, unverifiable,
        or left without usable text fails the generation as
        `:station_ai_unavailable` and commits no patient content.
@@ -1256,9 +1301,13 @@ defmodule Backend.Stations do
   defp process_voice_reply(session_id, turn_id, generation_id, learner_text) do
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(session) do
-      case turn_addressee(session_id, :voice, %{}) do
-        :examiner -> keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
-        :patient -> generate_voice_reply(session_id, turn_id, generation_id)
+      started_at = JevDecision.monotonic_now_ms()
+
+      if impresso_request?(learner_text) do
+        log_turn_addressee(:examiner, :impresso, :voice, started_at)
+        keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+      else
+        generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at)
       end
     else
       {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
@@ -1285,20 +1334,28 @@ defmodule Backend.Stations do
     end
   end
 
-  defp generate_voice_reply(session_id, turn_id, generation_id) do
+  defp generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at) do
     package = get_active_package()
 
     with {:ok, current_session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(current_session),
          context = format_context(current_session, package),
-         {:ok, ai_reply} <- generate_patient_reply(package, context),
-         {:ok, result} <-
-           package
-           |> check_voice_reply(current_session, context, ai_reply)
-           |> resolve_voice_reply(session_id, turn_id, generation_id, fn session ->
-             audit_delivered_reply(session_id, session, package, current_session)
-           end) do
-      {:ok, result}
+         {:ok, ai_reply} <- generate_patient_reply(package, context) do
+      case take_addressee(ai_reply, :voice, started_at) do
+        {:examiner, _ai_reply} ->
+          keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+
+        {:patient, ai_reply} ->
+          package
+          |> check_voice_reply(current_session, context, ai_reply)
+          |> resolve_voice_reply(session_id, turn_id, generation_id, fn session ->
+            audit_delivered_reply(session_id, session, package, current_session)
+          end)
+          |> case do
+            {:ok, result} -> {:ok, result}
+            {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
+          end
+      end
     else
       {:error, reason} ->
         fail_voice_reply(session_id, generation_id, reason)

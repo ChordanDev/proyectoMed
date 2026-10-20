@@ -940,7 +940,15 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
-  describe "examiner-addressed voice turns (#274)" do
+  describe "examiner-addressed voice turns (#274, #309)" do
+    # The generation decides the addressee with its marker (#309).
+    defmodule ExaminerMarkerAdapter do
+      @behaviour Backend.Stations.StationAI
+
+      @impl true
+      def next_reply(_package, _context), do: {:ok, %{text: "[EXAMINADOR]"}}
+    end
+
     defmodule ExaminerJevAdapter do
       @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -956,7 +964,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
     for stream? <- [false, true] do
       test "answers 201 kept with addressee examiner (streamed: #{stream?})", %{conn: conn} do
-        Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
+        Application.put_env(:backend, :station_ai_adapter, ExaminerMarkerAdapter)
         Application.put_env(:backend, :jev_decision_adapter, ExaminerJevAdapter)
         id = Stations.create_session(%{audio_consent: true}).session_id
 
