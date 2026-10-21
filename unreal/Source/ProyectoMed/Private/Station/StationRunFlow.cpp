@@ -61,6 +61,8 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 	ErrorText = FText::GetEmpty();
 	bVoiceFallback = false;
 	VoiceCredential.Reset();
+	PendingTurn.Reset();
+	Transcript.Reset();
 	OnChanged.Broadcast();
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
@@ -109,6 +111,78 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 			Flow->Step = EStationRunStep::Running;
 			Flow->OnChanged.Broadcast();
 		});
+	});
+}
+
+bool UStationRunFlow::CanSendTurn() const
+{
+	return Step == EStationRunStep::Running && !PendingTurn.IsSet();
+}
+
+bool UStationRunFlow::SendTypedTurn(const FString& Text)
+{
+	const FString Turn = Text.TrimStartAndEnd();
+	if (Turn.IsEmpty() || !CanSendTurn())
+	{
+		return false;
+	}
+
+	PendingTurn = Turn;
+	ErrorText = FText::GetEmpty();
+	OnChanged.Broadcast();
+
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	Client->SendTurn(Turn, EStationTurnModality::Text, [WeakThis, Turn](const TStationResult<FStationTurnReply>& Reply)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self)
+		{
+			return;
+		}
+		Self->PendingTurn.Reset();
+		if (Reply.HasError())
+		{
+			// Phoenix may have taken the turn without this client hearing back.
+			if (Reply.GetError().Code == TEXT("network_error"))
+			{
+				Self->ReloadTranscript();
+			}
+			Self->SetError(Reply.GetError(),
+				LOCTEXT("TurnFailed", "Não foi possível enviar sua mensagem. Tente novamente."));
+			return;
+		}
+
+		Self->AddLine(EStationSpeaker::Learner, Turn);
+		const FStationTurnReply& Value = Reply.GetValue();
+		// An examiner-addressed turn is kept with no patient reply.
+		if (Value.Outcome == EStationTurnOutcome::PatientReply && !Value.ReplyText.IsEmpty())
+		{
+			Self->AddLine(EStationSpeaker::Patient, Value.ReplyText);
+		}
+		Self->OnChanged.Broadcast();
+	});
+	return true;
+}
+
+void UStationRunFlow::AddLine(EStationSpeaker Speaker, const FString& Text)
+{
+	FStationMessage& Line = Transcript.AddDefaulted_GetRef();
+	Line.Speaker = Speaker;
+	Line.Text = Text;
+}
+
+void UStationRunFlow::ReloadTranscript()
+{
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	Client->RefreshSession([WeakThis](const TStationResult<FStationSession>& Refreshed)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self || Refreshed.HasError())
+		{
+			return;
+		}
+		Self->Transcript = Refreshed.GetValue().Messages;
+		Self->OnChanged.Broadcast();
 	});
 }
 
