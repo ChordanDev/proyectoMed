@@ -201,10 +201,24 @@ bool StationJson::ParseSession(const FJsonObject& Json, FStationSession& Out, FD
 		: EStationSessionStatus::Active;
 	Out.CompletionReason = OptionalString(Json, TEXT("completion_reason"));
 
-	// Only the show body carries the transcript.
+	// Only the show body carries the transcript. A line the client cannot read
+	// (for example a speaker added to Phoenix later) is skipped rather than
+	// failing the whole session.
 	Out.Messages.Reset();
-	return !Json.HasField(TEXT("messages"))
-		|| ParseArray<FStationMessage>(Json, TEXT("messages"), Out.Messages, ParseMessage);
+	const TArray<TSharedPtr<FJsonValue>>* Lines = nullptr;
+	if (Json.TryGetArrayField(TEXT("messages"), Lines))
+	{
+		for (const TSharedPtr<FJsonValue>& Line : *Lines)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			FStationMessage Message;
+			if (Line.IsValid() && Line->TryGetObject(Object) && ParseMessage(**Object, Message))
+			{
+				Out.Messages.Add(MoveTemp(Message));
+			}
+		}
+	}
+	return true;
 }
 
 bool StationJson::ParseVoiceCredential(const FJsonObject& Json, FStationVoiceCredential& Out)

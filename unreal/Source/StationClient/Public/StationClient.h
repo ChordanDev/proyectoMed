@@ -55,13 +55,16 @@ public:
 	/**
 	 * `POST .../sessions/:id/messages`: sends a learner turn and returns what
 	 * Phoenix approved. Refused locally with `session_completed` once the run ended.
+	 * Not idempotent: after a `network_error`, Phoenix may still have taken the
+	 * turn, so call `RefreshSession` and read the transcript before resending.
 	 */
 	void SendTurn(const FString& Text, EStationTurnModality Modality, TStationCallback<FStationTurnReply> OnDone);
 
 	/**
 	 * `POST .../sessions/:id/impressos/request`: asks for an impresso or exam
 	 * findings outside the patient dialogue. Pass the same `RequestId` to retry a
-	 * request; an empty one gets a new id.
+	 * request; an empty one gets a new id, which only a successful reply returns,
+	 * so a caller that may retry after a failure creates its own id first.
 	 */
 	void RequestImpresso(const FString& Text, const FString& RequestId, TStationCallback<FStationImpressoReply> OnDone);
 
@@ -90,7 +93,7 @@ private:
 	/** The URL of a route under the current session, for example `/voice`. */
 	FString SessionUrl(const TCHAR* Suffix) const;
 
-	/** Sends a request about the current session and parses its body with `Parse`, or fails with `no_session`. */
+	/** Sends a request and parses its body with `Parse`. Callers check for a session first. */
 	template <typename T>
 	void SendSessionRequest(const FString& Verb, const FString& Url, const TSharedPtr<FJsonObject>& Body,
 		TFunction<bool(const FJsonObject&, T&)> Parse, TStationCallback<T> OnDone);

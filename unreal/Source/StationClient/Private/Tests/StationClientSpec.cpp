@@ -287,6 +287,25 @@ void FStationClientUnitSpec::Define()
 			}
 		});
 
+		It("skips transcript lines with a speaker it does not know", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(SessionJson);
+			TArray<TSharedPtr<FJsonValue>> Messages;
+			for (const TCHAR* Role : {TEXT("examiner"), TEXT("patient")})
+			{
+				const TSharedRef<FJsonObject> Message = MakeShared<FJsonObject>();
+				Message->SetStringField(TEXT("role"), Role);
+				Message->SetStringField(TEXT("text"), TEXT("Linha."));
+				Messages.Add(MakeShared<FJsonValueObject>(Message));
+			}
+			Json->SetArrayField(TEXT("messages"), Messages);
+
+			FStationSession Session;
+			FDateTime ServerNow;
+			TestTrue("session still parsed", StationJson::ParseSession(*Json, Session, ServerNow));
+			TestEqual("known lines kept", Session.Messages.Num(), 1);
+		});
+
 		It("parses an educational result", [this]()
 		{
 			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(R"({

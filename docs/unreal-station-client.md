@@ -90,8 +90,12 @@ no session ──StartSession──▶ active ──FinishSession──▶ compl
 ```
 
 - `SendTurn` is refused locally with `session_completed` once the run is completed.
-- `RequestImpresso` with an empty `RequestId` gets a new id. Pass the same id to
-  retry a request without asking twice.
+- `RequestImpresso` with an empty `RequestId` gets a new id, returned only on
+  success. To retry after a failure without asking twice, create the id yourself
+  (`FGuid::NewGuid().ToString()`) and pass it on every attempt.
+- `SendTurn` is not idempotent. After a `network_error`, Phoenix may still have
+  taken the turn: call `RefreshSession` and check the transcript before resending.
+- `RefreshSession` skips transcript lines whose speaker the client does not know.
 
 ## Errors
 
