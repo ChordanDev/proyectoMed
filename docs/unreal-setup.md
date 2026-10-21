@@ -56,6 +56,33 @@ icons) goes through Git LFS, as configured in the root `.gitattributes`.
   before committing one, and avoid repeated full clones.
 - CI checkouts do not fetch LFS content unless a job asks for it.
 
+### What goes in Git and what can go elsewhere
+
+Rule: if the Unreal project loads it to open, run, or build, it lives in Git
+(through LFS). Working material the project never loads can be shared outside
+the repository, for example on a shared Google Drive folder.
+
+| In Git (LFS for binaries) | Outside the repository (for example Google Drive) |
+| --- | --- |
+| C++ source, config, and `ProyectoMed.uproject` | Raw source files: DCC exports, original audio, layered image files |
+| Every `.uasset` and `.umap` the project uses | References, screenshots, and test recordings |
+| The imported MetaHuman used by the scene | Installable builds (#197) handed to testers |
+
+Why project assets never travel outside Git:
+
+- Assets reference each other by path. A level points to materials, which
+  point to textures; a partial or mismatched copy opens with broken references.
+- A commit pins the exact code and assets that fit together. A file copied
+  through a shared drive cannot be tied to the commit that needs it.
+- Shared drives have no locks. Two people editing the same binary asset lose
+  one person's work, because binary assets cannot be merged.
+- CI and packaged builds only see what is in the repository.
+
+Keep raw source files outside `unreal/` so they never reach LFS. If the LFS
+budget falls short, buy additional GitHub LFS storage first; moving to Perforce
+is a separate decision. Review the LFS usage after the #189 spike shows the real
+size of a MetaHuman.
+
 ## Unreal MCP plugin
 
 Unreal MCP is Epic's Experimental plugin that runs a Model Context Protocol
