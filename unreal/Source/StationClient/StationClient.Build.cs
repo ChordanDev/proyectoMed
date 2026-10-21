@@ -20,5 +20,11 @@ public class StationClient : ModuleRules
 			"HTTP",
 			"Json",
 		});
+
+		// The automation tests serve a fake Phoenix to control response timing.
+		if (Target.Configuration != UnrealTargetConfiguration.Shipping)
+		{
+			PrivateDependencyModuleNames.Add("HTTPServer");
+		}
 	}
 }

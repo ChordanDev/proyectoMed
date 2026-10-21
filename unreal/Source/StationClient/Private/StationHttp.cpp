@@ -55,13 +55,13 @@ namespace
 }
 
 void StationHttp::Send(const FString& Verb, const FString& Url, const TSharedPtr<FJsonObject>& Body,
-	TFunction<void(const FStationHttpResponse&)> OnDone)
+	TFunction<void(const FStationHttpResponse&)> OnDone, float TimeoutSeconds)
 {
 	const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
 	Request->SetVerb(Verb);
 	Request->SetURL(Url);
 	Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
-	Request->SetTimeout(RequestTimeoutSeconds);
+	Request->SetTimeout(TimeoutSeconds);
 
 	if (Body.IsValid())
 	{

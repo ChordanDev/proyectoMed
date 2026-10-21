@@ -27,9 +27,11 @@ Client->FetchActiveStation([](const TStationResult<FStationSummary>& Result)
 	const FStationSummary& Station = Result.GetValue(); // title, brief, voice mode
 });
 
-Client->StartSession(/*bAudioConsent*/ true, [Client](const TStationResult<FStationSession>& Result)
+// Responses can still arrive after the caller is gone (for example when PIE
+// stops), so capture UObjects weakly.
+Client->StartSession(/*bAudioConsent*/ true, [WeakClient = TWeakObjectPtr<UStationClient>(Client)](const TStationResult<FStationSession>& Result)
 {
-	// From here, Client->GetRemainingTime() counts down the Station Timer.
+	// From here, WeakClient->GetRemainingTime() counts down the Station Timer.
 });
 ```
 
@@ -40,8 +42,8 @@ Build-file dependency: add `"StationClient"` to the consuming module's
 
 | Topic | Rule |
 | --- | --- |
-| Threading | Every callback runs on the game thread, exactly once. A call refused locally (for example `no_session`) calls back before it returns. |
-| Timeouts | A request Phoenix does not answer within 15 s fails with `network_error`. |
+| Threading | Every callback runs on the game thread, exactly once while the engine runs. A call refused locally (for example `no_session`) calls back before it returns. |
+| Timeouts | A request Phoenix does not answer within 15 s fails with `network_error`. `FetchResult` waits 95 s, as the web client does, because the first fetch assesses the run before answering. |
 | One run at a time | The client holds at most one session. `StartSession` fails with `session_in_progress` until `DiscardSession` succeeds. |
 | Content | The client holds no clinical rules and no Station Package content. Everything it returns is what Phoenix served for this run. |
 | Secrets | `FStationVoiceCredential::Token` is a secret: never log or display it. The session id is the run's only credential. |
@@ -51,10 +53,14 @@ Build-file dependency: add `"StationClient"` to the consuming module's
 
 Phoenix owns the duration: `deadline_at` is fixed when the session starts (ten
 minutes today). The client anchors Phoenix's `server_now` to the local monotonic
-clock, so `GetRemainingTime()` is correct whatever the machine clock says.
+clock, so `GetRemainingTime()` ignores changes to the machine's date and time.
 
 - It returns zero before a run, after the deadline, and once the run is completed.
 - `RefreshSession` re-anchors the clock to Phoenix.
+- The monotonic clock stops while the Mac sleeps, so after a sleep the timer shows
+  more time than is left. Phoenix still refuses late turns with
+  `station_time_elapsed` (409): on that error, and when the app comes back to the
+  foreground, call `RefreshSession`.
 - At zero, call `FinishSession(EStationFinishReason::Timer)`. If Phoenix answers
   `deadline_not_reached` (409), the local clock ran ahead: call `RefreshSession`
   and keep counting.
@@ -84,11 +90,6 @@ Synchronous accessors: `GetSession()` (null without a run), `GetRemainingTime()`
 
 Known limits, for the slices that build on them:
 
-- `FStationSession::CompletedAt` is set only by `FinishSession`; Phoenix's show
-  body has no `completed_at`, so a later `RefreshSession` clears it.
-- A `RefreshSession` sent before `FinishSession` but answered after it can
-  replace the completed session with the active one it read. Avoid overlapping
-  them until #195 settles the finish flow.
 - A run whose `StartSession` is still in flight when the game quits is not
   discarded; Phoenix forgets it after 30 minutes.
 
@@ -105,8 +106,11 @@ no session ──StartSession──▶ active ──FinishSession──▶ compl
   success. To retry after a failure without asking twice, create the id yourself
   (`FGuid::NewGuid().ToString()`) and pass it on every attempt.
 - `SendTurn` is not idempotent. After a `network_error`, Phoenix may still have
-  taken the turn: call `RefreshSession` and check the transcript before resending.
+  taken the turn, and after `reply_verification_failed` it may have kept it
+  without a reply: call `RefreshSession` and check the transcript before resending.
 - `RefreshSession` skips transcript lines whose speaker the client does not know.
+- `RefreshSession` never reopens a run this client saw finish: an answer read
+  before the finish keeps the run completed, with its completion time.
 
 ## Errors
 
@@ -127,13 +131,14 @@ Codes the client raises itself:
 | `http_<status>` | Phoenix answered an error without an `error` field. |
 
 Phoenix codes the slices are expected to handle (see `router.ex` and the
-controllers for the full list):
+controllers for the full list). Branch on `Code`, not on `HttpStatus`: one code
+can come with different statuses from different routes.
 
 | Code | Status | Raised by |
 | --- | --- | --- |
 | `session_not_found` | 404 | every session route |
 | `session_expired` | 410 | every session route |
-| `session_completed` | 422 | `SendTurn`, `RequestVoiceCredential` |
+| `session_completed` | 422, 409 | `SendTurn` and `RequestVoiceCredential` (422); `RequestImpresso` (409) |
 | `station_time_elapsed` | 409 | `SendTurn` after the deadline |
 | `deadline_not_reached` | 409 | `FinishSession(Timer)` called early |
 | `no_consent` | 403 | `RequestVoiceCredential` on a run without audio consent |

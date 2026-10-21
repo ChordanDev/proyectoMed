@@ -36,7 +36,11 @@ public:
 	 */
 	void StartSession(bool bAudioConsent, TStationCallback<FStationSession> OnDone);
 
-	/** `GET .../sessions/:id`: reloads the current session and re-anchors the timer. */
+	/**
+	 * `GET .../sessions/:id`: reloads the current session and re-anchors the
+	 * timer. A run this client saw finish stays completed, with its completion
+	 * time, even when the answer was read before the finish.
+	 */
 	void RefreshSession(TStationCallback<FStationSession> OnDone);
 
 	/**
@@ -93,10 +97,16 @@ private:
 	/** The URL of a route under the current session, for example `/voice`. */
 	FString SessionUrl(const TCHAR* Suffix) const;
 
-	/** Sends a request and parses its body with `Parse`. Callers check for a session first. */
+	/**
+	 * Sends a request and parses its body with `Parse`. Callers check for a
+	 * session first. A `TimeoutSeconds` of 0 uses the default request timeout.
+	 */
 	template <typename T>
 	void SendSessionRequest(const FString& Verb, const FString& Url, const TSharedPtr<FJsonObject>& Body,
-		TFunction<bool(const FJsonObject&, T&)> Parse, TStationCallback<T> OnDone);
+		TFunction<bool(const FJsonObject&, T&)> Parse, TStationCallback<T> OnDone, float TimeoutSeconds = 0.f);
+
+	/** Takes a refreshed session, keeping a completion this client already knows about. */
+	FStationSession MergeRefreshed(const FStationSession& Refreshed) const;
 
 	/** Phoenix origin, without a trailing slash. `-PhoenixUrl=` on the command line overrides it. */
 	UPROPERTY(Config)

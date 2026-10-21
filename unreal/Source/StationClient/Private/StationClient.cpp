@@ -137,6 +137,7 @@ void UStationClient::RefreshSession(TStationCallback<FStationSession> OnDone)
 			UStationClient* Self = WeakThis.Get();
 			if (Self && Self->Session.IsSet() && Self->Session->SessionId == SessionId)
 			{
+				Refreshed = Self->MergeRefreshed(Refreshed);
 				Self->AcceptSession(Refreshed, ServerNow);
 			}
 			OnDone(MakeValue(MoveTemp(Refreshed)));
@@ -254,10 +255,13 @@ void UStationClient::FinishSession(EStationFinishReason Reason, TStationCallback
 				OnDone(MakeError(InvalidResponseError(Response.Status)));
 				return;
 			}
+			// Apply only the closing fields to the live session: a refresh that
+			// landed meanwhile may hold a newer transcript than the snapshot.
 			UStationClient* Self = WeakThis.Get();
 			if (Self && Self->Session.IsSet() && Self->Session->SessionId == Current.SessionId)
 			{
-				Self->Session = Finished;
+				StationJson::ParseFinish(*Response.Json, Self->Session.GetValue());
+				Finished = Self->Session.GetValue();
 			}
 			OnDone(MakeValue(MoveTemp(Finished)));
 		});
@@ -271,7 +275,8 @@ void UStationClient::FetchResult(TStationCallback<FStationResult> OnDone)
 		return;
 	}
 	const FString Url = PhoenixBaseUrl + ResultSessionsPath + TEXT("/") + Session->SessionId + TEXT("/result");
-	SendSessionRequest<FStationResult>(TEXT("GET"), Url, nullptr, &StationJson::ParseResult, MoveTemp(OnDone));
+	SendSessionRequest<FStationResult>(TEXT("GET"), Url, nullptr, &StationJson::ParseResult, MoveTemp(OnDone),
+		StationHttp::ResultTimeoutSeconds);
 }
 
 FTimespan UStationClient::GetRemainingTime() const
@@ -288,6 +293,22 @@ FTimespan UStationClient::GetRemainingTimeAt(double LocalSeconds) const
 	return Clock.RemainingAt(Session->DeadlineAt, LocalSeconds);
 }
 
+FStationSession UStationClient::MergeRefreshed(const FStationSession& Refreshed) const
+{
+	FStationSession Merged = Refreshed;
+	if (Session->Status == EStationSessionStatus::Completed)
+	{
+		// Phoenix never reopens a run, so an "active" answer is one read before the finish.
+		Merged.Status = EStationSessionStatus::Completed;
+		Merged.CompletedAt = Session->CompletedAt;
+		if (Merged.CompletionReason.IsEmpty())
+		{
+			Merged.CompletionReason = Session->CompletionReason;
+		}
+	}
+	return Merged;
+}
+
 void UStationClient::AcceptSession(const FStationSession& InSession, const FDateTime& ServerNow)
 {
 	Session = InSession;
@@ -302,7 +323,7 @@ FString UStationClient::SessionUrl(const TCHAR* Suffix) const
 
 template <typename T>
 void UStationClient::SendSessionRequest(const FString& Verb, const FString& Url, const TSharedPtr<FJsonObject>& Body,
-	TFunction<bool(const FJsonObject&, T&)> Parse, TStationCallback<T> OnDone)
+	TFunction<bool(const FJsonObject&, T&)> Parse, TStationCallback<T> OnDone, float TimeoutSeconds)
 {
 	StationHttp::Send(Verb, Url, Body,
 		[Parse = MoveTemp(Parse), OnDone = MoveTemp(OnDone)](const FStationHttpResponse& Response)
@@ -319,5 +340,6 @@ void UStationClient::SendSessionRequest(const FString& Verb, const FString& Url,
 				return;
 			}
 			OnDone(MakeValue(MoveTemp(Value)));
-		});
+		},
+		TimeoutSeconds > 0.f ? TimeoutSeconds : StationHttp::RequestTimeoutSeconds);
 }
