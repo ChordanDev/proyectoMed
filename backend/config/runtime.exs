@@ -334,6 +334,14 @@ if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true
   config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
 end
 
+# E2E-only: a fixed patient reply instead of a text provider, so a process-level
+# client (the Unreal station tests, #192) can run a full turn against local
+# Phoenix. Same rules as above: honored only under `:dev`, and it wins over the
+# live `LLM_PROVIDER` selection when both are set.
+if config_env() == :dev and System.get_env("STATION_AI_E2E_SCRIPTED_ADAPTER") == "true" do
+  config :backend, :station_ai_adapter, Backend.E2ESupport.ScriptedStationAIAdapter
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
