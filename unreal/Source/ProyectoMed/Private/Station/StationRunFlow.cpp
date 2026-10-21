@@ -138,11 +138,18 @@ void UStationRunFlow::LoadStation()
 	});
 }
 
+FText StationErrorText(const FStationClientError& Error, const FText& Fallback)
+{
+	// Phoenix writes its error messages for the learner in Brazilian Portuguese.
+	// The client's own errors are English, including `invalid_response`, which
+	// keeps the 2xx status of the answer it could not read.
+	const bool bPhoenixError = Error.HttpStatus >= 400 && Error.HttpStatus < 600;
+	return bPhoenixError && !Error.Message.IsEmpty() ? FText::FromString(Error.Message) : Fallback;
+}
+
 void UStationRunFlow::SetError(const FStationClientError& Error, const FText& Fallback)
 {
-	// Phoenix's messages are written for the learner in Brazilian Portuguese; the
-	// client's own codes are not, so they get the fallback.
-	ErrorText = Error.HttpStatus > 0 && !Error.Message.IsEmpty() ? FText::FromString(Error.Message) : Fallback;
+	ErrorText = StationErrorText(Error, Fallback);
 	OnChanged.Broadcast();
 }
 

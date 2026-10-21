@@ -35,6 +35,13 @@ enum class EStationTrainingMode : uint8
 /** A voice training needs Phoenix to serve realtime voice. */
 PROYECTOMED_API bool IsVoiceTrainingAvailable(const FStationSummary& Station);
 
+/**
+ * The learner-facing text for a failed call. Phoenix's message is shown only when
+ * Phoenix answered with an error status; everything else (unreachable Phoenix, a
+ * body the client cannot read) gets `Fallback`, which is Brazilian Portuguese.
+ */
+PROYECTOMED_API FText StationErrorText(const FStationClientError& Error, const FText& Fallback);
+
 /** The Station Timer as `mm:ss`, rounding partial seconds up so it reads 00:00 only at the deadline. */
 PROYECTOMED_API FText FormatStationTimer(const FTimespan& Remaining);
 

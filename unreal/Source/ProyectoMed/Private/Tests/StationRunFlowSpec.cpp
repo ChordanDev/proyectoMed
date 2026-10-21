@@ -53,6 +53,23 @@ void FStationRunUnitSpec::Define()
 		TestEqual("deadline", FormatStationTimer(FTimespan::Zero()).ToString(), TEXT("00:00"));
 	});
 
+	It("shows Phoenix's message only for Phoenix error statuses", [this]()
+	{
+		const FText Fallback = FText::FromString(TEXT("Não foi possível carregar o cenário e as tarefas da estação."));
+		TestEqual("2xx body the client cannot read",
+			StationErrorText(FStationClientError{200, TEXT("invalid_response"), TEXT("Phoenix answered with a body the station client does not understand.")}, Fallback).ToString(),
+			Fallback.ToString());
+		TestEqual("Phoenix error",
+			StationErrorText(FStationClientError{422, TEXT("session_completed"), TEXT("A sessão já foi concluída.")}, Fallback).ToString(),
+			TEXT("A sessão já foi concluída."));
+		TestEqual("unreachable Phoenix",
+			StationErrorText(FStationClientError{0, TEXT("network_error"), TEXT("Phoenix did not answer at http://127.0.0.1:4000.")}, Fallback).ToString(),
+			Fallback.ToString());
+		TestEqual("Phoenix error without a message",
+			StationErrorText(FStationClientError{502, TEXT("http_502"), FString()}, Fallback).ToString(),
+			Fallback.ToString());
+	});
+
 	It("offers a voice training only with realtime voice", [this]()
 	{
 		FStationSummary Station;
