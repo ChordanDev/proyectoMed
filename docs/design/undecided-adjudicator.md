@@ -83,7 +83,7 @@ The prompt also defines, in concrete terms, every risk label Jev can leave undec
 `risk:unsupported_information`, `risk:follows_learner_instruction`, `rule_broken`). Out of
 role means speaking as an AI, an assistant, a clinician or an examiner, giving clinical
 advice, a diagnosis or a treatment plan, or talking about the simulation; a first-person
-patient answer (a name, an age, a symptom, a denial, "Não sei dizer, doutor.") is in role.
+patient answer (a name, an age, a symptom, a denial, "Não consta no script.") is in role.
 The request carries no identity profile, so a name or age is not unsupported information.
 An undecided score is only a hint: the model judges the reply text itself, and `refuse` is
 allowed only when the text actually breaks a rule (the earlier "refuse whenever you are

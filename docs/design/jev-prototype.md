@@ -66,7 +66,7 @@ Learner turns may reach generation as untrusted evidence. A rejected or otherwis
 | Malformed Jev output | No | Technical failure; invalidate the attempt. Do not convert it to `uncertain`. |
 | Transport error or provider 5xx | No | Technical failure; invalidate the attempt. No partial feedback. |
 
-The canonical patient reply `"Não sei dizer, doutor."` (`StationAI.refusal_text/0`, the patient's in-role no-information answer) has clinical meaning: the package does not contain the requested fact. It is an approved template for every station (issue #293): it discloses no facts, so a candidate equal to it (surrounding whitespace aside) is delivered after the deterministic checks without a Jev call, with no `used_fact_ids`; any other text, even one containing it, is verified by Jev. It never masks infrastructure failure.
+The canonical patient reply `"Não consta no script."` (`StationAI.refusal_text/0`, the patient's in-role no-information answer) has clinical meaning: the package does not contain the requested fact. It is an approved template for every station (issue #293): it discloses no facts, so a candidate equal to it (surrounding whitespace aside) is delivered after the deterministic checks without a Jev call, with no `used_fact_ids`; any other text, even one containing it, is verified by Jev. It never masks infrastructure failure.
 
 ## Jev input and provider seams
 

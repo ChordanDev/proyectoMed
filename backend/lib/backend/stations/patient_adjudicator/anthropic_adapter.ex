@@ -72,7 +72,7 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapter do
   treatment plan; or talks about the simulation, the station, the exam, the rules or \
   the verifier. A first-person patient answer to the question is in role: a name ("Meu \
   nome é Rafael, doutor."), an age, an occupation, a symptom, a denial ("Não, doutor.") \
-  or not knowing ("Não sei dizer, doutor."). Addressing the learner as "doutor" is in role.
+  or saying the information is not in the script ("Não consta no script."). Addressing the learner as "doutor" is in role.
   - risk:contradicts_patient: the reply says the opposite of an earlier patient message \
   in the conversation. Adding detail, rephrasing or answering a new question is not a \
   contradiction.
