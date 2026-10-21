@@ -1,8 +1,24 @@
+/** Learner-facing "cenário de atuação" and the ordered station tasks. */
+export interface CandidateBrief {
+  scenario: string;
+  tasks: string[];
+}
+
+/**
+ * The single voice experience the deployment offers (#270): the real-time
+ * LiveKit panel, the turn-based record/play buttons, or no voice at all.
+ */
+export type VoiceMode = "realtime" | "turn" | "off";
+
+const voiceModes: readonly VoiceMode[] = ["realtime", "turn", "off"];
+
 export interface ActiveStation {
   station_id: string;
   version: string;
   display_title: string;
   language: string;
+  candidate_brief: CandidateBrief;
+  voice_mode: VoiceMode;
 }
 
 export interface StartSessionRequest {
@@ -39,10 +55,33 @@ export interface SendMessageRequest {
   text: string;
 }
 
-export interface MessageReply {
+/** A verified patient reply. An older backend sends no `outcome`. */
+export interface PatientMessageReply {
+  outcome?: "patient_reply";
   reply_text: string;
   reply_audio_url?: string | null;
   server_now: string;
+}
+
+/**
+ * A learner turn addressed to the examiner (#274): the backend kept it without
+ * generating a patient reply.
+ */
+export interface ExaminerAcknowledgedReply {
+  outcome: "examiner_acknowledged";
+  reply_text: null;
+  learner_turn: SessionMessage;
+  server_now: string;
+}
+
+export type MessageReply = PatientMessageReply | ExaminerAcknowledgedReply;
+
+export interface VoiceSession {
+  url: string;
+  token: string;
+  room: string;
+  identity: string;
+  expires_at: string;
 }
 
 export type FinishReason = "user" | "timer";
@@ -183,6 +222,15 @@ const stringList = (body: JsonObject, key: string, label: string): string[] => {
     : invalid(label);
 };
 
+const decodeCandidateBrief = (value: unknown): CandidateBrief => {
+  const body = objectValue(value, "candidate brief");
+  const tasks = stringList(body, "tasks", "candidate brief");
+  return {
+    scenario: stringValue(body, "scenario", "candidate brief"),
+    tasks: tasks.length > 0 ? tasks : invalid("candidate brief"),
+  };
+};
+
 const decodeActiveStation = (value: unknown): ActiveStation => {
   const body = objectValue(value, "active station");
   return {
@@ -190,6 +238,11 @@ const decodeActiveStation = (value: unknown): ActiveStation => {
     version: stringValue(body, "version", "active station"),
     display_title: stringValue(body, "display_title", "active station"),
     language: stringValue(body, "language", "active station"),
+    candidate_brief: decodeCandidateBrief(body.candidate_brief),
+    // An older backend sends no voice_mode: keep the turn-based experience.
+    voice_mode: voiceModes.includes(body.voice_mode as VoiceMode)
+      ? (body.voice_mode as VoiceMode)
+      : "turn",
   };
 };
 
@@ -252,10 +305,32 @@ const decodeMessageReply = (value: unknown): MessageReply => {
     invalid("message");
   }
 
+  if (body.outcome === "examiner_acknowledged") {
+    const learnerTurn = decodeKeptLearnerTurn(body);
+    return {
+      outcome: "examiner_acknowledged",
+      reply_text: null,
+      learner_turn: learnerTurn ?? invalid("message"),
+      server_now: stringValue(body, "server_now", "message"),
+    };
+  }
+
   return {
+    ...(body.outcome === "patient_reply" ? { outcome: "patient_reply" as const } : {}),
     reply_text: stringValue(body, "reply_text", "message"),
     server_now: stringValue(body, "server_now", "message"),
     ...(hasAudioUrl ? { reply_audio_url: audioUrl as string | null } : {}),
+  };
+};
+
+const decodeVoiceSession = (value: unknown): VoiceSession => {
+  const body = objectValue(value, "voice session");
+  return {
+    url: stringValue(body, "url", "voice session"),
+    token: stringValue(body, "token", "voice session"),
+    room: stringValue(body, "room", "voice session"),
+    identity: stringValue(body, "identity", "voice session"),
+    expires_at: stringValue(body, "expires_at", "voice session"),
   };
 };
 
@@ -356,7 +431,8 @@ const decodeEducationalCriterion = (value: unknown): ResultCriterion => {
     if (fortieths(points) > fortieths(base.max_points)) invalid("educational criterion");
     return { ...base, status, reason: null, level: stringValue(body, "level", "educational criterion"), level_description: stringValue(body, "level_description", "educational criterion"), points };
   }
-  if ("points" in body || "level" in body || "level_description" in body || evidence.length > 0) invalid("educational criterion");
+  // Only an uncertain criterion may report evidence: what the learner asked (issue #291).
+  if ("points" in body || "level" in body || "level_description" in body || (status !== "uncertain" && evidence.length > 0)) invalid("educational criterion");
   const reasons = { uncertain: "assessment_unresolved", not_observable: "required_modality_unavailable", not_applicable: "authored_exclusion" };
   if (body.reason !== reasons[status]) invalid("educational criterion");
   return { ...base, status, reason: reasons[status] };
@@ -480,10 +556,12 @@ const decodeKeptLearnerTurn = (body: JsonObject): SessionMessage | undefined => 
     : undefined;
 };
 
-// The educational result runs the rubric resolver (10 s deadline) and then
-// generates learner feedback (60 s deadline) before answering, so its first
-// fetch may take about a minute. Every other request keeps `timeoutMs`.
-const EDUCATIONAL_RESULT_TIMEOUT_MS = 80_000;
+// The educational result runs the rubric resolver (30 s deadline) and then
+// generates learner feedback (45 s deadline) before answering, so its first
+// fetch may take over a minute; later fetches are served from the session.
+// The backend keeps resolver + feedback within 80 s of this wait (issue #301,
+// `backend/config/runtime.exs`). Every other request keeps `timeoutMs`.
+const EDUCATIONAL_RESULT_TIMEOUT_MS = 95_000;
 
 export const createApiClient = ({
   baseUrl,
@@ -591,6 +669,12 @@ export const createApiClient = ({
         jsonPost({ reason }),
         decodeCompletedSession,
       ),
+    createVoiceSession: (sessionId: string) =>
+      request(
+        `${sessionPath(sessionId)}/voice`,
+        { method: "POST" },
+        decodeVoiceSession,
+      ),
     transcribeAudio: (
       sessionId: string,
       audioBlob: Blob,
@@ -668,6 +752,7 @@ export const {
   transcribeAudio,
   synthesizeSpeech,
   fetchResult,
+  createVoiceSession,
   requestImpresso,
   getImpressos,
   discardSession,

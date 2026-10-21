@@ -14,6 +14,9 @@ defmodule Backend.Stations.CandidateGate do
        structured, machine-evaluable predicate from the vocabulary in
        `Backend.Stations.TemplateApplicability` evaluating to `true` against
        trusted case state (`opts[:case_state]`, never the AI `context` map).
+       The patient's no-information answer (`no_information_answer?/1`, issue
+       #293) is an approved template for every station: it discloses no facts,
+       so a candidate equal to it is delivered without Jev.
        Legacy deterministic literals (the `"unconditional"` string, `true`,
        and the `unconditional` map) remain accepted as defense in depth.
        Prose strings, malformed maps, unknown predicates, and predicates
@@ -27,8 +30,50 @@ defmodule Backend.Stations.CandidateGate do
        A candidate refused for `:semantic_refusal` or `:low_confidence` permits at most
        one regeneration within the remaining monotonic deadline budget.
        The regenerated candidate undergoes the full recheck (deny -> template -> Jev).
+       When Jev reports `unasked_fact_ids` (on-request facts stated without being
+       asked, issue #242), the regeneration is targeted: an arity-4 generator
+       `(package, conversation, remaining_ms, guidance)` receives
+       `%{withheld_fact_ids: ids}`, and the default generator puts the same ids in
+       the StationAI context. A `:low_confidence` refusal that Jev reports with
+       `undecided_fact_ids` (on-request facts it could not tell were stated while the
+       learner did not ask, issue #273, or stated facts it could not tell the
+       learner asked for, issue #284) is targeted the same way with those ids.
+       Every other refusal passes `withheld_fact_ids: []`, so the retry is unchanged. Generators of arity 0 to 3 receive no guidance.
        If the second candidate fails for any reason, no text is released and
        `{:error, {:refused, status}}` or `{:error, reason}` is returned.
+       When the regeneration runs out of budget (before or during generation,
+       or while it is verified), the original `{:error, {:refused, status}}` is
+       returned instead of `{:error, :timeout}` (issue #256), so the learner
+       turn is kept (#235). A timeout before any refusal stays `{:error, :timeout}`.
+
+  ## Undecided-verdict adjudication (issue #290)
+
+  A `:low_confidence` decision is not refused outright: it is handed once to
+  `Backend.Stations.PatientAdjudicator`, a small language model separate from
+  the patient generator, which reads Jev's undecided labels and scores.
+  `:deliver` delivers the candidate with the verdict's `used_fact_ids`;
+  `{:regenerate, ids}` runs the single regeneration withholding those facts;
+  a refusal, a failure, a timeout or a lack of budget keeps the behaviour
+  described above (one regeneration withholding Jev's `undecided_fact_ids`).
+  A regenerated candidate that Jev leaves undecided is adjudicated too, and is
+  delivered only on `:deliver`. The adjudicator runs inside the same monotonic
+  deadline, which only a `{:regenerate, ids}` answer extends, by
+  `Backend.Stations.PatientAdjudicator.regeneration_extension_ms/1` (1.5 s by
+  default), never after a deterministic denial, and never delivers a fact
+  Jev's clear-no "asked" answer says was not requested. A `:verified` or
+  `:semantic_refusal` decision is never adjudicated.
+
+  ## Refusal causes (issue #273)
+
+  Every Jev decision on a candidate, the regenerated one included, is counted
+  node-wide by cause, so the false-refusal rate can be tracked:
+  `:verified`; `:unasked_fact` (a semantic refusal naming `unasked_fact_ids`,
+  even when a risk is also high); `:risk` (any other semantic refusal: a risk or
+  a response rule); `:undecided_unasked_fact` (a low-confidence decision naming
+  `undecided_fact_ids`); `:undecided_other` (any other low-confidence decision).
+  `refusal_cause_counts/0` reads the counts, which restart with the node. Each
+  refusal also logs one `:info` line, `[CandidateGate] refusal cause=<cause>
+  count=<n>`, with no text and no fact id.
 
   ## Security & No-Leak Invariants
 
@@ -38,9 +83,16 @@ defmodule Backend.Stations.CandidateGate do
     * Errors are sanitized without leaking candidate text or learner audio/text.
   """
 
+  require Logger
+
   alias Backend.Stations.JevDecision
+  alias Backend.Stations.PatientAdjudicator
+  alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.BoundedReply
   alias Backend.Stations.TemplateApplicability
+
+  @decision_causes [:verified, :risk, :unasked_fact, :undecided_unasked_fact, :undecided_other]
+  @counts_key {__MODULE__, :decision_cause_counts}
 
   @type candidate_error ::
           {:denied, atom()}
@@ -64,16 +116,56 @@ defmodule Backend.Stations.CandidateGate do
           {:ok, String.t()} | {:error, candidate_error()}
   def verify_and_deliver(candidate_text, package, conversation \\ [], opts \\ [])
       when is_list(opts) do
+    with {:ok, %{text: text}} <- verify(candidate_text, package, conversation, opts) do
+      {:ok, text}
+    end
+  end
+
+  @doc """
+  Verifies a candidate like `verify_and_deliver/4` and also returns the facts the
+  delivered text states (issue #286): `{:ok, %{text: text, used_fact_ids: ids}}`.
+
+  `used_fact_ids` are the authored ids of the Jev verdict that verified `text`
+  (the regeneration's verdict when the regeneration is delivered), and `[]` for
+  an approved-template bypass. `opts[:disclosed_fact_ids]`, the facts earlier
+  verified patient turns of the session disclosed, is passed to every Jev
+  request.
+  """
+  @spec verify(term(), map(), list(), keyword()) ::
+          {:ok, %{text: String.t(), used_fact_ids: [String.t()]}}
+          | {:error, candidate_error()}
+  def verify(candidate_text, package, conversation \\ [], opts \\ []) when is_list(opts) do
     conversation = conversation || []
     deadline_at = resolve_monotonic_deadline(opts)
 
     with :ok <- BoundedReply.check_violations(candidate_text, package) do
-      if template_bypass?(candidate_text, package, opts) do
-        {:ok, candidate_text}
+      if no_information_answer?(candidate_text) or
+           template_bypass?(candidate_text, package, opts) do
+        {:ok, delivered(candidate_text, %{})}
       else
         verify_with_jev(candidate_text, package, conversation, deadline_at, opts)
       end
     end
+  end
+
+  defp delivered(text, decision) do
+    ids =
+      case Map.get(decision, :used_fact_ids) do
+        ids when is_list(ids) -> Enum.filter(ids, &is_binary/1)
+        _ -> []
+      end
+
+    %{text: text, used_fact_ids: ids}
+  end
+
+  defp patient_jev_request(candidate_text, package, conversation, deadline_at, opts) do
+    %{
+      candidate_text: candidate_text,
+      package: package,
+      conversation: conversation,
+      deadline_at_monotonic_ms: deadline_at,
+      disclosed_fact_ids: Keyword.get(opts, :disclosed_fact_ids, [])
+    }
   end
 
   @doc """
@@ -86,9 +178,38 @@ defmodule Backend.Stations.CandidateGate do
   end
 
   @doc """
+  Returns how many Jev decisions on candidates each cause has had since the node
+  started (see "Refusal causes"). Holds only cause names and counts.
+  """
+  @spec refusal_cause_counts() :: %{atom() => non_neg_integer()}
+  def refusal_cause_counts do
+    ref = cause_counters()
+
+    @decision_causes
+    |> Enum.with_index(1)
+    |> Map.new(fn {cause, index} -> {cause, :counters.get(ref, index)} end)
+  end
+
+  @doc """
   Delegates deny-first violation checks to `BoundedReply.check_violations/2`.
   """
   defdelegate check_violations(text, package), to: BoundedReply
+
+  @doc """
+  Whether `candidate_text` is the patient's no-information answer, the phrase
+  `Backend.Stations.StationAI.refusal_text/0` defines once for every station
+  (issue #293).
+
+  Only that exact phrase matches; surrounding whitespace is ignored because it
+  carries no content. Any other text, even one that contains the phrase,
+  does not match.
+  """
+  @spec no_information_answer?(term()) :: boolean()
+  def no_information_answer?(candidate_text) when is_binary(candidate_text) do
+    String.trim(candidate_text) === StationAI.refusal_text()
+  end
+
+  def no_information_answer?(_candidate_text), do: false
 
   # ============================================================================
   # Approved Template Check (Option B Fail-Closed)
@@ -264,21 +385,36 @@ defmodule Backend.Stations.CandidateGate do
     if JevDecision.remaining_budget_ms(deadline_at) <= 0 do
       {:error, :timeout}
     else
-      jev_request = %{
-        candidate_text: candidate_text,
-        package: package,
-        conversation: conversation,
-        deadline_at_monotonic_ms: deadline_at
-      }
+      jev_request =
+        patient_jev_request(candidate_text, package, conversation, deadline_at, opts)
 
       jev_opts = Keyword.put(opts, :deadline_at_monotonic_ms, deadline_at)
 
-      case JevDecision.decide_patient(jev_request, jev_opts) do
-        {:ok, %{status: :verified}} ->
-          {:ok, candidate_text}
+      case jev_request |> JevDecision.decide_patient(jev_opts) |> count_cause() do
+        {:ok, %{status: :verified} = decision} ->
+          {:ok, delivered(candidate_text, decision)}
 
-        {:ok, %{status: status}} when status in [:semantic_refusal, :low_confidence] ->
-          handle_refusal(status, package, conversation, deadline_at, opts)
+        {:ok, %{status: :low_confidence} = decision} ->
+          candidate_text
+          |> adjudicate(decision, package, conversation, deadline_at, opts)
+          |> resolve_adjudication(
+            candidate_text,
+            decision,
+            package,
+            conversation,
+            deadline_at,
+            opts
+          )
+
+        {:ok, %{status: :semantic_refusal} = decision} ->
+          handle_refusal(
+            :semantic_refusal,
+            regeneration_guidance(decision),
+            package,
+            conversation,
+            deadline_at,
+            opts
+          )
 
         {:error, reason} ->
           # Technical failures (:timeout, {:adapter_disabled, _}, {:upstream_5xx, _}, etc.)
@@ -288,21 +424,85 @@ defmodule Backend.Stations.CandidateGate do
     end
   end
 
-  defp handle_refusal(status, package, conversation, deadline_at, opts) do
+  # ============================================================================
+  # Undecided-verdict adjudication (issue #290)
+  # ============================================================================
+
+  defp adjudicate(candidate_text, decision, package, conversation, deadline_at, opts) do
+    PatientAdjudicator.adjudicate(
+      decision,
+      candidate_text,
+      package,
+      conversation,
+      Keyword.put(opts, :deadline_at_monotonic_ms, deadline_at)
+    )
+  end
+
+  defp resolve_adjudication(:deliver, text, decision, _package, _conversation, _deadline, _opts),
+    do: {:ok, delivered(text, decision)}
+
+  # The adjudication already used part of the budget, so this path alone gets
+  # the extension: the regeneration, its recheck and that recheck's adjudication
+  # share the extended deadline. Every other path keeps the turn's deadline.
+  defp resolve_adjudication({:regenerate, ids}, _text, _decision, package, conv, deadline, opts) do
+    extended = deadline + PatientAdjudicator.regeneration_extension_ms(opts)
+    handle_refusal(:low_confidence, %{withheld_fact_ids: ids}, package, conv, extended, opts)
+  end
+
+  # A refusal, a failure or no budget: today's low-confidence path.
+  defp resolve_adjudication({:refuse, _reason}, _text, decision, package, conv, deadline, opts) do
+    handle_refusal(
+      :low_confidence,
+      regeneration_guidance(decision),
+      package,
+      conv,
+      deadline,
+      opts
+    )
+  end
+
+  # The guidance names facts only by authored ids: those Jev reported as stated
+  # without being asked (issue #242), or, on a low-confidence decision, those it
+  # could not tell were stated while the learner did not ask (issue #273). It
+  # never carries Jev or candidate text.
+  defp regeneration_guidance(decision) do
+    key =
+      case decision.status do
+        :semantic_refusal -> :unasked_fact_ids
+        :low_confidence -> :undecided_fact_ids
+      end
+
+    case Map.get(decision, key) do
+      ids when is_list(ids) -> %{withheld_fact_ids: Enum.filter(ids, &is_binary/1)}
+      _ -> %{withheld_fact_ids: []}
+    end
+  end
+
+  defp handle_refusal(status, guidance, package, conversation, deadline_at, opts) do
     retry_count = Keyword.get(opts, :retry_count, 0)
     can_retry? = Keyword.get(opts, :can_retry?, true)
 
     if can_retry? and retry_count == 0 do
-      attempt_regeneration(package, conversation, deadline_at, opts)
+      guidance
+      |> attempt_regeneration(package, conversation, deadline_at, opts)
+      |> keep_refusal_on_timeout(status)
     else
       {:error, {:refused, status}}
     end
   end
 
-  defp attempt_regeneration(package, conversation, deadline_at, opts) do
+  # Issue #256: when the regeneration cannot finish inside the budget (before
+  # or during generation, or while it is verified), the turn ends with the
+  # original refusal, so the caller keeps the learner turn (#235). Nothing of
+  # the late candidate is returned. Any other regeneration failure is unchanged.
+  defp keep_refusal_on_timeout({:error, :timeout}, status), do: {:error, {:refused, status}}
+  defp keep_refusal_on_timeout(result, _status), do: result
+
+  defp attempt_regeneration(guidance, package, conversation, deadline_at, opts) do
     with :ok <- check_regeneration_budget(deadline_at),
          generator = opts[:generator],
-         {:ok, regen_text} <- invoke_generator(generator, package, conversation, deadline_at),
+         {:ok, regen_text} <-
+           invoke_generator(generator, guidance, package, conversation, deadline_at),
          :ok <- check_regeneration_budget(deadline_at) do
       recheck_regenerated(regen_text, package, conversation, deadline_at, opts)
     end
@@ -329,8 +529,8 @@ defmodule Backend.Stations.CandidateGate do
   end
 
   defp recheck_candidate_dispatch(regen_text, package, conversation, deadline_at, recheck_opts) do
-    if template_bypass?(regen_text, package, recheck_opts) do
-      {:ok, regen_text}
+    if no_information_answer?(regen_text) or template_bypass?(regen_text, package, recheck_opts) do
+      {:ok, delivered(regen_text, %{})}
     else
       recheck_with_jev(regen_text, package, conversation, deadline_at, recheck_opts)
     end
@@ -338,26 +538,94 @@ defmodule Backend.Stations.CandidateGate do
 
   defp recheck_with_jev(regen_text, package, conversation, deadline_at, recheck_opts) do
     with :ok <- check_regeneration_budget(deadline_at) do
-      jev_request = %{
-        candidate_text: regen_text,
-        package: package,
-        conversation: conversation,
-        deadline_at_monotonic_ms: deadline_at
-      }
-
-      eval_recheck_jev_result(JevDecision.decide_patient(jev_request, recheck_opts), regen_text)
+      regen_text
+      |> patient_jev_request(package, conversation, deadline_at, recheck_opts)
+      |> JevDecision.decide_patient(recheck_opts)
+      |> count_cause()
+      |> eval_recheck_jev_result(regen_text, package, conversation, deadline_at, recheck_opts)
     end
   end
 
-  defp eval_recheck_jev_result({:ok, %{status: :verified}}, regen_text), do: {:ok, regen_text}
+  # ============================================================================
+  # Refusal Causes
+  # ============================================================================
 
-  defp eval_recheck_jev_result({:ok, %{status: status}}, _text)
-       when status in [:semantic_refusal, :low_confidence],
-       do: {:error, {:refused, status}}
+  # Counts the decision's cause and returns the result unchanged. Errors are
+  # technical failures, not decisions, and are not counted.
+  defp count_cause({:ok, %{status: status} = decision} = result)
+       when status in [:verified, :semantic_refusal, :low_confidence] do
+    cause = decision_cause(decision)
+    index = Enum.find_index(@decision_causes, &(&1 == cause)) + 1
+    ref = cause_counters()
+    :counters.add(ref, index, 1)
 
-  defp eval_recheck_jev_result({:error, reason}, _text), do: {:error, reason}
+    if cause != :verified do
+      Logger.info("[CandidateGate] refusal cause=#{cause} count=#{:counters.get(ref, index)}")
+    end
 
-  defp invoke_generator(generator, package, conversation, deadline_at) do
+    result
+  end
+
+  defp count_cause(result), do: result
+
+  defp decision_cause(%{status: :verified}), do: :verified
+
+  defp decision_cause(%{status: :semantic_refusal} = decision) do
+    if named_fact_ids?(decision, :unasked_fact_ids), do: :unasked_fact, else: :risk
+  end
+
+  defp decision_cause(%{status: :low_confidence} = decision) do
+    if named_fact_ids?(decision, :undecided_fact_ids),
+      do: :undecided_unasked_fact,
+      else: :undecided_other
+  end
+
+  defp named_fact_ids?(decision, key) do
+    case Map.get(decision, key) do
+      [_ | _] -> true
+      _ -> false
+    end
+  end
+
+  # The counters live for the node. Two first callers racing may each create a
+  # set; the later one wins and at most the other's first count is lost.
+  defp cause_counters do
+    case :persistent_term.get(@counts_key, nil) do
+      nil ->
+        ref = :counters.new(length(@decision_causes), [:write_concurrency])
+        :persistent_term.put(@counts_key, ref)
+        ref
+
+      ref ->
+        ref
+    end
+  end
+
+  defp eval_recheck_jev_result({:ok, %{status: :verified} = decision}, regen_text, _, _, _, _),
+    do: {:ok, delivered(regen_text, decision)}
+
+  # The regenerated candidate is adjudicated like the first one; only a deliver
+  # helps, since no second regeneration exists (issue #290).
+  defp eval_recheck_jev_result(
+         {:ok, %{status: :low_confidence} = decision},
+         regen_text,
+         package,
+         conversation,
+         deadline_at,
+         opts
+       ) do
+    case adjudicate(regen_text, decision, package, conversation, deadline_at, opts) do
+      :deliver -> {:ok, delivered(regen_text, decision)}
+      _other -> {:error, {:refused, :low_confidence}}
+    end
+  end
+
+  defp eval_recheck_jev_result({:ok, %{status: :semantic_refusal}}, _text, _, _, _, _),
+    do: {:error, {:refused, :semantic_refusal}}
+
+  defp eval_recheck_jev_result({:error, reason}, _text, _, _, _, _), do: {:error, reason}
+
+  defp invoke_generator(generator, guidance, package, conversation, deadline_at) do
     remaining_ms = JevDecision.remaining_budget_ms(deadline_at)
 
     if remaining_ms <= 0 do
@@ -378,12 +646,16 @@ defmodule Backend.Stations.CandidateGate do
             is_function(generator, 3) ->
               generator.(package, conversation, remaining_ms)
 
+            is_function(generator, 4) ->
+              generator.(package, conversation, remaining_ms, guidance)
+
             is_nil(generator) ->
               language = package["language"] || package[:language] || "pt-BR"
 
-              Backend.Stations.StationAI.next_reply(package, %{
+              StationAI.next_reply(package, %{
                 conversation: conversation,
-                language: language
+                language: language,
+                withheld_fact_ids: guidance.withheld_fact_ids
               })
 
             true ->

@@ -22,6 +22,9 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
   is `config :backend, Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter,
   model: ...` (`RUBRIC_RESOLVER_MODEL`), falling back to the station OpenAI
   model and then to `gpt-4o-mini`.
+  The HTTP receive timeout sits just below the resolver deadline
+  (`Backend.Stations.RubricAssessment.Resolver.deadline_ms/1`), which the
+  resolver enforces as the hard limit.
   Options (`:api_key`, `:base_url`, `:model`, `:plug`, `:retry`,
   `:req_options`) override the configuration. The operating system environment
   is never read here.
@@ -39,6 +42,10 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
 
   @behaviour Backend.Stations.RubricAssessment.Resolver
 
+  alias Backend.Stations.RubricAssessment.Resolver
+
+  @timeout_margin_ms 250
+  @min_receive_timeout_ms 500
   @default_model "gpt-4o-mini"
   @default_base_url "https://api.openai.com"
   @classes ["performed", "not_performed", "uncertain"]
@@ -112,11 +119,17 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
       base_url: opts[:base_url] || station[:base_url] || @default_base_url,
       model: opts[:model] || own[:model] || station[:model] || @default_model,
       req_options:
-        own
-        |> Keyword.get(:req_options, [])
+        [receive_timeout: receive_timeout(opts)]
+        |> Keyword.merge(Keyword.get(own, :req_options, []))
         |> Keyword.merge(Keyword.get(opts, :req_options, []))
         |> Keyword.merge(Keyword.take(opts, [:plug, :retry]))
     }
+  end
+
+  # Just below the resolver deadline, which the resolver enforces as the hard
+  # limit (issue #301), as in the Anthropic adapter.
+  defp receive_timeout(opts) do
+    max(Resolver.deadline_ms(opts) - @timeout_margin_ms, @min_receive_timeout_ms)
   end
 
   defp validate_credentials(key) when is_binary(key) do
@@ -208,7 +221,19 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
        do: {:error, :refused}
 
   defp parse(%{"choices" => [%{"message" => %{"content" => content}} | _]})
-       when is_binary(content) do
+       when is_binary(content),
+       do: decode_answer(content)
+
+  defp parse(_body), do: {:error, :malformed_response}
+
+  @doc """
+  Decodes the provider's JSON answer (the `schema/0` shape) into decisions.
+  Shared with `Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter`.
+  """
+  @spec decode_answer(String.t()) ::
+          {:ok, %{actions: [Backend.Stations.RubricAssessment.Resolver.decision()]}}
+          | {:error, :malformed_response}
+  def decode_answer(content) when is_binary(content) do
     with {:ok, %{"actions" => actions}} when is_list(actions) <- Jason.decode(content),
          decisions when is_list(decisions) <- decisions(actions) do
       {:ok, %{actions: decisions}}
@@ -216,8 +241,6 @@ defmodule Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter do
       _malformed -> {:error, :malformed_response}
     end
   end
-
-  defp parse(_body), do: {:error, :malformed_response}
 
   defp decisions(actions) do
     Enum.reduce_while(actions, [], fn action, acc ->

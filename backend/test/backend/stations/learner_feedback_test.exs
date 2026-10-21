@@ -8,6 +8,7 @@ defmodule Backend.Stations.LearnerFeedbackTest do
 
   alias Backend.Stations
   alias Backend.Stations.LearnerFeedback
+  alias Backend.Stations.LearnerFeedback.DisabledAdapter
 
   @moduletag capture_log: true
 
@@ -277,8 +278,8 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       assert recommendations(attach(id))["history"] == @generated["history"]
     end
 
-    test "the configured deadline is one minute" do
-      assert Application.fetch_env!(:backend, :learner_feedback_deadline_ms) == 60_000
+    test "the configured deadline is forty-five seconds" do
+      assert Application.fetch_env!(:backend, :learner_feedback_deadline_ms) == 45_000
     end
 
     test "logs the latency of a successful call without any feedback text", %{session_id: id} do
@@ -367,6 +368,88 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       text = String.duplicate("é", 400)
       respond_with(fn _request -> {:ok, %{"history" => "  #{text}\n", "exam" => "Bom."}} end)
       assert recommendations(attach(id))["history"] == text
+    end
+  end
+
+  # Issue #291: an uncertain criterion never showed more than its authored
+  # text, which can be the bare item title.
+  describe "attach/3 on an uncertain criterion" do
+    defp uncertain_history(sub_actions) do
+      %{
+        @history
+        | status: :uncertain,
+          reason: {:uncertain_sub_action, "duration"},
+          sub_actions: sub_actions
+      }
+      |> Map.drop([:level, :points])
+    end
+
+    defp with_criterion(criterion), do: %{@assessment | criteria: [criterion, @exam, @unclear]}
+
+    test "writes what was asked and what is still missing from its actions", %{session_id: id} do
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "radiation", classification: "not_performed", evidence_ids: []},
+          %{id: "duration", classification: "uncertain", evidence_ids: []}
+        ])
+
+      result = attach(id, with_criterion(history))
+
+      assert recommendations(result)["history"] ==
+               "Você investigou: Asks about onset. " <>
+                 "Ainda falta investigar: Asks about radiation; Asks about duration."
+
+      assert recommendations(result)["unclear"] == "Authored unclear recommendation."
+      assert recommendations(result)["exam"] == @generated["exam"]
+
+      assert_received {:feedback_request, request}
+      assert Enum.map(request.criteria, & &1.id) == ["exam"]
+    end
+
+    test "a performed action without evidence is still missing", %{session_id: id} do
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: []},
+          %{id: "radiation", classification: "not_performed", evidence_ids: []},
+          %{id: "duration", classification: "not_performed", evidence_ids: []}
+        ])
+
+      assert recommendations(attach(id, with_criterion(history)))["history"] ==
+               "Ainda falta investigar: Asks about onset; Asks about radiation; " <>
+                 "Asks about duration."
+    end
+
+    test "is written even when the provider is disabled", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_adapter, DisabledAdapter)
+
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "radiation", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "duration", classification: "performed", evidence_ids: ["turn-1"]}
+        ])
+
+      result = attach(id, with_criterion(history))
+
+      assert recommendations(result)["history"] ==
+               "Você investigou: Asks about onset; Asks about radiation; Asks about duration."
+
+      assert recommendations(result)["exam"] == "Authored exam recommendation."
+    end
+
+    test "changes nothing but the recommendation", %{session_id: id} do
+      history =
+        uncertain_history([
+          %{id: "onset", classification: "performed", evidence_ids: ["turn-1"]},
+          %{id: "radiation", classification: "not_performed", evidence_ids: []},
+          %{id: "duration", classification: "uncertain", evidence_ids: []}
+        ])
+
+      assessment = with_criterion(history)
+      result = attach(id, assessment)
+
+      assert without_recommendations(result) == without_recommendations(assessment)
     end
   end
 
@@ -753,12 +836,14 @@ defmodule Backend.Stations.LearnerFeedbackTest do
 
     test "a positive integer overrides the deadline" do
       assert runtime_deadline(:dev, "45000") == {:ok, 45_000}
-      assert runtime_deadline(:dev, " 65000 ") == {:ok, 65_000}
+      assert runtime_deadline(:dev, " 50000 ") == {:ok, 50_000}
     end
 
-    test "a value above 65 s is capped so the 80 s web wait still covers the request" do
-      assert runtime_deadline(:dev, "90000") == {:ok, 65_000}
-      assert runtime_deadline(:dev, "3600000") == {:ok, 65_000}
+    # Issue #301: with the resolver's default 30 s, feedback gets the rest of
+    # the 80 s budget kept inside the web client's 95 s wait.
+    test "a value above 50 s is capped so the 95 s web wait still covers the request" do
+      assert runtime_deadline(:dev, "65000") == {:ok, 50_000}
+      assert runtime_deadline(:dev, "3600000") == {:ok, 50_000}
     end
 
     test "without the variable the configured default stays" do

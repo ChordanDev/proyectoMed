@@ -26,7 +26,10 @@ defmodule Backend.ArchitectureTest do
     Backend.Stations.TTS,
     Backend.StationPackage,
     Backend.Stations.StationPackage,
-    Backend.Stations.Impressos
+    Backend.Stations.LiveKit,
+    Backend.Stations.MediaSession,
+    Backend.Stations.Impressos,
+    Backend.Stations.PatientAdjudicator
   ]
 
   @web_dir Path.expand("../../lib/backend_web", __DIR__)
@@ -56,7 +59,9 @@ defmodule Backend.ArchitectureTest do
     station_controllers = [
       "lib/backend_web/controllers/station_controller.ex",
       "lib/backend_web/controllers/transcription_controller.ex",
-      "lib/backend_web/controllers/tts_controller.ex"
+      "lib/backend_web/controllers/tts_controller.ex",
+      "lib/backend_web/controllers/voice_session_controller.ex",
+      "lib/backend_web/controllers/voice_worker_controller.ex"
     ]
 
     for rel_path <- station_controllers do

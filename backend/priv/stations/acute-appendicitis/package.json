@@ -3,6 +3,16 @@
   "version": "2.0.0",
   "language": "pt-BR",
   "display_title": "Abdome agudo inflamatório — apendicite aguda",
+  "candidate_brief": {
+    "scenario": "Você é o médico ou a médica de plantão em um pronto-socorro de hospital geral. Rafael Nogueira, 27 anos, auxiliar administrativo, chega sem acompanhante e procura atendimento por dor abdominal.",
+    "tasks": [
+      "Apresentar-se, confirmar a identificação do paciente e obter anamnese dirigida.",
+      "Solicitar e interpretar o exame físico abdominal e as manobras pertinentes.",
+      "Solicitar e interpretar exames laboratoriais e de imagem adequados ao caso.",
+      "Formular a hipótese diagnóstica principal e indicar medidas de suporte e tratamento inicial.",
+      "Explicar a necessidade de avaliação cirúrgica e tratamento definitivo, respondendo às dúvidas do paciente."
+    ]
+  },
   "placeholder": true,
   "patient_profile": {
     "persona": "Rafael está sentado na maca, um pouco curvado e com expressão de desconforto. Responde às perguntas, mas evita movimentar o tronco por causa da dor. Não está agitado nem confuso. Demonstra preocupação com a possibilidade de cirurgia e com o tempo de recuperação.",
@@ -14,13 +24,37 @@
     {
       "id": "hda-01",
       "topic": "HDA — respostas padronizadas",
-      "content": "A dor começou há 18 horas, inicialmente ao redor do umbigo; há cerca de 10 horas migrou para a parte inferior direita do abdome.",
+      "content": "A dor começou ao redor do umbigo.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-01-migracao",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Há cerca de 10 horas, a dor migrou para a parte inferior direita do abdome.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-01-tempo",
+      "topic": "HDA — respostas padronizadas",
+      "content": "A dor começou há 18 horas.",
       "disclosure_condition": "on_request"
     },
     {
       "id": "hda-02",
       "topic": "HDA — respostas padronizadas",
-      "content": "É uma dor contínua, que foi aumentando progressivamente, atualmente 7/10.",
+      "content": "É uma dor contínua.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-02-progressao",
+      "topic": "HDA — respostas padronizadas",
+      "content": "A dor foi aumentando progressivamente.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-02-intensidade",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Atualmente, a dor é 7/10.",
       "disclosure_condition": "on_request"
     },
     {
@@ -44,7 +78,13 @@
     {
       "id": "hda-06",
       "topic": "HDA — respostas padronizadas",
-      "content": "Mediu a temperatura em casa e teve “febre baixa”; não tomou antitérmico.",
+      "content": "Mediu a temperatura em casa e teve “febre baixa”.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "hda-06-antitermico",
+      "topic": "HDA — respostas padronizadas",
+      "content": "Não tomou antitérmico.",
       "disclosure_condition": "on_request"
     },
     {
@@ -68,7 +108,13 @@
     {
       "id": "antecedentes-01",
       "topic": "Antecedentes, medicações e hábitos — respostas padronizadas",
-      "content": "Nega doenças crônicas, internações anteriores e cirurgias.",
+      "content": "Nega doenças crônicas.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "antecedentes-01-internacoes-cirurgias",
+      "topic": "Antecedentes, medicações e hábitos — respostas padronizadas",
+      "content": "Nega internações anteriores e cirurgias.",
       "disclosure_condition": "on_request"
     },
     {
@@ -104,7 +150,13 @@
     {
       "id": "pergunta-explicita-02",
       "topic": "Informações que o ator só revela se o candidato perguntar explicitamente",
-      "content": "Nega uso recente de antibióticos, anti-inflamatórios ou anticoagulantes.",
+      "content": "Nega uso recente de antibióticos ou anticoagulantes.",
+      "disclosure_condition": "on_request"
+    },
+    {
+      "id": "pergunta-explicita-02-anti-inflamatorios",
+      "topic": "Informações que o ator só revela se o candidato perguntar explicitamente",
+      "content": "Nega uso recente de anti-inflamatórios.",
       "disclosure_condition": "on_request"
     },
     {
@@ -419,15 +471,24 @@
         },
         {
           "id": "criterio-2",
-          "description": "verbaliza dor à palpação profunda no ponto de McBurney/fossa ilíaca direita"
+          "description": "verbaliza dor à palpação profunda no ponto de McBurney/fossa ilíaca direita",
+          "interprets_impresso_ids": [
+            "impresso-1-exame-fisico"
+          ]
         },
         {
           "id": "criterio-3",
-          "description": "pesquisa e interpreta o sinal de Blumberg"
+          "description": "pesquisa e interpreta o sinal de Blumberg",
+          "interprets_impresso_ids": [
+            "impresso-1-exame-fisico"
+          ]
         },
         {
           "id": "criterio-4",
-          "description": "pesquisa ao menos uma manobra entre Rovsing, psoas e obturador"
+          "description": "pesquisa ao menos uma manobra entre Rovsing, psoas e obturador",
+          "interprets_impresso_ids": [
+            "impresso-1-exame-fisico"
+          ]
         }
       ],
       "order": null,
@@ -531,19 +592,33 @@
       "actions": [
         {
           "id": "criterio-1",
-          "description": "Identifica leucocitose com neutrofilia e desvio à esquerda"
+          "description": "Identifica leucocitose com neutrofilia e desvio à esquerda",
+          "interprets_impresso_ids": [
+            "impresso-2-hemograma"
+          ]
         },
         {
           "id": "criterio-2",
-          "description": "reconhece PCR elevada"
+          "description": "reconhece PCR elevada",
+          "interprets_impresso_ids": [
+            "impresso-2-pcr"
+          ]
         },
         {
           "id": "criterio-3",
-          "description": "interpreta EAS sem evidências de infecção urinária"
+          "description": "interpreta EAS sem evidências de infecção urinária",
+          "interprets_impresso_ids": [
+            "impresso-2-urina-tipo-1"
+          ]
         },
         {
           "id": "criterio-4",
-          "description": "considera função renal e eletrólitos preservados"
+          "description": "considera função renal e eletrólitos preservados",
+          "interprets_impresso_ids": [
+            "impresso-2-ureia",
+            "impresso-2-creatinina",
+            "impresso-2-eletrolitos"
+          ]
         },
         {
           "id": "atribuicao-a-infeccao-urinaria",
@@ -594,16 +669,25 @@
         },
         {
           "id": "criterio-2",
-          "description": "identifica apêndice dilatado, espessamento parietal e inflamação periapendicular"
+          "description": "identifica apêndice dilatado, espessamento parietal e inflamação periapendicular",
+          "interprets_impresso_ids": [
+            "impresso-3-exame-de-imagem"
+          ]
         },
         {
           "id": "criterio-3",
-          "description": "reconhece ausência de abscesso ou perfuração"
+          "description": "reconhece ausência de abscesso ou perfuração",
+          "interprets_impresso_ids": [
+            "impresso-3-exame-de-imagem"
+          ]
         },
         {
           "id": "criterio-4",
           "description": "formula a hipótese de apendicite aguda",
-          "role": "mandatory"
+          "role": "mandatory",
+          "interprets_impresso_ids": [
+            "impresso-3-exame-de-imagem"
+          ]
         }
       ],
       "order": null,
@@ -775,7 +859,18 @@
       "title": "IMPRESSO 1 — EXAME FÍSICO SEGMENTAR",
       "category": "physical_exam",
       "keywords": [
-        "exame físico"
+        "exame físico",
+        "exame segmentar",
+        "exame do abdome",
+        "exame abdominal",
+        "examinar o abdome",
+        "examinar a barriga",
+        "examinar o paciente",
+        "palpação abdominal",
+        "palpação do abdome",
+        "palpar o abdome",
+        "palpar a barriga",
+        "sinais vitais"
       ],
       "content": "- **Estado geral:** regular, consciente, orientado, fácies de dor; hidratado, sem cianose ou icterícia.\n- **Sinais vitais no exame:** PA 126/78 mmHg; FC 102 bpm; FR 18 irpm; temperatura 38,1 °C; SpO₂ 98% em ar ambiente.\n- **Aparelho cardiovascular:** bulhas normofonéticas, ritmo regular, sem sopros.\n- **Aparelho respiratório:** murmúrio vesicular presente bilateralmente, sem ruídos adventícios.\n- **Abdome — inspeção:** plano, sem cicatrizes, distensão, equimoses ou circulação colateral; movimentação reduzida durante a respiração profunda.\n- **Ausculta:** ruídos hidroaéreos presentes, discretamente diminuídos; sem sopros.\n- **Percussão:** timpanismo predominante; sem macicez anormal.\n- **Palpação superficial:** dor localizada no quadrante inferior direito, com defesa voluntária discreta.\n- **Palpação profunda:** dor acentuada na fossa ilíaca direita, especialmente no ponto de McBurney. Descompressão brusca dolorosa na fossa ilíaca direita: sinal de Blumberg positivo.\n- **Manobras:** sinal de Rovsing positivo; sinal do psoas negativo; sinal do obturador negativo. Sem dor à punho-percussão lombar.\n- **Neurológico:** alerta, orientado em tempo, espaço e pessoa; sem déficit motor grosseiro.\n- **Geniturinário:** sem dor testicular à inspeção referida; não é necessário exame genital invasivo na ausência de indicação clínica."
     },
@@ -784,7 +879,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Hemograma completo",
       "category": "laboratory",
       "keywords": [
-        "hemograma"
+        "hemograma",
+        "leucograma"
       ],
       "content": "**Hemograma completo:**\n\n- Hemoglobina: 14,6 g/dL. Referência adulto masculino: 13,0–17,0 g/dL.\n- Hematócrito: 43%. Referência adulto masculino: 40–52%.\n- Leucócitos: 15.800/mm³. Referência: 4.000–11.000/mm³.\n- Neutrófilos: 86%; bastonetes: 8%. Referências usuais: neutrófilos segmentados 40–75%; bastonetes 0–5%.\n- Plaquetas: 268.000/mm³. Referência: 150.000–450.000/mm³."
     },
@@ -794,7 +890,8 @@
       "category": "laboratory",
       "keywords": [
         "PCR",
-        "proteína C-reativa"
+        "proteína C-reativa",
+        "proteína C reativa"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- PCR: 86 mg/L. Referência: inferior a 5 mg/L."
     },
@@ -803,7 +900,10 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Sódio, Potássio",
       "category": "laboratory",
       "keywords": [
-        "eletrólitos"
+        "eletrólitos",
+        "sódio",
+        "potássio",
+        "ionograma"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Sódio: 138 mmol/L. Referência: 135–145 mmol/L.\n- Potássio: 4,1 mmol/L. Referência: 3,5–5,1 mmol/L."
     },
@@ -812,7 +912,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Ureia",
       "category": "laboratory",
       "keywords": [
-        "ureia"
+        "ureia",
+        "função renal"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Ureia: 28 mg/dL. Referência: 15–45 mg/dL."
     },
@@ -821,7 +922,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Creatinina",
       "category": "laboratory",
       "keywords": [
-        "creatinina"
+        "creatinina",
+        "função renal"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Creatinina: 0,9 mg/dL. Referência adulto masculino: 0,7–1,3 mg/dL."
     },
@@ -830,7 +932,8 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Glicemia",
       "category": "laboratory",
       "keywords": [
-        "glicemia"
+        "glicemia",
+        "glicose"
       ],
       "content": "**Inflamação e função renal/metabólica:**\n\n- Glicemia: 104 mg/dL. Referência em jejum: 70–99 mg/dL."
     },
@@ -839,7 +942,14 @@
       "title": "IMPRESSO 2 — EXAMES LABORATORIAIS — Urina tipo 1 (EAS)",
       "category": "laboratory",
       "keywords": [
-        "urina tipo 1"
+        "urina tipo 1",
+        "urina tipo I",
+        "urina 1",
+        "EAS",
+        "exame de urina",
+        "sumário de urina",
+        "parcial de urina",
+        "urinálise"
       ],
       "content": "**Urina tipo 1 (EAS):**\n\n- Densidade: 1,020; pH: 6,0.\n- Nitrito negativo; esterase leucocitária negativa.\n- Leucócitos: 2/campo; hemácias: 1/campo.\n- Sem bacteriúria significativa, proteinúria ou cetonúria relevante."
     },
@@ -849,7 +959,20 @@
       "category": "imaging",
       "keywords": [
         "ultrassonografia de abdome e pelve",
-        "tomografia computadorizada de abdome e pelve"
+        "tomografia computadorizada de abdome e pelve",
+        "ultrassonografia",
+        "ultrassom",
+        "USG",
+        "ecografia",
+        "TC de abdome",
+        "TC do abdome",
+        "TC abdominal",
+        "tomografia de abdome",
+        "tomografia do abdome",
+        "tomografia abdominal",
+        "tomografia computadorizada de abdome",
+        "tomografia computadorizada do abdome",
+        "exame de imagem"
       ],
       "content": "**Tomografia computadorizada de abdome e pelve com contraste intravenoso:**\n\n- Apêndice cecal em posição habitual, com diâmetro externo máximo de 10 mm, espessamento parietal e realce mucoso.\n- Presença de densificação da gordura periapendicular e pequena quantidade de líquido adjacente.\n- Apendicolito de 5 mm no interior do apêndice.\n- Sem pneumoperitônio, abscesso organizado, coleção ou sinais de perfuração.\n- Sem dilatação de alças ou sinais de obstrução intestinal.\n- Rins sem hidronefrose; bexiga sem alteração relevante.\n\n**Conclusão:** achados compatíveis com apendicite aguda, sem evidência tomográfica de perfuração ou abscesso."
     },

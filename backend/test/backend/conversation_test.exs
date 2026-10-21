@@ -1,7 +1,8 @@
 defmodule Backend.ConversationTest do
   use ExUnit.Case, async: false
 
-  alias Backend.Conversation
+  alias Backend.Conversation, as: LegacyConversation
+  alias Backend.Stations.Conversation
   alias Backend.Stations.Conversation, as: StationConversation
 
   test "start creates an active session with a thirty-minute safety timeout and default station identity" do
@@ -135,6 +136,817 @@ defmodule Backend.ConversationTest do
                role: :learner,
                text: "Outro texto"
              })
+  end
+
+  describe "voice turns and generation identity" do
+    test "failed outcome is bounded to the latest accepted turn and preserves legacy duplicates" do
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 4, "First")
+
+      assert {:ok, :failed} =
+               Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+      assert {:error, :station_ai_unavailable} =
+               Conversation.begin_voice_turn(session.session_id, 4, "First")
+
+      assert {:ok, :duplicate} = Conversation.commit_voice_turn(session.session_id, 4, "First")
+      assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 3, "Older")
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 5, "Newer")
+      assert {:ok, stored} = Conversation.fetch(session.session_id)
+      assert stored.failed_voice_turn == nil
+
+      assert {:error, :stale_generation} =
+               Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+      assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 4, "First")
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 2, "Patient reply")
+      assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 5, "Newer")
+    end
+
+    test "completion clears failure outcome and expiry or discard removes the session" do
+      for boundary <- [:completed, :expired, :discarded] do
+        session = Conversation.start()
+
+        assert {:ok, :committed, 1} =
+                 Conversation.begin_voice_turn(session.session_id, 1, "Question")
+
+        assert {:ok, :failed} =
+                 Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+        case boundary do
+          :completed ->
+            assert {:ok, completed} = Conversation.complete(session.session_id, :user)
+            assert completed.failed_voice_turn == nil
+
+            assert {:error, :completed} =
+                     Conversation.begin_voice_turn(session.session_id, 1, "Question")
+
+            assert {:error, :completed} =
+                     Conversation.fail_generation(session.session_id, 1, :station_ai_unavailable)
+
+          :expired ->
+            {:ok, stored} = Conversation.fetch(session.session_id)
+
+            :ets.insert(
+              Conversation,
+              {session.session_id, %{stored | expires_at: session.started_at}}
+            )
+
+            assert {:error, :expired} =
+                     Conversation.begin_voice_turn(session.session_id, 1, "Question")
+
+            assert {:error, :not_found} = Conversation.fetch(session.session_id)
+
+          :discarded ->
+            assert :ok = Conversation.discard(session.session_id)
+
+            assert {:error, :not_found} =
+                     Conversation.begin_voice_turn(session.session_id, 1, "Question")
+        end
+      end
+    end
+
+    test "commit_voice_turn preserves base #118 return shape and advances state atomically" do
+      session = Conversation.start()
+
+      assert {:ok, :committed} =
+               Conversation.commit_voice_turn(session.session_id, 1, "Olá doutor")
+
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, session_state} = Conversation.fetch(session.session_id)
+      assert session_state.last_voice_turn_id == 1
+      assert session_state.active_generation_id == 1
+
+      assert [%{role: :learner, modality: :voice, text: "Olá doutor"}] =
+               session_state.messages
+
+      assert {:ok, :duplicate} =
+               Conversation.commit_voice_turn(session.session_id, 1, "Olá repetido")
+    end
+
+    test "begin_voice_turn assigns monotonic session-scoped generation identity" do
+      session = Conversation.start()
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(session.session_id, 1, "Olá doutor")
+
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, session_state} = Conversation.fetch(session.session_id)
+      assert session_state.last_voice_turn_id == 1
+      assert session_state.active_generation_id == 1
+
+      assert [%{role: :learner, modality: :voice, text: "Olá doutor"}] =
+               session_state.messages
+    end
+
+    test "begin_voice_turn and commit_voice_turn share atomic duplicate checks" do
+      session = Conversation.start()
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(session.session_id, 2, "Segunda fala")
+
+      assert {:ok, :duplicate} =
+               Conversation.begin_voice_turn(session.session_id, 2, "Segunda fala repetida")
+
+      assert {:ok, :duplicate} =
+               Conversation.commit_voice_turn(session.session_id, 1, "Primeira fala atrasada")
+
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, session_state} = Conversation.fetch(session.session_id)
+      assert session_state.last_voice_turn_id == 2
+      assert length(session_state.messages) == 1
+    end
+
+    test "generations are scoped to the individual session" do
+      session_a = Conversation.start()
+      session_b = Conversation.start()
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(session_a.session_id, 1, "Fala A1")
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(session_b.session_id, 1, "Fala B1")
+
+      assert {:ok, :committed, 2} =
+               Conversation.begin_voice_turn(session_a.session_id, 2, "Fala A2")
+
+      assert {:ok, 2} = Conversation.active_generation(session_a.session_id)
+      assert {:ok, 1} = Conversation.active_generation(session_b.session_id)
+    end
+  end
+
+  describe "voice generation authority after message rollback" do
+    for entrypoint <- [:commit_voice_turn, :begin_voice_turn] do
+      test "#{entrypoint} origin removal invalidates its pending generation" do
+        session = Conversation.start()
+        result = apply(Conversation, unquote(entrypoint), [session.session_id, 1, "probe"])
+        assert result in [{:ok, :committed}, {:ok, :committed, 1}]
+        assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+        assert {:ok, popped} =
+                 Conversation.pop_last_message(session.session_id, %{
+                   role: :learner,
+                   text: "probe"
+                 })
+
+        assert popped.messages == []
+        assert popped.active_generation_id == nil
+        assert popped.active_voice_turn_id == nil
+        assert popped.active_generation_message_index == nil
+
+        assert {:error, :stale_generation} =
+                 Conversation.resolve_patient_reply(session.session_id, 1, "orphan")
+
+        assert {:ok, ^popped} = Conversation.fetch(session.session_id)
+        assert {:ok, nil} = Conversation.active_generation(session.session_id)
+        assert popped.last_voice_turn_id == 1
+        assert popped.next_generation_id == 2
+        assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 1, "retry")
+        assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 2, "next")
+      end
+    end
+  end
+
+  describe "rollback preserves unrelated generation authority" do
+    for modality <- [:text, :voice] do
+      test "popping an unrelated same-text #{modality} message preserves the pending voice turn" do
+        session = Conversation.start()
+
+        assert {:ok, :committed, 1} =
+                 Conversation.begin_voice_turn(session.session_id, 1, "probe")
+
+        assert {:ok, pending} = Conversation.fetch(session.session_id)
+
+        assert {:ok, _} =
+                 Conversation.append_message(session.session_id, %{
+                   role: :learner,
+                   modality: unquote(modality),
+                   text: "probe"
+                 })
+
+        assert {:ok, ^pending} =
+                 Conversation.pop_last_message(session.session_id, %{
+                   role: :learner,
+                   text: "probe"
+                 })
+
+        assert {:ok, 1} = Conversation.active_generation(session.session_id)
+        assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 1, "reply")
+      end
+    end
+
+    test "failed pops leave the full empty or pending session unchanged" do
+      session = Conversation.start()
+      assert {:error, :no_match} = Conversation.pop_last_message(session.session_id)
+      assert {:ok, ^session} = Conversation.fetch(session.session_id)
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+      assert {:ok, pending} = Conversation.fetch(session.session_id)
+
+      for expected <- [%{role: :patient, text: "probe"}, %{role: :learner, text: "other"}] do
+        assert {:error, :no_match} = Conversation.pop_last_message(session.session_id, expected)
+        assert {:ok, ^pending} = Conversation.fetch(session.session_id)
+      end
+
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 1, "reply")
+    end
+
+    test "same-text text rollback removing a newer voice origin leaves no reply authority" do
+      session = Conversation.start()
+      text_message = %{role: :learner, modality: :text, text: "probe"}
+      assert {:ok, text_only} = Conversation.append_message(session.session_id, text_message)
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+
+      # The existing rollback matcher intentionally remains role/text based.
+      assert {:ok, popped} = Conversation.pop_last_message(session.session_id, text_message)
+      assert popped.messages == text_only.messages
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "orphan")
+
+      assert {:ok, ^popped} = Conversation.fetch(session.session_id)
+    end
+
+    test "replacement does not restore superseded authority when voice origins are popped" do
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 2, "probe")
+      assert {:ok, replacement} = Conversation.fetch(session.session_id)
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "old reply")
+
+      assert {:ok, ^replacement} = Conversation.fetch(session.session_id)
+      assert {:ok, _} = Conversation.pop_last_message(session.session_id)
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+      assert {:ok, empty} = Conversation.pop_last_message(session.session_id)
+      assert empty.messages == []
+
+      for generation_id <- [1, 2] do
+        assert {:error, :stale_generation} =
+                 Conversation.resolve_patient_reply(session.session_id, generation_id, "orphan")
+
+        assert {:ok, ^empty} = Conversation.fetch(session.session_id)
+      end
+
+      assert {:ok, :committed, 3} = Conversation.begin_voice_turn(session.session_id, 3, "probe")
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 3, "new reply")
+    end
+
+    test "popping a superseded message copied after replacement cannot cancel the new generation" do
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "probe")
+      assert {:ok, old} = Conversation.fetch(session.session_id)
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 2, "probe")
+      assert {:ok, replacement} = Conversation.fetch(session.session_id)
+      assert {:ok, _} = Conversation.append_message(session.session_id, hd(old.messages))
+      assert {:ok, ^replacement} = Conversation.pop_last_message(session.session_id)
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+      assert {:ok, _} = Conversation.resolve_patient_reply(session.session_id, 2, "new reply")
+    end
+  end
+
+  describe "resolve_patient_reply" do
+    test "resolves verified reply for the active generation and clears active generation" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Onde dói?")
+
+      assert {:ok, updated} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 1,
+                 "Dói no peito, doutor."
+               )
+
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+
+      assert [
+               %{role: :learner, modality: :voice, text: "Onde dói?"},
+               %{role: :patient, modality: :voice, text: "Dói no peito, doutor."}
+             ] = updated.messages
+
+      # Second resolve of the same generation is rejected as stale
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 1,
+                 "Dói no peito, doutor."
+               )
+    end
+
+    test "rejects invalid reply payloads without crashing GenServer and preserves pending generation" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Como começou?")
+
+      server_pid = Process.whereis(Conversation)
+      assert is_pid(server_pid) and Process.alive?(server_pid)
+
+      invalid_payloads = [
+        "",
+        "   \t\n  ",
+        nil,
+        123,
+        [:invalid],
+        %{role: :learner, text: "Injeção de papel de estudante"},
+        %{text: ""},
+        %{role: :patient, text: "Mapa arbitrário"}
+      ]
+
+      for payload <- invalid_payloads do
+        assert {:error, :invalid_reply} =
+                 Conversation.resolve_patient_reply(session.session_id, 1, payload)
+
+        assert Process.alive?(server_pid)
+        assert {:ok, 1} = Conversation.active_generation(session.session_id)
+      end
+
+      # Valid text reply can still be resolved subsequently
+      assert {:ok, updated} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 1,
+                 "Começou de repente, doutor."
+               )
+
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+      last_message = List.last(updated.messages)
+      assert last_message.role == :patient
+      assert last_message.modality == :voice
+      assert last_message.text == "Começou de repente, doutor."
+    end
+
+    test "refuses stale generations when superseded by a newer accepted turn" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Primeira pergunta")
+
+      {:ok, :committed, 2} =
+        Conversation.begin_voice_turn(session.session_id, 2, "Segunda pergunta interrompendo")
+
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+
+      # Attempting to resolve generation 1 fails because generation 2 superseded it
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 1,
+                 "Resposta para a primeira pergunta"
+               )
+
+      # Generation 2 can still resolve successfully
+      assert {:ok, updated} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 2,
+                 "Resposta para a segunda pergunta"
+               )
+
+      assert length(updated.messages) == 3
+
+      assert Enum.map(updated.messages, & &1.text) == [
+               "Primeira pergunta",
+               "Segunda pergunta interrompendo",
+               "Resposta para a segunda pergunta"
+             ]
+    end
+  end
+
+  describe "cancellation and race conditions" do
+    test "cancel_generation invalidates pending generation and refuses late resolve" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Pergunta cancelada")
+
+      assert {:ok, :cancelled} = Conversation.cancel_generation(session.session_id, 1)
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 1,
+                 "Resposta tardia após cancelamento"
+               )
+    end
+
+    test "cancel_generation protects against cancellation race with newer turn" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      {:ok, :committed, 2} =
+        Conversation.begin_voice_turn(session.session_id, 2, "Turno 2")
+
+      # Stale cancellation for turn 1 arrives late
+      assert {:error, :stale_generation} =
+               Conversation.cancel_generation(session.session_id, 1)
+
+      # Active generation 2 remains untouched and can resolve
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, _} =
+               Conversation.resolve_patient_reply(session.session_id, 2, "Resposta do Turno 2")
+    end
+
+    test "cancel_generation without generation_id unconditionally clears active generation" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Pergunta")
+
+      assert {:ok, :cancelled} = Conversation.cancel_generation(session.session_id)
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+      assert {:ok, :cancelled} = Conversation.cancel_generation(session.session_id)
+    end
+
+    test "cancel_voice_turn cancels active generation when expected turn_id matches" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Pergunta turn 1")
+
+      assert {:ok, :cancelled} = Conversation.cancel_voice_turn(session.session_id, 1)
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(
+                 session.session_id,
+                 1,
+                 "Resposta tardia após cancelamento"
+               )
+    end
+
+    test "cancel_voice_turn protects newer turn against delayed cancellation of earlier turn" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      {:ok, :committed, 2} =
+        Conversation.begin_voice_turn(session.session_id, 2, "Turno 2")
+
+      # Delayed cancellation for turn 1 arrives late
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, 1)
+
+      # Active turn 2 generation remains active and can resolve
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, _} =
+               Conversation.resolve_patient_reply(session.session_id, 2, "Resposta do Turno 2")
+    end
+
+    test "idle turn cancellation fences admission and retries while later turns remain eligible" do
+      session = Conversation.start()
+
+      # No matching active generation still returns stale, but fences admission.
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, 1)
+
+      for _attempt <- 1..2 do
+        assert {:error, :stale_generation} =
+                 Conversation.begin_voice_turn(session.session_id, 1, "Cancelled question")
+
+        assert {:error, :stale_generation} =
+                 Conversation.commit_voice_turn(
+                   session.session_id,
+                   1,
+                   "Cancelled legacy question"
+                 )
+      end
+
+      assert {:error, :stale_generation} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Late reply")
+
+      assert {:ok, %{messages: [], last_voice_turn_id: 0}} =
+               Conversation.fetch(session.session_id)
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 2, "Later question")
+
+      {:ok, _} =
+        Conversation.resolve_patient_reply(session.session_id, 1, "Resposta 1")
+
+      # Already resolved: late cancel returns stale_generation
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, 2)
+
+      assert {:ok, :duplicate} =
+               Conversation.begin_voice_turn(session.session_id, 2, "Repeated admitted question")
+    end
+
+    test "cancel_voice_turn supports criteria keywords and maps" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      # Cancel with matching keyword criteria
+      assert {:ok, :cancelled} =
+               Conversation.cancel_voice_turn(session.session_id, turn_id: 1, generation_id: 1)
+
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+    end
+
+    test "admission fences protect independent newer work and generation mismatch has no side effects" do
+      session = Conversation.start()
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(session.session_id, 3, "Independent question")
+
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, turn_id: 1)
+
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, turn_id: 4, generation_id: 999)
+
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, _} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Independent reply")
+
+      assert {:ok, :committed, 2} =
+               Conversation.begin_voice_turn(session.session_id, 4, "Next independent question")
+
+      idle = Conversation.start()
+      assert {:error, :stale_generation} = Conversation.cancel_generation(idle.session_id, 999)
+      assert {:ok, :cancelled} = Conversation.cancel_generation(idle.session_id)
+
+      assert {:ok, :committed, 1} =
+               Conversation.begin_voice_turn(idle.session_id, 1, "Generation-only compatibility")
+    end
+
+    test "duplicate turn_id does not disrupt active voice turn or generation identity" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Turno 1")
+
+      # Duplicate turn arrival
+      assert {:ok, :duplicate} =
+               Conversation.begin_voice_turn(session.session_id, 1, "Turno 1 repetido")
+
+      # Older turn arrival
+      assert {:ok, :duplicate} =
+               Conversation.begin_voice_turn(session.session_id, 0, "Turno 0 antigo")
+
+      # Active generation is still 1 and resolves normally
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, updated} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta válida")
+
+      assert length(updated.messages) == 2
+    end
+  end
+
+  describe "deterministic append order and text interleaving" do
+    test "preserves deterministic append order across voice and text turns" do
+      session = Conversation.start()
+
+      {:ok, _} =
+        Conversation.append_message(session.session_id, %{
+          role: :learner,
+          modality: :text,
+          text: "Mensagem de texto inicial"
+        })
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Voz 1")
+
+      {:ok, _} =
+        Conversation.resolve_patient_reply(session.session_id, 1, "Resposta voz 1")
+
+      {:ok, _} =
+        Conversation.append_message(session.session_id, %{
+          role: :learner,
+          modality: :text,
+          text: "Mensagem de texto intermediária"
+        })
+
+      {:ok, :committed, 2} =
+        Conversation.begin_voice_turn(session.session_id, 2, "Voz 2")
+
+      {:ok, updated} =
+        Conversation.resolve_patient_reply(session.session_id, 2, "Resposta voz 2")
+
+      assert Enum.map(updated.messages, &{&1.role, &1.modality, &1.text}) == [
+               {:learner, :text, "Mensagem de texto inicial"},
+               {:learner, :voice, "Voz 1"},
+               {:patient, :voice, "Resposta voz 1"},
+               {:learner, :text, "Mensagem de texto intermediária"},
+               {:learner, :voice, "Voz 2"},
+               {:patient, :voice, "Resposta voz 2"}
+             ]
+    end
+  end
+
+  describe "rubric assessment kept with a completed session (issue #301)" do
+    test "is nil until kept, then served and never replaced" do
+      session = Conversation.start()
+      id = session.session_id
+
+      assert Conversation.put_rubric_assessment(id, %{criteria: []}) ==
+               {:error, :session_not_finished}
+
+      {:ok, _} = Conversation.complete(id, :user)
+      assert Conversation.rubric_assessment(id) == {:ok, nil}
+
+      assert :ok = Conversation.put_rubric_assessment(id, %{criteria: [:first]})
+      assert :ok = Conversation.put_rubric_assessment(id, %{criteria: [:second]})
+      assert Conversation.rubric_assessment(id) == {:ok, %{criteria: [:first]}}
+
+      :ok = Conversation.discard(id)
+      assert Conversation.rubric_assessment(id) == {:error, :not_found}
+      assert Conversation.put_rubric_assessment(id, %{criteria: []}) == {:error, :not_found}
+    end
+  end
+
+  describe "lifecycle boundaries: completion, expiry, discard" do
+    test "complete locks session and refuses voice turns, replies, cancellations, and generation queries" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Fala antes de completar")
+
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      assert {:error, :completed} =
+               Conversation.begin_voice_turn(session.session_id, 2, "Nova fala")
+
+      assert {:error, :completed} =
+               Conversation.commit_voice_turn(session.session_id, 2, "Nova fala legacy")
+
+      assert {:error, :completed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta tardia")
+
+      assert {:error, :completed} =
+               Conversation.cancel_generation(session.session_id, 1)
+
+      assert {:error, :completed} =
+               Conversation.cancel_voice_turn(session.session_id, 1)
+
+      assert {:error, :completed} =
+               Conversation.active_generation(session.session_id)
+    end
+
+    test "complete race refuses resolve_patient_reply even with invalid payload" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Pergunta")
+
+      {:ok, _} = Conversation.complete(session.session_id, :timeout)
+
+      assert {:error, :completed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "")
+
+      assert {:error, :completed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Texto válido")
+    end
+
+    test "expiry refuses voice turns, replies, and cancellations" do
+      original_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      on_exit(fn ->
+        if is_nil(original_timeout) do
+          Application.delete_env(:backend, :conversation_timeout_ms)
+        else
+          Application.put_env(:backend, :conversation_timeout_ms, original_timeout)
+        end
+      end)
+
+      # Each expired session returns :expired on first access and removes from ETS
+      session1 = Conversation.start()
+
+      assert {:error, :expired} =
+               Conversation.begin_voice_turn(session1.session_id, 1, "Fala")
+
+      session1b = Conversation.start()
+
+      assert {:error, :expired} =
+               Conversation.commit_voice_turn(session1b.session_id, 1, "Fala")
+
+      session2 = Conversation.start()
+
+      assert {:error, :expired} =
+               Conversation.resolve_patient_reply(session2.session_id, 1, "Resposta")
+
+      session3 = Conversation.start()
+
+      assert {:error, :expired} =
+               Conversation.cancel_generation(session3.session_id, 1)
+
+      session3b = Conversation.start()
+
+      assert {:error, :expired} =
+               Conversation.cancel_voice_turn(session3b.session_id, 1)
+
+      session4 = Conversation.start()
+
+      assert {:error, :expired} =
+               Conversation.active_generation(session4.session_id)
+    end
+
+    test "discard removes session and refuses voice operations with :not_found" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      assert :ok = Conversation.discard(session.session_id)
+
+      assert {:error, :not_found} =
+               Conversation.begin_voice_turn(session.session_id, 2, "Fala 2")
+
+      assert {:error, :not_found} =
+               Conversation.commit_voice_turn(session.session_id, 2, "Fala 2 legacy")
+
+      assert {:error, :not_found} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta")
+
+      assert {:error, :not_found} =
+               Conversation.cancel_generation(session.session_id, 1)
+
+      assert {:error, :not_found} =
+               Conversation.active_generation(session.session_id)
+    end
+  end
+
+  describe "evaluation-visible role-labelled transcript" do
+    test "transcript maintains evaluator-compatible role labelling and clean history" do
+      session = Conversation.start()
+
+      {:ok, :committed, 1} =
+        Conversation.begin_voice_turn(session.session_id, 1, "Doutor, qual o diagnóstico?")
+
+      {:ok, _} =
+        Conversation.resolve_patient_reply(
+          session.session_id,
+          1,
+          "Ainda estamos investigando."
+        )
+
+      # A superseded turn where patient reply is refused
+      {:ok, :committed, 2} =
+        Conversation.begin_voice_turn(session.session_id, 2, "Pergunta ignorada")
+
+      {:ok, :committed, 3} =
+        Conversation.begin_voice_turn(session.session_id, 3, "Pergunta definitiva")
+
+      {:ok, _} =
+        Conversation.resolve_patient_reply(session.session_id, 3, "Resposta definitiva")
+
+      {:ok, fetched} = Conversation.fetch(session.session_id)
+
+      # Evaluator extracts messages and normalizes roles: 3 learner turns + 2 patient replies
+      assert length(fetched.messages) == 5
+
+      roles = Enum.map(fetched.messages, & &1.role)
+      assert roles == [:learner, :patient, :learner, :learner, :patient]
+
+      # Verify each message has required attributes for evaluation
+      for msg <- fetched.messages do
+        assert msg.role in [:learner, :patient]
+        assert is_binary(msg.text) and msg.text != ""
+        assert msg.modality in [:voice, :text]
+        assert %DateTime{} = msg.at
+      end
+    end
+
+    test "legacy Backend.Conversation alias preserves base delegates and avoids leaking new surface" do
+      session = LegacyConversation.start()
+      assert {:ok, _} = LegacyConversation.fetch(session.session_id)
+
+      assert {:ok, updated} =
+               LegacyConversation.append_message(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Texto via legado"
+               })
+
+      assert length(updated.messages) == 1
+      assert {:ok, _} = LegacyConversation.complete(session.session_id, :normal)
+      assert :ok = LegacyConversation.discard(session.session_id)
+
+      # Ensure new voice generation APIs are not exposed on the legacy alias
+      refute function_exported?(LegacyConversation, :commit_voice_turn, 3)
+      refute function_exported?(LegacyConversation, :resolve_patient_reply, 3)
+      refute function_exported?(LegacyConversation, :cancel_generation, 1)
+      refute function_exported?(LegacyConversation, :cancel_generation, 2)
+      refute function_exported?(LegacyConversation, :active_generation, 1)
+    end
   end
 
   describe "record_impresso_request/4" do
@@ -554,6 +1366,568 @@ defmodule Backend.ConversationTest do
     end
   end
 
+  describe "station deadline on voice turns (Issue 201)" do
+    setup do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      original_grace = Application.get_env(:backend, :turn_grace_ms)
+
+      on_exit(fn ->
+        restore_env(:station_duration_ms, original_duration)
+        restore_env(:turn_grace_ms, original_grace)
+      end)
+
+      :ok
+    end
+
+    for entrypoint <- [:commit_voice_turn, :begin_voice_turn] do
+      test "#{entrypoint} rejects a turn at/after the deadline on a still-active session" do
+        Application.put_env(:backend, :station_duration_ms, 50)
+        Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+        session = Conversation.start()
+
+        # A pending text turn keeps the session active past the deadline.
+        assert {:ok, pending, _token} =
+                 StationConversation.begin_turn(session.session_id, %{
+                   role: :learner,
+                   modality: :text,
+                   text: "Pergunta antes do prazo"
+                 })
+
+        Process.sleep(150)
+        assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+
+        assert {:error, :station_time_elapsed} =
+                 apply(Conversation, unquote(entrypoint), [session.session_id, 1, "Chegou tarde"])
+
+        assert {:ok, after_reject} = Conversation.fetch(session.session_id)
+        assert after_reject.messages == pending.messages
+        assert after_reject.active_generation_id == nil
+        assert after_reject.last_voice_turn_id == 0
+      end
+
+      test "#{entrypoint} rejects a turn on a session completed by the timer" do
+        Application.put_env(:backend, :station_duration_ms, 30)
+        session = Conversation.start()
+
+        wait_until(fn ->
+          match?({:ok, %{status: :completed}}, Conversation.fetch(session.session_id))
+        end)
+
+        assert {:error, :station_time_elapsed} =
+                 apply(Conversation, unquote(entrypoint), [session.session_id, 1, "Chegou tarde"])
+
+        assert {:ok, %{messages: [], completion_reason: :timer}} =
+                 Conversation.fetch(session.session_id)
+      end
+    end
+
+    test "a retry of a voice turn committed before the deadline stays idempotent after it" do
+      Application.put_env(:backend, :station_duration_ms, 50)
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      Process.sleep(150)
+
+      assert {:ok, :duplicate} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+    end
+
+    test "the deadline firing with only a voice generation in flight defers completion until grace expiry" do
+      Application.put_env(:backend, :station_duration_ms, 50)
+      Application.put_env(:backend, :turn_grace_ms, 400)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      # Past the deadline, inside the grace window.
+      Process.sleep(150)
+
+      assert {:ok, %{status: :active, messages: [_learner]}} =
+               Conversation.fetch(session.session_id)
+
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Conversation.fetch(session.session_id))
+      end)
+
+      assert {:ok, %{completion_reason: :timer}} = Conversation.fetch(session.session_id)
+    end
+
+    test "a voice generation resolving inside the grace window is appended and the timer completes the session" do
+      Application.put_env(:backend, :station_duration_ms, 50)
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      Process.sleep(150)
+
+      assert {:ok, resolved} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta na graça")
+
+      assert resolved.status == :completed
+      assert resolved.completion_reason == :timer
+
+      assert Enum.map(resolved.messages, &{&1.role, &1.text}) == [
+               {:learner, "Fala"},
+               {:patient, "Resposta na graça"}
+             ]
+
+      assert {:ok, ^resolved} = Conversation.fetch(session.session_id)
+    end
+
+    test "a voice generation resolving after the grace window is refused and leaves no orphaned learner message" do
+      Application.put_env(:backend, :station_duration_ms, 30)
+      Application.put_env(:backend, :turn_grace_ms, 60)
+
+      session = Conversation.start()
+
+      assert {:ok, _} =
+               Conversation.append_message(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Texto respondido"
+               })
+
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      # Let both the deadline and the grace window elapse without resolving.
+      Process.sleep(300)
+
+      assert {:ok, forced} = Conversation.fetch(session.session_id)
+      assert forced.status == :completed
+      assert forced.completion_reason == :timer
+      assert Enum.map(forced.messages, & &1.text) == ["Texto respondido"]
+
+      assert {:error, :station_time_elapsed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta tardia")
+
+      # Only the generation the deadline cut off reports the elapsed time.
+      assert {:error, :completed} =
+               Conversation.resolve_patient_reply(session.session_id, 2, "Outra geração")
+
+      assert {:ok, ^forced} = Conversation.fetch(session.session_id)
+    end
+
+    test "a voice reply inside the grace window waits for a text turn still pending under grace" do
+      Application.put_env(:backend, :station_duration_ms, 50)
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+
+      assert {:ok, _session, token} =
+               StationConversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Pergunta de texto"
+               })
+
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      Process.sleep(150)
+
+      assert {:ok, %{status: :active}} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta de voz")
+
+      assert {:ok, resolved} =
+               StationConversation.resolve_turn(
+                 session.session_id,
+                 token,
+                 {:ok, %{role: :patient, modality: :text, text: "Resposta de texto"}}
+               )
+
+      assert resolved.status == :completed
+      assert resolved.completion_reason == :timer
+
+      assert Enum.map(resolved.messages, & &1.text) == [
+               "Pergunta de texto",
+               "Fala",
+               "Resposta de voz",
+               "Resposta de texto"
+             ]
+    end
+
+    test "a text turn resolving under grace leaves the same window to a voice generation still in flight" do
+      Application.put_env(:backend, :station_duration_ms, 50)
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+
+      assert {:ok, _session, token} =
+               StationConversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Pergunta de texto"
+               })
+
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      Process.sleep(150)
+
+      assert {:ok, %{status: :active}} =
+               StationConversation.resolve_turn(
+                 session.session_id,
+                 token,
+                 {:ok, %{role: :patient, modality: :text, text: "Resposta de texto"}}
+               )
+
+      assert {:ok, resolved} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta de voz")
+
+      assert resolved.status == :completed
+      assert resolved.completion_reason == :timer
+      assert length(resolved.messages) == 4
+    end
+
+    test "grace expiry removes both the unanswered text and voice learner messages" do
+      Application.put_env(:backend, :station_duration_ms, 30)
+      Application.put_env(:backend, :turn_grace_ms, 60)
+
+      session = Conversation.start()
+
+      assert {:ok, _session, token} =
+               StationConversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Pergunta de texto"
+               })
+
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      Process.sleep(300)
+
+      assert {:ok, forced} = Conversation.fetch(session.session_id)
+      assert forced.status == :completed
+      assert forced.completion_reason == :timer
+      assert forced.messages == []
+
+      assert {:error, :station_time_elapsed} =
+               StationConversation.resolve_turn(
+                 session.session_id,
+                 token,
+                 {:ok, %{role: :patient, modality: :text, text: "Tarde demais"}}
+               )
+
+      assert {:error, :station_time_elapsed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Tarde demais")
+
+      assert {:ok, %{messages: []}} = Conversation.fetch(session.session_id)
+    end
+
+    test "a manual completion during the voice grace window keeps its reason and :completed replies" do
+      Application.put_env(:backend, :station_duration_ms, 50)
+      Application.put_env(:backend, :turn_grace_ms, 200)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      Process.sleep(120)
+
+      assert {:ok, completed} = Conversation.complete(session.session_id, :user)
+      assert completed.completion_reason == :user
+
+      # The grace timer armed by the deadline must not rewrite the manual completion.
+      Process.sleep(250)
+
+      assert {:error, :completed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta tardia")
+
+      assert {:ok, ^completed} = Conversation.fetch(session.session_id)
+    end
+
+    test "a manual :timer completion with only a voice generation in flight waits for the reply inside grace" do
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+      # The caller stays parked and the session active while the generation is in flight.
+      Process.sleep(100)
+      assert Task.yield(waiter, 0) == nil
+      assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, resolved} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta na graça")
+
+      assert resolved.status == :completed
+      assert resolved.completion_reason == :timer
+      assert Enum.map(resolved.messages, & &1.text) == ["Fala", "Resposta na graça"]
+      assert Task.await(waiter, 1_000) == {:ok, resolved}
+    end
+
+    test "a manual :timer completion left unanswered is replied at grace expiry without the voice learner message" do
+      Application.put_env(:backend, :turn_grace_ms, 150)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+      Process.sleep(50)
+      assert Task.yield(waiter, 0) == nil
+
+      assert {:ok, forced} = Task.await(waiter, 1_000)
+      assert forced.status == :completed
+      assert forced.completion_reason == :timer
+      assert forced.messages == []
+
+      assert {:error, :station_time_elapsed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta tardia")
+
+      assert {:ok, ^forced} = Conversation.fetch(session.session_id)
+    end
+
+    test "a manual completion with a non-timer reason still completes at once with a voice generation in flight" do
+      Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :user) end)
+      assert {:ok, completed} = Task.await(waiter, 500)
+
+      assert completed.status == :completed
+      assert completed.completion_reason == :user
+      assert Enum.map(completed.messages, & &1.text) == ["Fala"]
+
+      assert {:error, :completed} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta tardia")
+    end
+
+    test "a manual :timer completion followed by the server deadline shares one grace window and one completion" do
+      Application.put_env(:backend, :station_duration_ms, 100)
+      Application.put_env(:backend, :turn_grace_ms, 300)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      # The client's finish arrives before the server deadline fires.
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+      # Past the deadline, inside the window opened by the manual completion.
+      Process.sleep(200)
+      assert Task.yield(waiter, 0) == nil
+      assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+
+      assert {:ok, forced} = Task.await(waiter, 1_000)
+      assert forced.completion_reason == :timer
+      assert forced.messages == []
+
+      # A second window armed by the deadline would expire here and must change nothing.
+      Process.sleep(300)
+      assert {:ok, ^forced} = Conversation.fetch(session.session_id)
+      assert {:ok, ^forced} = Conversation.complete(session.session_id, :timer)
+    end
+
+    # Every way a voice generation can end without a patient reply. Each one is
+    # applied to generation 1 of voice turn 1.
+    abandonments = [
+      {"fail_generation/3", :fail_generation, [1, :station_ai_unavailable], {:ok, :failed}},
+      {"cancel_generation/2", :cancel_generation, [1], {:ok, :cancelled}},
+      {"cancel_generation/1", :cancel_generation, [], {:ok, :cancelled}},
+      {"cancel_voice_turn/2 by turn id", :cancel_voice_turn, [1], {:ok, :cancelled}},
+      {"cancel_voice_turn/2 by criteria", :cancel_voice_turn, [[turn_id: 1, generation_id: 1]],
+       {:ok, :cancelled}}
+    ]
+
+    for {label, function, args, expected_reply} <- abandonments do
+      test "#{label} during a manual :timer voice grace completes the session at once" do
+        Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+        session = Conversation.start()
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+
+        Process.sleep(100)
+        assert Task.yield(waiter, 0) == nil
+        assert %{token: grace_token} = voice_grace(session.session_id)
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        # Far inside the 2 s window: grace expiry cannot explain this reply.
+        assert {:ok, completed} = Task.await(waiter, 500)
+        assert completed.status == :completed
+        assert completed.completion_reason == :timer
+        assert completed.active_generation_id == nil
+        assert voice_grace(session.session_id) == nil
+        assert {:ok, ^completed} = Conversation.fetch(session.session_id)
+
+        # The expiry of the already settled window must change nothing.
+        server = Process.whereis(StationConversation)
+        send(server, {:grace_expired, session.session_id, grace_token})
+        assert voice_grace(session.session_id) == nil
+        assert Process.whereis(StationConversation) == server
+        assert Process.alive?(server)
+        assert {:ok, ^completed} = Conversation.fetch(session.session_id)
+      end
+
+      test "#{label} after the server deadline deferred for the voice generation completes the session at once" do
+        Application.put_env(:backend, :station_duration_ms, 50)
+        Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+        session = Conversation.start()
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        # Past the deadline, far inside the grace window.
+        Process.sleep(150)
+        assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+        assert %{} = voice_grace(session.session_id)
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        assert {:ok, completed} = Conversation.fetch(session.session_id)
+        assert completed.status == :completed
+        assert completed.completion_reason == :timer
+        assert voice_grace(session.session_id) == nil
+
+        assert {:error, :station_time_elapsed} =
+                 Conversation.begin_voice_turn(session.session_id, 2, "Chegou tarde")
+      end
+
+      test "#{label} leaves the completion to a text turn pending under the deadline grace" do
+        Application.put_env(:backend, :station_duration_ms, 50)
+        Application.put_env(:backend, :turn_grace_ms, 2_000)
+
+        session = Conversation.start()
+
+        assert {:ok, _session, token} =
+                 StationConversation.begin_turn(session.session_id, %{
+                   role: :learner,
+                   modality: :text,
+                   text: "Pergunta de texto"
+                 })
+
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        Process.sleep(150)
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+
+        assert {:ok, resolved} =
+                 StationConversation.resolve_turn(
+                   session.session_id,
+                   token,
+                   {:ok, %{role: :patient, modality: :text, text: "Resposta de texto"}}
+                 )
+
+        assert resolved.status == :completed
+        assert resolved.completion_reason == :timer
+        assert voice_grace(session.session_id) == nil
+      end
+
+      test "#{label} does not settle an armed voice grace while a text turn is pending" do
+        Application.put_env(:backend, :turn_grace_ms, 600)
+
+        session = Conversation.start()
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+        # The client's finish arrives before the deadline and arms the voice grace;
+        # a text turn is still admitted because the deadline has not passed.
+        waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+        Process.sleep(50)
+        assert %{token: grace_token} = voice_grace(session.session_id)
+
+        assert {:ok, _session, _token} =
+                 StationConversation.begin_turn(session.session_id, %{
+                   role: :learner,
+                   modality: :text,
+                   text: "Pergunta de texto"
+                 })
+
+        assert apply(Conversation, unquote(function), [session.session_id | unquote(args)]) ==
+                 unquote(expected_reply)
+
+        assert {:ok, %{status: :active}} = Conversation.fetch(session.session_id)
+        assert %{token: ^grace_token} = voice_grace(session.session_id)
+        assert Task.yield(waiter, 0) == nil
+
+        # The window still ends the session on its own.
+        assert {:ok, %{status: :completed, completion_reason: :timer}} =
+                 Task.await(waiter, 2_000)
+      end
+    end
+
+    test "a stale cancel during the voice grace leaves the window and the generation untouched" do
+      Application.put_env(:backend, :turn_grace_ms, 400)
+
+      session = Conversation.start()
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
+      Process.sleep(50)
+
+      assert {:error, :stale_generation} = Conversation.cancel_generation(session.session_id, 7)
+
+      assert {:error, :stale_generation} =
+               Conversation.fail_generation(session.session_id, 7, :station_ai_unavailable)
+
+      assert {:error, :stale_generation} =
+               Conversation.cancel_voice_turn(session.session_id, generation_id: 7)
+
+      assert Task.yield(waiter, 0) == nil
+      assert %{} = voice_grace(session.session_id)
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, resolved} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta na graça")
+
+      assert resolved.completion_reason == :timer
+      assert Task.await(waiter, 1_000) == {:ok, resolved}
+    end
+
+    test "text rollback removes its own learner message when a voice message was appended after it" do
+      session = Conversation.start()
+
+      assert {:ok, _session, token} =
+               StationConversation.begin_turn(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Pergunta de texto"
+               })
+
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
+      assert {:ok, rolled_back} =
+               StationConversation.resolve_turn(session.session_id, token, :rollback)
+
+      assert Enum.map(rolled_back.messages, &{&1.modality, &1.text}) == [{:voice, "Fala"}]
+      assert rolled_back.active_generation_id == 1
+      assert rolled_back.active_generation_message_index == 0
+
+      # A stale index would make this unrelated tail pop cancel the generation.
+      assert {:ok, _} =
+               Conversation.append_message(session.session_id, %{
+                 role: :learner,
+                 modality: :text,
+                 text: "Outro texto"
+               })
+
+      assert {:ok, ^rolled_back} = Conversation.pop_last_message(session.session_id)
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      assert {:ok, resolved} =
+               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta de voz")
+
+      assert Enum.map(resolved.messages, &{&1.role, &1.text}) == [
+               {:learner, "Fala"},
+               {:patient, "Resposta de voz"}
+             ]
+    end
+  end
+
   describe "Conversation process restart" do
     test "a Conversation restart loses ephemeral ETS state; existing sessions become not_found" do
       session = Conversation.start()
@@ -586,6 +1960,15 @@ defmodule Backend.ConversationTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:backend, key)
   defp restore_env(key, value), do: Application.put_env(:backend, key, value)
+
+  # The voice grace armed for a session, read from the server state; the call
+  # also orders the read after every message already in the server's mailbox.
+  defp voice_grace(session_id) do
+    StationConversation
+    |> :sys.get_state()
+    |> Map.fetch!(:voice_graces)
+    |> Map.get(session_id)
+  end
 
   defp wait_until(fun, attempts \\ 50)
 

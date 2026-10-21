@@ -18,9 +18,9 @@ fails technically.
 | `status` | `assessed`, `uncertain`, `not_observable`, or `not_applicable` |
 | `max_points` | Exact maximum over the criterion's authored levels, even for excluded criteria |
 | `level`, `level_description`, `points` | Present **only** when assessed; authored label/description and exact points |
-| `evidence_ids`, `evidence` | Validated current-session excerpts `{id, role, text}`, in pool order; unresolved/excluded criteria have empty evidence |
+| `evidence_ids`, `evidence` | Validated current-session excerpts `{id, role, text}`, in pool order. An `uncertain` criterion whose evidence validated reports its criterion evidence and the evidence of its performed actions (issue #291); `not_observable` and `not_applicable` criteria, and an uncertain one whose evidence failed validation, have empty evidence |
 | `reason` | `null` when assessed; otherwise the bounded categories below |
-| `recommendation` | For `assessed` criteria, LLM-written feedback (issue #215) generated from the graded record only, in the package `language`, at most 400 characters; it explains the outcome and never changes `level`, `status` or `points`. Falls back to the authored `practice_recommendation` on any provider failure, timeout or invalid output, and always for non-assessed criteria. Generated once per session and kept while the criterion's graded outcome is unchanged |
+| `recommendation` | For `assessed` criteria, LLM-written feedback (issue #215) generated from the graded record only, in the package `language`, at most 400 characters; it explains the outcome and never changes `level`, `status` or `points`. Falls back to the authored `practice_recommendation` on any provider failure, timeout or invalid output. For an `uncertain` criterion that reports its authored actions, a deterministic text written without a provider names what the learner asked (actions performed with evidence) and what is still missing (issue #291), for example `Você investigou: Localização inicial; tempo de evolução. Ainda falta investigar: intensidade.`; every other non-assessed criterion keeps the authored text. Generated once per session and kept while the criterion's graded outcome is unchanged |
 | `coverage` | Counts for all four statuses, including excluded criteria |
 | `placeholder` | True only when package metadata explicitly authors `placeholder: true` |
 
@@ -47,7 +47,7 @@ sub-action classifications. Sub-actions are not presented as credited actions.
 
 ## How a criterion is graded (issue #228)
 
-Grading follows what the learner actually did. Three rules keep a criterion's
+Grading follows what the learner actually did. Five rules keep a criterion's
 outcome tied to the transcript:
 
 - **Action context.** Each rubric action is asked of the classifier (Jev)
@@ -66,6 +66,20 @@ outcome tied to the transcript:
   `assessment_unresolved`, not assessed at `"0"`. A zero that Jev's own
   answers or a deterministic rule decide stays assessed. The resolver request
   runs at `temperature` 0.
+- **Related citations only (issue #243).** For each action Jev leaves
+  undecided, it also reports the learner items it could neither confirm nor
+  rule out for that action. The rubric resolver may cite only those items: a
+  citation of an item Jev answered "no" for that action (such as the opening
+  question cited for lab interpretation) is dropped, and an action left with
+  no related citation stays undecided, so an unrelated citation never raises a
+  level. These candidate items are never reported as evidence.
+- **Interpretation after release (issue #265).** A learner cannot interpret an
+  exam before receiving it. An action authored with `interprets_impresso_ids`
+  (`docs/content/authoring-guide.md`) accepts as evidence only learner turns
+  sent after a verified Impressos request released one of those impressos, in
+  session order. The rule applies to Jev's citations and the resolver's alike:
+  an earlier turn is dropped, and a performed action left with no citation is
+  `not_performed`, so an earlier turn never raises a level.
 
 Every point value is a shortest exact **decimal string**, not a JSON number:
 `"0"`, `"0.025"`, `"0.125"`, `"0.4"`, `"1.125"`, etc. A value has at most three

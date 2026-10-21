@@ -10,6 +10,10 @@ config :backend, BackendWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# The periodic orphan-room sweep is disabled in tests; tests trigger it
+# explicitly via Backend.Stations.MediaSession.sweep_orphans/0.
+config :backend, :livekit_orphan_sweep_enabled, false
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

@@ -8,6 +8,9 @@ defmodule Backend.Stations.JevDecision do
     3. Batched classification of independent rubric questions over one shared
        evidence pool (`decide_rubric_batch/2`).
 
+  Since #309 the patient generation decides who a learner turn is addressed to
+  (`Backend.Stations.StationAI.Addressee`); Jev no longer does.
+
   ## Safety & Reliability Invariants
 
     * **Disabled by default**: Live provider adapters are disabled until human
@@ -18,7 +21,9 @@ defmodule Backend.Stations.JevDecision do
       are stripped; conversation history is bounded to recent turns; learner turns
       are explicitly marked with `:trust => :untrusted` and patient turns with
       `:trust => :trusted`; `latest_learner_turn`, `package_id`, `package_version`,
-      and authored `disclosure_condition` are preserved.
+      and authored `disclosure_condition` are preserved. `disclosed_fact_ids` (the
+      facts earlier verified patient turns disclosed, issue #286) is always a list
+      of authored ids, empty when the caller passes none or a malformed value.
     * **Total text cap, never truncated**: The learner/conversation text handed to
       any adapter (candidate, bounded conversation and latest learner turn for
       patient requests, capped by `max_context_characters/0`; the evidence pool
@@ -63,8 +68,32 @@ defmodule Backend.Stations.JevDecision do
   @type patient_decision :: %{
           required(:status) => patient_decision_status(),
           optional(:rationale) => String.t(),
-          optional(:used_fact_ids) => [String.t()]
+          optional(:used_fact_ids) => [String.t()],
+          optional(:unasked_fact_ids) => [String.t()],
+          optional(:undecided_fact_ids) => [String.t()],
+          optional(:not_asked_fact_ids) => [String.t()],
+          optional(:asked_fact_ids) => [String.t()],
+          optional(:stated_not_asked_fact_ids) => [String.t()],
+          optional(:fact_scores) => [fact_score()],
+          optional(:undecided_labels) => [undecided_label()]
         }
+
+  @typedoc """
+  One answer Jev left undecided (issue #290): the question, its score from 0 to
+  1, and the fact id or authored rule instruction it is about.
+  """
+  @type undecided_label :: %{
+          required(:question) => String.t(),
+          required(:score) => number(),
+          optional(:fact_id) => String.t(),
+          optional(:rule) => String.t()
+        }
+
+  @typedoc """
+  Jev's `fact_stated` and `fact_asked` scores for one fact the reply may state
+  (issue #290); `asked` is `nil` for a fact that is not `on_request`.
+  """
+  @type fact_score :: %{fact_id: String.t(), stated: number(), asked: number() | nil}
 
   @type rubric_decision :: %{
           required(:classification) => String.t(),
@@ -106,12 +135,32 @@ defmodule Backend.Stations.JevDecision do
     with {:ok, validated_request} <- validate_patient_request(request, opts) do
       adapter = resolve_adapter(opts)
       deadline_ms = validated_request.deadline_ms
+      started_at = monotonic_now_ms()
 
       result =
-        execute_adapter(adapter, :decide_patient, validated_request, deadline_ms, opts)
+        adapter
+        |> execute_adapter(:decide_patient, validated_request, deadline_ms, opts)
+        |> validate_patient_output(validated_request.package)
 
-      validate_patient_output(result, validated_request.package)
+      log_patient_latency(monotonic_now_ms() - started_at, result)
+      result
     end
+  end
+
+  # Debug-level latency of each patient verification, so live runs can tune
+  # the budget (issue #256). Only the decision status or "error" and the
+  # milliseconds are logged, never candidate, learner or rationale text.
+  defp log_patient_latency(latency_ms, result) do
+    outcome =
+      case result do
+        {:ok, %{status: status}} when is_atom(status) -> Atom.to_string(status)
+        _other -> "error"
+      end
+
+    log_privacy_safe(
+      :debug,
+      "patient_verification latency_ms=#{latency_ms} outcome=#{outcome}"
+    )
   end
 
   @doc """
@@ -345,14 +394,15 @@ defmodule Backend.Stations.JevDecision do
          :ok <- validate_conversation(conversation),
          {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
       minimized =
-        minimize_patient_request(
-          candidate_text,
+        candidate_text
+        |> minimize_patient_request(
           package,
           conversation,
           deadline_ms,
           deadline_at,
           opts
         )
+        |> Map.put(:disclosed_fact_ids, disclosed_fact_ids(request))
 
       max_chars = opts[:max_context_characters] || max_context_characters()
 
@@ -364,6 +414,19 @@ defmodule Backend.Stations.JevDecision do
 
   defp validate_patient_request(_not_a_map, _opts) do
     {:error, {:invalid_request, :expected_map}}
+  end
+
+  # Facts earlier verified patient turns of the session disclosed (issue #286),
+  # by authored id. Anything but a list of non-blank ids discloses nothing, so a
+  # malformed value can only keep the gating, never relax it.
+  defp disclosed_fact_ids(request) do
+    case Map.get(request, :disclosed_fact_ids) || Map.get(request, "disclosed_fact_ids") do
+      ids when is_list(ids) ->
+        ids |> Enum.filter(&(is_binary(&1) and String.trim(&1) != "")) |> Enum.uniq()
+
+      _other ->
+        []
+    end
   end
 
   defp validate_candidate_text(text, max_chars) when is_binary(text) do
@@ -740,10 +803,41 @@ defmodule Backend.Stations.JevDecision do
     raw_status = Map.get(response, :status) || Map.get(response, "status")
     used_fact_ids = Map.get(response, :used_fact_ids) || Map.get(response, "used_fact_ids")
 
+    unasked_fact_ids =
+      Map.get(response, :unasked_fact_ids) || Map.get(response, "unasked_fact_ids")
+
+    undecided_fact_ids =
+      Map.get(response, :undecided_fact_ids) || Map.get(response, "undecided_fact_ids")
+
+    not_asked_fact_ids =
+      Map.get(response, :not_asked_fact_ids) || Map.get(response, "not_asked_fact_ids")
+
+    asked_fact_ids = Map.get(response, :asked_fact_ids) || Map.get(response, "asked_fact_ids")
+
+    stated_not_asked_fact_ids =
+      Map.get(response, :stated_not_asked_fact_ids) ||
+        Map.get(response, "stated_not_asked_fact_ids")
+
     with {:ok, status} <- normalize_patient_status(raw_status),
-         {:ok, validated_fact_ids} <- validate_used_fact_ids(used_fact_ids, package) do
+         {:ok, validated_fact_ids} <- validate_used_fact_ids(used_fact_ids, package),
+         {:ok, validated_unasked_ids} <- validate_used_fact_ids(unasked_fact_ids, package),
+         {:ok, validated_undecided_ids} <- validate_used_fact_ids(undecided_fact_ids, package),
+         {:ok, validated_not_asked_ids} <- validate_used_fact_ids(not_asked_fact_ids, package),
+         {:ok, validated_asked_ids} <- validate_used_fact_ids(asked_fact_ids, package),
+         {:ok, validated_stated_not_asked_ids} <-
+           validate_used_fact_ids(stated_not_asked_fact_ids, package) do
       rationale = Map.get(response, :rationale) || Map.get(response, "rationale")
-      {:ok, build_patient_output_result(status, rationale, validated_fact_ids)}
+
+      {:ok,
+       status
+       |> build_patient_output_result(rationale, validated_fact_ids)
+       |> maybe_put(:unasked_fact_ids, validated_unasked_ids)
+       |> maybe_put(:undecided_fact_ids, validated_undecided_ids)
+       |> maybe_put(:not_asked_fact_ids, validated_not_asked_ids)
+       |> maybe_put(:asked_fact_ids, validated_asked_ids)
+       |> maybe_put(:stated_not_asked_fact_ids, validated_stated_not_asked_ids)
+       |> maybe_put(:fact_scores, validate_fact_scores(response, package))
+       |> maybe_put(:undecided_labels, validate_undecided_labels(response, package))}
     else
       :error -> {:error, {:invalid_response, :unrecognized_patient_status}}
       {:error, reason} -> {:error, {:invalid_response, reason}}
@@ -809,6 +903,76 @@ defmodule Backend.Stations.JevDecision do
   end
 
   defp validate_used_fact_ids(_other, _package), do: {:error, :invalid_used_fact_ids}
+
+  # Issue #290: the labels are evidence for the adjudicator, not a verdict. A
+  # malformed list is dropped (nil), never trusted in part; the decision itself
+  # stands, and the adjudicator is then not asked.
+  defp validate_undecided_labels(response, package) do
+    case Map.get(response, :undecided_labels) || Map.get(response, "undecided_labels") do
+      labels when is_list(labels) ->
+        normalized = Enum.map(labels, &normalize_label/1)
+
+        if Enum.all?(normalized, &valid_label?(&1, package)), do: normalized, else: nil
+
+      _absent ->
+        nil
+    end
+  end
+
+  # Issue #290: per-fact scores are evidence for the adjudicator, validated like
+  # the labels: a malformed list is dropped whole (nil), never trusted in part.
+  defp validate_fact_scores(response, package) do
+    case Map.get(response, :fact_scores) || Map.get(response, "fact_scores") do
+      scores when is_list(scores) ->
+        normalized = Enum.map(scores, &normalize_fact_score/1)
+        if Enum.all?(normalized, &valid_fact_score?(&1, package)), do: normalized, else: nil
+
+      _absent ->
+        nil
+    end
+  end
+
+  defp normalize_fact_score(score) when is_map(score) do
+    for key <- [:fact_id, :stated, :asked], into: %{} do
+      {key, Map.get(score, key) || Map.get(score, Atom.to_string(key))}
+    end
+  end
+
+  defp normalize_fact_score(_score), do: :invalid
+
+  defp valid_fact_score?(%{fact_id: id, stated: stated, asked: asked}, package)
+       when is_binary(id) do
+    probability?(stated) and (is_nil(asked) or probability?(asked)) and
+      match?({:ok, _}, validate_used_fact_ids([id], package))
+  end
+
+  defp valid_fact_score?(_score, _package), do: false
+
+  defp probability?(value), do: is_number(value) and value >= 0 and value <= 1
+
+  defp normalize_label(label) when is_map(label) do
+    for key <- [:question, :score, :fact_id, :rule],
+        value = Map.get(label, key) || Map.get(label, Atom.to_string(key)),
+        value != nil,
+        into: %{},
+        do: {key, value}
+  end
+
+  defp normalize_label(_label), do: :invalid
+
+  defp valid_label?(%{question: question, score: score} = label, package)
+       when is_binary(question) and is_number(score) and score >= 0 and score <= 1 do
+    fact_ok? =
+      case Map.get(label, :fact_id) do
+        nil -> true
+        id -> match?({:ok, _}, validate_used_fact_ids([id], package))
+      end
+
+    rule_ok? = is_nil(label[:rule]) or is_binary(label[:rule])
+    fact_ok? and rule_ok?
+  end
+
+  defp valid_label?(_label, _package), do: false
 
   # ============================================================================
   # Strict Output Validation: Rubric Decision

@@ -8,16 +8,20 @@ defmodule Backend.Stations.LearnerFeedback do
   points, evidence, reason, sub-actions, estimates and calls are never read
   back from the provider or changed.
 
-    * **Eligibility.** Only `:assessed` criteria are sent. Other criteria keep
-      the authored `practice_recommendation` and are never sent. Without an
-      eligible criterion no provider call is made.
+    * **Eligibility.** Only `:assessed` criteria are sent. Other criteria are
+      never sent. Without an eligible criterion no provider call is made.
+    * **Uncertain criteria.** An `:uncertain` criterion that reports its
+      authored actions gets a deterministic text, written without a provider,
+      naming the actions the learner performed with evidence and the ones
+      still missing (issue #291). Every other unsent criterion keeps the
+      authored `practice_recommendation`.
     * **Request.** One call for every eligible criterion that has no cached
       text, carrying the package `language` and, per criterion, its
       description, obtained and next level, points, performed and missing
       authored actions, and the text of the learner evidence the assessment
       already cited. The conversation is never sent.
     * **Deadline.** The call runs under `:learner_feedback_deadline_ms`
-      (default 60 000 ms, overridden at boot by `LEARNER_FEEDBACK_DEADLINE_MS`);
+      (default 45 000 ms, overridden at boot by `LEARNER_FEEDBACK_DEADLINE_MS`);
       a timeout, error or crash keeps the authored text for every criterion.
       There are no retries. Each call logs its latency at info level (success)
       or warning level (fallback), never the texts.
@@ -46,7 +50,9 @@ defmodule Backend.Stations.LearnerFeedback do
 
   The provider is selected with `:learner_feedback_adapter` (a
   `Backend.Stations.LearnerFeedback.Adapter`). `config/config.exs` sets it to
-  `Backend.Stations.LearnerFeedback.OpenAIAdapter` for dev and prod, and
+  `Backend.Stations.LearnerFeedback.OpenAIAdapter` for dev and prod
+  (`LLM_PROVIDER=anthropic` swaps in
+  `Backend.Stations.LearnerFeedback.AnthropicAdapter` at boot), and
   `config/test.exs` keeps the `Backend.Stations.LearnerFeedback.DisabledAdapter`,
   which is also the fallback when the key is unset.
   """
@@ -57,7 +63,7 @@ defmodule Backend.Stations.LearnerFeedback do
   alias Backend.Stations.LearnerFeedback.DisabledAdapter
   alias Backend.Stations.RubricAssessment.Points
 
-  @default_deadline_ms 60_000
+  @default_deadline_ms 45_000
   @default_cooldown_ms 30_000
   @max_characters 400
   @performed "performed"
@@ -71,13 +77,19 @@ defmodule Backend.Stations.LearnerFeedback do
 
   @doc """
   Returns `assessment` with the `recommendation` of each assessed criterion
-  replaced by valid generated feedback, keeping the authored text otherwise.
+  replaced by valid generated feedback, and of each uncertain criterion that
+  reports its actions by what was asked and what is still missing, keeping the
+  authored text otherwise.
   """
   @spec attach(map(), map(), String.t()) :: map()
   def attach(%{criteria: criteria} = assessment, package, session_id) do
     authored = Map.new(rubric(package), &{&1["id"], &1})
     eligible = Enum.filter(criteria, &(&1.status == :assessed and Map.has_key?(authored, &1.id)))
-    texts = feedback_texts(eligible, authored, package, session_id)
+
+    texts =
+      eligible
+      |> feedback_texts(authored, package, session_id)
+      |> Map.merge(uncertain_texts(criteria, authored, package))
 
     %{
       assessment
@@ -90,6 +102,44 @@ defmodule Backend.Stations.LearnerFeedback do
           end)
     }
   end
+
+  # The texts of uncertain criteria that report their actions: what was asked
+  # (performed with evidence) and what is still missing (everything else).
+  defp uncertain_texts(criteria, authored, package) do
+    for %{status: :uncertain, sub_actions: [_ | _] = sub_actions, id: id} <- criteria,
+        Map.has_key?(authored, id),
+        actions =
+          Map.new(list(authored[id], "actions"), &{&1["id"], to_string(&1["description"])}),
+        {asked, missing} = asked_and_missing(sub_actions, actions),
+        asked != [] or missing != [],
+        into: %{},
+        do: {id, uncertain_text(asked, missing, package["language"])}
+  end
+
+  defp asked_and_missing(sub_actions, actions) do
+    known = Enum.filter(sub_actions, &Map.has_key?(actions, &1.id))
+    {asked, missing} = Enum.split_with(known, &asked?/1)
+    {Enum.map(asked, &phrase(actions[&1.id])), Enum.map(missing, &phrase(actions[&1.id]))}
+  end
+
+  # Authored descriptions join one sentence, so their own final period goes.
+  defp phrase(description), do: description |> String.trim() |> String.trim_trailing(".")
+
+  defp asked?(%{classification: @performed, evidence_ids: [_ | _]}), do: true
+  defp asked?(_sub_action), do: false
+
+  defp uncertain_text(asked, missing, language) do
+    {asked_label, missing_label} = uncertain_labels(language)
+
+    [{asked_label, asked}, {missing_label, missing}]
+    |> Enum.reject(fn {_label, descriptions} -> descriptions == [] end)
+    |> Enum.map_join(" ", fn {label, descriptions} ->
+      "#{label}: #{Enum.join(descriptions, "; ")}."
+    end)
+  end
+
+  defp uncertain_labels("pt" <> _region), do: {"Você investigou", "Ainda falta investigar"}
+  defp uncertain_labels(_language), do: {"You asked about", "Still to investigate"}
 
   defp feedback_texts(eligible, authored, package, session_id) do
     {cached, cooling} = lookup(session_id, eligible)

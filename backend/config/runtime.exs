@@ -55,6 +55,45 @@ if voice = System.get_env("OPENAI_TTS_VOICE") do
   config :backend, :openai_tts_voice, voice
 end
 
+if url = System.get_env("LIVEKIT_URL") do
+  config :backend, :livekit_url, url
+end
+
+if api_key = System.get_env("LIVEKIT_API_KEY") do
+  config :backend, :livekit_api_key, api_key
+end
+
+if api_secret = System.get_env("LIVEKIT_API_SECRET") do
+  config :backend, :livekit_api_secret, api_secret
+end
+
+if secret = System.get_env("VOICE_WORKER_SECRET") do
+  config :backend, :voice_worker_secret, secret
+end
+
+# Voice experience the web offers (#270): `realtime` (LiveKit voice panel and the
+# voice worker), `turn` (record and "Ouvir resposta" buttons through
+# `VOICE_PROVIDER`) or `off` (text only, no audio consent). Unset or unknown, it is
+# `realtime` when LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET are all set,
+# otherwise `turn`. Served as `voice_mode` on GET /api/stations/active. `:test`
+# keeps the compiled default from config.exs.
+if config_env() != :test do
+  livekit_configured? =
+    Enum.all?(
+      ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"],
+      &(String.trim(System.get_env(&1, "")) != "")
+    )
+
+  voice_mode =
+    case System.get_env("VOICE_MODE", "") |> String.trim() |> String.downcase() do
+      mode when mode in ["realtime", "turn", "off"] -> mode
+      _ when livekit_configured? -> "realtime"
+      _ -> "turn"
+    end
+
+  config :backend, :voice_mode, voice_mode
+end
+
 with timeout when is_binary(timeout) <- System.get_env("CONVERSATION_TIMEOUT_MS"),
      {timeout_ms, ""} when timeout_ms > 0 <- Integer.parse(timeout) do
   config :backend, :conversation_timeout_ms, timeout_ms
@@ -96,7 +135,8 @@ if config_env() != :test do
 
   for {variable, key} <- [
         {"TYPESAFE_YES_THRESHOLD", :yes_threshold},
-        {"TYPESAFE_NO_THRESHOLD", :no_threshold}
+        {"TYPESAFE_NO_THRESHOLD", :no_threshold},
+        {"TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD", :out_of_role_no_threshold}
       ],
       raw = System.get_env(variable) do
     threshold =
@@ -109,35 +149,180 @@ if config_env() != :test do
   end
 end
 
+# Patient reply verification (issue #307): `PATIENT_VERIFICATION=audit` (the
+# default) delivers a patient reply once the deterministic BoundedReply check
+# passes and verifies it with Jev after delivery; `blocking` keeps the
+# pre-delivery Jev gate with the adjudicator and the single regeneration; `off`
+# makes no patient-side Jev call. Case and surrounding whitespace are ignored.
+# Any other value fails the boot, naming it. `:test` reads none of it.
+if config_env() != :test do
+  case System.get_env("PATIENT_VERIFICATION", "") |> String.trim() |> String.downcase() do
+    "" ->
+      :ok
+
+    mode when mode in ["blocking", "audit", "off"] ->
+      config :backend, :patient_verification, String.to_existing_atom(mode)
+
+    _invalid ->
+      raise ArgumentError,
+            "PATIENT_VERIFICATION must be blocking, audit or off, got: " <>
+              inspect(System.get_env("PATIENT_VERIFICATION"))
+  end
+end
+
+# Text provider (issue #252): `LLM_PROVIDER=anthropic` serves the three text
+# seams (simulated patient, rubric resolver, learner feedback) from Claude's
+# Messages API. Unset, or any other value, keeps OpenAI exactly as before. Jev
+# (TypeSafe) and voice are not affected. `ANTHROPIC_API_KEY`,
+# `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (resolver and feedback, default
+# `claude-opus-5-5`) and `ANTHROPIC_PATIENT_MODEL` (patient, default
+# `claude-haiku-5-5`, issues #256 and #308) and `ANTHROPIC_ADJUDICATOR_MODEL`
+# (undecided-verdict adjudicator, default `claude-haiku-5-5`, issue #290) are
+# written to `Backend.Stations.StationAI.AnthropicClient`; the adapters never
+# read the operating system environment. Selecting Claude without a key boots
+# normally and every call fails as a technical failure (`:missing_credentials`),
+# which each seam already handles. `:test` reads none of it.
+anthropic_selected? = System.get_env("LLM_PROVIDER") == "anthropic"
+
+if config_env() != :test do
+  for {variable, key} <- [
+        {"ANTHROPIC_API_KEY", :api_key},
+        {"ANTHROPIC_BASE_URL", :base_url},
+        {"ANTHROPIC_MODEL", :model},
+        {"ANTHROPIC_PATIENT_MODEL", :patient_model},
+        {"ANTHROPIC_ADJUDICATOR_MODEL", :adjudicator_model}
+      ],
+      value = System.get_env(variable) do
+    config :backend, Backend.Stations.StationAI.AnthropicClient, [{key, value}]
+  end
+
+  if anthropic_selected? do
+    config :backend, :station_ai_adapter, Backend.Stations.StationAI.AnthropicAdapter
+
+    config :backend,
+           :learner_feedback_adapter,
+           Backend.Stations.LearnerFeedback.AnthropicAdapter
+
+    # Undecided-verdict adjudicator (issue #290): with Claude selected, a
+    # low-confidence Jev verdict gets one call to `ANTHROPIC_ADJUDICATOR_MODEL`
+    # (default `claude-haiku-5-5`). `PATIENT_ADJUDICATOR=off` keeps today's
+    # refusal path.
+    if System.get_env("PATIENT_ADJUDICATOR") != "off" do
+      config :backend,
+             :patient_adjudicator_adapter,
+             Backend.Stations.PatientAdjudicator.AnthropicAdapter
+    end
+  end
+
+  # `PATIENT_ADJUDICATOR_DEADLINE_MS` overrides the adjudicator's own deadline
+  # (2 s); the turn's verification budget still caps it. Anything but a
+  # positive integer keeps the default.
+  with raw when is_binary(raw) <- System.get_env("PATIENT_ADJUDICATOR_DEADLINE_MS"),
+       {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
+    config :backend, :patient_adjudicator_deadline_ms, deadline_ms
+  end
+
+  # `PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS` is added to the turn's
+  # verification deadline only when the adjudicator asks for a regeneration
+  # (default 1500 ms, so 4.5 s at most on that path; `0` turns it off). Anything
+  # but a non-negative integer keeps the default.
+  with raw when is_binary(raw) <- System.get_env("PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS"),
+       {extension_ms, ""} when extension_ms >= 0 <- Integer.parse(String.trim(raw)) do
+    config :backend, :patient_adjudicator_regeneration_extension_ms, extension_ms
+  end
+end
+
 # Rubric resolver (issue #214): an LLM that decides only the rubric actions Jev
-# left undecided. Off unless `RUBRIC_RESOLVER=openai` asks for it: without the
-# variable the default `DisabledAdapter` leaves those actions uncertain. It reuses
-# the OpenAI key and base URL configured above; `RUBRIC_RESOLVER_MODEL` picks its
-# model, which otherwise falls back to `OPENAI_MODEL`. `:test` reads none of it.
+# left undecided. Off unless `RUBRIC_RESOLVER` turns it on (`openai`, kept for
+# compatibility, or `on`): without the variable the default `DisabledAdapter`
+# leaves those actions uncertain. `LLM_PROVIDER` picks who serves it: Claude
+# with `LLM_PROVIDER=anthropic` (configured above), OpenAI otherwise. On OpenAI
+# it reuses the OpenAI key and base URL configured above, and
+# `RUBRIC_RESOLVER_MODEL` picks its model, which otherwise falls back to
+# `OPENAI_MODEL`; on Claude `ANTHROPIC_MODEL` applies. `:test` reads none of it.
 if config_env() != :test do
   resolver_adapter = Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter
 
-  if System.get_env("RUBRIC_RESOLVER") == "openai" do
-    config :backend, :rubric_resolver_adapter, resolver_adapter
+  if System.get_env("RUBRIC_RESOLVER") in ["openai", "on"] do
+    selected_resolver =
+      if anthropic_selected?,
+        do: Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter,
+        else: resolver_adapter
+
+    config :backend, :rubric_resolver_adapter, selected_resolver
   end
 
   if model = System.get_env("RUBRIC_RESOLVER_MODEL") do
     config :backend, resolver_adapter, model: model
   end
 
-  # `RUBRIC_RESOLVER_DEADLINE_MS` overrides the resolver's own deadline (10 s).
-  with raw when is_binary(raw) <- System.get_env("RUBRIC_RESOLVER_DEADLINE_MS"),
-       {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
-    config :backend, :rubric_resolver_deadline_ms, deadline_ms
-  end
+  # Educational result budget (issue #301). The first fetch of the result runs
+  # the rubric resolver and then learner feedback before answering, and the web
+  # client waits 95 s for it (`EDUCATIONAL_RESULT_TIMEOUT_MS`). 15 s are kept
+  # for Jev's rubric calls, the network and serialization, so resolver plus
+  # feedback get at most 80 s. Defaults (config.exs): resolver 30 s, feedback
+  # 45 s. `test/backend/educational_result_budget_test.exs` pins this.
+  educational_result_budget_ms = 80_000
+  max_resolver_deadline_ms = 40_000
 
-  # `LEARNER_FEEDBACK_DEADLINE_MS` overrides the learner feedback deadline (60 s,
-  # issue #226). Anything but a positive integer keeps the default. Values above
-  # 65 s are capped: with the resolver's 10 s, the request must still finish
-  # inside the web client's 80 s wait for the educational result.
+  # `RUBRIC_RESOLVER_DEADLINE_MS` overrides the resolver's own deadline (30 s),
+  # capped at 40 s. Anything but a positive integer keeps the default.
+  resolver_deadline_ms =
+    with raw when is_binary(raw) <- System.get_env("RUBRIC_RESOLVER_DEADLINE_MS"),
+         {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
+      deadline_ms = min(deadline_ms, max_resolver_deadline_ms)
+      config :backend, :rubric_resolver_deadline_ms, deadline_ms
+      deadline_ms
+    else
+      _default -> 30_000
+    end
+
+  # `LEARNER_FEEDBACK_DEADLINE_MS` overrides the learner feedback deadline (45 s,
+  # issues #226 and #301). Anything but a positive integer keeps the default.
+  # Values above what the resolver leaves of the budget are capped.
   with raw when is_binary(raw) <- System.get_env("LEARNER_FEEDBACK_DEADLINE_MS"),
        {deadline_ms, ""} when deadline_ms > 0 <- Integer.parse(String.trim(raw)) do
-    config :backend, :learner_feedback_deadline_ms, min(deadline_ms, 65_000)
+    config :backend,
+           :learner_feedback_deadline_ms,
+           min(deadline_ms, educational_result_budget_ms - resolver_deadline_ms)
+  end
+end
+
+# Active station (issue #238): `ACTIVE_STATION_ID` names the station directory
+# under `priv/stations` that the Station Loader loads at boot, for example
+# `acute-appendicitis`. Unset or blank keeps the default from `config.exs`
+# (`chest-pain-initial-assessment`). The loader rejects anything but a plain
+# directory name (`[a-z0-9-]+`) and fails the boot, naming the id, when the id is
+# malformed, unknown, or its package is invalid. `:test` reads none of it, so the
+# suite always starts from the default station.
+if config_env() != :test do
+  case System.get_env("ACTIVE_STATION_ID", "") |> String.trim() do
+    "" -> :ok
+    station_id -> config :backend, :active_station_id, station_id
+  end
+end
+
+# Turn-based voice providers (issue #253). Off unless
+# `VOICE_PROVIDER=deepgram_elevenlabs` asks for it: without the variable both voice
+# endpoints keep the OpenAI configuration above. Deepgram transcribes the learner
+# (pt-BR) and ElevenLabs speaks the patient. Without the selected provider's key, or
+# without `ELEVENLABS_VOICE_ID`, voice is unavailable, as it is without an OpenAI
+# key. `:test` reads none of it.
+if config_env() != :test do
+  if System.get_env("VOICE_PROVIDER") == "deepgram_elevenlabs" do
+    config :backend, :voice_provider, :deepgram_elevenlabs
+  end
+
+  for {variable, key} <- [
+        {"DEEPGRAM_API_KEY", :deepgram_api_key},
+        {"DEEPGRAM_MODEL", :deepgram_model},
+        {"ELEVENLABS_API_KEY", :elevenlabs_api_key},
+        {"ELEVENLABS_VOICE_ID", :elevenlabs_voice_id},
+        {"ELEVENLABS_MODEL", :elevenlabs_model}
+      ],
+      value = System.get_env(variable),
+      String.trim(value) != "" do
+    config :backend, key, String.trim(value)
   end
 end
 

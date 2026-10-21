@@ -31,6 +31,26 @@
   color: #374151;
 }
 
+.station-header__brief-button {
+  background: #ffffff;
+  color: #1f2937;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.station-header__brief-button:hover {
+  background: #f3f4f6;
+}
+
+.station-brief-modal {
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
 .station-header__finish-button {
   background: #dc2626;
   color: #ffffff;
@@ -85,6 +105,24 @@
   background: #f3f4f6;
   color: #111827;
   border-bottom-left-radius: 4px;
+}
+
+/* Display-only examiner entries: centered and outlined, unlike either party. */
+.station-message--examiner {
+  align-self: center;
+  background: #fffbeb;
+  color: #78350f;
+  border: 1px dashed #d97706;
+  font-style: italic;
+}
+
+/* Display-only notice that the patient did not answer a kept turn (#274). */
+.station-message--notice {
+  align-self: center;
+  background: #f9fafb;
+  color: #374151;
+  border: 1px dashed #9ca3af;
+  font-style: italic;
 }
 
 .station-message__play-button {
@@ -333,6 +371,14 @@
   text-align: left;
   font-size: 13px;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.impresso-drawer__category {
+  color: #6b7280;
+  font-size: 12px;
 }
 
 .impresso-drawer__viewer {
@@ -341,5 +387,82 @@
   border-radius: 8px;
   padding: 12px;
   font-size: 13px;
-  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.impresso-content > * {
+  margin: 0;
+}
+
+.impresso-content > * + * {
+  margin-top: 8px;
+}
+
+.impresso-content__heading {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.impresso-content__list {
+  padding-left: 20px;
+}
+
+.impresso-content__list li + li {
+  margin-top: 2px;
+}
+
+/* ---- Real-time voice (#270) ---- */
+
+.station-screen .voice-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 14px;
+  color: #374151;
+  flex-shrink: 0;
+}
+
+.station-screen .voice-panel p {
+  margin: 0;
+}
+
+.station-screen .voice-panel [data-testid="voice-mic-indicator"] {
+  color: #047857;
+  font-weight: 600;
+}
+
+.station-screen .voice-panel [data-testid="voice-error"] {
+  flex-basis: 100%;
+  color: #b91c1c;
+}
+
+.station-screen .voice-panel button {
+  margin-left: auto;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.station-screen .voice-panel button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.station-voice-caption {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px dashed #93c5fd;
+  border-radius: 12px;
+  font-size: 14px;
+  font-style: italic;
+  color: #1e40af;
 }

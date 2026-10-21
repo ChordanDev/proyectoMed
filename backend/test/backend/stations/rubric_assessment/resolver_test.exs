@@ -135,6 +135,33 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
     }
   end
 
+  # Both criteria have an undecided action: history-taking's `ask-intensity`
+  # and treatment-plan's `indicate-expected`.
+  defp two_undecided_answers do
+    %{
+      @history => %{classification: "uncertain", evidence_ids: [], actions: history_actions()},
+      @treatment => %{
+        classification: "uncertain",
+        evidence_ids: [],
+        actions: [uncertain("indicate-expected"), not_performed("indicate-contraindicated")]
+      }
+    }
+  end
+
+  # Answers each single-criterion request after `delays[criterion_id]` ms.
+  defp per_criterion_reply(delays) do
+    fn %{criteria: [%{id: criterion_id}]} ->
+      Process.sleep(Map.get(delays, criterion_id, 0))
+
+      case criterion_id do
+        @history -> resolved([llm("ask-intensity", "performed", ["turn-3"])])
+        @treatment -> resolved([llm("indicate-expected", "performed", ["turn-3"], @treatment)])
+      end
+    end
+  end
+
+  defp treatment(assessment), do: Enum.find(assessment.criteria, &(&1.id == @treatment))
+
   defp resolved(decisions), do: {:ok, %{actions: decisions}}
 
   defp llm(id, classification, evidence_ids, criterion_id \\ @history) do
@@ -205,6 +232,24 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
              ]
     end
 
+    test "each criterion with undecided actions is requested on its own" do
+      assess(resolved([]), answers: two_undecided_answers())
+
+      assert_received {:resolver_request, first}
+      assert_received {:resolver_request, second}
+      refute_received {:resolver_request, _third}
+
+      assert Enum.sort(Enum.map([first, second], &Enum.map(&1.criteria, fn c -> c.id end))) ==
+               [[@history], [@treatment]]
+
+      for request <- [first, second] do
+        assert request.evidence_pool == [
+                 %{id: "turn-1", text: "Quando começou a dor?"},
+                 %{id: "turn-3", text: "A dor é forte?"}
+               ]
+      end
+    end
+
     test "is not sent when Jev left no action undecided" do
       actions = List.replace_at(history_actions(), 2, not_performed("ask-intensity"))
 
@@ -268,7 +313,15 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
         |> history()
 
       assert result.reason == {:uncertain_sub_action, "ask-intensity"}
-      assert result.sub_actions == []
+
+      # The uncertain criterion reports its actions (issue #291): Jev's clear
+      # answers stand over the resolver's.
+      assert Map.new(result.sub_actions, &{&1.id, &1.classification}) == %{
+               "ask-onset" => "performed",
+               "ask-duration" => "performed",
+               "ask-intensity" => "uncertain",
+               "ask-relief" => "not_performed"
+             }
     end
 
     test "decisions on unknown actions or criteria are ignored" do
@@ -294,6 +347,81 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
         ])
       )
       |> assert_still_uncertain()
+    end
+  end
+
+  # ============================================================================
+  # Citations related to the action (issue #243)
+  # ============================================================================
+
+  # Jev hands an undecided action the items it could not rule out for it (its
+  # candidates). A resolver citation outside them is unrelated to the action.
+  describe "a resolver citation must be an item Jev left undecided for the action" do
+    defp with_candidates(candidate_ids) do
+      jev_answers(
+        List.replace_at(history_actions(), 2, %{
+          id: "ask-intensity",
+          classification: "uncertain",
+          evidence_ids: candidate_ids
+        })
+      )
+    end
+
+    test "an unrelated citation is dropped and the supported one is kept" do
+      result =
+        assess(resolved([llm("ask-intensity", "performed", ["turn-1", "turn-3"])]),
+          answers: with_candidates(["turn-3"])
+        )
+        |> history()
+
+      assert %{status: :assessed, level: "adequado", points: 40} = result
+      assert action(result, "ask-intensity") == performed("ask-intensity", ["turn-3"])
+    end
+
+    test "an unrelated citation alone never raises the level" do
+      assess(resolved([llm("ask-intensity", "performed", ["turn-1"])]),
+        answers: with_candidates(["turn-3"])
+      )
+      |> assert_still_uncertain()
+    end
+
+    test "an action Jev offered no candidates for keeps any valid citation" do
+      result =
+        assess(resolved([llm("ask-intensity", "performed", ["turn-1"])]),
+          answers: with_candidates([])
+        )
+        |> history()
+
+      assert %{status: :assessed, level: "adequado"} = result
+      assert action(result, "ask-intensity") == performed("ask-intensity", ["turn-1"])
+    end
+
+    test "candidates are never reported as evidence of an action left uncertain" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-1"]),
+        %{id: "ask-intensity", classification: "uncertain", evidence_ids: ["turn-3"]},
+        performed("ask-relief", ["turn-1"])
+      ]
+
+      result = assess(resolved([]), answers: jev_answers(actions)) |> history()
+
+      assert %{status: :assessed, level: "adequado", evidence_ids: ["turn-1"]} = result
+      assert action(result, "ask-intensity") == uncertain("ask-intensity")
+    end
+
+    test "candidates are dropped when the resolver fails" do
+      actions = [
+        performed("ask-onset", ["turn-1"]),
+        performed("ask-duration", ["turn-1"]),
+        %{id: "ask-intensity", classification: "uncertain", evidence_ids: ["turn-3"]},
+        performed("ask-relief", ["turn-1"])
+      ]
+
+      result = assess({:error, :upstream_error}, answers: jev_answers(actions)) |> history()
+
+      assert %{status: :assessed, evidence_ids: ["turn-1"]} = result
+      assert action(result, "ask-intensity") == uncertain("ask-intensity")
     end
   end
 
@@ -336,15 +464,51 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
       assess(slow, rubric_resolver_deadline_ms: 20) |> assert_still_uncertain()
     end
 
+    test "criteria are resolved concurrently under one deadline" do
+      # Sequentially the two 150 ms answers would need 300 ms.
+      assessment =
+        assess(per_criterion_reply(%{@history => 150, @treatment => 150}),
+          answers: two_undecided_answers(),
+          rubric_resolver_deadline_ms: 260
+        )
+
+      assert history(assessment).level == "adequado"
+      assert action(treatment(assessment), "indicate-expected").classification == "performed"
+    end
+
+    test "a criterion that times out stays uncertain while the others keep their decisions" do
+      assessment =
+        assess(per_criterion_reply(%{@history => 0, @treatment => 1_000}),
+          answers: two_undecided_answers(),
+          rubric_resolver_deadline_ms: 200
+        )
+
+      assert history(assessment).status == :assessed
+      assert history(assessment).level == "adequado"
+      assert action(treatment(assessment), "indicate-expected").classification == "uncertain"
+    end
+
+    test "a criterion whose request fails stays uncertain while the others keep their decisions" do
+      reply = fn
+        %{criteria: [%{id: @treatment}]} -> raise "boom"
+        request -> per_criterion_reply(%{}).(request)
+      end
+
+      assessment = assess(reply, answers: two_undecided_answers())
+
+      assert history(assessment).level == "adequado"
+      assert action(treatment(assessment), "indicate-expected").classification == "uncertain"
+    end
+
     test "the disabled resolver is a no-op" do
       assess(nil, resolver_adapter: Resolver.DisabledAdapter) |> assert_still_uncertain()
     end
   end
 
   describe "configuration" do
-    test "the resolver is disabled by default with its own ten second deadline" do
+    test "the resolver is disabled by default with its own thirty second deadline" do
       assert Resolver.adapter([]) == Resolver.DisabledAdapter
-      assert Resolver.deadline_ms([]) == 10_000
+      assert Resolver.deadline_ms([]) == 30_000
       assert Resolver.adapter(resolver_adapter: ResolverDouble) == ResolverDouble
       assert Resolver.deadline_ms(rubric_resolver_deadline_ms: 10) == 10
     end
@@ -405,7 +569,9 @@ defmodule Backend.Stations.RubricAssessment.ResolverTest do
       assert result.reason == {:uncertain_sub_action, "ask-duration"}
       refute Map.has_key?(result, :level)
       refute Map.has_key?(result, :points)
-      assert result.sub_actions == []
+
+      assert Enum.map(result.sub_actions, & &1.classification) ==
+               ["performed", "not_performed", "not_performed", "not_performed"]
     end
 
     test "a missing mandatory action the resolver decided is uncertain" do

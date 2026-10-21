@@ -149,4 +149,268 @@ defmodule Backend.TTSTest do
   test "allowed_voices lists the six OpenAI voices" do
     assert TTS.allowed_voices() == ~w(alloy echo fable onyx nova shimmer)
   end
+
+  test "synthesize keeps the OpenAI path when the voice provider is :openai" do
+    Application.put_env(:backend, :voice_provider, :openai)
+    Application.put_env(:backend, :elevenlabs_api_key, "el-test-secret-key")
+    Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+
+    on_exit(fn ->
+      Application.delete_env(:backend, :voice_provider)
+      Application.delete_env(:backend, :elevenlabs_api_key)
+      Application.delete_env(:backend, :elevenlabs_voice_id)
+    end)
+
+    session = consented_session()
+    test_pid = self()
+
+    Req.Test.stub(OpenAIPathStub, fn conn ->
+      send(test_pid, {:path, conn.request_path})
+      Plug.Conn.send_resp(conn, 200, @audio)
+    end)
+
+    assert {:ok, %{format: "mp3"}} =
+             TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, OpenAIPathStub})
+
+    assert_receive {:path, "/v1/audio/speech"}
+  end
+
+  describe "stage directions" do
+    defp inspect_input(stub) do
+      test_pid = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        send(test_pid, {:spoken, decoded["input"] || decoded["text"]})
+        Plug.Conn.send_resp(conn, 200, @audio)
+      end)
+
+      [plug: {Req.Test, stub}]
+    end
+
+    defp refuse_calls(stub) do
+      test_pid = self()
+
+      Req.Test.stub(stub, fn conn ->
+        send(test_pid, :provider_called)
+        Plug.Conn.send_resp(conn, 200, @audio)
+      end)
+
+      [plug: {Req.Test, stub}]
+    end
+
+    test "a leading *(…)* action is not sent to the provider" do
+      session = consented_session()
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "*(curvado, com a mão na barriga)* Vim por causa de uma dor na barriga.",
+                 "alloy",
+                 inspect_input(StageLeadingStub)
+               )
+
+      assert_receive {:spoken, "Vim por causa de uma dor na barriga."}
+    end
+
+    test "*…* spans anywhere and a leading or closing parenthesized action are removed" do
+      session = consented_session()
+      opts = inspect_input(StageSpansStub)
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "Dói aqui *(aponta para o lado direito)*, doutor. *suspira*",
+                 "alloy",
+                 opts
+               )
+
+      assert_receive {:spoken, "Dói aqui, doutor."}
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "(evitando mexer o tronco) Começou ontem. (geme baixinho)",
+                 "alloy",
+                 opts
+               )
+
+      assert_receive {:spoken, "Começou ontem."}
+    end
+
+    test "text without stage directions is unchanged, including in-sentence parentheses" do
+      session = consented_session()
+      opts = inspect_input(StagePlainStub)
+
+      for text <- [
+            @text,
+            "Tomei dipirona (500 mg) ontem à noite.",
+            "Começou há dois dias (talvez três) e piorou.",
+            "Tomo um remédio para pressão (losartana)"
+          ] do
+        assert {:ok, _} = TTS.synthesize(session.session_id, text, "alloy", opts)
+        assert_receive {:spoken, ^text}
+      end
+    end
+
+    test "a reply made only of a stage direction makes no provider call" do
+      session = consented_session()
+      opts = refuse_calls(StageOnlyStub)
+
+      for text <- ["*(curvado, com a mão na barriga)*", "(fica em silêncio)", " *suspira* "] do
+        assert {:error, :invalid_text} = TTS.synthesize(session.session_id, text, "alloy", opts)
+      end
+
+      refute_received :provider_called
+    end
+
+    test "ElevenLabs receives the text without stage directions" do
+      Application.put_env(:backend, :voice_provider, :deepgram_elevenlabs)
+      Application.put_env(:backend, :elevenlabs_api_key, "el-test-secret-key")
+      Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :voice_provider)
+        Application.delete_env(:backend, :elevenlabs_api_key)
+        Application.delete_env(:backend, :elevenlabs_voice_id)
+      end)
+
+      session = consented_session()
+
+      assert {:ok, _} =
+               TTS.synthesize(
+                 session.session_id,
+                 "*(curvado, com a mão na barriga)* Vim por causa de uma dor na barriga.",
+                 nil,
+                 inspect_input(StageElevenStub)
+               )
+
+      assert_receive {:spoken, "Vim por causa de uma dor na barriga."}
+
+      assert {:error, :invalid_text} =
+               TTS.synthesize(
+                 session.session_id,
+                 "*(evitando mexer o tronco)*",
+                 nil,
+                 refuse_calls(StageElevenOnlyStub)
+               )
+
+      refute_received :provider_called
+    end
+  end
+
+  describe "with the ElevenLabs voice provider" do
+    setup do
+      Application.put_env(:backend, :voice_provider, :deepgram_elevenlabs)
+      Application.put_env(:backend, :elevenlabs_api_key, "el-test-secret-key")
+      Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :voice_provider)
+        Application.delete_env(:backend, :elevenlabs_api_key)
+        Application.delete_env(:backend, :elevenlabs_voice_id)
+        Application.delete_env(:backend, :elevenlabs_model)
+      end)
+
+      :ok
+    end
+
+    test "posts the text to the configured voice and asks for mp3" do
+      session = consented_session()
+      test_pid = self()
+
+      Req.Test.stub(ElevenInspectStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+        send(
+          test_pid,
+          {:req, conn.method, conn.request_path, URI.decode_query(conn.query_string),
+           Plug.Conn.get_req_header(conn, "xi-api-key"),
+           Plug.Conn.get_req_header(conn, "authorization"), body}
+        )
+
+        conn
+        |> Plug.Conn.put_resp_content_type("audio/mpeg")
+        |> Plug.Conn.send_resp(200, @audio)
+      end)
+
+      assert {:ok, result} =
+               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenInspectStub})
+
+      assert result.audio_binary == @audio
+      assert result.format == "mp3"
+      assert %DateTime{} = result.synthesized_at
+
+      assert_receive {:req, "POST", "/v1/text-to-speech/voice-123", query, key, auth, body}
+      assert query == %{"output_format" => "mp3_44100_128"}
+      assert key == ["el-test-secret-key"]
+      assert auth == []
+      assert Jason.decode!(body) == %{"text" => @text, "model_id" => "eleven_flash_v2_5"}
+    end
+
+    test "uses the configured model and the configured voice for any accepted voice name" do
+      Application.put_env(:backend, :elevenlabs_model, "eleven_multilingual_v2")
+      session = consented_session()
+      test_pid = self()
+
+      Req.Test.stub(ElevenModelStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:req, conn.request_path, Jason.decode!(body)["model_id"]})
+        Plug.Conn.send_resp(conn, 200, @audio)
+      end)
+
+      assert {:ok, _} =
+               TTS.synthesize(session.session_id, @text, "nova",
+                 plug: {Req.Test, ElevenModelStub}
+               )
+
+      assert_receive {:req, "/v1/text-to-speech/voice-123", "eleven_multilingual_v2"}
+    end
+
+    test "maps an HTTP error to :openai_unavailable" do
+      session = consented_session()
+
+      Req.Test.stub(ElevenErrorStub, fn conn ->
+        conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"detail" => "invalid_api_key"})
+      end)
+
+      assert {:error, :openai_unavailable} =
+               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenErrorStub})
+    end
+
+    test "maps a timeout and an empty body to :openai_unavailable" do
+      session = consented_session()
+      Req.Test.stub(ElevenTimeoutStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
+      Req.Test.stub(ElevenEmptyStub, fn conn -> Plug.Conn.send_resp(conn, 200, "") end)
+
+      assert {:error, :openai_unavailable} =
+               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenTimeoutStub})
+
+      assert {:error, :openai_unavailable} =
+               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenEmptyStub})
+    end
+
+    test "is unavailable without an ElevenLabs key or voice id, even with an OpenAI key" do
+      session = consented_session()
+      opts = stub_audio(ElevenUnusedStub)
+
+      Application.delete_env(:backend, :elevenlabs_voice_id)
+      assert {:error, :openai_unavailable} = TTS.synthesize(session.session_id, @text, nil, opts)
+
+      Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+      Application.delete_env(:backend, :elevenlabs_api_key)
+      assert {:error, :openai_unavailable} = TTS.synthesize(session.session_id, @text, nil, opts)
+    end
+
+    test "keeps the text limits" do
+      session = consented_session()
+      opts = stub_audio(ElevenUnusedStub2)
+
+      assert {:error, :invalid_text} = TTS.synthesize(session.session_id, "  ", nil, opts)
+
+      assert {:error, :invalid_text} =
+               TTS.synthesize(session.session_id, String.duplicate("a", 4097), nil, opts)
+    end
+  end
 end

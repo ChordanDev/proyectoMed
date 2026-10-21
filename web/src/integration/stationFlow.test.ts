@@ -41,6 +41,10 @@ describe("Station E2E Happy Path", () => {
       version: "2.0.0",
       display_title: "Avaliação inicial de dor torácica",
       language: "pt-BR",
+      candidate_brief: {
+        scenario: expect.stringContaining("dor torácica"),
+        tasks: expect.arrayContaining([expect.any(String)]),
+      },
     });
 
     // 2. Start session with learner consent

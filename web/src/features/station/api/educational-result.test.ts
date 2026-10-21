@@ -63,6 +63,31 @@ describe("educational result wire boundary", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v2/stations/active/sessions/session%2F1/result");
   });
 
+  // Issue #291: an uncertain criterion may carry the evidence of what the learner asked.
+  it("accepts evidence on an uncertain criterion", async () => {
+    const evidence = [{ id: "turn-1", role: "learner" as const, text: "Onde começou a dor?" }];
+    const uncertain = { ...partialResult.criteria[1], evidence_ids: ["turn-1"], evidence };
+    const body = { ...partialResult, criteria: [partialResult.criteria[0], uncertain] };
+    const client = createApiClient({ baseUrl: "", fetch: vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body))) });
+    await expect(client.fetchResult("session-1")).resolves.toEqual(body);
+  });
+
+  it.each(["not_observable", "not_applicable"] as const)("still rejects evidence on a %s criterion", async (status) => {
+    const reason = status === "not_observable" ? "required_modality_unavailable" : "authored_exclusion";
+    const evidence = [{ id: "turn-1", role: "learner", text: "Onde começou a dor?" }];
+    const criterion = { ...partialResult.criteria[1], status, reason, evidence_ids: ["turn-1"], evidence };
+    const coverage = { assessed: 1, uncertain: 0, not_observable: status === "not_observable" ? 1 : 0, not_applicable: status === "not_applicable" ? 1 : 0 };
+    const unresolved = status === "not_observable" ? [{ id: criterion.id, status }] : [];
+    const eligible_max = status === "not_observable" ? "1.25" : "0.25";
+    const body = { ...partialResult, criteria: [partialResult.criteria[0], criterion], coverage, estimates: { ...partialResult.estimates, eligible_max, unresolved, total: unresolved.length === 0 ? "0.25" : null } };
+    const valid = { ...body, criteria: [partialResult.criteria[0], { ...criterion, evidence_ids: [], evidence: [] }] };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(valid)));
+    const client = createApiClient({ baseUrl: "", fetch: fetchMock });
+    await expect(client.fetchResult("session-1")).resolves.toEqual(valid);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(body)));
+    await expect(client.fetchResult("session-1")).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("rejects legacy success and never falls back after a technical failure", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error: "invalid_attempt", message: "Tentativa inválida" }), { status: 502 }));
     const client = createApiClient({ baseUrl: "", fetch: fetchMock });

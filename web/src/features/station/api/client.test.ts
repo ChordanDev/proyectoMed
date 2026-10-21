@@ -19,12 +19,65 @@ const blobResponse = (blob: Blob, status = 200) =>
   }) as unknown as Response;
 
 describe("station API client", () => {
+  it.each([
+    ["missing", undefined],
+    ["without tasks", { scenario: "Cenário." }],
+    ["with an empty task list", { scenario: "Cenário.", tasks: [] }],
+    ["with a non-string task", { scenario: "Cenário.", tasks: [1] }],
+    ["without a scenario", { tasks: ["Anamnese."] }],
+  ])("rejects an active station whose brief is %s", async (_label, brief) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        station_id: "station-1",
+        version: "2.0.0",
+        display_title: "Dor torácica",
+        language: "pt-BR",
+        candidate_brief: brief,
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.getActiveStation()).rejects.toMatchObject({
+      name: "ApiError",
+      code: "invalid_response",
+    });
+  });
+
+  it.each([
+    ["realtime", "realtime"],
+    ["turn", "turn"],
+    ["off", "off"],
+    [undefined, "turn"],
+    ["loud", "turn"],
+  ])("decodes voice_mode %s as %s (#270)", async (voiceMode, expected) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        station_id: "station-1",
+        version: "2.0.0",
+        display_title: "Dor torácica",
+        language: "pt-BR",
+        candidate_brief: { scenario: "Cenário.", tasks: ["Anamnese."] },
+        voice_mode: voiceMode,
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.getActiveStation()).resolves.toMatchObject({
+      voice_mode: expected,
+    });
+  });
+
   it("models every station flow request and decodes its response", async () => {
     const activeStation = {
       station_id: "station-1",
       version: "1.0.0",
       display_title: "Dor torácica",
       language: "pt-BR",
+      candidate_brief: {
+        scenario: "Você é o médico de plantão.",
+        tasks: ["Obter anamnese dirigida.", "Indicar a conduta inicial."],
+      },
+      voice_mode: "realtime",
     };
     const session = {
       session_id: "session-1",
@@ -315,6 +368,96 @@ describe("station API client", () => {
     expect((failure as { learnerTurn?: unknown }).learnerTurn).toBeUndefined();
   });
 
+  it("decodes an examiner acknowledgement with the kept learner turn (#274)", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        outcome: "examiner_acknowledged",
+        reply_text: null,
+        reply_audio_url: null,
+        learner_turn: { role: "learner", modality: "text", text: "Blumberg positivo." },
+        server_now: "2026-01-01T10:01:00Z",
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.sendMessage("session-1", {
+        role: "learner",
+        modality: "text",
+        text: "Blumberg positivo.",
+      }),
+    ).resolves.toEqual({
+      outcome: "examiner_acknowledged",
+      reply_text: null,
+      learner_turn: { role: "learner", text: "Blumberg positivo." },
+      server_now: "2026-01-01T10:01:00Z",
+    });
+  });
+
+  it("reads a reply with outcome patient_reply as a patient reply", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        outcome: "patient_reply",
+        reply_text: "Começou ontem.",
+        reply_audio_url: null,
+        server_now: "2026-01-01T10:01:00Z",
+      }),
+    );
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(
+      client.sendMessage("session-1", { role: "learner", modality: "text", text: "Quando?" }),
+    ).resolves.toEqual({
+      outcome: "patient_reply",
+      reply_text: "Começou ontem.",
+      reply_audio_url: null,
+      server_now: "2026-01-01T10:01:00Z",
+    });
+  });
+
+  it("requests a voice session and decodes its response", async () => {
+    const voiceSession = {
+      url: "wss://livekit.example.test",
+      token: "signed-jwt",
+      room: "station-session-session-1",
+      identity: "learner-session-1",
+      expires_at: "2026-01-01T10:02:00Z",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(voiceSession, 201));
+    const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+    await expect(client.createVoiceSession("session-1")).resolves.toEqual(
+      voiceSession,
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${baseUrl}/api/stations/active/sessions/session-1/voice`);
+    expect(init).toMatchObject({ method: "POST" });
+  });
+
+  it.each([
+    [404, "session_not_found", "Sessão não encontrada."],
+    [410, "session_expired", "Sessão expirada."],
+    [422, "session_completed", "Sessão concluída."],
+    [403, "audio_consent_required", "Consentimento de áudio necessário."],
+    [429, "rate_limited", "Muitas tentativas. Aguarde um instante."],
+    [503, "voice_unavailable", "Voz indisponível no momento."],
+  ])(
+    "maps voice session %i responses to ApiError %s",
+    async (status, code, message) => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ error: code, message }, status));
+      const client = createApiClient({ baseUrl, fetch: fetchMock });
+
+      await expect(client.createVoiceSession("session-1")).rejects.toMatchObject(
+        { name: "ApiError", status, code, message },
+      );
+    },
+  );
+
   it("requests an impresso and decodes the released documents", async () => {
     const responseBody = {
       request_id: "req-1",
@@ -453,7 +596,7 @@ describe("station API client", () => {
       return { fetchMock, signals };
     };
 
-    it("waits up to 80 s for the educational result, which may still be generating feedback", async () => {
+    it("waits up to 95 s for the educational result, which may still be generating feedback", async () => {
       vi.useFakeTimers();
       const { fetchMock, signals } = stalledFetch();
       const client = createApiClient({ baseUrl, fetch: fetchMock });
@@ -466,7 +609,7 @@ describe("station API client", () => {
           code: "request_timeout",
         });
 
-        await vi.advanceTimersByTimeAsync(79_999);
+        await vi.advanceTimersByTimeAsync(94_999);
         expect(signals[0]?.aborted).toBe(false);
 
         await vi.advanceTimersByTimeAsync(1);

@@ -1,6 +1,16 @@
 defmodule Backend.Stations.TTS do
   @moduledoc """
-  Single point of contact between the backend and OpenAI's text-to-speech API.
+  Single point of contact between the backend and the text-to-speech provider.
+
+  OpenAI's speech API is the default. When `:voice_provider` is
+  `:deepgram_elevenlabs`, the text goes to ElevenLabs instead
+  (`Backend.Stations.TTS.ElevenLabs`); text and voice validation, consent and session
+  checks, the mp3 format and the error outcomes are the same for both providers.
+
+  Before either provider is called, the patient's stage directions (`*…*` spans and a
+  leading or standalone closing parenthesized action) are removed from the text
+  (`Backend.Stations.TTS.StageDirections`). A reply made only of stage directions is
+  `{:error, :invalid_text}` and no provider is called.
 
   Symmetric to `Backend.Stations.Transcription`: text goes in, audio comes out. The
   synthesized audio is streamed straight back to the caller and discarded:
@@ -8,11 +18,13 @@ defmodule Backend.Stations.TTS do
 
   ## Retry policy
 
-  None. On any OpenAI failure the error is surfaced as `{:error, :openai_unavailable}`
+  None. On any provider failure the error is surfaced as `{:error, :openai_unavailable}`
   and the client decides the fallback policy (text-only render).
   """
 
   alias Backend.Stations.Conversation
+  alias Backend.Stations.TTS.ElevenLabs
+  alias Backend.Stations.TTS.StageDirections
 
   @allowed_voices ~w(alloy echo fable onyx nova shimmer)
   @default_voice "alloy"
@@ -42,15 +54,24 @@ defmodule Backend.Stations.TTS do
          {:ok, voice} <- validate_voice(voice),
          {:ok, session} <- fetch_session(session_id),
          :ok <- validate_consent(session),
-         {:ok, audio} <- request(text, voice, config(opts)) do
+         {:ok, audio} <- provider_synthesize(text, voice, opts) do
       {:ok, %{audio_binary: audio, format: @format, synthesized_at: DateTime.utc_now()}}
     end
   end
 
+  defp provider_synthesize(text, voice, opts) do
+    case Application.get_env(:backend, :voice_provider, :openai) do
+      :deepgram_elevenlabs -> ElevenLabs.synthesize(text, opts)
+      _openai -> request(text, voice, config(opts))
+    end
+  end
+
+  # Stage directions are removed here, before any provider is chosen, so neither
+  # provider reads them aloud; a reply made only of them has nothing to synthesize.
   defp validate_text(text) when is_binary(text) and byte_size(text) <= @max_text_length do
-    case String.trim(text) do
+    case StageDirections.strip(text) do
       "" -> {:error, :invalid_text}
-      trimmed -> {:ok, trimmed}
+      speakable -> {:ok, speakable}
     end
   end
 

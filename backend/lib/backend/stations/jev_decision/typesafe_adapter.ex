@@ -33,7 +33,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `fact_stated:<n>` - the reply states fact `n` (one per fact)
     * `fact_asked:<n>` - the learner asked about the subject of fact `n`, with a
       subject that can be identified from the conversation (only for `on_request`
-      facts). Its `instructions` is an object, `question` plus the fact under `fact`,
+      facts not in `disclosed_fact_ids`, issue #286). Its `instructions` is an object, `question` plus the fact under `fact`,
       and it carries `criteria` that rule out vague questions with no identifiable
       subject; that wording was chosen from live runs (see issue #206).
     * `rule_broken:<n>` - the reply breaks response rule `n` (one per rule)
@@ -82,9 +82,26 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   The verdict is computed in code from the answers and two thresholds. A value at or
   above `yes_threshold` is a yes, a value at or below `no_threshold` is a no, and a
-  value strictly between them is undecided.
+  value strictly between them is undecided. `risk:speaks_out_of_role` alone uses
+  `out_of_role_no_threshold` (default `0.5`) as its no threshold: with the full
+  acute-appendicitis package it scores plainly in-role replies 0.22-0.47 (issue
+  #284). Obvious out-of-role text is still caught deterministically by
+  `Backend.Stations.StationAI.BoundedReply` before Jev is asked.
 
     * `used_fact_ids` - the facts whose stated answer is a yes
+    * `unasked_fact_ids` - present only when non-empty: the authored ids of the
+      `on_request` facts stated (yes) while the learner did not ask for them (no).
+      `CandidateGate` names them in its single regeneration (issue #242).
+    * `undecided_fact_ids` - present only on a `:low_confidence` verdict whose every
+      risk answer is a no and whose only open answers are either the stated
+      question of an `on_request` fact the learner did not ask for (no, issue #273)
+      or the asked question of an `on_request` fact the reply states (yes, issue
+      #284): their authored ids. `CandidateGate` withholds them in its single
+      regeneration.
+    * `undecided_labels`, `not_asked_fact_ids`, `asked_fact_ids`,
+      `stated_not_asked_fact_ids`, `fact_scores` - only on a `:low_confidence`
+      verdict: the evidence the undecided-verdict adjudicator reads (issue #290,
+      see `put_adjudication_evidence/5`)
     * `:semantic_refusal` - a risk answer is a yes, or an `on_request` fact is stated
       (yes) while the learner did not ask for it (no)
     * `:verified` - every risk answer is a no and no answer the verdict depends on is
@@ -103,7 +120,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     * `{:error, {:technical_failure, :invalid_thresholds}}` - thresholds outside
       `0 <= no_threshold <= 0.5 <= yes_threshold <= 1` with `no_threshold <
       yes_threshold`, so that a "no" never means a probability above one half and a
-      "yes" never means one below it
+      "yes" never means one below it; `out_of_role_no_threshold` obeys the same
+      bounds as `no_threshold`
     * `{:error, {:technical_failure, :invalid_base_url}}` - a base URL whose scheme is
       not exactly `https` or whose host is empty, so the key never travels in clear
     * `{:error, {:technical_failure, :invalid_disclosure_condition}}` - a fact with a
@@ -119,7 +137,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   ## Configuration
 
   Call options first, then `Application.get_env(:backend, __MODULE__)`: `:api_key`,
-  `:base_url`, `:model`, `:yes_threshold`, `:no_threshold`, `:max_request_tokens`
+  `:base_url`, `:model`, `:yes_threshold`, `:no_threshold`,
+  `:out_of_role_no_threshold` (patient decision only), `:max_request_tokens`
   (default `64_000`, rubric batch only). The operating system
   environment is never read here; `config/runtime.exs` copies the `TYPESAFE_*`
   variables into the application environment at boot.
@@ -145,6 +164,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @default_model "jev-1.13.0"
   @default_yes_threshold 0.8
   @default_no_threshold 0.2
+
+  # Issue #284: the one risk whose calibration drifts with the facts payload.
+  @out_of_role_risk "risk:speaks_out_of_role"
+  @default_out_of_role_no_threshold 0.5
 
   # The provider's per-request budget for one rubric request, in estimated tokens.
   @default_max_request_tokens 64_000
@@ -181,7 +204,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
        "the patient role."}
   ]
 
-  @type thresholds :: %{yes: number(), no: number()}
+  @type thresholds :: %{
+          required(:yes) => number(),
+          required(:no) => number(),
+          optional(:out_of_role_no) => number()
+        }
   @type fact_plan :: %{
           id: String.t(),
           topic: String.t(),
@@ -205,6 +232,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
     with :ok <- validate_credentials(config.api_key),
          {:ok, thresholds} <- validate_thresholds(config.yes_threshold, config.no_threshold),
+         {:ok, thresholds} <- validate_out_of_role(thresholds, config.out_of_role_no_threshold),
          :ok <- validate_base_url(config.base_url),
          {:ok, facts} <- plan_facts(request),
          {:ok, budget_ms} <- usable_budget(request),
@@ -213,7 +241,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
          payload = build_payload(request, facts, questions, config.model),
          {:ok, body} <- execute_request(config, payload, budget_ms),
          {:ok, nouls} <- parse_answers(body, Map.keys(questions)) do
-      decision = verdict(facts, risk_ids(rules), nouls, thresholds)
+      decision =
+        facts
+        |> verdict(risk_ids(rules), nouls, thresholds)
+        |> put_adjudication_evidence(facts, rules, nouls, thresholds)
+
       log_classifications(decision.status, nouls, thresholds)
       {:ok, decision}
     end
@@ -228,7 +260,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
         |> Enum.sort()
         |> Enum.map_join(" ", fn {id, noul} ->
           rounded = :erlang.float_to_binary(noul / 1, decimals: 3)
-          "#{id}=#{rounded}:#{classify(noul, thresholds)}"
+          "#{id}=#{rounded}:#{classify(noul, question_thresholds(id, thresholds))}"
         end)
 
       "[TypesafeAdapter] patient verdict=#{status} #{answers}"
@@ -284,6 +316,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       model: opts[:model] || Keyword.get(app, :model) || @default_model,
       yes_threshold: threshold(opts, app, :yes_threshold, @default_yes_threshold),
       no_threshold: threshold(opts, app, :no_threshold, @default_no_threshold),
+      out_of_role_no_threshold: threshold(opts, app, :out_of_role_no_threshold, nil),
       max_request_tokens: threshold(opts, app, :max_request_tokens, @default_max_request_tokens),
       req_options:
         app
@@ -321,6 +354,23 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   end
 
   defp validate_thresholds(_yes, _no), do: {:error, {:technical_failure, :invalid_thresholds}}
+
+  # The out-of-role no threshold obeys the bounds of the global no threshold. Unset,
+  # it is `0.5`, or the global no threshold when the yes threshold is `0.5` itself.
+  defp validate_out_of_role(%{yes: yes, no: global_no} = thresholds, nil) do
+    default =
+      if yes > @default_out_of_role_no_threshold,
+        do: @default_out_of_role_no_threshold,
+        else: global_no
+
+    validate_out_of_role(thresholds, default)
+  end
+
+  defp validate_out_of_role(%{yes: yes} = thresholds, no) do
+    with {:ok, _} <- validate_thresholds(yes, no) do
+      {:ok, Map.put(thresholds, :out_of_role_no, no)}
+    end
+  end
 
   defp validate_max_request_tokens(max) when is_integer(max) and max > 0, do: {:ok, max}
 
@@ -391,11 +441,17 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   A fact without an id or without content is left out: it is not sent, so a reply
   that states it is reported by the unsupported-information question instead.
+
+  A fact named in the request's `disclosed_fact_ids` (disclosed by an earlier
+  verified patient turn of the session, issue #286) gets no `fact_asked` question:
+  its disclosure is respected. Its `fact_stated` question is still asked, for
+  `used_fact_ids`, and every risk question still applies.
   """
   @spec plan_facts(map()) ::
           {:ok, [fact_plan()]} | {:error, {:technical_failure, :invalid_disclosure_condition}}
   def plan_facts(request) do
     facts = request |> package() |> Map.get("revealable_facts", []) |> List.wrap()
+    disclosed = disclosed_fact_ids(request)
 
     if Enum.all?(facts, &known_disclosure_condition?/1) do
       {:ok,
@@ -411,11 +467,19 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
            content: fact["content"],
            disclosure_condition: condition,
            stated: "fact_stated:#{n}",
-           asked: if(condition == @on_request, do: "fact_asked:#{n}")
+           asked:
+             if(condition == @on_request and fact["id"] not in disclosed, do: "fact_asked:#{n}")
          }
        end)}
     else
       {:error, {:technical_failure, :invalid_disclosure_condition}}
+    end
+  end
+
+  defp disclosed_fact_ids(request) do
+    case Map.get(request, :disclosed_fact_ids) do
+      ids when is_list(ids) -> Enum.filter(ids, &is_binary/1)
+      _other -> []
     end
   end
 
@@ -656,11 +720,13 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   question of `facts` and for every id in `risk_ids`.
   """
   @spec verdict([fact_plan()], [String.t()], %{String.t() => number()}, thresholds()) :: %{
-          status: :verified | :semantic_refusal | :low_confidence,
-          used_fact_ids: [String.t()]
+          required(:status) => :verified | :semantic_refusal | :low_confidence,
+          required(:used_fact_ids) => [String.t()],
+          optional(:unasked_fact_ids) => [String.t()],
+          optional(:undecided_fact_ids) => [String.t()]
         }
   def verdict(facts, risk_ids, nouls, thresholds) do
-    risks = Enum.map(risk_ids, &classify(nouls[&1], thresholds))
+    risks = Enum.map(risk_ids, &classify(nouls[&1], question_thresholds(&1, thresholds)))
     disclosures = Enum.map(facts, &disclosure(&1, nouls, thresholds))
 
     # Two facts may share an id; the id is reported once.
@@ -668,15 +734,170 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       for(fact <- facts, classify(nouls[fact.stated], thresholds) == :yes, do: fact.id)
       |> Enum.uniq()
 
+    unasked_fact_ids =
+      for({fact, :violation} <- Enum.zip(facts, disclosures), do: fact.id)
+      |> Enum.uniq()
+
     status =
       cond do
-        :yes in risks or :violation in disclosures -> :semantic_refusal
-        Enum.all?(risks, &(&1 == :no)) and :undecided not in disclosures -> :verified
-        true -> :low_confidence
+        :yes in risks or :violation in disclosures ->
+          :semantic_refusal
+
+        Enum.all?(risks, &(&1 == :no)) and
+            Enum.all?(disclosures, &(&1 == :respected)) ->
+          :verified
+
+        true ->
+          :low_confidence
       end
 
     %{status: status, used_fact_ids: used_fact_ids}
+    |> put_fact_ids(:unasked_fact_ids, unasked_fact_ids)
+    |> put_fact_ids(:undecided_fact_ids, undecided_fact_ids(status, risks, facts, disclosures))
   end
+
+  @doc """
+  Adds to a `:low_confidence` verdict the evidence the undecided-verdict
+  adjudicator reads (issue #290); any other verdict is returned unchanged.
+
+    * `undecided_labels` - every answer strictly between its thresholds, in
+      question order (facts, then the fixed risks, then the rules): `question`
+      (`"fact_stated"`, `"fact_asked"`, a `risk:` id or `"rule_broken"`), the
+      `fact_id` of a fact question or the authored `rule` instruction of a rule
+      question, and the `score` rounded to 3 decimals
+    * `not_asked_fact_ids` - present only when non-empty: the `on_request` facts
+      whose `fact_asked` answer is a clear no while `fact_stated` is not, so a
+      delivered reply could state a fact nobody asked for
+    * `asked_fact_ids` - present only when non-empty: the `on_request` facts
+      whose `fact_asked` answer is a clear yes, so the adjudicator never
+      withholds a fact the learner asked for
+    * `stated_not_asked_fact_ids` - present only when non-empty: the facts
+      whose `fact_stated` answer is a clear yes and `fact_asked` a clear no, the
+      only facts the adjudicator's hard limit blocks (a defense in depth: this
+      verdict is normally already a `:semantic_refusal`)
+    * `fact_scores` - present only when non-empty: every fact whose
+      `fact_stated` answer is not a clear no, in question order, with its
+      `stated` and `asked` scores rounded to 3 decimals (`asked` is `nil` for a
+      fact that is not `on_request`), so the adjudicator can judge whether the
+      reply really states it
+  """
+  @spec put_adjudication_evidence(map(), [fact_plan()], [rule_plan()], map(), thresholds()) ::
+          map()
+  def put_adjudication_evidence(
+        %{status: :low_confidence} = decision,
+        facts,
+        rules,
+        nouls,
+        thresholds
+      ) do
+    fact_labels =
+      Enum.flat_map(facts, fn fact ->
+        [{"fact_stated", fact.stated}, {"fact_asked", fact.asked}]
+        |> Enum.filter(fn {_question, id} -> id != nil and undecided?(id, nouls, thresholds) end)
+        |> Enum.map(fn {question, id} ->
+          %{question: question, fact_id: fact.id, score: rounded(nouls[id])}
+        end)
+      end)
+
+    risk_labels =
+      for {id, _instructions} <- @risk_questions,
+          undecided?(id, nouls, thresholds),
+          do: %{question: id, score: rounded(nouls[id])}
+
+    rule_labels =
+      for rule <- rules,
+          undecided?(rule.broken, nouls, thresholds),
+          do: %{
+            question: "rule_broken",
+            rule: rule.instruction,
+            score: rounded(nouls[rule.broken])
+          }
+
+    not_asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :no,
+        classify(nouls[fact.stated], thresholds) != :no,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
+    asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :yes,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
+    stated_not_asked =
+      for(
+        %{asked: asked} = fact when asked != nil <- facts,
+        classify(nouls[asked], thresholds) == :no,
+        classify(nouls[fact.stated], thresholds) == :yes,
+        do: fact.id
+      )
+      |> Enum.uniq()
+
+    fact_scores =
+      for(
+        fact <- facts,
+        classify(nouls[fact.stated], thresholds) != :no,
+        do: %{
+          fact_id: fact.id,
+          stated: rounded(nouls[fact.stated]),
+          asked: if(fact.asked, do: rounded(nouls[fact.asked]))
+        }
+      )
+      |> Enum.uniq_by(& &1.fact_id)
+
+    decision
+    |> Map.put(:undecided_labels, fact_labels ++ risk_labels ++ rule_labels)
+    |> put_fact_ids(:not_asked_fact_ids, not_asked)
+    |> put_fact_ids(:asked_fact_ids, asked)
+    |> put_fact_ids(:stated_not_asked_fact_ids, stated_not_asked)
+    |> put_fact_ids(:fact_scores, fact_scores)
+  end
+
+  def put_adjudication_evidence(decision, _facts, _rules, _nouls, _thresholds), do: decision
+
+  defp undecided?(id, nouls, thresholds),
+    do: classify(nouls[id], question_thresholds(id, thresholds)) == :undecided
+
+  defp rounded(noul), do: Float.round(noul / 1, 3)
+
+  defp put_fact_ids(decision, _key, []), do: decision
+  defp put_fact_ids(decision, key, ids), do: Map.put(decision, key, ids)
+
+  # A low-confidence verdict whose only open answers are on-request facts that a
+  # regeneration can safely leave out: stated-undecided while clearly not asked
+  # (issue #273), or clearly stated while it is unclear whether the learner asked
+  # (issue #284). Any other open answer (a risk, both answers unclear) names nothing.
+  @withholdable [:undecided_unasked, :undecided_asked]
+
+  defp undecided_fact_ids(:low_confidence, risks, facts, disclosures) do
+    if Enum.all?(risks, &(&1 == :no)) and
+         Enum.all?(disclosures, &(&1 == :respected or &1 in @withholdable)) do
+      for(
+        {fact, disclosure} <- Enum.zip(facts, disclosures),
+        disclosure in @withholdable,
+        do: fact.id
+      )
+      |> Enum.uniq()
+    else
+      []
+    end
+  end
+
+  defp undecided_fact_ids(_status, _risks, _facts, _disclosures), do: []
+
+  # The thresholds one question is classified with: `risk:speaks_out_of_role` uses
+  # its own no threshold when one is set (issue #284), every other question the
+  # global ones.
+  defp question_thresholds(@out_of_role_risk, %{out_of_role_no: no} = thresholds),
+    do: %{thresholds | no: no}
+
+  defp question_thresholds(_id, thresholds), do: thresholds
 
   @doc "Classifies a noul against the thresholds; both thresholds are inclusive."
   @spec classify(number(), thresholds()) :: :yes | :no | :undecided
@@ -690,7 +911,9 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   # Only an `on_request` fact has a disclosure rule the answers can break. It is
   # respected when the fact is not stated or the learner asked for it, broken when it
-  # is stated and the learner did not ask, and undecided in every other combination.
+  # is stated and the learner did not ask, and undecided in every other combination;
+  # `:undecided_unasked` marks the undecided case where the learner clearly did not ask,
+  # `:undecided_asked` the one where the fact is clearly stated but the ask is unclear.
   defp disclosure(%{asked: nil}, _nouls, _thresholds), do: :respected
 
   defp disclosure(fact, nouls, thresholds) do
@@ -700,6 +923,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
     cond do
       stated == :no or asked == :yes -> :respected
       stated == :yes and asked == :no -> :violation
+      stated == :undecided and asked == :no -> :undecided_unasked
+      stated == :yes and asked == :undecided -> :undecided_asked
       true -> :undecided
     end
   end
@@ -854,7 +1079,10 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
 
   # Each action is performed when an item is a yes (citing every yes item),
   # not performed when every item is a no or there is no item, and uncertain
-  # otherwise. The criterion is always uncertain, so authored rules decide its level.
+  # otherwise. An uncertain action offers the items left undecided for it as its
+  # candidates: the rubric resolver may cite only those, never an item answered no
+  # for that action (issue #243), and they are never reported as evidence. The
+  # criterion is always uncertain, so authored rules decide its level.
   defp rubric_decisions(questions, plans, nouls, thresholds) do
     by_criterion = Enum.group_by(plans, & &1.criterion_id)
 
@@ -875,14 +1103,15 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   defp action_decision(plan, nouls, thresholds) do
     answers = Enum.map(plan.asks, fn {id, item} -> {classify(nouls[id], thresholds), item.id} end)
     cited = for {:yes, evidence_id} <- answers, do: evidence_id
+    undecided = for {:undecided, evidence_id} <- answers, do: evidence_id
 
-    classification =
+    {classification, evidence_ids} =
       cond do
-        cited != [] -> "performed"
-        Enum.all?(answers, &(elem(&1, 0) == :no)) -> "not_performed"
-        true -> "uncertain"
+        cited != [] -> {"performed", cited}
+        undecided == [] -> {"not_performed", []}
+        true -> {"uncertain", undecided}
       end
 
-    %{id: plan.action_id, classification: classification, evidence_ids: cited}
+    %{id: plan.action_id, classification: classification, evidence_ids: evidence_ids}
   end
 end
