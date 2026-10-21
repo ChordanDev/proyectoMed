@@ -85,7 +85,13 @@ All operations are methods of `UStationClient`. Each one takes a
 | `DiscardSession` | `POST .../sessions/:id/discard` | Nothing; the local session is cleared only after Phoenix confirms | #195, #196 |
 
 Synchronous accessors: `GetSession()` (null without a run), `GetRemainingTime()`
-and `GetPhoenixBaseUrl()`.
+(and `GetRemainingTimeAt(LocalSeconds)` for tests), `GetPhoenixBaseUrl()` and
+`SetPhoenixBaseUrl()`. `FStationClock` is the public helper behind the timer.
+
+Known limits, for the slices that build on them:
+
+- A run whose `StartSession` is still in flight when the game quits is not
+  discarded; Phoenix forgets it after 30 minutes.
 
 ### Run lifecycle
 

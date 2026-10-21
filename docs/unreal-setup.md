@@ -87,8 +87,48 @@ Why project assets never travel outside Git:
 
 Keep raw source files outside `unreal/` so they never reach LFS. If the LFS
 budget falls short, buy additional GitHub LFS storage first; moving to Perforce
-is a separate decision. Review the LFS usage after the #189 spike shows the real
-size of a MetaHuman.
+is a separate decision. The scene's MetaHuman, with its shared `MetaHumans/Common`
+assets, takes about 353 MB of LFS (#190).
+
+## Running the station client
+
+The default map is `/Game/Station/Consultation`. `AStationGameMode` is the
+project's global default game mode, so every level without its own override
+shows the station screens.
+It needs a local Phoenix; the station client module (`StationClient`) is the
+only code that talks to it, and its interface is documented in
+`docs/unreal-station-client.md`.
+
+1. Start Phoenix. The LiveKit values are the local development ones; LiveKit
+   itself only has to run for spoken turns (#191):
+
+   ```bash
+   ( cd backend && VOICE_MODE=realtime LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret mix phx.server )
+   ```
+
+2. Open the editor and press **Play**. The learner sees the Pre-Station Notice,
+   then the brief Phoenix serves, where they pick "Treino por texto" or "Treino
+   por voz", then the patient and the ten-minute Station Timer. The voice option
+   only appears when Phoenix serves `voice_mode: realtime`.
+3. A voice training logs `LogStationRun: Voice credential received for room
+   station-session-<id>`; the token itself is never logged.
+
+Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
+`[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config.
+
+### The consultation scene
+
+- The patient is `/Game/Spike/MHC_Patient/BP_MHC_Patient`. The folder keeps the
+  #189 spike name because moving a MetaHuman in the editor crashed it
+  (`VisualLookUp`); rename it with plenty of free memory.
+- The patient plays copies of the MetaHuman Creator template idle loops
+  (`/Game/Station/Patient/Animations`) in single-node mode, with `useLiveLink`
+  off. The project's `MetaHumans/Common` body and face skeletons list the
+  plugin's skeletons as compatible so those loops can play. Lip sync (#191) has
+  to blend the face idle with Live Link.
+- The learner sees the scene through the `CameraActor` tagged `StationView`,
+  standing 1.40 m from the patient at 1.62 m with a 70° field of view. Both
+  stand because MetaHuman Creator ships no seated animation.
 
 ## Unreal MCP plugin
 
