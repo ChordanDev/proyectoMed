@@ -10,6 +10,6 @@ public class ProyectoMedTarget : TargetRules
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V7;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
-		ExtraModuleNames.AddRange(new string[] { "ProyectoMed", "PatientVoiceSpike" });
+		ExtraModuleNames.AddRange(new string[] { "ProyectoMed", "StationClient", "PatientVoiceSpike" });
 	}
 }
