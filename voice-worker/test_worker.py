@@ -648,6 +648,10 @@ class BuildTTSTest(unittest.TestCase):
             model="eleven_flash_v2_5",
             encoding="pcm_24000",
             language="pt-BR",
+            # Token TTS streaming (#313): words go out as they arrive, with a
+            # short first chunk instead of whole sentences.
+            auto_mode=False,
+            chunk_length_schedule=worker.TTS_CHUNK_LENGTH_SCHEDULE,
         )
 
     def test_model_can_be_overridden(self):
@@ -708,6 +712,122 @@ class BuildTTSTest(unittest.TestCase):
             build_tts("s1", self.CONTEXT)
 
         self.assertEqual(tts.call_args.kwargs["model"], "eleven_flash_v2_5")
+
+
+class TokenStreamingVoiceTest(unittest.IsolatedAsyncioTestCase):
+    """Token TTS streaming (#313): Phoenix deltas feed one provider stream per reply."""
+
+    setUp = PatientVoiceFlowTest.setUp
+    _source = PatientVoiceFlowTest._source
+    connect = PatientVoiceFlowTest.connect
+    say = PatientVoiceFlowTest.say
+    disconnect = PatientVoiceFlowTest.disconnect
+
+    async def test_deltas_reach_the_tts_stream_before_the_first_sentence(self):
+        more = asyncio.Event()
+        self.client.streams[1] = [
+            ("delta", "Começou"),
+            ("delta", " ontem."),
+            more,
+            "Começou ontem.",
+        ]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+
+        self.assertEqual(self.client.delta_requests, [True])
+        stream = self.tts.input_streams[0]
+        self.assertEqual(stream.pushed, ["Começou", " ontem."])
+        self.assertEqual(self.room.patient_events(), [])
+        stream.queue.put_nowait(chunk("t1"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["t1"])
+
+        more.set()
+        await asyncio.sleep(0.01)
+        # The sentence is shown, never synthesized again; the settled turn ends
+        # the provider input.
+        self.assertEqual(self.tts.texts, [])
+        self.assertEqual(
+            [e.get("text") for e in self.room.patient_events() if "segment" in e],
+            ["Começou ontem."],
+        )
+        self.assertTrue(stream.ended)
+        stream.queue.put_nowait(None)
+        await asyncio.sleep(0.01)
+        await self.disconnect(task)
+        self.assertEqual(len(self.tts.input_streams), 1)
+
+    async def test_an_abort_stops_the_audio_and_the_regenerated_reply_is_spoken(self):
+        violation = asyncio.Event()
+        self.client.streams[1] = [
+            ("delta", "Sou um"),
+            violation,
+            ("abort",),
+            "Começou ontem à noite.",
+        ]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        stream = self.tts.input_streams[0]
+        self.assertEqual(stream.pushed, ["Sou um"])
+        stream.queue.put_nowait(chunk("t1"))
+        await settle()
+
+        violation.set()
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertGreaterEqual(self.sources[0].cleared, 1)
+        # Sentence mode takes over for what follows the abort.
+        self.assertEqual(self.tts.texts, ["Começou ontem à noite."])
+        await self.disconnect(task)
+
+    async def test_deltas_aborted_before_playback_are_never_spoken(self):
+        self.client.streams[1] = [("delta", "Sou um"), ("abort",), "Começou ontem."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+
+        self.assertTrue(all(s.pushed == [] for s in self.tts.input_streams))
+        self.assertEqual(self.tts.texts, ["Começou ontem."])
+        await self.disconnect(task)
+
+    async def test_an_examiner_turn_synthesizes_nothing(self):
+        self.client.replies[1] = VoiceTurnReply(
+            1, "kept", 1, None, addressee="examiner"
+        )
+        self.client.streams[1] = []
+        task = self.connect()
+        await self.say("Pode me mostrar o hemograma?")
+        await settle()
+
+        self.assertEqual(self.tts.texts, [])
+        self.assertEqual(self.tts.input_streams, [])
+        self.assertEqual(
+            [e.get("status") for e in self.room.patient_events()], ["acknowledged"]
+        )
+        await self.disconnect(task)
+
+    async def test_barge_in_stops_a_streamed_reply(self):
+        more = asyncio.Event()
+        self.client.streams[1] = [("delta", "Começou"), more, "Começou ontem."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        stream = self.tts.input_streams[0]
+        stream.queue.put_nowait(chunk("t1"))
+        await settle()
+
+        self.queue.put_nowait(event(INTERIM, "espera"))
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertIn({"generation_id": None, "turn_id": 1}, self.client.cancel_calls)
+        more.set()
+        await asyncio.sleep(0.01)
+        self.assertEqual(self.tts.texts, [])
+        await self.disconnect(task)
 
 
 if __name__ == "__main__":

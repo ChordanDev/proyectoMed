@@ -159,6 +159,42 @@ class VoiceTurnReply:
         )
 
 
+class ReplyDelta:
+    """Patient text Phoenix streams before its sentence completes (#313, token mode).
+
+    `text` is word-aligned speakable text (the deltas of a reply add up to its
+    spoken text); `None` is the abort that withdraws the deltas not covered by a
+    sentence. `speech_ended_at` and `received_at` are the timing marks, as on
+    `VoiceTurnReply`. The text never appears in logs or representations.
+    """
+
+    def __init__(self, turn_id: int, generation_id: int, text: str | None = None):
+        self.turn_id = turn_id
+        self.generation_id = generation_id
+        self.text = text
+        self.speech_ended_at: float | None = None
+        self.received_at: float | None = None
+
+    def is_abort(self) -> bool:
+        return self.text is None
+
+    def is_valid(self) -> bool:
+        return (
+            type(self.turn_id) is int
+            and self.turn_id > 0
+            and type(self.generation_id) is int
+            and self.generation_id > 0
+            and (self.text is None or (isinstance(self.text, str) and bool(self.text.strip())))
+        )
+
+    def __repr__(self) -> str:
+        kind = "abort" if self.is_abort() else "delta"
+        return (
+            f"ReplyDelta({kind}, turn_id={self.turn_id}, "
+            f"generation_id={self.generation_id})"
+        )
+
+
 class TurnTracker:
     """Turns Deepgram interim/final/end-of-speech events into session- and turn-scoped events.
 
@@ -336,7 +372,9 @@ class PhoenixClient:
     async def context(self) -> dict:
         return await self._request("GET", self._path)
 
-    async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
+    async def commit(
+        self, turn_id: int, text: str, on_sentence=None, on_delta=None
+    ) -> VoiceTurnReply:
         """Commits a final transcript; returns typed VoiceTurnReply.
 
         Each attempt waits for the server budget (`turn_timeout`, #269), and a
@@ -348,8 +386,15 @@ class PhoenixClient:
         `VoiceTurnReply` with `index`) as Phoenix sends it, and the returned reply
         is Phoenix's final result. Once a sentence was handed over the request is
         never retried: a retry could only answer `duplicate`.
+
+        With `on_delta` as well (#313) the worker asks for token TTS streaming
+        (`deltas: true`): `on_delta` is awaited with each `ReplyDelta` (text or
+        abort) Phoenix streams, in order with the sentences. Phoenix sends them
+        only in its token mode.
         """
         body = {"turn_id": turn_id, "text": text}
+        if on_sentence is not None and on_delta is not None:
+            body["deltas"] = True
         path = self._path + "/transcripts"
         attempts_left = self._turn_retries
         handed_over = False
@@ -359,6 +404,13 @@ class PhoenixClient:
             handed_over = True
             await on_sentence(sentence)
 
+        async def hand_over_delta(delta: ReplyDelta) -> None:
+            nonlocal handed_over
+            if on_delta is None:
+                raise VoiceFailure("malformed")
+            handed_over = True
+            await on_delta(delta)
+
         while True:
             try:
                 if on_sentence is None:
@@ -366,7 +418,9 @@ class PhoenixClient:
                         "POST", path, json=body, timeout=self._turn_timeout
                     )
                 else:
-                    result = await self._stream_turn(path, body, hand_over)
+                    result = await self._stream_turn(
+                        path, body, hand_over, hand_over_delta
+                    )
                 break
             except VoiceFailure as failure:
                 if (
@@ -385,10 +439,13 @@ class PhoenixClient:
             addressee=result.get("addressee"),
         )
 
-    async def _stream_turn(self, path: str, body: dict, on_sentence) -> dict:
+    async def _stream_turn(
+        self, path: str, body: dict, on_sentence, on_delta=None
+    ) -> dict:
         """POST a transcript asking for NDJSON; returns the final result object.
 
-        Lines are `sentence`, then one `result` or `error`. A single JSON body (a
+        Lines are `sentence` (and in token mode `delta` and `abort`, #313), then
+        one `result` or `error`. A single JSON body (a
         turn that speaks nothing, or an older server) is read as before.
         """
         try:
@@ -418,6 +475,14 @@ class PhoenixClient:
                                 generation_id=item.get("generation_id"),
                                 reply_text=item.get("text"),
                                 index=item.get("index"),
+                            )
+                        )
+                    elif kind in ("delta", "abort") and on_delta is not None:
+                        await on_delta(
+                            ReplyDelta(
+                                item.get("turn_id"),
+                                item.get("generation_id"),
+                                item.get("text") if kind == "delta" else None,
                             )
                         )
                     elif kind == "result" and isinstance(item.get("status"), str):
@@ -521,10 +586,14 @@ class TurnManager:
         cleanup_timeout: float = 1.0,
         on_cancel=None,
         on_turn_end=None,
+        on_delta=None,
     ):
         self.tracker = tracker
         self.phoenix = phoenix
         self.on_reply = on_reply
+        # Told each token-mode delta or abort of the pending turn (#313); with it
+        # the worker asks Phoenix for deltas.
+        self.on_delta = on_delta
         # Told when Phoenix settled a reply streamed sentence by sentence (#281).
         self.on_turn_end = on_turn_end
         # Synchronous consumer told which turn was cancelled or went stale (#120).
@@ -749,7 +818,37 @@ class TurnManager:
                     if asyncio.iscoroutine(result):
                         await result
 
-            reply = await self.phoenix.commit(turn_id, text, on_sentence=on_sentence)
+            deltas_seen = False
+
+            async def on_delta(delta: ReplyDelta) -> None:
+                # Token TTS streaming (#313): the delta makes its generation the
+                # active one, like a sentence, so it can be spoken at once.
+                nonlocal streamed, deltas_seen
+                if delta.turn_id != turn_id or not delta.is_valid():
+                    return
+                if not delta.is_abort():
+                    probe = VoiceTurnReply(
+                        turn_id, "committed", delta.generation_id, delta.text
+                    )
+                    if self.tracker.accept_sentence(probe) is None:
+                        return
+                    streamed = deltas_seen = True
+                delta.speech_ended_at = speech_ended_at
+                delta.received_at = first_received()
+                result = self.on_delta(delta)
+                if asyncio.iscoroutine(result):
+                    await result
+
+            options = {"on_sentence": on_sentence}
+            if self.on_delta is not None:
+                options["on_delta"] = on_delta
+            try:
+                reply = await self.phoenix.commit(turn_id, text, **options)
+            except Exception:
+                if deltas_seen:
+                    # A stream cut after deltas withdraws them, as an abort would.
+                    await self._abort_deltas(turn_id)
+                raise
             reply.speech_ended_at = speech_ended_at
             reply.received_at = first_received()
             if (
@@ -783,6 +882,8 @@ class TurnManager:
                 if accepted is None and reply.is_settled_receipt():
                     # A committed result the tracker refuses is a stale generation.
                     self._notify_cancel(turn_id)
+                if deltas_seen and (accepted is None or not accepted.is_committed_receipt()):
+                    await self._abort_deltas(turn_id)
                 return accepted
             return None
         except asyncio.CancelledError as exc:
@@ -809,6 +910,14 @@ class TurnManager:
                 and turn_id not in self._unresolved_cancel_turns
             ):
                 self.pending_turn_id = None
+
+    async def _abort_deltas(self, turn_id: int) -> None:
+        """Withdraw the deltas of a turn that did not settle as a spoken reply (#313)."""
+        if self.on_delta is None or self.tracker.active_generation_id is None:
+            return
+        result = self.on_delta(ReplyDelta(turn_id, self.tracker.active_generation_id))
+        if asyncio.iscoroutine(result):
+            await result
 
     def _notify_cancel(self, turn_id: int) -> None:
         if self.on_cancel is not None:
@@ -921,6 +1030,7 @@ async def process_speech_stream(
     eof_timeout: float = 15.0,
     on_cancel=None,
     on_turn_end=None,
+    on_delta=None,
 ) -> None:
     turn_manager = TurnManager(
         tracker=tracker,
@@ -929,6 +1039,7 @@ async def process_speech_stream(
         cleanup_timeout=cleanup_timeout,
         on_cancel=on_cancel,
         on_turn_end=on_turn_end,
+        on_delta=on_delta,
     )
     turn_manager.set_main_task(asyncio.current_task())
     try:

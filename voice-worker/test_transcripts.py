@@ -13,6 +13,7 @@ from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 
 import transcripts
 from transcripts import (
+    ReplyDelta,
     PhoenixClient,
     TurnManager,
     TurnTracker,
@@ -800,9 +801,15 @@ class ControllablePhoenixClient(PhoenixClient):
         # Sentence streams (#271): each item is a sentence to hand over or an
         # asyncio.Event the stream waits for before going on.
         self.streams: dict[int, list] = {}
+        # Token TTS streaming (#313): a stream item ("delta", text) or ("abort",)
+        # is handed to `on_delta`; whether each commit asked for deltas.
+        self.delta_requests: list[bool] = []
 
-    async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
+    async def commit(
+        self, turn_id: int, text: str, on_sentence=None, on_delta=None
+    ) -> VoiceTurnReply:
         self.call_log.append(("commit_start", turn_id, text))
+        self.delta_requests.append(on_delta is not None)
         self.commit_calls.append((turn_id, text))
         if turn_id in self.commit_events:
             self.commit_events[turn_id].set()
@@ -819,6 +826,12 @@ class ControllablePhoenixClient(PhoenixClient):
                     continue
                 if isinstance(item, Exception):
                     raise item
+                if isinstance(item, tuple):
+                    if on_delta is not None:
+                        await on_delta(
+                            ReplyDelta(turn_id, turn_id, item[1] if len(item) > 1 else None)
+                        )
+                    continue
                 sentence = VoiceTurnReply(
                     turn_id=turn_id,
                     status="committed",
@@ -2888,6 +2901,87 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(tracker.is_valid_reply(stale_turn))
         self.assertIsNone(tracker.accept_reply(stale_turn))
+
+
+class PhoenixClientDeltaStreamTest(unittest.IsolatedAsyncioTestCase):
+    """Token TTS streaming (#313): delta and abort lines of the transcript stream."""
+
+    async def test_asks_for_deltas_and_hands_them_over_in_order(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=ndjson(
+                    {"type": "delta", "turn_id": 1, "generation_id": 1, "text": "Começou"},
+                    {"type": "delta", "turn_id": 1, "generation_id": 1, "text": " ontem."},
+                    sentence_line(0, "Começou ontem."),
+                    {"type": "abort", "turn_id": 1, "generation_id": 1},
+                    {
+                        "type": "result",
+                        "turn_id": 1,
+                        "generation_id": 1,
+                        "status": "committed",
+                        "reply_text": "Começou ontem.",
+                    },
+                ),
+            )
+
+        seen = []
+
+        async def on_sentence(sentence):
+            seen.append(("sentence", sentence.reply_text))
+
+        async def on_delta(delta):
+            seen.append(("abort",) if delta.is_abort() else ("delta", delta.text))
+
+        client = PhoenixClient(
+            "http://phoenix", "secret", "s1", transport=httpx.MockTransport(handler)
+        )
+        async with client:
+            reply = await client.commit(
+                1, "Quando?", on_sentence=on_sentence, on_delta=on_delta
+            )
+
+        self.assertTrue(json.loads(requests[0].content)["deltas"])
+        self.assertEqual(
+            seen,
+            [
+                ("delta", "Começou"),
+                ("delta", " ontem."),
+                ("sentence", "Começou ontem."),
+                ("abort",),
+            ],
+        )
+        self.assertTrue(reply.is_committed_receipt())
+
+    async def test_without_a_delta_handler_no_deltas_are_asked_for(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(
+                201,
+                json={"turn_id": 1, "status": "kept", "generation_id": 1},
+            )
+
+        client = PhoenixClient(
+            "http://phoenix", "secret", "s1", transport=httpx.MockTransport(handler)
+        )
+        async with client:
+            await client.commit(1, "Quando?", on_sentence=AsyncMock())
+        self.assertNotIn("deltas", json.loads(requests[0].content))
+
+    def test_a_delta_never_exposes_its_text(self):
+        delta = ReplyDelta(1, 1, "Resposta clinica confidencial")
+        self.assertNotIn("confidencial", repr(delta))
+        self.assertTrue(delta.is_valid())
+        self.assertFalse(delta.is_abort())
+        self.assertTrue(ReplyDelta(1, 1).is_abort())
+        self.assertFalse(ReplyDelta(1, 1, "   ").is_valid())
+        self.assertFalse(ReplyDelta(0, 1, "a").is_valid())
 
 
 if __name__ == "__main__":

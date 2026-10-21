@@ -25,6 +25,47 @@ def _audio_track(source):
     return rtc.LocalAudioTrack.create_audio_track(TRACK_NAME, source)
 
 
+class TextFeed:
+    """Text of one reply still arriving, for token TTS streaming (#313).
+
+    `push` adds a piece, `end` marks the end of the reply; iterating yields the
+    pieces in order until the end. `abort` drops what was not yielded yet and
+    ends it: an aborted feed is never spoken. Never logged.
+    """
+
+    _END = object()
+
+    def __init__(self):
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self.ended = False
+        self.aborted = False
+
+    def push(self, text: str) -> None:
+        if not self.ended:
+            self._queue.put_nowait(text)
+
+    def end(self) -> None:
+        if not self.ended:
+            self.ended = True
+            self._queue.put_nowait(self._END)
+
+    def abort(self) -> None:
+        self.aborted = True
+        while not self._queue.empty():
+            self._queue.get_nowait()
+        self.ended = False
+        self.end()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        item = await self._queue.get()
+        if item is self._END:
+            raise StopAsyncIteration
+        return item
+
+
 class SpeechPlayer:
     """Speaks accepted replies through an injected TTS provider, one generation at a time.
 
@@ -93,8 +134,15 @@ class SpeechPlayer:
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         )
 
-    async def speak(self, reply: VoiceTurnReply) -> VoiceFailure | None:
+    async def speak(
+        self, reply: VoiceTurnReply, feed: TextFeed | None = None
+    ) -> VoiceFailure | None:
         """Stream one accepted reply into the room; frames are pushed as they arrive.
+
+        With `feed` (token TTS streaming, #313) the reply's text is pushed to a
+        streaming-input provider stream piece by piece as the feed yields it, and
+        the provider input ends with the feed; `reply` then only carries the
+        generation identity.
 
         Returns when the generation finished, was cancelled or was superseded. A
         provider or publication error is returned as `synthesis_failed`, never raised.
@@ -103,7 +151,7 @@ class SpeechPlayer:
             return None
         self._stop()  # a newer generation supersedes the one being spoken
         self._speaking = reply
-        task = self._task = asyncio.create_task(self._synthesize(reply))
+        task = self._task = asyncio.create_task(self._synthesize(reply, feed))
         try:
             await asyncio.wait({task})
         except asyncio.CancelledError:
@@ -128,6 +176,16 @@ class SpeechPlayer:
             return
         self.tracker.cancel(generation_id=generation_id)
         self._stop()
+
+    def interrupt(self, generation_id: int | None) -> None:
+        """Stop speaking `generation_id` now without cancelling the generation (#313).
+
+        Used when Phoenix aborts a token-mode reply: what follows the abort (a
+        regenerated reply) is still this generation and is spoken.
+        """
+        reply = self._speaking
+        if reply is not None and reply.generation_id == generation_id:
+            self._stop()
 
     def cancel_turn(self, turn_id: int) -> None:
         """Stop the playback bound to `turn_id` or an earlier turn; newer turns keep playing."""
@@ -215,16 +273,32 @@ class SpeechPlayer:
             if self._source is not None:
                 self._source.clear_queue()
 
-    async def _synthesize(self, reply: VoiceTurnReply) -> VoiceFailure | None:
+    async def _push_feed(self, reply: VoiceTurnReply, feed: TextFeed, stream) -> None:
+        async for text in feed:
+            self._mark_push(reply)
+            stream.push_text(text)
+        stream.end_input()
+
+    async def _synthesize(
+        self, reply: VoiceTurnReply, feed: TextFeed | None = None
+    ) -> VoiceFailure | None:
         stream = None
+        pusher = None
         try:
             await self.start()
             if self._speaking is not reply or not self._is_current(reply):
                 return None
-            self._mark_push(reply)
-            stream = self.tts.synthesize(
-                reply.reply_text, conn_options=SYNTHESIS_OPTIONS
-            )
+            if feed is not None and feed.aborted:
+                return None
+            if feed is None:
+                self._mark_push(reply)
+                stream = self.tts.synthesize(
+                    reply.reply_text, conn_options=SYNTHESIS_OPTIONS
+                )
+            else:
+                stream = self.tts.stream(conn_options=SYNTHESIS_OPTIONS)
+                pusher = asyncio.create_task(self._push_feed(reply, feed, stream))
+            mode = "sentence" if feed is None else "token"
             async for audio in stream:
                 if self._speaking is not reply:
                     return None
@@ -232,7 +306,7 @@ class SpeechPlayer:
                     # Fenced by the tracker alone: drop this frame and every later one.
                     self._source.clear_queue()
                     return None
-                self._log_first_audio(reply)
+                self._log_first_audio(reply, mode)
                 await self._source.capture_frame(audio.frame)
             # Still this generation until the buffered tail is heard, so a cancel in
             # that window clears it instead of being a finished-generation no-op.
@@ -252,5 +326,8 @@ class SpeechPlayer:
             )
             return failure
         finally:
+            if pusher is not None:
+                pusher.cancel()
+                await asyncio.gather(pusher, return_exceptions=True)
             if stream is not None:
                 await self._release(stream.aclose())

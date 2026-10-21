@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from livekit.agents import APIConnectionError, APIStatusError
 
-from speech import SpeechPlayer
+from speech import SpeechPlayer, TextFeed
 from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 
 REPLY_TEXT = "Resposta clinica confidencial"
@@ -107,6 +107,21 @@ class FakeSynthesis:
         self.closed += 1
 
 
+class FakeInputStream(FakeSynthesis):
+    """Streaming-input provider stream (#313): records pushed text and the end of input."""
+
+    def __init__(self):
+        super().__init__()
+        self.pushed: list[str] = []
+        self.ended = False
+
+    def push_text(self, text: str) -> None:
+        self.pushed.append(text)
+
+    def end_input(self) -> None:
+        self.ended = True
+
+
 class FakeTTS:
     sample_rate = 22050
     num_channels = 1
@@ -114,8 +129,13 @@ class FakeTTS:
     def __init__(self):
         self.texts: list[str] = []
         self.streams: list[FakeSynthesis] = []
+        self.input_streams: list[FakeInputStream] = []
         self.synthesize_error: Exception | None = None
         self.closed = 0
+
+    def stream(self, **_options):
+        self.input_streams.append(FakeInputStream())
+        return self.input_streams[-1]
 
     def synthesize(self, text: str, **_options):
         self.texts.append(text)
@@ -492,6 +512,76 @@ class SpeechPlayerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
         self.assertNotIn(REPLY_TEXT, repr(self.player))
+
+
+class StreamedSpeechTest(unittest.IsolatedAsyncioTestCase):
+    """Token TTS streaming (#313): text pushed to the provider as it arrives."""
+
+    setUp = SpeechPlayerTest.setUp
+
+    async def test_text_is_pushed_as_it_arrives_and_its_audio_played(self):
+        reply = accepted(self.tracker, 1, "Começou")
+        feed = TextFeed()
+        feed.push("Começou")
+        task = asyncio.create_task(self.player.speak(reply, feed=feed))
+        await settle()
+
+        stream = self.tts.input_streams[0]
+        self.assertEqual(stream.pushed, ["Começou"])
+        self.assertEqual(self.tts.texts, [])
+        stream.queue.put_nowait(chunk("a1"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["a1"])
+
+        feed.push(" ontem.")
+        await settle()
+        self.assertEqual(stream.pushed, ["Começou", " ontem."])
+        self.assertFalse(stream.ended)
+        feed.end()
+        await settle()
+        self.assertTrue(stream.ended)
+
+        stream.queue.put_nowait(chunk("a2"))
+        stream.queue.put_nowait(None)
+        self.assertIsNone(await task)
+        self.assertEqual(self.sources[0].frames, ["a1", "a2"])
+        self.assertEqual(stream.closed, 1)
+
+    async def test_interrupt_stops_playback_without_cancelling_the_generation(self):
+        reply = accepted(self.tracker, 1, "Sou um")
+        feed = TextFeed()
+        feed.push("Sou um")
+        task = asyncio.create_task(self.player.speak(reply, feed=feed))
+        await settle()
+        self.tts.input_streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+
+        self.player.interrupt(1)
+        self.assertIsNone(await task)
+        self.assertEqual(self.tts.input_streams[0].closed, 1)
+        self.assertGreaterEqual(self.sources[0].cleared, 1)
+        # The generation is still current: its regenerated reply can be spoken.
+        self.assertNotIn(1, self.tracker.cancelled_generations)
+
+    async def test_first_audio_of_a_streamed_turn_logs_the_token_mode(self):
+        reply = accepted(self.tracker, 1, "Começou")
+        reply.speech_ended_at = asyncio.get_running_loop().time()
+        reply.received_at = reply.speech_ended_at
+        feed = TextFeed()
+        feed.push("Começou")
+        feed.end()
+        with self.assertLogs("voice-worker.speech", level="INFO") as logs:
+            task = asyncio.create_task(self.player.speak(reply, feed=feed))
+            await settle()
+            self.tts.input_streams[0].queue.put_nowait(chunk("a1"))
+            self.tts.input_streams[0].queue.put_nowait(None)
+            await task
+
+        self.assertRegex(
+            "\n".join(logs.output),
+            r"after \d+ ms \(mode=token first_text=\d+ ms first_tts_push=\d+ ms\)",
+        )
+        self.assertNotIn("Começou", "\n".join(logs.output))
 
 
 if __name__ == "__main__":

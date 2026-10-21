@@ -20,11 +20,12 @@ import sys
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, cli
 from livekit.plugins import deepgram, elevenlabs
-from speech import SpeechPlayer
+from speech import SpeechPlayer, TextFeed
 from transcripts import (
     DEFAULT_TURN_RETRIES,
     DEFAULT_TURN_TIMEOUT_S,
     PhoenixClient,
+    ReplyDelta,
     TurnTracker,
     VoiceFailure,
     VoiceTurnReply,
@@ -40,6 +41,13 @@ ENDPOINTING_MS = 500
 DEFAULT_TTS_MODEL = "eleven_flash_v2_5"
 # Raw PCM: frames reach the room as they arrive, with no decoder in between.
 TTS_ENCODING = "pcm_24000"
+# Token TTS streaming (#313): Phoenix deltas reach ElevenLabs word by word over the
+# streaming-input websocket. `auto_mode` would wait for whole sentences (the plugin
+# then tokenizes by sentence), so it is off and generation starts once 50
+# characters are buffered (the API's minimum); later chunks may be longer for a
+# steadier voice. Only `TTS.stream()` uses these; sentence mode's
+# `TTS.synthesize()` is unchanged. ponytail: tune from real sessions.
+TTS_CHUNK_LENGTH_SCHEDULE = [50, 90, 120, 160]
 logger = logging.getLogger("voice-worker")
 server = AgentServer()
 
@@ -152,6 +160,8 @@ def build_tts(session_id: str, context):
             model=os.environ.get("ELEVENLABS_MODEL", "").strip() or DEFAULT_TTS_MODEL,
             encoding=TTS_ENCODING,
             language=context["language"],
+            auto_mode=False,
+            chunk_length_schedule=TTS_CHUNK_LENGTH_SCHEDULE,
         )
     except (KeyError, ValueError):
         logger.warning(
@@ -173,6 +183,13 @@ class PatientVoice:
     learner; a failure there is published content-free and never stops the job. A text
     event the room rejects is reported the same way (`text_delivery_failed`) and the
     reply is still spoken.
+
+    Token TTS streaming (#313): Phoenix may stream a reply's text as deltas before
+    its sentences. The first delta of a generation opens one provider stream fed
+    with every delta (`SpeechPlayer.speak` with a `TextFeed`); that generation's
+    sentences are then published as text only, and the settled turn ends the
+    feed. An abort stops the audio at once and closes the feed: what follows it
+    (a regenerated reply) is spoken sentence by sentence.
     """
 
     def __init__(self, room, player: SpeechPlayer | None, session_id: str = ""):
@@ -183,6 +200,9 @@ class PatientVoice:
         # Last queued speech as (generation_id, turn_id, task): sentences of one
         # streamed reply (#271) are spoken in order, each after the previous one.
         self._tail: tuple[int | None, int, asyncio.Task] | None = None
+        # Open token-mode feeds by generation (#313).
+        self._feeds: dict[int, TextFeed] = {}
+        self._aborted: set[int] = set()
 
     async def start(self) -> None:
         """Publish the patient track ahead of the first reply; a failure is retried then."""
@@ -215,13 +235,56 @@ class PatientVoice:
             # Called from the speech reader: a room publish error must not stop the
             # job. Phoenix keeps the approved text, and the reply is still spoken.
             await self._publish_failure(reply, "text_delivery_failed")
+        if reply.generation_id in self._feeds:
+            return  # its words are already being spoken from the deltas (#313)
+        self._queue_speech(reply, None)
+
+    def _queue_speech(self, reply: VoiceTurnReply, feed: TextFeed | None) -> None:
         previous = None
         if self._tail is not None and self._tail[0] == reply.generation_id:
             previous = self._tail[2]
-        task = asyncio.create_task(self._speak(reply, previous))
+        task = asyncio.create_task(self._speak(reply, previous, feed))
         self._tail = (reply.generation_id, reply.turn_id, task)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def on_delta(self, delta: ReplyDelta) -> None:
+        """Speak a token-mode delta of the reply being generated, or abort it (#313)."""
+        if self.player is None:
+            return  # the sentences report `synthesis_failed`, as without deltas
+        generation_id = delta.generation_id
+        if delta.is_abort():
+            self._abort(generation_id)
+            return
+        feed = self._feeds.get(generation_id)
+        if feed is None:
+            if generation_id in self._aborted:
+                return
+            for older in [g for g in self._feeds if g < generation_id]:
+                self._feeds.pop(older).end()
+            self._aborted = {g for g in self._aborted if g >= generation_id}
+            feed = self._feeds[generation_id] = TextFeed()
+            reply = VoiceTurnReply(
+                delta.turn_id, "committed", generation_id, delta.text
+            )
+            reply.speech_ended_at = delta.speech_ended_at
+            reply.received_at = delta.received_at
+            self._queue_speech(reply, feed)
+        feed.push(delta.text)
+
+    def _abort(self, generation_id: int) -> None:
+        feed = self._feeds.pop(generation_id, None)
+        self._aborted.add(generation_id)
+        if feed is not None:
+            feed.abort()
+        try:
+            self.player.interrupt(generation_id)
+        except Exception:
+            logger.warning(
+                "playback interrupt failed for session %s generation %d",
+                self.session_id,
+                generation_id,
+            )
 
     async def _acknowledge(self, reply: VoiceTurnReply) -> None:
         """Phoenix kept the learner turn without a patient reply.
@@ -254,6 +317,9 @@ class PatientVoice:
         is logged content-free and never stops the job; it is not a failure event,
         since the sentences were delivered.
         """
+        feed = self._feeds.pop(reply.generation_id, None)
+        if feed is not None:
+            feed.end()  # every delta was handed over (#313)
         try:
             await publish(
                 self.room,
@@ -305,12 +371,17 @@ class PatientVoice:
             await self.player.aclose()
 
     async def _speak(
-        self, reply: VoiceTurnReply, previous: asyncio.Task | None = None
+        self,
+        reply: VoiceTurnReply,
+        previous: asyncio.Task | None = None,
+        feed: TextFeed | None = None,
     ) -> None:
         if previous is not None:
             # The previous sentence of the same reply finishes first; a cancelled
             # generation is then skipped by the player's fence.
             await asyncio.wait({previous})
+        if feed is not None and feed.aborted:
+            return  # Phoenix withdrew these deltas before they were spoken (#313)
         if self.player is None:
             failure = VoiceFailure("synthesis_failed")
             logger.warning(
@@ -321,7 +392,7 @@ class PatientVoice:
                 failure.kind,
             )
         else:
-            failure = await self.player.speak(reply)
+            failure = await self.player.speak(reply, feed=feed)
         if failure is not None:
             await self._publish_failure(reply, failure.kind)
 
@@ -370,6 +441,7 @@ async def transcribe(
     if voice is not None and on_reply is None:
         on_reply = voice.on_reply
     on_turn_end = voice.on_turn_end if voice is not None else None
+    on_delta = voice.on_delta if voice is not None else None
     if stt is None:
         stt = deepgram.STT(
             model="nova-3",
@@ -440,6 +512,7 @@ async def transcribe(
             eof_timeout=phoenix.eof_timeout,
             on_cancel=voice.cancel_turn if voice is not None else None,
             on_turn_end=on_turn_end,
+            on_delta=on_delta,
         )
     finally:
         primary = sys.exception()
