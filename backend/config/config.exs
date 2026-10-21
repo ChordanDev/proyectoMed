@@ -22,6 +22,7 @@ config :backend,
   # resolver 30 s + feedback 45 s fit the web client's 95 s wait for the
   # educational result (issue #301, see runtime.exs).
   learner_feedback_deadline_ms: 45_000,
+  learner_feedback_cooldown_ms: 30_000,
   rubric_resolver_adapter: Backend.Stations.RubricAssessment.Resolver.DisabledAdapter,
   rubric_resolver_deadline_ms: 30_000,
   # Undecided-verdict adjudicator (issue #290): off unless runtime.exs selects it.

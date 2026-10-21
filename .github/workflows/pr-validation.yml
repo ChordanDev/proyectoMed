@@ -1,18 +1,30 @@
 name: Pull Request Validation
 
+# Every pull request is checked, whatever its base. Draft pull requests are
+# skipped until they are marked ready for review.
+#
+# Pushes to develop also run, so the dependency, build and Dialyzer PLT caches
+# are saved on develop, where every pull request to develop can restore them.
+# A cache saved by a pull request is visible only to that pull request.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [develop]
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-validation-${{ github.event.pull_request.number }}
+  group: pr-validation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test Web and Phoenix
+  # One job instead of three: GitHub bills each job rounded up to the whole
+  # minute, and every job repeated the same Node, Erlang and dependency setup.
+  validate:
+    name: Validate Web and Phoenix
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -20,57 +32,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: web/package.json
-
-      - uses: erlef/setup-beam@v1
-        with:
-          version-file: backend/.tool-versions
-          version-type: strict
-
-      - run: npm --prefix web ci
-      - run: ( cd backend && mix deps.get )
-      - run: bash scripts/test.sh
-
-  lint:
-    name: Lint and Typecheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: web/package.json
-
-      - uses: erlef/setup-beam@v1
-        with:
-          version-file: backend/.tool-versions
-          version-type: strict
-
-      - name: Install web dependencies
-        run: npm --prefix web ci
-
-      - name: Web typecheck
-        run: npm --prefix web run typecheck
-
-      - name: Web lint
-        run: npm --prefix web run lint
-
-      - name: Install backend dependencies
-        run: ( cd backend && mix deps.get )
-
-      - name: Backend format check
-        run: ( cd backend && mix format --check-formatted )
-
-      - name: Backend compile with warnings as errors
-        run: ( cd backend && mix compile --warnings-as-errors )
-
-      - name: Backend Credo strict check
-        run: ( cd backend && mix credo --strict )
-
-  dialyzer:
-    name: Dialyzer Static Analysis
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - uses: erlef/setup-beam@v1
         id: beam
@@ -78,10 +41,19 @@ jobs:
           version-file: backend/.tool-versions
           version-type: strict
 
-      - name: Install backend dependencies
-        run: ( cd backend && mix deps.get )
+      - name: Restore backend dependencies and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            backend/deps
+            backend/_build
+          key: >-
+            mix-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{
+            steps.beam.outputs.elixir-version }}-${{ hashFiles('backend/mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
-      - name: Restore Dialyzer PLT Cache
+      - name: Restore Dialyzer PLT cache
         uses: actions/cache@v4
         with:
           path: backend/priv/plts
@@ -91,5 +63,31 @@ jobs:
           restore-keys: |
             plt-${{ runner.os }}-
 
-      - name: Run Dialyzer
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Install backend dependencies
+        run: ( cd backend && mix deps.get )
+
+      - name: Web typecheck
+        run: npm --prefix web run typecheck
+
+      - name: Web lint
+        run: npm --prefix web run lint
+
+      - name: Backend format check
+        run: ( cd backend && mix format --check-formatted )
+
+      # --force recompiles the project (not its deps): with a cached _build,
+      # unchanged modules would otherwise skip compilation and hide warnings.
+      - name: Backend compile with warnings as errors
+        run: ( cd backend && mix compile --force --warnings-as-errors )
+
+      - name: Backend Credo strict check
+        run: ( cd backend && mix credo --strict )
+
+      - name: Tests (web unit, ExUnit, end-to-end)
+        run: bash scripts/test.sh
+
+      - name: Dialyzer static analysis
         run: ( cd backend && mix dialyzer --format short )

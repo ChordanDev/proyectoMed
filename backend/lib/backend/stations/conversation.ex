@@ -9,6 +9,12 @@ defmodule Backend.Stations.Conversation do
   (`put_learner_feedback/2`) and the after-delivery audits of its patient
   replies (`record_patient_audit/3`, issue #307), which live and die with the
   session.
+
+  Learner feedback generation is single-flight per session
+  (`claim_learner_feedback/2`, `settle_learner_feedback/2`): one caller
+  generates while later callers for the same session wait for it to settle.
+  A settled, crashed or exited owner, or a discarded session, releases every
+  waiter.
   """
 
   use GenServer
@@ -78,10 +84,15 @@ defmodule Backend.Stations.Conversation do
         }
 
   @typedoc """
-  Generated learner feedback by criterion id, each entry bound to the
-  fingerprint of the graded outcome it was written for.
+  Learner feedback by criterion id, each entry bound to the fingerprint of the
+  graded outcome it was generated for: either the generated `text`, or a
+  failed generation not to retry before the monotonic `retry_after` (ms).
   """
-  @type learner_feedback :: %{String.t() => %{fingerprint: term(), text: String.t()}}
+  @type learner_feedback :: %{
+          String.t() =>
+            %{fingerprint: term(), text: String.t()}
+            | %{fingerprint: term(), retry_after: integer()}
+        }
 
   @type turn_token :: reference()
 
@@ -438,11 +449,38 @@ defmodule Backend.Stations.Conversation do
     GenServer.call(__MODULE__, {:put_learner_feedback, session_id, entries})
   end
 
+  @doc """
+  Claims learner feedback generation for a session.
+
+  Returns `:generate` when the caller now owns the generation and must call
+  `settle_learner_feedback/2` (or exit) when done. When another process is
+  already generating for the session, the call blocks until that owner
+  settles, exits or the session is discarded, and returns `:settled`; the
+  caller then reads the cache instead of generating. `timeout` bounds the
+  wait; an exit is the caller's to handle.
+  """
+  @spec claim_learner_feedback(String.t(), timeout()) ::
+          :generate | :settled | {:error, :not_found | :expired}
+  def claim_learner_feedback(session_id, timeout) do
+    GenServer.call(__MODULE__, {:claim_learner_feedback, session_id}, timeout)
+  end
+
+  @doc """
+  Merges `entries` into the learner feedback cache of a session, like
+  `put_learner_feedback/2`, and releases the generation the caller claimed,
+  waking every waiter. A missing or expired session is left untouched.
+  """
+  @spec settle_learner_feedback(String.t(), learner_feedback()) ::
+          :ok | {:error, :not_found | :expired}
+  def settle_learner_feedback(session_id, entries) when is_map(entries) do
+    GenServer.call(__MODULE__, {:settle_learner_feedback, session_id, entries})
+  end
+
   @impl true
   def init(_options) do
     :ets.new(__MODULE__, [:named_table, :set, :public, read_concurrency: true])
     schedule_purge()
-    {:ok, %{turns: %{}, voice_graces: %{}}}
+    {:ok, %{turns: %{}, voice_graces: %{}, feedback_flights: %{}}}
   end
 
   @impl true
@@ -795,14 +833,27 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_call({:put_learner_feedback, session_id, entries}, _from, state) do
-    case fetch_session(session_id) do
-      {:ok, session} ->
-        cache = session |> Map.get(:learner_feedback, %{}) |> Map.merge(entries)
-        true = :ets.insert(__MODULE__, {session_id, Map.put(session, :learner_feedback, cache)})
-        {:reply, :ok, state}
+    {:reply, merge_learner_feedback(session_id, entries), state}
+  end
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+  def handle_call({:claim_learner_feedback, session_id}, {pid, _tag} = from, state) do
+    flights = Map.get(state, :feedback_flights, %{})
+
+    case Map.fetch(flights, session_id) do
+      {:ok, flight} ->
+        flight = %{flight | waiters: [from | flight.waiters]}
+        {:noreply, Map.put(state, :feedback_flights, Map.put(flights, session_id, flight))}
+
+      :error ->
+        case fetch_session(session_id) do
+          {:ok, _session} ->
+            flight = %{owner: pid, monitor: Process.monitor(pid), waiters: []}
+            flights = Map.put(flights, session_id, flight)
+            {:reply, :generate, Map.put(state, :feedback_flights, flights)}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -853,6 +904,18 @@ defmodule Backend.Stations.Conversation do
     end
   end
 
+  def handle_call({:settle_learner_feedback, session_id, entries}, {pid, _tag}, state) do
+    reply = merge_learner_feedback(session_id, entries)
+
+    state =
+      case state |> Map.get(:feedback_flights, %{}) |> Map.get(session_id) do
+        %{owner: ^pid} -> release_flight(state, session_id)
+        _other -> state
+      end
+
+    {:reply, reply, state}
+  end
+
   def handle_call({:discard, session_id}, _from, state) do
     :ets.delete(__MODULE__, session_id)
 
@@ -869,7 +932,7 @@ defmodule Backend.Stations.Conversation do
 
     {voice_grace, state} = pop_voice_grace(state, session_id)
     reply_waiters({:error, :not_found}, voice_grace.waiters)
-    {:reply, :ok, state}
+    {:reply, :ok, release_flight(state, session_id)}
   end
 
   @impl true
@@ -894,6 +957,15 @@ defmodule Backend.Stations.Conversation do
 
       nil ->
         {:noreply, defer_or_complete_timer(session_id, [], state)}
+    end
+  end
+
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+    flights = Map.get(state, :feedback_flights, %{})
+
+    case Enum.find(flights, fn {_session_id, flight} -> flight.monitor == monitor end) do
+      {session_id, _flight} -> {:noreply, release_flight(state, session_id)}
+      nil -> {:noreply, state}
     end
   end
 
@@ -1004,6 +1076,32 @@ defmodule Backend.Stations.Conversation do
   end
 
   defp get_criterion(_criteria, _key), do: nil
+
+  defp merge_learner_feedback(session_id, entries) do
+    case fetch_session(session_id) do
+      {:ok, session} ->
+        cache = session |> Map.get(:learner_feedback, %{}) |> Map.merge(entries)
+        true = :ets.insert(__MODULE__, {session_id, Map.put(session, :learner_feedback, cache)})
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Ends the learner feedback generation of a session, if any, and wakes its
+  # waiters so they read the cache.
+  defp release_flight(state, session_id) do
+    case Map.pop(Map.get(state, :feedback_flights, %{}), session_id) do
+      {nil, _flights} ->
+        state
+
+      {flight, flights} ->
+        Process.demonitor(flight.monitor, [:flush])
+        reply_waiters(:settled, flight.waiters)
+        Map.put(state, :feedback_flights, flights)
+    end
+  end
 
   defp active_session(session_id) do
     case fetch_session(session_id) do

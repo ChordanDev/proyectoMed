@@ -133,6 +133,7 @@ defmodule Backend.Stations.LearnerFeedbackTest do
   setup do
     previous_adapter = Application.fetch_env(:backend, :learner_feedback_adapter)
     previous_deadline = Application.fetch_env(:backend, :learner_feedback_deadline_ms)
+    previous_cooldown = Application.fetch_env(:backend, :learner_feedback_cooldown_ms)
     Application.put_env(:backend, :learner_feedback_adapter, FeedbackDouble)
     respond_with(fn _request -> {:ok, @generated} end)
 
@@ -140,6 +141,7 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       Application.delete_env(:backend, FeedbackDouble)
       restore(:learner_feedback_adapter, previous_adapter)
       restore(:learner_feedback_deadline_ms, previous_deadline)
+      restore(:learner_feedback_cooldown_ms, previous_cooldown)
     end)
 
     session = Stations.create_session(audio_consent: false)
@@ -542,7 +544,8 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       assert_received {:feedback_request, _}
     end
 
-    test "a failure is not cached, so the next fetch retries", %{session_id: id} do
+    test "without a cooldown a failure retries on the next fetch", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 0)
       respond_with(fn _request -> {:error, :unavailable} end)
       assert_authored(attach(id))
       assert_received {:feedback_request, _}
@@ -553,7 +556,10 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       assert Enum.map(request.criteria, & &1.id) == ["history", "exam"]
     end
 
-    test "an invalid criterion is retried while valid ones are reused", %{session_id: id} do
+    test "without a cooldown an invalid criterion is retried while valid ones are reused", %{
+      session_id: id
+    } do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 0)
       respond_with(fn _request -> {:ok, %{"exam" => @generated["exam"]}} end)
       attach(id)
       assert_received {:feedback_request, _}
@@ -570,6 +576,238 @@ defmodule Backend.Stations.LearnerFeedbackTest do
       :ok = Stations.discard_session(id)
 
       attach(id)
+      assert_received {:feedback_request, _}
+    end
+  end
+
+  describe "failure cooldown" do
+    test "the default cooldown is 30 s and the test environment disables it" do
+      config = Config.Reader.read!(Path.expand("../../../config/config.exs", __DIR__), env: :dev)
+      assert get_in(config, [:backend, :learner_feedback_cooldown_ms]) == 30_000
+      assert Application.fetch_env!(:backend, :learner_feedback_cooldown_ms) == 0
+    end
+
+    test "a fetch within the cooldown keeps the authored text without a call", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 60_000)
+      respond_with(fn _request -> {:error, :unavailable} end)
+      assert_authored(attach(id))
+      assert_received {:feedback_request, _}
+
+      respond_with(fn _request -> {:ok, @generated} end)
+      assert_authored(attach(id))
+      refute_received {:feedback_request, _}
+    end
+
+    test "a timed out generation also cools down", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 60_000)
+      Application.put_env(:backend, :learner_feedback_deadline_ms, 20)
+
+      respond_with(fn _request ->
+        Process.sleep(200)
+        {:ok, @generated}
+      end)
+
+      assert_authored(attach(id))
+      assert_received {:feedback_request, _}
+      assert_authored(attach(id))
+      refute_received {:feedback_request, _}
+    end
+
+    test "a fetch after the cooldown calls the provider again", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 30)
+      respond_with(fn _request -> {:error, :unavailable} end)
+      assert_authored(attach(id))
+      assert_received {:feedback_request, _}
+
+      Process.sleep(40)
+      respond_with(fn _request -> {:ok, @generated} end)
+      assert recommendations(attach(id))["history"] == @generated["history"]
+      assert_received {:feedback_request, request}
+      assert Enum.map(request.criteria, & &1.id) == ["history", "exam"]
+    end
+
+    test "an invalid criterion cools down while valid ones are reused", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 60_000)
+      respond_with(fn _request -> {:ok, %{"exam" => @generated["exam"]}} end)
+      attach(id)
+      assert_received {:feedback_request, _}
+
+      respond_with(fn _request -> {:ok, @generated} end)
+      result = attach(id)
+      refute_received {:feedback_request, _}
+
+      assert recommendations(result) == %{
+               "history" => "Authored history recommendation.",
+               "exam" => @generated["exam"],
+               "unclear" => "Authored unclear recommendation."
+             }
+    end
+
+    test "a changed graded outcome regenerates a cooling criterion only", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 60_000)
+      respond_with(fn _request -> {:error, :unavailable} end)
+      attach(id)
+      assert_received {:feedback_request, _}
+
+      respond_with(fn _request -> {:ok, %{"history" => "Agora você completou a história."}} end)
+      changed = %{@history | level: "adequado", points: 40}
+      result = attach(id, %{@assessment | criteria: [changed, @exam, @unclear]})
+
+      assert_received {:feedback_request, request}
+      assert Enum.map(request.criteria, & &1.id) == ["history"]
+      assert recommendations(result)["history"] == "Agora você completou a história."
+      assert recommendations(result)["exam"] == "Authored exam recommendation."
+    end
+
+    test "discarding the session drops its cooldown", %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 60_000)
+      respond_with(fn _request -> {:error, :unavailable} end)
+      attach(id)
+      assert_received {:feedback_request, _}
+      :ok = Stations.discard_session(id)
+
+      attach(id)
+      assert_received {:feedback_request, _}
+    end
+
+    test "a waiter whose generation failed reads the cooldown, not the provider", %{
+      session_id: id
+    } do
+      Application.put_env(:backend, :learner_feedback_cooldown_ms, 60_000)
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      send(generator, {:release, {:error, :unavailable}})
+      Enum.each(Task.await_many([first, second]), &assert_authored/1)
+      assert_authored(attach(id))
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+    end
+  end
+
+  # Answers each provider call only when the test sends `{:release, reply}` to
+  # the generating process, which is reported as `{:generating, pid}`.
+  defp gate_provider do
+    test_pid = self()
+
+    respond_with(fn _request ->
+      send(test_pid, {:generating, self()})
+
+      receive do
+        {:release, reply} -> reply
+      end
+    end)
+  end
+
+  defp wait_for_waiters(session_id, count, attempts \\ 200)
+
+  defp wait_for_waiters(session_id, count, 0) do
+    flunk("expected #{count} feedback waiters for #{session_id}")
+  end
+
+  defp wait_for_waiters(session_id, count, attempts) do
+    state = :sys.get_state(Backend.Stations.Conversation)
+
+    case state |> Map.get(:feedback_flights, %{}) |> Map.get(session_id) do
+      %{waiters: waiters} when length(waiters) == count ->
+        :ok
+
+      _other ->
+        Process.sleep(5)
+        wait_for_waiters(session_id, count, attempts - 1)
+    end
+  end
+
+  describe "single-flight" do
+    test "a concurrent fetch waits for the running generation", %{session_id: id} do
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      send(generator, {:release, {:ok, @generated}})
+      results = Task.await_many([first, second])
+
+      assert [result, result] = results
+      assert recommendations(result)["history"] == @generated["history"]
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+      refute_received {:generating, _}
+    end
+
+    test "a waiter gets the authored text when the generation fails", %{session_id: id} do
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      send(generator, {:release, {:error, :unavailable}})
+      Enum.each(Task.await_many([first, second]), &assert_authored/1)
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+    end
+
+    test "a waiter gets the authored text within the deadline when the generation times out",
+         %{session_id: id} do
+      Application.put_env(:backend, :learner_feedback_deadline_ms, 100)
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, _generator}
+      {elapsed_us, second} = :timer.tc(fn -> attach(id) end)
+
+      assert_authored(second)
+      assert elapsed_us < 600_000
+      assert_authored(Task.await(first))
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+    end
+
+    test "a waiter gets the authored text when the generating process dies", %{session_id: id} do
+      gate_provider()
+      owner = spawn(fn -> attach(id) end)
+      assert_receive {:generating, _generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      Process.exit(owner, :kill)
+      assert_authored(Task.await(second))
+      assert_received {:feedback_request, _}
+      refute_received {:feedback_request, _}
+    end
+
+    test "discarding the session releases its waiters", %{session_id: id} do
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      assert_receive {:generating, generator}
+      second = Task.async(fn -> attach(id) end)
+      wait_for_waiters(id, 1)
+
+      :ok = Stations.discard_session(id)
+      assert_authored(Task.await(second))
+      send(generator, {:release, {:ok, @generated}})
+      assert recommendations(Task.await(first))["history"] == @generated["history"]
+    end
+
+    test "different sessions generate independently", %{session_id: id} do
+      other = Stations.create_session(audio_consent: false)
+      {:ok, _} = Stations.complete_session(other.session_id)
+      on_exit(fn -> Stations.discard_session(other.session_id) end)
+
+      gate_provider()
+      first = Task.async(fn -> attach(id) end)
+      second = Task.async(fn -> attach(other.session_id) end)
+      assert_receive {:generating, generator_a}
+      assert_receive {:generating, generator_b}
+
+      send(generator_a, {:release, {:ok, @generated}})
+      send(generator_b, {:release, {:ok, @generated}})
+      Task.await_many([first, second])
+      assert_received {:feedback_request, _}
       assert_received {:feedback_request, _}
     end
   end
