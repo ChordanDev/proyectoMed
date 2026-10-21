@@ -3,8 +3,11 @@ defmodule BackendWeb.StationController do
 
   alias Backend.Stations
 
+  # `voice_mode` (#270) tells the web which single voice experience to offer:
+  # "realtime", "turn" or "off" (config/runtime.exs resolves VOICE_MODE).
   def active(conn, _params) do
-    json(conn, Stations.get_active_station())
+    voice_mode = Application.get_env(:backend, :voice_mode, "turn")
+    json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
   end
 
   def create_session(conn, params) do
@@ -51,11 +54,7 @@ defmodule BackendWeb.StationController do
              modality: parsed_modality,
              text: text
            }) do
-      json(conn, %{
-        reply_text: reply.reply_text,
-        reply_audio_url: reply.reply_audio_url,
-        server_now: DateTime.to_iso8601(DateTime.utc_now())
-      })
+      json(conn, message_reply_json(reply))
     else
       {:error, :invalid_message} ->
         conn
@@ -164,6 +163,29 @@ defmodule BackendWeb.StationController do
           message: "O serviço da estação de IA está temporariamente indisponível."
         })
     end
+  end
+
+  # An examiner-addressed turn (#274) is acknowledged with the kept learner
+  # turn and no reply, plus any impressos it released (#302); a patient reply
+  # carries `outcome: "patient_reply"`.
+  defp message_reply_json(%{outcome: :examiner_acknowledged, learner_turn: learner_turn} = reply) do
+    %{
+      outcome: "examiner_acknowledged",
+      reply_text: nil,
+      reply_audio_url: nil,
+      learner_turn: message_to_json(learner_turn),
+      newly_released: Map.get(reply, :newly_released, []),
+      server_now: DateTime.to_iso8601(DateTime.utc_now())
+    }
+  end
+
+  defp message_reply_json(reply) do
+    %{
+      outcome: "patient_reply",
+      reply_text: reply.reply_text,
+      reply_audio_url: reply.reply_audio_url,
+      server_now: DateTime.to_iso8601(DateTime.utc_now())
+    }
   end
 
   def finish_session(conn, %{"id" => session_id} = params) do

@@ -178,7 +178,38 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       nouls = nouls(%{@stated_allergy => 0.96, @asked_allergy => 0.03})
 
       assert decide(UnaskedStub, nouls) ==
-               {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-allergy"]}}
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-allergy"],
+                  unasked_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "names only the unasked on_request facts, not the asked ones or other risks" do
+      nouls =
+        nouls(%{
+          @stated_onset => 0.97,
+          @asked_onset => 0.95,
+          @stated_allergy => 0.96,
+          @asked_allergy => 0.03
+        })
+
+      assert decide(MixedUnaskedStub, nouls) ==
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-onset", "fact-allergy"],
+                  unasked_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "a refusal for a risk alone names no unasked fact" do
+      nouls = nouls(%{@stated_onset => 0.97, @asked_onset => 0.95, @risk_unsupported => 0.93})
+
+      assert {:ok, decision} = decide(RiskOnlyStub, nouls)
+      assert decision.status == :semantic_refusal
+      refute Map.has_key?(decision, :unasked_fact_ids)
     end
 
     test "a timed fact needs no asked question" do
@@ -259,28 +290,140 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       assert TypesafeAdapter.decide_patient(
                with_facts([@onset, twin]),
                stub_nouls(TwinUnaskedStub, unasked)
-             ) == {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-onset"]}}
+             ) ==
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-onset"],
+                  unasked_fact_ids: ["fact-onset"]
+                }}
     end
 
     test "is low confidence when a risk answer falls between the thresholds" do
       for {risk, idx} <- Enum.with_index(@risk_ids) do
         stub = Module.concat(__MODULE__, "UnsureRiskStub#{idx}")
-        assert {:ok, %{status: :low_confidence}} = decide(stub, nouls(%{risk => 0.5}))
+        assert {:ok, %{status: :low_confidence}} = decide(stub, nouls(%{risk => 0.65}))
       end
     end
 
-    test "is low confidence when it is unclear whether a stated on_request fact was asked for" do
+    # Issue #284: in-role replies score 0.22-0.47 on this risk with large packages.
+    test "speaks_out_of_role has its own no threshold, 0.5 by default" do
+      assert decide(OutOfRoleLowStub, nouls(%{@risk_speaks_out_of_role => 0.3})) ==
+               {:ok, %{status: :verified, used_fact_ids: []}}
+
+      assert decide(OutOfRoleAtStub, nouls(%{@risk_speaks_out_of_role => 0.5})) ==
+               {:ok, %{status: :verified, used_fact_ids: []}}
+
+      assert {:ok, %{status: :low_confidence}} =
+               decide(OutOfRoleUnsureStub, nouls(%{@risk_speaks_out_of_role => 0.6}))
+
+      assert {:ok, %{status: :semantic_refusal}} =
+               decide(OutOfRoleHighStub, nouls(%{@risk_speaks_out_of_role => 0.8}))
+    end
+
+    test "every other risk keeps the global no threshold" do
+      for {risk, idx} <- Enum.with_index(@risk_ids -- [@risk_speaks_out_of_role]) do
+        stub = Module.concat(__MODULE__, "OtherRiskAtPointThreeStub#{idx}")
+        assert {:ok, %{status: :low_confidence}} = decide(stub, nouls(%{risk => 0.3}))
+      end
+    end
+
+    test "fact labels keep the global no threshold" do
+      # An unasked on-request fact stated at 0.3 is still undecided, not a no.
+      assert {:ok, %{status: :low_confidence, undecided_fact_ids: ["fact-allergy"]}} =
+               decide(FactAtPointThreeStub, nouls(%{@stated_allergy => 0.3}))
+    end
+
+    test "the out-of-role no threshold is configurable" do
+      nouls = nouls(%{@risk_speaks_out_of_role => 0.3})
+
+      assert {:ok, %{status: :low_confidence}} =
+               decide(OutOfRoleOptStub, nouls, out_of_role_no_threshold: 0.2)
+    end
+
+    test "names a stated on_request fact when it is unclear whether it was asked for" do
+      # Issue #284: "Onde começou a dor?" answered with the migration as well.
       nouls = nouls(%{@stated_onset => 0.97, @asked_onset => 0.5})
 
       assert decide(UnsureAskedStub, nouls) ==
-               {:ok, %{status: :low_confidence, used_fact_ids: ["fact-onset"]}}
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: ["fact-onset"],
+                  undecided_fact_ids: ["fact-onset"],
+                  fact_scores: [%{fact_id: "fact-onset", stated: 0.97, asked: 0.5}],
+                  undecided_labels: [%{question: "fact_asked", fact_id: "fact-onset", score: 0.5}]
+                }}
     end
 
     test "is low confidence when it is unclear whether an unrequested on_request fact is stated" do
       nouls = nouls(%{@stated_allergy => 0.5, @asked_allergy => 0.03})
 
       assert decide(UnsureStatedStub, nouls) ==
-               {:ok, %{status: :low_confidence, used_fact_ids: []}}
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: [],
+                  undecided_fact_ids: ["fact-allergy"],
+                  not_asked_fact_ids: ["fact-allergy"],
+                  fact_scores: [%{fact_id: "fact-allergy", stated: 0.5, asked: 0.03}],
+                  undecided_labels: [
+                    %{question: "fact_stated", fact_id: "fact-allergy", score: 0.5}
+                  ]
+                }}
+    end
+
+    test "names the undecided unasked facts only when they are the sole open answer" do
+      # Issue #273: the asked fact is stated and every risk is a clear no.
+      nouls =
+        nouls(%{
+          @stated_onset => 0.97,
+          @asked_onset => 0.95,
+          @stated_allergy => 0.31,
+          @asked_allergy => 0.03
+        })
+
+      assert decide(SoleUndecidedStub, nouls) ==
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: ["fact-onset"],
+                  undecided_fact_ids: ["fact-allergy"],
+                  not_asked_fact_ids: ["fact-allergy"],
+                  asked_fact_ids: ["fact-onset"],
+                  fact_scores: [
+                    %{fact_id: "fact-onset", stated: 0.97, asked: 0.95},
+                    %{fact_id: "fact-allergy", stated: 0.31, asked: 0.03}
+                  ],
+                  undecided_labels: [
+                    %{question: "fact_stated", fact_id: "fact-allergy", score: 0.31}
+                  ]
+                }}
+    end
+
+    test "names no undecided fact when another answer keeps the verdict open or refuses" do
+      undecided_stated = %{@stated_allergy => 0.31, @asked_allergy => 0.03}
+
+      cases = [
+        # A risk is also undecided.
+        {UndecidedWithRiskStub, Map.put(undecided_stated, @risk_unsupported, 0.5)},
+        # It is unclear whether the learner asked.
+        {UndecidedAskedStub, %{@stated_allergy => 0.31, @asked_allergy => 0.5}},
+        # Stated, unclear whether asked, and a risk is also undecided.
+        {StatedUnsureAskedWithRiskStub,
+         %{@stated_allergy => 0.9, @asked_allergy => 0.5, @risk_unsupported => 0.5}},
+        # Another fact is a clear disclosure violation.
+        {UndecidedWithViolationStub,
+         Map.merge(undecided_stated, %{@stated_onset => 0.96, @asked_onset => 0.03})},
+        # A risk is a clear yes.
+        {UndecidedWithRiskYesStub, Map.put(undecided_stated, @risk_contradicts_facts, 0.9)}
+      ]
+
+      for {stub, overrides} <- cases do
+        assert {:ok, decision} = decide(stub, nouls(overrides))
+        assert decision.status in [:low_confidence, :semantic_refusal]
+        refute Map.has_key?(decision, :undecided_fact_ids)
+      end
     end
 
     test "an unclear stated answer is harmless when the fact was asked for or is not on_request" do
@@ -335,6 +478,90 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                  yes_threshold: 0.6,
                  no_threshold: 0.4
                )
+    end
+  end
+
+  describe "decide_patient/2 undecided labels (issue #290)" do
+    test "a low-confidence verdict lists every undecided answer with its score" do
+      nouls =
+        nouls(%{
+          @stated_onset => 0.97,
+          @asked_onset => 0.45678,
+          @risk_unsupported => 0.5,
+          @rule_broken => 0.3,
+          # Below its own no threshold (0.5): a clear no, not a label.
+          @risk_speaks_out_of_role => 0.3
+        })
+
+      assert {:ok, decision} = decide(LabelsStub, nouls)
+      assert decision.status == :low_confidence
+
+      assert decision.undecided_labels == [
+               %{question: "fact_asked", fact_id: "fact-onset", score: 0.457},
+               %{question: @risk_unsupported, score: 0.5},
+               %{question: "rule_broken", rule: @rule["instruction"], score: 0.3}
+             ]
+
+      refute Map.has_key?(decision, :not_asked_fact_ids)
+    end
+
+    test "names the on_request facts a clear-no asked label says were not requested" do
+      # Stated undecided, clearly not asked: the adjudicator may never deliver it.
+      nouls =
+        nouls(%{@stated_allergy => 0.45, @asked_allergy => 0.03, @risk_unsupported => 0.5})
+
+      assert {:ok, decision} = decide(NotAskedStub, nouls)
+      assert decision.status == :low_confidence
+      assert decision.not_asked_fact_ids == ["fact-allergy"]
+    end
+
+    test "names the on_request facts a clear-yes asked label says were requested" do
+      # The adjudicator may never withhold a fact that answers the question.
+      nouls =
+        nouls(%{
+          @stated_onset => 0.5,
+          @asked_onset => 0.92,
+          @stated_allergy => 0.45,
+          @asked_allergy => 0.03
+        })
+
+      assert {:ok, decision} = decide(AskedStub, nouls)
+      assert decision.status == :low_confidence
+      assert decision.asked_fact_ids == ["fact-onset"]
+      assert decision.not_asked_fact_ids == ["fact-allergy"]
+    end
+
+    test "scores every fact the reply may state, for the adjudicator" do
+      nouls =
+        nouls(%{
+          @stated_onset => 0.5,
+          @asked_onset => 0.92,
+          @stated_allergy => 0.31,
+          @asked_allergy => 0.19
+        })
+
+      assert {:ok, decision} = decide(FactScoresStub, nouls)
+      assert decision.status == :low_confidence
+
+      assert decision.fact_scores == [
+               %{fact_id: "fact-onset", stated: 0.5, asked: 0.92},
+               %{fact_id: "fact-allergy", stated: 0.31, asked: 0.19}
+             ]
+
+      # Stated is undecided, so the hard limit does not apply.
+      refute Map.has_key?(decision, :stated_not_asked_fact_ids)
+    end
+
+    test "a verified or refused verdict carries no labels" do
+      assert {:ok, verified} = decide(NoLabelsVerifiedStub, nouls())
+      assert {:ok, refused} = decide(NoLabelsRefusedStub, nouls(%{@risk_unsupported => 0.9}))
+
+      for decision <- [verified, refused] do
+        refute Map.has_key?(decision, :undecided_labels)
+        refute Map.has_key?(decision, :not_asked_fact_ids)
+        refute Map.has_key?(decision, :asked_fact_ids)
+        refute Map.has_key?(decision, :fact_scores)
+      end
     end
   end
 
@@ -731,6 +958,33 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       assert {:ok, %{status: :verified}} = decide(AppEnvHalfOkStub, nouls())
     end
 
+    test "an invalid out-of-role no threshold is rejected like the global ones" do
+      opts = never_called(BadOutOfRoleStub)
+
+      for value <- [0.6, -0.1, "0.5", :low, "", 0.8] do
+        assert TypesafeAdapter.decide_patient(
+                 request(),
+                 opts ++ [out_of_role_no_threshold: value]
+               ) == {:error, {:technical_failure, :invalid_thresholds}}
+      end
+
+      # Never at or above the yes threshold either.
+      assert TypesafeAdapter.decide_patient(
+               request(),
+               opts ++ [out_of_role_no_threshold: 0.5, yes_threshold: 0.5, no_threshold: 0.2]
+             ) == {:error, {:technical_failure, :invalid_thresholds}}
+
+      Application.put_env(:backend, TypesafeAdapter, out_of_role_no_threshold: 0.25)
+
+      assert {:ok, %{status: :low_confidence}} =
+               decide(OutOfRoleAppEnvStub, nouls(%{@risk_speaks_out_of_role => 0.3}))
+
+      Application.put_env(:backend, TypesafeAdapter, out_of_role_no_threshold: "abc")
+
+      assert TypesafeAdapter.decide_patient(request(), never_called(AppEnvBadOutOfRoleStub)) ==
+               {:error, {:technical_failure, :invalid_thresholds}}
+    end
+
     test "a base URL that is not https with a host is rejected before the provider" do
       opts = never_called(BaseUrlStub)
 
@@ -769,8 +1023,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
     test "accepts the extreme thresholds 0 and 1" do
       nouls = nouls(%{@stated_onset => 1.0, @asked_onset => 1.0})
 
-      assert decide(ExtremeStub, nouls, yes_threshold: 1, no_threshold: 0) ==
-               {:ok, %{status: :low_confidence, used_fact_ids: ["fact-onset"]}}
+      assert {:ok, %{status: :low_confidence, used_fact_ids: ["fact-onset"]}} =
+               decide(ExtremeStub, nouls, yes_threshold: 1, no_threshold: 0)
     end
   end
 
@@ -1083,7 +1337,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
   describe "config/runtime.exs" do
     @runtime_config Path.expand("../../../../config/runtime.exs", __DIR__)
     @runtime_vars ~w(JEV_ADAPTER JEV_E2E_APPROVING_ADAPTER TYPESAFE_API_KEY TYPESAFE_BASE_URL
-                     TYPESAFE_MODEL TYPESAFE_YES_THRESHOLD TYPESAFE_NO_THRESHOLD)
+                     TYPESAFE_MODEL TYPESAFE_YES_THRESHOLD TYPESAFE_NO_THRESHOLD
+                     TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD)
 
     # Evaluates the runtime configuration for `env` with exactly `vars` set, without
     # touching the running application's environment.
@@ -1107,7 +1362,8 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       "TYPESAFE_BASE_URL" => "https://typesafe.example",
       "TYPESAFE_MODEL" => "jev-latest",
       "TYPESAFE_YES_THRESHOLD" => "0.9",
-      "TYPESAFE_NO_THRESHOLD" => " 0.1 "
+      "TYPESAFE_NO_THRESHOLD" => " 0.1 ",
+      "TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD" => "0.4"
     }
 
     test "without variables it selects no adapter and configures nothing" do
@@ -1127,6 +1383,7 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
                base_url: "https://typesafe.example",
                model: "jev-latest",
                no_threshold: 0.1,
+               out_of_role_no_threshold: 0.4,
                yes_threshold: 0.9
              ]
     end
@@ -1142,11 +1399,13 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       config =
         runtime_backend_config(:dev, %{
           "TYPESAFE_YES_THRESHOLD" => "high",
-          "TYPESAFE_NO_THRESHOLD" => ""
+          "TYPESAFE_NO_THRESHOLD" => "",
+          "TYPESAFE_OUT_OF_ROLE_NO_THRESHOLD" => "half"
         })
 
       assert config[TypesafeAdapter][:yes_threshold] == "high"
       assert config[TypesafeAdapter][:no_threshold] == ""
+      assert config[TypesafeAdapter][:out_of_role_no_threshold] == "half"
 
       assert TypesafeAdapter.decide_patient(
                request(),
@@ -1196,6 +1455,84 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
 
       assert_receive {:typesafe_request, _conn, payload}
       assert payload["state"]["latest_learner_message"] == @learner_question
+    end
+
+    test "passes the unasked on_request fact ids of a refusal through the seam" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            SeamUnaskedStub,
+            nouls(%{@stated_allergy => 0.96, @asked_allergy => 0.03})
+          )
+
+      assert JevDecision.decide_patient(seam_request(), opts) ==
+               {:ok,
+                %{
+                  status: :semantic_refusal,
+                  used_fact_ids: ["fact-allergy"],
+                  unasked_fact_ids: ["fact-allergy"]
+                }}
+    end
+
+    test "passes the undecided unasked fact ids of a low-confidence verdict through the seam" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            SeamUndecidedStub,
+            nouls(%{@stated_allergy => 0.3, @asked_allergy => 0.03})
+          )
+
+      assert JevDecision.decide_patient(seam_request(), opts) ==
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: [],
+                  undecided_fact_ids: ["fact-allergy"],
+                  not_asked_fact_ids: ["fact-allergy"],
+                  fact_scores: [%{fact_id: "fact-allergy", stated: 0.3, asked: 0.03}],
+                  undecided_labels: [
+                    %{question: "fact_stated", fact_id: "fact-allergy", score: 0.3}
+                  ]
+                }}
+    end
+
+    test "a stated fact the learner may not have asked for gets one regeneration that withholds it" do
+      # Issue #284, end to end through CandidateGate: the first candidate states the
+      # on-request onset while `fact_asked` is undecided; the regeneration is verified.
+      test_pid = self()
+      calls = :counters.new(1, [])
+
+      Req.Test.stub(GateUnsureAskedStub, fn conn ->
+        :counters.add(calls, 1, 1)
+
+        nouls =
+          if :counters.get(calls, 1) == 1,
+            do: nouls(%{@stated_onset => 0.97, @asked_onset => 0.5}),
+            else: nouls()
+
+        Req.Test.json(conn, success_body(nouls))
+      end)
+
+      generator = fn _package, _conversation, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "Começou durante uma caminhada."}
+      end
+
+      %{package: package, conversation: conversation} = seam_request()
+
+      assert Backend.Stations.CandidateGate.verify_and_deliver(
+               @candidate,
+               package,
+               conversation,
+               adapter: TypesafeAdapter,
+               generator: generator,
+               api_key: "ts-test-key",
+               plug: {Req.Test, GateUnsureAskedStub}
+             ) == {:ok, "Começou durante uma caminhada."}
+
+      assert_received {:guidance, %{withheld_fact_ids: ["fact-onset"]}}
+      refute_received {:guidance, _}
+      assert :counters.get(calls, 1) == 2
     end
 
     test "returns a sanitized error for an overloaded provider, with a log free of payload text" do
@@ -1259,6 +1596,106 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapterTest do
       assert result == {:error, {:technical_failure, :adapter_crashed}}
       refute log =~ "segredo-do-candidato"
       refute log =~ <<0xFF, 0xFE>>
+    end
+  end
+
+  describe "facts already disclosed (issue #286)" do
+    # A fact an earlier verified patient turn disclosed is not re-gated: its
+    # `fact_asked` question is not asked, so its disclosure is respected.
+    defp disclosed_request(ids) do
+      %{
+        candidate_text: @candidate,
+        package: %{
+          "station_id" => "station-1",
+          "version" => "2.0.0",
+          "language" => "pt-BR",
+          "patient_profile" => %{"persona" => "Maria Silva", "age" => 52},
+          "revealable_facts" => [@onset, @sweating, @allergy],
+          "response_rules" => [@rule]
+        },
+        conversation: [%{role: "student", text: @learner_question}],
+        disclosed_fact_ids: ids
+      }
+    end
+
+    @without_asked_onset @all_ids -- [@asked_onset]
+
+    test "plan_facts asks no fact_asked question for a disclosed fact" do
+      {:ok, facts} =
+        TypesafeAdapter.plan_facts(request(%{disclosed_fact_ids: ["fact-onset"]}))
+
+      assert Enum.map(facts, &{&1.id, &1.stated, &1.asked}) == [
+               {"fact-onset", @stated_onset, nil},
+               {"fact-sweating", @stated_sweating, nil},
+               {"fact-allergy", @stated_allergy, @asked_allergy}
+             ]
+    end
+
+    test "restating a disclosed fact verifies without asking whether it was asked for" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            DisclosedVerifiedStub,
+            nouls(%{@stated_onset => 0.97}, @without_asked_onset)
+          )
+
+      assert JevDecision.decide_patient(disclosed_request(["fact-onset"]), opts) ==
+               {:ok, %{status: :verified, used_fact_ids: ["fact-onset"]}}
+
+      assert_receive {:typesafe_request, _conn, payload}
+      questions = Map.keys(payload["questions"])
+      refute @asked_onset in questions
+      assert @stated_onset in questions
+      assert @asked_allergy in questions
+      assert @risk_contradicts_patient in questions
+    end
+
+    test "a disclosed fact still refuses a reply that contradicts the patient" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            DisclosedContradictionStub,
+            nouls(
+              %{@stated_onset => 0.97, @risk_contradicts_patient => 0.9},
+              @without_asked_onset
+            )
+          )
+
+      assert {:ok, %{status: :semantic_refusal}} =
+               JevDecision.decide_patient(disclosed_request(["fact-onset"]), opts)
+    end
+
+    test "an undisclosed fact keeps today's gating" do
+      opts =
+        [adapter: TypesafeAdapter] ++
+          stub_nouls(
+            UndisclosedGatedStub,
+            nouls(%{@stated_allergy => 0.97, @asked_allergy => 0.5}, @without_asked_onset)
+          )
+
+      assert JevDecision.decide_patient(disclosed_request(["fact-onset"]), opts) ==
+               {:ok,
+                %{
+                  status: :low_confidence,
+                  used_fact_ids: ["fact-allergy"],
+                  undecided_fact_ids: ["fact-allergy"],
+                  fact_scores: [%{fact_id: "fact-allergy", stated: 0.97, asked: 0.5}],
+                  undecided_labels: [
+                    %{question: "fact_asked", fact_id: "fact-allergy", score: 0.5}
+                  ]
+                }}
+    end
+
+    test "a malformed disclosed set discloses nothing" do
+      for ids <- ["fact-onset", [:"fact-onset", 1], nil] do
+        opts = [adapter: TypesafeAdapter] ++ stub_nouls(MalformedDisclosedStub, nouls())
+
+        assert {:ok, %{status: :verified}} =
+                 JevDecision.decide_patient(disclosed_request(ids), opts)
+
+        assert_receive {:typesafe_request, _conn, payload}
+        assert @asked_onset in Map.keys(payload["questions"])
+      end
     end
   end
 end

@@ -7,11 +7,14 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   `"uncertain"`, and nothing else. Jev's clear `"performed"` and
   `"not_performed"` answers are final.
 
-  The request carries, per criterion with at least one undecided action, every
-  authored action with Jev's classification and the identifiers of the actions
-  the provider may decide, plus one learner-only evidence pool (`id`, `text`).
-  The provider answers one decision per action, keyed by criterion and action
-  identifier.
+  Each criterion with at least one undecided action gets its own request
+  (issue #301), carrying that criterion with every authored action, Jev's
+  classification and the identifiers of the actions the provider may decide,
+  plus the learner-only evidence pool (`id`, `text`). The requests run
+  concurrently (at most `:rubric_resolver_max_concurrency`, default 6, at a
+  time) under one overall deadline. The provider answers one decision per
+  action, keyed by criterion and action identifier; a decision about another
+  criterion than the one asked is ignored.
 
   The answer is merged in code, never trusted:
 
@@ -22,14 +25,28 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
       `Backend.Stations.RubricAssessment.Evidence.validate/3` as learner
       evidence for the criterion's requirement; otherwise the action stays
       `"uncertain"`;
+    * a citation must also be related to the action (issue #243): when Jev
+      left the action uncertain with candidate items in its `evidence_ids`
+      (the items it could neither confirm nor rule out for that action), a
+      citation outside them is dropped, and an action left with no related
+      citation stays `"uncertain"`. An unrelated citation alone never credits
+      an action. An undecided action without candidates accepts any valid
+      citation;
     * `"not_performed"` is taken without evidence, and `"uncertain"` changes
       nothing. The rubric assessment never lets such answers alone ground a
       zero-point level (`Backend.Stations.RubricAssessment`, step 4).
 
   A technical failure (an error, malformed output, a raise or the deadline)
-  never invalidates the attempt: every undecided action stays `"uncertain"`.
+  never invalidates the attempt: the undecided actions of that criterion stay
+  `"uncertain"`, and every other criterion keeps the decisions it got. Each
+  criterion's outcome and latency are logged (criterion id, counts and the
+  failure's name only, never transcript text).
+
+  Candidates are consumed here and never reported: every action still
+  `"uncertain"` after this step carries no evidence, whatever the outcome.
   The resolver has its own deadline, `:rubric_resolver_deadline_ms` (default
-  10000 ms), independent of Jev's.
+  30000 ms), independent of Jev's; it bounds all of a session's requests
+  together, not each one.
 
   The adapter is `opts[:resolver_adapter]` or the `:rubric_resolver_adapter`
   application setting, `Backend.Stations.RubricAssessment.Resolver.DisabledAdapter`
@@ -46,7 +63,8 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   @performed "performed"
   @not_performed "not_performed"
   @classes [@performed, @not_performed, @uncertain]
-  @default_deadline_ms 10_000
+  @default_deadline_ms 30_000
+  @default_max_concurrency 6
 
   @typedoc "An authored action with Jev's classification."
   @type action :: %{id: String.t(), description: String.t(), classification: String.t()}
@@ -92,19 +110,35 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   def resolve(decisions, asked, pool, opts) when is_map(decisions) and is_list(opts) do
     asked = Enum.filter(asked, &(decidable_ids(decisions[&1.id]) != []))
 
-    if asked == [] do
-      decisions
-    else
-      request = %{
-        criteria: Enum.map(asked, &criterion(&1, decisions[&1.id])),
-        evidence_pool: learner_pool(pool)
-      }
+    decisions
+    |> decide(asked, pool, opts)
+    |> without_candidates()
+  end
 
-      case run(adapter(opts), request, opts) do
-        {:ok, resolved} -> merge(decisions, asked, pool, resolved)
-        {:error, _reason} -> decisions
+  defp decide(decisions, [], _pool, _opts), do: decisions
+
+  # One request per criterion, run concurrently under one overall deadline.
+  # A criterion whose request fails or misses the deadline keeps its undecided
+  # actions; every other criterion keeps the decisions it got.
+  defp decide(decisions, asked, pool, opts) do
+    evidence_pool = learner_pool(pool)
+
+    requests =
+      for %{id: id} = entry <- asked do
+        {id, %{criteria: [criterion(entry, decisions[id])], evidence_pool: evidence_pool}}
       end
-    end
+
+    outcomes = run_all(adapter(opts), requests, opts)
+
+    Enum.reduce(asked, decisions, fn %{id: id} = entry, acc ->
+      case Map.fetch!(outcomes, id) do
+        {:ok, resolved} ->
+          merge(acc, [entry], pool, Enum.filter(resolved, &(&1.criterion_id == id)))
+
+        {:error, _reason} ->
+          acc
+      end
+    end)
   end
 
   @doc "Resolves the resolver adapter from options or application configuration."
@@ -164,48 +198,107 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
   # Adapter execution
   # ============================================================================
 
-  defp run(adapter, request, opts) do
+  defp run_all(adapter, requests, opts) do
     adapter_opts = Keyword.get(opts, :resolver_opts, [])
     deadline_ms = deadline_ms(opts)
     started_at = System.monotonic_time(:millisecond)
+    caller = self()
+    ref = make_ref()
 
-    task =
+    # The runner owns every request task: killing it at the deadline takes the
+    # requests still in flight with it.
+    runner =
       Task.async(fn ->
-        try do
-          adapter.resolve(request, adapter_opts)
-        rescue
-          _error -> {:error, :adapter_crashed}
-        catch
-          :exit, _reason -> {:error, :task_exit}
-          :throw, _value -> {:error, :adapter_threw}
-        end
+        requests
+        |> Task.async_stream(
+          fn {id, request} ->
+            send(caller, {ref, id, call(adapter, request, adapter_opts), now() - started_at})
+          end,
+          max_concurrency: max_concurrency(opts),
+          ordered: false,
+          timeout: :infinity
+        )
+        |> Stream.run()
       end)
 
-    result =
-      case Task.yield(task, deadline_ms) || Task.shutdown(task, :brutal_kill) do
-        {:ok, result} -> result
-        nil -> {:error, :timeout}
-        {:exit, _reason} -> {:error, :task_exit}
-      end
+    collected = collect(ref, length(requests), started_at + deadline_ms, %{})
+    Task.shutdown(runner, :brutal_kill)
+    flush(ref)
 
-    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+    elapsed_ms = now() - started_at
 
-    case validate_output(result) do
-      {:ok, actions} = ok ->
-        Logger.info(
-          "Rubric resolver answered in #{elapsed_ms} ms: " <>
-            "#{length(actions)} decisions for #{decidable_count(request)} undecided actions"
-        )
+    outcomes =
+      Map.new(requests, fn {id, request} ->
+        {result, latency_ms} = Map.get(collected, id, {{:error, :timeout}, elapsed_ms})
+        {id, log_outcome(id, request, validate_output(result), latency_ms)}
+      end)
 
-        ok
+    answered = Enum.count(outcomes, &match?({_id, {:ok, _}}, &1))
 
-      {:error, reason} = error ->
-        Logger.warning(
-          "Rubric resolver left undecided actions uncertain after #{elapsed_ms} ms: #{tag(reason)}"
-        )
+    Logger.info(
+      "Rubric resolver finished in #{elapsed_ms} ms: " <>
+        "#{answered} of #{length(requests)} criteria answered"
+    )
 
-        error
+    outcomes
+  end
+
+  defp collect(_ref, 0, _deadline_at, acc), do: acc
+
+  defp collect(ref, pending, deadline_at, acc) do
+    receive do
+      {^ref, id, result, latency_ms} ->
+        collect(ref, pending - 1, deadline_at, Map.put(acc, id, {result, latency_ms}))
+    after
+      max(deadline_at - now(), 0) -> acc
     end
+  end
+
+  defp flush(ref) do
+    receive do
+      {^ref, _id, _result, _latency_ms} -> flush(ref)
+    after
+      0 -> :ok
+    end
+  end
+
+  defp call(adapter, request, adapter_opts) do
+    adapter.resolve(request, adapter_opts)
+  rescue
+    _error -> {:error, :adapter_crashed}
+  catch
+    :exit, _reason -> {:error, :task_exit}
+    :throw, _value -> {:error, :adapter_threw}
+  end
+
+  defp max_concurrency(opts) do
+    opts[:rubric_resolver_max_concurrency] ||
+      Application.get_env(
+        :backend,
+        :rubric_resolver_max_concurrency,
+        @default_max_concurrency
+      )
+  end
+
+  defp now, do: System.monotonic_time(:millisecond)
+
+  # Only the criterion id, counts, the reason's name and latency are logged,
+  # never content.
+  defp log_outcome(id, request, {:ok, actions} = ok, latency_ms) do
+    Logger.info(
+      "Rubric resolver criterion #{id} answered in #{latency_ms} ms: " <>
+        "#{length(actions)} decisions for #{decidable_count(request)} undecided actions"
+    )
+
+    ok
+  end
+
+  defp log_outcome(id, _request, {:error, reason} = error, latency_ms) do
+    Logger.warning(
+      "Rubric resolver left criterion #{id} uncertain after #{latency_ms} ms: #{tag(reason)}"
+    )
+
+    error
   end
 
   defp decidable_count(%{criteria: criteria}) do
@@ -289,16 +382,35 @@ defmodule Backend.Stations.RubricAssessment.Resolver do
          pool,
          requirement
        ) do
-    case Evidence.validate(pool, ids, requirement) do
-      {:ok, evidence} ->
-        %{action | classification: @performed, evidence_ids: Evidence.ids(evidence)}
-
-      {:error, _rejection} ->
-        action
+    with {:ok, evidence} <- Evidence.validate(pool, ids, requirement),
+         [_ | _] = related <- related(Evidence.ids(evidence), action.evidence_ids) do
+      %{action | classification: @performed, evidence_ids: related}
+    else
+      _invalid_or_unrelated -> action
     end
   end
 
   defp apply_decision(action, _uncertain_or_unsupported, _pool, _requirement), do: action
+
+  # The cited ids among the action's candidates, in pool order; every cited id
+  # when Jev offered no candidates.
+  defp related(cited, []), do: cited
+  defp related(cited, candidates), do: Enum.filter(cited, &(&1 in candidates))
+
+  defp without_candidates(decisions) do
+    Map.new(decisions, fn
+      {id, %{actions: actions} = decision} when is_list(actions) ->
+        {id, %{decision | actions: Enum.map(actions, &without_candidate/1)}}
+
+      entry ->
+        entry
+    end)
+  end
+
+  defp without_candidate(%{classification: @uncertain} = action),
+    do: %{action | evidence_ids: []}
+
+  defp without_candidate(action), do: action
 
   defp list(map, key) do
     case Map.get(map, key) do

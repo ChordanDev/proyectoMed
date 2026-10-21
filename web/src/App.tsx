@@ -1,8 +1,10 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useState } from "react";
 import {
+  BriefScreen,
   NoticeScreen,
   StationScreen,
   ResultScreen,
+  useActiveStation,
   useStation,
   type ResultScreenStatus,
 } from "./features/station";
@@ -11,13 +13,18 @@ import "./index.css";
 
 export default function App(): React.JSX.Element {
   const station = useStation();
+  const activeStation = useActiveStation();
+  // Consent given on the notice; the brief screen shows until the learner enters.
+  const [pendingConsent, setPendingConsent] = useState<boolean | null>(null);
+  const title = activeStation.station?.display_title;
+  const brief = activeStation.station?.candidate_brief ?? null;
+  // One voice experience per deployment (VOICE_MODE, #270).
+  const voiceMode = activeStation.station?.voice_mode ?? "turn";
 
-  const handleStart = useCallback(
-    (consent: boolean) => {
-      void station.start(consent);
-    },
-    [station],
-  );
+  const handleEnter = useCallback(() => {
+    if (pendingConsent === null) return;
+    void station.start(pendingConsent);
+  }, [station, pendingConsent]);
 
   const sendMessage = useCallback(
     async (
@@ -50,16 +57,27 @@ export default function App(): React.JSX.Element {
 
   const handleRestart = useCallback(async () => {
     await station.reset();
+    setPendingConsent(null);
   }, [station]);
 
-  // Flow: notice → station → result
+  // Flow: notice → brief → station → result
   if (station.status === "idle" || station.status === "loading") {
     return (
       <main className="app-root">
         {station.status === "loading" ? (
           <p role="status">{strings.loadingStation}</p>
+        ) : pendingConsent === null ? (
+          <NoticeScreen
+            onStart={setPendingConsent}
+            voiceSupport={voiceMode !== "off"}
+          />
         ) : (
-          <NoticeScreen onStart={handleStart} voiceSupport />
+          <BriefScreen
+            title={title}
+            brief={brief}
+            error={activeStation.error}
+            onEnter={handleEnter}
+          />
         )}
       </main>
     );
@@ -97,20 +115,31 @@ export default function App(): React.JSX.Element {
 
   // station.status === "active"
   const timeElapsed = station.remainingMs !== null && station.remainingMs <= 0;
+  const voice = station.audioConsent && voiceMode !== "off";
+  const turnVoice = voice && voiceMode === "turn";
   return (
     <main className="app-root">
       <StationScreen
+        title={title}
+        brief={brief}
         onSend={handleSend}
         onFinish={handleFinish}
-        audioConsent={station.audioConsent}
-        onTranscribe={station.transcribe}
-        onSendVoice={handleSendVoice}
-        onSynthesize={station.synthesize}
+        audioConsent={voice}
+        onTranscribe={turnVoice ? station.transcribe : undefined}
+        onSendVoice={turnVoice ? handleSendVoice : undefined}
+        onSynthesize={turnVoice ? station.synthesize : undefined}
+        realtimeVoice={
+          voice && voiceMode === "realtime"
+            ? { sessionId: station.sessionId }
+            : undefined
+        }
+        onFetchTranscript={station.fetchTranscript}
         error={station.error}
         disabled={timeElapsed}
         remainingMs={station.remainingMs}
         initialMessages={station.initialMessages}
         onRequestImpresso={station.requestImpresso}
+        onRefreshImpressos={station.refreshImpressos}
         impressos={station.impressos}
         impressoError={station.impressoError}
       />

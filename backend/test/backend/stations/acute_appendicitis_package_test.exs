@@ -130,11 +130,103 @@ defmodule Backend.Stations.AcuteAppendicitisPackageTest do
            ]
   end
 
+  # Issue #265: a learner cannot interpret an exam before receiving it. The
+  # verbalized exam findings, the lab interpretation, and the imaging
+  # interpretation and hypothesis name the impresso they read.
+  test "authors interprets_impresso_ids on the interpretation actions" do
+    authored =
+      for criterion <- package()["rubric"],
+          %{"interprets_impresso_ids" => ids} = action <- criterion["actions"] do
+        {criterion["id"], action["id"], ids}
+      end
+
+    exam = ["impresso-1-exame-fisico"]
+    imaging = ["impresso-3-exame-de-imagem"]
+
+    assert authored == [
+             {"item-05", "criterio-2", exam},
+             {"item-05", "criterio-3", exam},
+             {"item-05", "criterio-4", exam},
+             {"item-07", "criterio-1", ["impresso-2-hemograma"]},
+             {"item-07", "criterio-2", ["impresso-2-pcr"]},
+             {"item-07", "criterio-3", ["impresso-2-urina-tipo-1"]},
+             {"item-07", "criterio-4",
+              ["impresso-2-ureia", "impresso-2-creatinina", "impresso-2-eletrolitos"]},
+             {"item-08", "criterio-2", imaging},
+             {"item-08", "criterio-3", imaging},
+             {"item-08", "criterio-4", imaging}
+           ]
+  end
+
+  # Issue #264: one on-request fact per rubric characteristic, so a reply to one
+  # question cannot volunteer the answer to another criterion.
+  @item_2_facts [
+    {"criterio-1", "hda-01", "A dor começou ao redor do umbigo."},
+    {"criterio-2", "hda-01-migracao",
+     "Há cerca de 10 horas, a dor migrou para a parte inferior direita do abdome."},
+    {"criterio-3", "hda-02", "É uma dor contínua."},
+    {"criterio-3", "hda-02-progressao", "A dor foi aumentando progressivamente."},
+    {"criterio-4", "hda-01-tempo", "A dor começou há 18 horas."},
+    {"criterio-5", "hda-02-intensidade", "Atualmente, a dor é 7/10."}
+  ]
+
+  defp fact(id), do: Enum.find(package()["revealable_facts"], &(&1["id"] == id))
+
+  test "each item-2 characteristic is a separate on-request fact" do
+    item_2 = Enum.find(package()["rubric"], &(&1["id"] == "item-02"))
+    action_ids = Enum.map(item_2["actions"], & &1["id"])
+
+    for {criterion, id, content} <- @item_2_facts do
+      assert criterion in action_ids
+      assert %{"content" => ^content, "disclosure_condition" => "on_request"} = fact(id)
+    end
+  end
+
+  test "no fact still bundles the item-2 characteristics" do
+    contents = Enum.map(package()["revealable_facts"], & &1["content"])
+
+    refute Enum.any?(contents, &(&1 =~ "18 horas" and &1 =~ "umbigo"))
+    refute Enum.any?(contents, &(&1 =~ "umbigo" and &1 =~ "migrou"))
+    refute Enum.any?(contents, &(&1 =~ "contínua" and &1 =~ "7/10"))
+  end
+
+  @item_4_facts [
+    {"criterio-1", "antecedentes-01", "Nega doenças crônicas."},
+    {"criterio-2", "antecedentes-01-internacoes-cirurgias",
+     "Nega internações anteriores e cirurgias."},
+    {"criterio-3", "pergunta-explicita-02-anti-inflamatorios",
+     "Nega uso recente de anti-inflamatórios."},
+    {"criterio-5", "pergunta-explicita-02",
+     "Nega uso recente de antibióticos ou anticoagulantes."}
+  ]
+
+  test "each item-4 characteristic is a separate on-request fact" do
+    item_4 = Enum.find(package()["rubric"], &(&1["id"] == "item-04"))
+    action_ids = Enum.map(item_4["actions"], & &1["id"])
+
+    for {criterion, id, content} <- @item_4_facts do
+      assert criterion in action_ids
+      assert %{"content" => ^content, "disclosure_condition" => "on_request"} = fact(id)
+    end
+  end
+
   test "every criterion has rule fields the assessment can apply" do
     for criterion <- package()["rubric"] do
       assert AuthoredRules.check(criterion) == :ok
       assert criterion["exclusion"] == false
       assert criterion["rule"] == nil
     end
+  end
+
+  # Issue #273: the fever answer carried "não tomou antitérmico", so Jev could not
+  # tell whether a reply to "Teve febre?" also stated the unasked medication facts.
+  test "the fever fact no longer carries the antipyretic clause" do
+    assert %{"content" => "Mediu a temperatura em casa e teve “febre baixa”."} = fact("hda-06")
+
+    assert %{"content" => "Não tomou antitérmico.", "disclosure_condition" => "on_request"} =
+             fact("hda-06-antitermico")
+
+    contents = Enum.map(package()["revealable_facts"], & &1["content"])
+    refute Enum.any?(contents, &(&1 =~ "febre" and &1 =~ "antitérmico"))
   end
 end

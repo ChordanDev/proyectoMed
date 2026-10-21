@@ -41,6 +41,19 @@ defmodule Backend.Stations.CandidateGateTest do
       {:ok, %{status: :semantic_refusal, rationale: "Prompt injection detected in candidate"}}
     end
 
+    defp decide_candidate("volunteers_unasked_fact", _req) do
+      {:ok, %{status: :semantic_refusal, used_fact_ids: ["fact-1"], unasked_fact_ids: ["fact-1"]}}
+    end
+
+    defp decide_candidate("undecided_unasked_fact", _req) do
+      {:ok, %{status: :low_confidence, used_fact_ids: [], undecided_fact_ids: ["fact-1"]}}
+    end
+
+    # Defense in depth: a semantic refusal never targets undecided facts.
+    defp decide_candidate("refused_with_undecided_fact", _req) do
+      {:ok, %{status: :semantic_refusal, undecided_fact_ids: ["fact-1"]}}
+    end
+
     defp decide_candidate("low_confidence_text", _req) do
       {:ok, %{status: :low_confidence, rationale: "Uncertain clinical grounding"}}
     end
@@ -77,6 +90,34 @@ defmodule Backend.Stations.CandidateGateTest do
           {:ok, %{status: :verified}}
       end
     end
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
+  # Issue #286: echoes the request's `disclosed_fact_ids` as the verdict's
+  # `used_fact_ids`, and refuses any candidate starting with "refuse".
+  defmodule DisclosedEchoAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(%{candidate_text: "refuse" <> _rest}),
+      do: {:ok, %{status: :semantic_refusal}}
+
+    def decide_patient(%{disclosed_fact_ids: disclosed}),
+      do: {:ok, %{status: :verified, used_fact_ids: disclosed}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
+  # Issue #293: refuses every candidate, so a delivered text proves Jev was
+  # never asked about it.
+  defmodule RefuseAllAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :semantic_refusal}}
 
     @impl true
     def decide_rubric(_request), do: {:error, :not_implemented}
@@ -1018,6 +1059,150 @@ defmodule Backend.Stations.CandidateGateTest do
   end
 
   # ============================================================================
+  # 5b. Targeted Regeneration For Unasked On-Request Facts (issue #242)
+  # ============================================================================
+
+  describe "Targeted regeneration for unasked on-request facts" do
+    test "the retry receives the unasked fact ids and the compliant reply is delivered" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_without_unasked_fact"}
+      end
+
+      assert {:ok, "regen_ok_without_unasked_fact"} =
+               CandidateGate.verify_and_deliver(
+                 "volunteers_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+
+      assert_received {:guidance, %{withheld_fact_ids: ["fact-1"]}}
+      refute_received {:guidance, _}
+    end
+
+    test "a refusal for any other reason keeps the plain retry, with no withheld fact" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_plain"}
+      end
+
+      for refused <- ["ungrounded_hallucination", "low_confidence_text"] do
+        assert {:ok, "regen_ok_plain"} =
+                 CandidateGate.verify_and_deliver(
+                   refused,
+                   base_package(),
+                   sample_conversation(),
+                   adapter: DoubleAdapter,
+                   generator: generator
+                 )
+
+        assert_received {:guidance, %{withheld_fact_ids: []}}
+        refute_received {:guidance, _}
+      end
+    end
+
+    test "an undecided unasked fact gets one regeneration that withholds it (#273)" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_without_undecided_fact"}
+      end
+
+      assert {:ok, "regen_ok_without_undecided_fact"} =
+               CandidateGate.verify_and_deliver(
+                 "undecided_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+
+      assert_received {:guidance, %{withheld_fact_ids: ["fact-1"]}}
+      refute_received {:guidance, _}
+    end
+
+    test "a second undecided refusal releases no text and keeps the low-confidence refusal" do
+      generator = fn _pkg, _conv, _remaining_ms, _guidance ->
+        {:ok, "regen_low_confidence_again"}
+      end
+
+      assert {:error, {:refused, :low_confidence}} =
+               CandidateGate.verify_and_deliver(
+                 "undecided_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+    end
+
+    test "a semantic refusal never withholds undecided facts" do
+      test_pid = self()
+
+      generator = fn _pkg, _conv, _remaining_ms, guidance ->
+        send(test_pid, {:guidance, guidance})
+        {:ok, "regen_ok_plain"}
+      end
+
+      assert {:ok, "regen_ok_plain"} =
+               CandidateGate.verify_and_deliver(
+                 "refused_with_undecided_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+
+      assert_received {:guidance, %{withheld_fact_ids: []}}
+    end
+
+    test "older generator arities keep working on a targeted refusal" do
+      assert {:ok, "regen_ok_legacy"} =
+               CandidateGate.verify_and_deliver(
+                 "volunteers_unasked_fact",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: fn -> {:ok, "regen_ok_legacy"} end
+               )
+    end
+
+    test "refused text is never logged, passed to the retry, or returned" do
+      refused = "volunteers_unasked_fact"
+      test_pid = self()
+
+      generator = fn pkg, conv, _remaining_ms, guidance ->
+        send(test_pid, {:retry_inputs, inspect({pkg, conv, guidance})})
+        {:ok, "regen_refused_again"}
+      end
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          CandidateGate.verify_and_deliver(
+            refused,
+            base_package(),
+            sample_conversation(),
+            adapter: DoubleAdapter,
+            generator: generator
+          )
+        end)
+
+      assert result == {:error, {:refused, :semantic_refusal}}
+      assert_received {:retry_inputs, retry_inputs}
+      refute retry_inputs =~ refused
+      refute log =~ refused
+      refute log =~ "regen_refused_again"
+    end
+  end
+
+  # ============================================================================
   # 6. Monotonic Deadline Shared Across Attempts
   # ============================================================================
 
@@ -1036,7 +1221,9 @@ defmodule Backend.Stations.CandidateGateTest do
                )
     end
 
-    test "timeout during generator regeneration halts without releasing text" do
+    # Issue #256: a refused candidate whose regeneration cannot finish in time
+    # returns the original refusal, so the learner turn is kept (#235).
+    test "timeout during generator regeneration returns the original refusal, never the late text" do
       package = base_package()
       deadline_at = JevDecision.monotonic_now_ms() + 40
 
@@ -1046,7 +1233,7 @@ defmodule Backend.Stations.CandidateGateTest do
         {:ok, "regen_ok_too_late"}
       end
 
-      assert {:error, :timeout} =
+      assert {:error, {:refused, :semantic_refusal}} =
                CandidateGate.verify_and_deliver(
                  "ungrounded_hallucination",
                  package,
@@ -1054,6 +1241,45 @@ defmodule Backend.Stations.CandidateGateTest do
                  adapter: DoubleAdapter,
                  generator: generator,
                  deadline_at_monotonic_ms: deadline_at
+               )
+    end
+
+    test "a generator that reports a timeout returns the original refusal" do
+      generator = fn -> {:error, :timeout} end
+
+      assert {:error, {:refused, :low_confidence}} =
+               CandidateGate.verify_and_deliver(
+                 "low_confidence_text",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+    end
+
+    test "a regenerated candidate whose verification times out returns the original refusal" do
+      generator = fn -> {:ok, "adapter_timeout"} end
+
+      assert {:error, {:refused, :semantic_refusal}} =
+               CandidateGate.verify_and_deliver(
+                 "ungrounded_hallucination",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
+               )
+    end
+
+    test "a regeneration that fails for a non-timeout reason keeps today's error" do
+      generator = fn -> {:error, {:upstream_5xx, 503}} end
+
+      assert {:error, {:upstream_5xx, 503}} =
+               CandidateGate.verify_and_deliver(
+                 "ungrounded_hallucination",
+                 base_package(),
+                 sample_conversation(),
+                 adapter: DoubleAdapter,
+                 generator: generator
                )
     end
 
@@ -1224,6 +1450,94 @@ defmodule Backend.Stations.CandidateGateTest do
                  sample_conversation(),
                  adapter: DoubleAdapter
                )
+    end
+  end
+
+  describe "verify/4 (issue #286)" do
+    test "returns the verdict's facts and passes the disclosed facts to Jev" do
+      assert CandidateGate.verify("Começou há 2 horas.", base_package(), [],
+               adapter: DisclosedEchoAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, %{text: "Começou há 2 horas.", used_fact_ids: ["fact-1"]}}
+
+      assert CandidateGate.verify("Começou há 2 horas.", base_package(), [],
+               adapter: DisclosedEchoAdapter
+             ) == {:ok, %{text: "Começou há 2 horas.", used_fact_ids: []}}
+    end
+
+    test "returns the regeneration's facts when the regeneration is delivered" do
+      assert CandidateGate.verify("refuse this", base_package(), [],
+               adapter: DisclosedEchoAdapter,
+               disclosed_fact_ids: ["fact-1"],
+               generator: fn -> {:ok, "Começou durante a caminhada."} end
+             ) == {:ok, %{text: "Começou durante a caminhada.", used_fact_ids: ["fact-1"]}}
+    end
+
+    test "an approved template bypass discloses nothing" do
+      assert CandidateGate.verify("Compreendo, doutor.", base_package(), [],
+               adapter: ExplosiveAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, %{text: "Compreendo, doutor.", used_fact_ids: []}}
+    end
+
+    test "verify_and_deliver/4 keeps returning the text only" do
+      assert CandidateGate.verify_and_deliver("Começou há 2 horas.", base_package(), [],
+               adapter: DisclosedEchoAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, "Começou há 2 horas."}
+    end
+  end
+
+  describe "no-information answer (issue #293)" do
+    defp no_information, do: Backend.Stations.StationAI.refusal_text()
+
+    test "is delivered without a Jev call and discloses nothing" do
+      package = base_package(%{"approved_templates" => nil})
+
+      assert CandidateGate.verify(no_information(), package, sample_conversation(),
+               adapter: ExplosiveAdapter,
+               disclosed_fact_ids: ["fact-1"]
+             ) == {:ok, %{text: no_information(), used_fact_ids: []}}
+    end
+
+    test "surrounding whitespace still matches the phrase" do
+      candidate = " " <> no_information() <> "\n"
+
+      assert CandidateGate.verify_and_deliver(candidate, base_package(), [],
+               adapter: ExplosiveAdapter
+             ) == {:ok, candidate}
+    end
+
+    test "a regenerated no-information answer is delivered without a Jev call" do
+      assert CandidateGate.verify(
+               "Acho que a dor vai para as costas.",
+               base_package(%{"approved_templates" => nil}),
+               sample_conversation(),
+               adapter: RefuseAllAdapter,
+               generator: fn -> {:ok, no_information()} end
+             ) == {:ok, %{text: no_information(), used_fact_ids: []}}
+    end
+
+    test "any other text still goes through Jev" do
+      for text <- [
+            no_information() <> " A dor começou há 2 horas.",
+            "Sobre isso: " <> no_information(),
+            String.trim_trailing(no_information(), ".")
+          ] do
+        assert CandidateGate.verify_and_deliver(text, base_package(), [],
+                 adapter: RefuseAllAdapter,
+                 can_retry?: false
+               ) == {:error, {:refused, :semantic_refusal}}
+      end
+    end
+
+    test "the deterministic checks still run first" do
+      package =
+        base_package(%{"response_rules" => [%{"id" => "length-cap", "max_length" => 5}]})
+
+      assert CandidateGate.verify_and_deliver(no_information(), package, [],
+               adapter: ExplosiveAdapter
+             ) == {:error, {:denied, :response_rules}}
     end
   end
 end

@@ -62,7 +62,7 @@ const unknownErrorMessage =
 // Create-message failures after which the session stays active, mapped to the
 // pt-BR notice offering a retry. The single seam deciding which turn failures
 // keep the station running. A reply_verification_failed carrying the kept
-// learner turn is reported by `keptLearnerTurnNotice` instead.
+// learner turn is recognised by `isKeptLearnerTurn` instead.
 const recoverableTurnNotices: Readonly<Record<string, string>> = {
   reply_verification_failed: strings.replyVerificationFailedNotice,
   timeout: strings.turnUnavailableNotice,
@@ -84,19 +84,44 @@ export const recoverableTurnNotice = (cause: unknown): string | null => {
 };
 
 /**
- * Returns the pt-BR notice for a refused patient reply whose learner turn the
- * backend kept (the error carries `learnerTurn`), or null otherwise. Such a
- * turn stays in the transcript: it must not be resent.
+ * Whether a create-message failure is a refused patient reply whose learner
+ * turn the backend kept (the error carries `learnerTurn`). Such a turn stays in
+ * the transcript and must not be resent.
  */
-export const keptLearnerTurnNotice = (cause: unknown): string | null => {
-  if (typeof cause !== "object" || cause === null) return null;
+export const isKeptLearnerTurn = (cause: unknown): boolean => {
+  if (typeof cause !== "object" || cause === null) return false;
   const { code, learnerTurn } = cause as { code?: unknown; learnerTurn?: unknown };
-  return code === "reply_verification_failed" &&
+  return (
+    code === "reply_verification_failed" &&
     typeof learnerTurn === "object" &&
     learnerTurn !== null
-    ? strings.learnerTurnKeptNotice
-    : null;
+  );
 };
+
+/**
+ * Thrown by `send` when the backend kept a learner turn addressed to the
+ * examiner (#274): there is no patient reply, and the station goes on. It
+ * travels the same path as a kept refusal, so the screen decides what to show.
+ */
+export class ExaminerAcknowledgement extends Error {
+  /**
+   * `newlyReleased` holds the impressos the turn released by asking the
+   * examiner for them (#302), empty when it released none.
+   */
+  constructor(
+    readonly learnerTurn: SessionMessage,
+    readonly newlyReleased: Impresso[] = [],
+  ) {
+    super("Examiner acknowledgement");
+    this.name = "ExaminerAcknowledgement";
+  }
+}
+
+/** Whether a send outcome is a turn the examiner acknowledged (#274). */
+export const isExaminerAcknowledgement = (cause: unknown): boolean =>
+  typeof cause === "object" &&
+  cause !== null &&
+  (cause as { name?: unknown }).name === "ExaminerAcknowledgement";
 
 const unknownImpressoErrorMessage =
   "Não foi possível solicitar o impresso. Tente novamente.";
@@ -144,10 +169,13 @@ export const useStation = (api: StationApi = defaultApi) => {
   const [result, setResult] = useState<SessionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [audioConsent, setAudioConsent] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [deadlineAtMs, setDeadlineAtMs] = useState<number | null>(null);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [initialMessages, setInitialMessages] = useState<SessionMessage[]>([]);
   const [impressos, setImpressos] = useState<Impresso[]>([]);
+  // The released impressos the latest refresh compared against (#302).
+  const impressosRef = useRef<Impresso[]>([]);
   const [impressoError, setImpressoError] = useState<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const hasStartedRef = useRef(false);
@@ -184,6 +212,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       setDeadlineAtMs(null);
       setRemainingMs(null);
       setImpressoError(null);
+      setSessionId(null);
       setError(cause instanceof ApiError ? cause.message : unknownErrorMessage);
       updateStatus("failed");
     },
@@ -207,6 +236,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       clockAnchorRef.current = null;
       timerFinishTriggeredRef.current = false;
       clearPersistedSessionId();
+      setSessionId(null);
       setDeadlineAtMs(null);
       setRemainingMs(null);
       setInitialMessages([]);
@@ -237,6 +267,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         timerFinishTriggeredRef.current = false;
         pageHideAttemptedRef.current = null;
         clearPersistedSessionId();
+        setSessionId(null);
         setDeadlineAtMs(null);
         setRemainingMs(null);
         setInitialMessages([]);
@@ -277,6 +308,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       setAudioConsent(consent);
       setError(null);
       setResult(null);
+      setSessionId(null);
       setInitialMessages([]);
       setImpressos([]);
       setImpressoError(null);
@@ -287,6 +319,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         anchorClock(session.server_now);
         setDeadlineAtMs(Date.parse(session.deadline_at));
         persistSessionId(session.session_id);
+        setSessionId(session.session_id);
         updateStatus("active");
       } catch (cause) {
         fail(cause);
@@ -361,6 +394,35 @@ export const useStation = (api: StationApi = defaultApi) => {
     [anchorClock, api, fail, updateStatus],
   );
 
+  useEffect(() => {
+    impressosRef.current = impressos;
+  }, [impressos]);
+
+  /**
+   * Re-reads the released impressos of the live session and returns the ones
+   * that were not released before (#302): an examiner acknowledgement may have
+   * released impressos the learner asked for out loud. A failed read leaves the
+   * drawer as it was and returns none.
+   */
+  const refreshImpressos = useCallback(async (): Promise<Impresso[]> => {
+    const session = sessionRef.current;
+    if (!session || isResettingRef.current) return [];
+
+    try {
+      const response = await api.getImpressos(session.session_id);
+      if (sessionRef.current !== session) return [];
+
+      const known = new Set(impressosRef.current.map((impresso) => impresso.id));
+      impressosRef.current = response.released_impressos;
+      setImpressos(response.released_impressos);
+      return response.released_impressos.filter(
+        (impresso) => !known.has(impresso.id),
+      );
+    } catch {
+      return [];
+    }
+  }, [api]);
+
   const send = useCallback(
     (message: SendMessageRequest): Promise<MessageReply | null> => {
       const session = sessionRef.current;
@@ -386,11 +448,19 @@ export const useStation = (api: StationApi = defaultApi) => {
             return null;
           }
           anchorClock(messageReply.server_now);
+          if (messageReply.outcome === "examiner_acknowledged") {
+            throw new ExaminerAcknowledgement(
+              messageReply.learner_turn,
+              await refreshImpressos(),
+            );
+          }
           return messageReply;
         } catch (cause) {
           if (sessionRef.current !== session || isResettingRef.current) {
             return null;
           }
+
+          if (isExaminerAcknowledgement(cause)) throw cause;
 
           if (cause instanceof ApiError && cause.code === "station_time_elapsed") {
             if (!timerFinishTriggeredRef.current) {
@@ -423,7 +493,7 @@ export const useStation = (api: StationApi = defaultApi) => {
       pendingSendRef.current = pendingSend;
       return pendingSend;
     },
-    [anchorClock, api, fail, finish],
+    [anchorClock, api, fail, finish, refreshImpressos],
   );
 
   const transcribe = useCallback(
@@ -457,6 +527,21 @@ export const useStation = (api: StationApi = defaultApi) => {
     },
     [api],
   );
+
+  // Reads the stored transcript, e.g. to show a real-time voice reply as it
+  // was stored (#270). Read-only: it never changes the session state.
+  const fetchTranscript = useCallback(async (): Promise<
+    SessionMessage[] | null
+  > => {
+    const session = sessionRef.current;
+    if (!session) return null;
+    try {
+      const detail = await api.getSession(session.session_id);
+      return sessionRef.current === session ? detail.messages : null;
+    } catch {
+      return null;
+    }
+  }, [api]);
 
   const synthesize = useCallback(
     async (text: string): Promise<Blob | null> => {
@@ -540,6 +625,7 @@ export const useStation = (api: StationApi = defaultApi) => {
         if (cancelled || readPersistedSessionId() !== savedSessionId) return;
 
         sessionRef.current = detail;
+        setSessionId(detail.session_id);
         setAudioConsent(detail.audio_consent);
         anchorClock(detail.server_now);
         setDeadlineAtMs(Date.parse(detail.deadline_at));
@@ -643,6 +729,7 @@ export const useStation = (api: StationApi = defaultApi) => {
           timerFinishTriggeredRef.current = false;
           pageHideAttemptedRef.current = null;
           clearPersistedSessionId();
+          setSessionId(null);
           setResult(null);
           setInitialMessages([]);
           setImpressos([]);
@@ -669,13 +756,16 @@ export const useStation = (api: StationApi = defaultApi) => {
     send,
     transcribe,
     synthesize,
+    fetchTranscript,
     requestImpresso,
+    refreshImpressos,
     finish,
     reset,
     result,
     status,
     error,
     audioConsent,
+    sessionId,
     remainingMs,
     initialMessages,
     impressos,

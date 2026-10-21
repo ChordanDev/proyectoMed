@@ -13,6 +13,7 @@ defmodule Backend.Application do
       {Phoenix.PubSub, name: Backend.PubSub},
       Backend.Stations.StationLoader,
       Backend.Stations.Conversation,
+      Backend.Stations.MediaSession,
       # Start a worker by calling: Backend.Worker.start_link(arg)
       # {Backend.Worker, arg},
       # Start to serve requests, typically the last entry

@@ -4,8 +4,11 @@ defmodule Backend.Stations.Conversation do
 
   Sessions are never persisted. A completed session is immutable: calling
   `complete/2` again returns the original completed session. The only data
-  added to a completed session is its learner feedback cache
-  (`put_learner_feedback/2`), which lives and dies with the session.
+  added to a completed session are its rubric assessment
+  (`put_rubric_assessment/2`, issue #301), its learner feedback cache
+  (`put_learner_feedback/2`) and the after-delivery audits of its patient
+  replies (`record_patient_audit/3`, issue #307), which live and die with the
+  session.
 
   Learner feedback generation is single-flight per session
   (`claim_learner_feedback/2`, `settle_learner_feedback/2`): one caller
@@ -25,6 +28,22 @@ defmodule Backend.Stations.Conversation do
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
           optional(:learner_feedback) => learner_feedback(),
+          optional(:rubric_assessment) => map(),
+          optional(:patient_audits) => [map()],
+          optional(:elapsed_generation_id) => pos_integer(),
+          optional(:last_voice_turn_id) => pos_integer(),
+          optional(:cancelled_voice_turn_id) => non_neg_integer(),
+          optional(:active_generation_id) => pos_integer() | nil,
+          optional(:active_voice_turn_id) => pos_integer() | nil,
+          optional(:active_generation_message_index) => non_neg_integer() | nil,
+          optional(:next_generation_id) => pos_integer(),
+          optional(:failed_voice_turn) =>
+            %{
+              turn_id: pos_integer(),
+              generation_id: pos_integer(),
+              reason: :station_ai_unavailable
+            }
+            | nil,
           session_id: String.t(),
           station_id: String.t(),
           station_version: String.t(),
@@ -38,7 +57,19 @@ defmodule Backend.Stations.Conversation do
           status: :active | :completed
         }
 
-  @type message :: %{role: term(), modality: term(), text: String.t(), at: DateTime.t()}
+  @typedoc """
+  A transcript message. A patient message may carry `verified_fact_ids`: the
+  authored ids of the facts the Jev verdict that verified it found stated
+  (issue #286). The session's disclosed facts are derived from them, see
+  `disclosed_fact_ids/1`.
+  """
+  @type message :: %{
+          required(:role) => term(),
+          required(:modality) => term(),
+          required(:text) => String.t(),
+          required(:at) => DateTime.t(),
+          optional(:verified_fact_ids) => [String.t()]
+        }
 
   @type impresso_request_event :: %{
           request_id: String.t(),
@@ -73,6 +104,12 @@ defmodule Backend.Stations.Conversation do
            grace_ref: reference() | nil
          }
 
+  @typep voice_grace :: %{
+           token: reference(),
+           grace_ref: reference() | nil,
+           waiters: [GenServer.from()]
+         }
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
     GenServer.start_link(__MODULE__, options, name: __MODULE__)
@@ -93,6 +130,12 @@ defmodule Backend.Stations.Conversation do
     GenServer.call(__MODULE__, {:append_message, session_id, message})
   end
 
+  @doc """
+  Completes a session. While a text turn is pending the caller waits until it
+  settles or the bounded grace period elapses. A `:timer` completion takes the
+  deadline's decision: it also waits, under the same single grace window, for a
+  voice generation in flight. Any other reason completes at once in that case.
+  """
   @spec complete(String.t(), term()) :: {:ok, session()} | {:error, :not_found | :expired}
   def complete(session_id, reason) do
     GenServer.call(__MODULE__, {:complete, session_id, reason}, call_timeout_ms())
@@ -104,6 +147,9 @@ defmodule Backend.Stations.Conversation do
   this in-flight turn. While a turn is pending, session completion (manual or
   timer) is deferred until `resolve_turn/3` settles it or the bounded grace
   period elapses.
+
+  The deadline grants one grace window per session: it also covers a voice
+  generation in flight, see `begin_voice_turn/3` and `resolve_patient_reply/4`.
   """
   @spec begin_turn(String.t(), map()) ::
           {:ok, session(), turn_token()}
@@ -169,6 +215,190 @@ defmodule Backend.Stations.Conversation do
   end
 
   @doc """
+  Atomically appends a learner voice turn unless `turn_id` is not greater than
+  the last committed voice turn, which makes reconnects, retries and
+  reordered provider finals idempotent.
+
+  Preserves the base #118 return shape `{:ok, :committed | :duplicate}` for existing
+  callers such as Backend.Stations.commit_voice_transcript and VoiceWorkerController.
+
+  Follows the station deadline exactly as `begin_voice_turn/3` does.
+  """
+  @spec commit_voice_turn(String.t(), pos_integer(), String.t()) ::
+          {:ok, :committed | :duplicate}
+          | {:error,
+             :not_found | :expired | :completed | :stale_generation | :station_time_elapsed}
+  def commit_voice_turn(session_id, turn_id, text) do
+    GenServer.call(__MODULE__, {:commit_voice_turn, session_id, turn_id, text})
+  end
+
+  @doc """
+  Atomically commits an accepted learner voice turn and assigns a session-scoped
+  monotonic generation identity for bounded real-time turns (#119).
+
+  Invalidates any previously pending generation on an accepted final turn.
+  Returns `{:ok, :committed, generation_id}` on accepted turns, or `{:ok, :duplicate}`
+  if turn_id is not greater than the last committed voice turn. The latest failed
+  generation returns its canonical technical failure on retry instead of duplicate.
+
+  A new turn at or after the authoritative deadline, or any turn on a session
+  completed by the timer, returns `{:error, :station_time_elapsed}` and appends
+  nothing. A generation still in flight when the deadline fires defers the timer
+  completion for the same bounded grace period a pending text turn gets.
+  """
+  @spec begin_voice_turn(String.t(), pos_integer(), String.t()) ::
+          {:ok, :committed, pos_integer()}
+          | {:ok, :duplicate}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :stale_generation
+             | :station_ai_unavailable
+             | :station_time_elapsed}
+  def begin_voice_turn(session_id, turn_id, text) do
+    GenServer.call(__MODULE__, {:begin_voice_turn, session_id, turn_id, text})
+  end
+
+  @doc """
+  Records a canonical technical failure only for the still-active generation.
+  Keeps one turn-scoped outcome until a newer turn or session completion, never
+  provider payloads or reply text. Cancellation and supersession remain stale.
+  """
+  @spec fail_generation(String.t(), pos_integer(), :station_ai_unavailable) ::
+          {:ok, :failed}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def fail_generation(session_id, generation_id, :station_ai_unavailable)
+      when is_integer(generation_id) and generation_id > 0 do
+    GenServer.call(__MODULE__, {:fail_generation, session_id, generation_id})
+  end
+
+  @doc """
+  Atomically resolves a verified patient reply against the active generation identity.
+  Refuses invalid replies (non-binary or empty text), stale generations,
+  completed sessions, expired sessions, and missing/discarded sessions.
+
+  `:keep_learner_turn` settles the generation the same way without appending a
+  patient message: the learner voice turn stays, as `resolve_turn/3` keeps a
+  text turn whose patient reply was refused (#235, #269).
+
+  A reply resolved inside the deadline grace window is appended and the returned
+  session is then completed with reason `:timer`, unless a text turn is still
+  pending under the same window. Once the window elapsed, the generation it cut
+  off returns `{:error, :station_time_elapsed}` and nothing is appended.
+
+  `verified_fact_ids` are stored on the appended patient message (issue #286);
+  they are recorded only when the reply is, never for a stale, cancelled or
+  kept generation.
+  """
+  @spec resolve_patient_reply(
+          String.t(),
+          pos_integer(),
+          String.t() | :keep_learner_turn,
+          [String.t()]
+        ) ::
+          {:ok, session()}
+          | {:error,
+             :not_found
+             | :expired
+             | :completed
+             | :stale_generation
+             | :invalid_reply
+             | :station_time_elapsed}
+  def resolve_patient_reply(session_id, generation_id, reply_text, verified_fact_ids \\ []) do
+    GenServer.call(
+      __MODULE__,
+      {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids}
+    )
+  end
+
+  @doc """
+  The facts the session's verified patient turns disclosed (issue #286): the
+  `verified_fact_ids` of its patient messages, in first-disclosure order,
+  without duplicates. Derived from the transcript, so it lives and dies with the
+  session and is unaffected by kept, rolled back or cancelled learner turns.
+  """
+  @spec disclosed_fact_ids(session()) :: [String.t()]
+  def disclosed_fact_ids(%{messages: messages}) when is_list(messages) do
+    messages
+    |> Enum.flat_map(fn
+      %{role: :patient, verified_fact_ids: ids} when is_list(ids) -> ids
+      _message -> []
+    end)
+    |> Enum.uniq()
+  end
+
+  def disclosed_fact_ids(_session), do: []
+
+  @doc """
+  Records the after-delivery Jev audit of a patient message (issue #307).
+
+  The message is the patient message stored at `message_at`. `audit` is
+  appended to the session's `patient_audits` with that message's
+  `message_index`; when `verified_fact_ids` is a list it replaces the message's
+  `verified_fact_ids`, so `disclosed_fact_ids/1` follows the audit verdict.
+  A completed session still records it: audits are measurement data that live
+  and die with the session. Returns the recorded audit.
+  """
+  @spec record_patient_audit(String.t(), DateTime.t(), %{
+          audit: map(),
+          verified_fact_ids: [String.t()] | nil
+        }) :: {:ok, map()} | {:error, :not_found | :expired | :message_not_found}
+  def record_patient_audit(session_id, message_at, entry) do
+    GenServer.call(__MODULE__, {:record_patient_audit, session_id, message_at, entry})
+  end
+
+  @doc """
+  Explicitly cancels a pending generation. When `generation_id` is provided,
+  cancels only if that generation is still active, protecting against races with newer turns.
+
+  Cancelling or failing the generation a deadline grace window was waiting for
+  completes the session with reason `:timer` at once, unless a text turn is
+  still pending; the return value is unchanged.
+  """
+  @spec cancel_generation(String.t(), pos_integer() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_generation(session_id, generation_id \\ nil) do
+    GenServer.call(__MODULE__, {:cancel_generation, session_id, generation_id})
+  end
+
+  @doc """
+  Explicitly cancels a pending voice turn by expected turn_id (#119).
+  Cancels active work only if `turn_id` matches. Turn-only criteria also fence
+  future admission through that monotonic turn ID, even when no active work
+  matches (the existing `:stale_generation` response is preserved). A supplied
+  generation must match before a fence is installed. Already admitted duplicates
+  retain their idempotent return shape; a fence never removes transcript messages.
+  """
+  @spec cancel_voice_turn(String.t(), pos_integer() | keyword() | map() | nil) ::
+          {:ok, :cancelled}
+          | {:error, :not_found | :expired | :completed | :stale_generation}
+  def cancel_voice_turn(session_id, criteria \\ nil)
+
+  def cancel_voice_turn(session_id, turn_id) when is_integer(turn_id) and turn_id > 0 do
+    GenServer.call(__MODULE__, {:cancel_voice_turn, session_id, turn_id})
+  end
+
+  def cancel_voice_turn(session_id, criteria) when is_list(criteria) or is_map(criteria) do
+    GenServer.call(__MODULE__, {:cancel_by_criteria, session_id, criteria})
+  end
+
+  def cancel_voice_turn(session_id, nil) do
+    cancel_generation(session_id, nil)
+  end
+
+  @doc """
+  Returns the current active generation identity for the session, or nil if none is pending.
+  """
+  @spec active_generation(String.t()) ::
+          {:ok, pos_integer() | nil}
+          | {:error, :not_found | :expired | :completed}
+  def active_generation(session_id) do
+    GenServer.call(__MODULE__, {:active_generation, session_id})
+  end
+
+  @doc """
   Idempotently discards a session from in-memory storage.
   Returns `:ok` whether the session existed or not.
   """
@@ -184,6 +414,28 @@ defmodule Backend.Stations.Conversation do
     with {:ok, session} <- fetch(session_id) do
       {:ok, Map.get(session, :learner_feedback, %{})}
     end
+  end
+
+  @doc """
+  Returns the rubric assessment kept with a session, or `nil` before it has
+  been graded (issue #301).
+  """
+  @spec rubric_assessment(String.t()) :: {:ok, map() | nil} | {:error, :not_found | :expired}
+  def rubric_assessment(session_id) do
+    with {:ok, session} <- fetch(session_id) do
+      {:ok, Map.get(session, :rubric_assessment)}
+    end
+  end
+
+  @doc """
+  Keeps the rubric assessment of a completed session, so it is graded once
+  (issue #301). An assessment already kept is never replaced, and a missing,
+  expired or still active session is left untouched.
+  """
+  @spec put_rubric_assessment(String.t(), map()) ::
+          :ok | {:error, :not_found | :expired | :session_not_finished}
+  def put_rubric_assessment(session_id, assessment) when is_map(assessment) do
+    GenServer.call(__MODULE__, {:put_rubric_assessment, session_id, assessment})
   end
 
   @doc """
@@ -228,7 +480,7 @@ defmodule Backend.Stations.Conversation do
   def init(_options) do
     :ets.new(__MODULE__, [:named_table, :set, :public, read_concurrency: true])
     schedule_purge()
-    {:ok, %{turns: %{}, feedback_flights: %{}}}
+    {:ok, %{turns: %{}, voice_graces: %{}, feedback_flights: %{}}}
   end
 
   @impl true
@@ -261,7 +513,14 @@ defmodule Backend.Stations.Conversation do
       messages: [],
       released_impressos: [],
       impresso_requests: [],
-      status: :active
+      status: :active,
+      last_voice_turn_id: 0,
+      cancelled_voice_turn_id: 0,
+      active_generation_id: nil,
+      active_voice_turn_id: nil,
+      active_generation_message_index: nil,
+      next_generation_id: 1,
+      failed_voice_turn: nil
     }
 
     true = :ets.insert(__MODULE__, {session.session_id, session})
@@ -271,16 +530,13 @@ defmodule Backend.Stations.Conversation do
 
   def handle_call({:begin_turn, session_id, message}, _from, state) do
     case active_session(session_id) do
-      {:ok, %{status: :completed, completion_reason: :timer}} ->
-        {:reply, {:error, :station_time_elapsed}, state}
-
-      {:ok, %{status: :completed}} ->
-        {:reply, {:error, :completed}, state}
+      {:ok, %{status: :completed} = session} ->
+        {:reply, {:error, completed_turn_error(session)}, state}
 
       {:ok, %{status: :active} = session} ->
         now = DateTime.utc_now()
 
-        if DateTime.compare(now, session.deadline_at) != :lt do
+        if deadline_passed?(session, now) do
           {:reply, {:error, :station_time_elapsed}, state}
         else
           message = Map.put(message, :at, now)
@@ -309,8 +565,6 @@ defmodule Backend.Stations.Conversation do
   def handle_call({:resolve_turn, session_id, token, resolution}, _from, state) do
     case get_in(state, [:turns, session_id]) do
       %{token: ^token} = turn ->
-        if turn.grace_ref, do: Process.cancel_timer(turn.grace_ref)
-
         case apply_resolution(session_id, turn, resolution) do
           {:ok, session} ->
             state = %{state | turns: Map.delete(state.turns, session_id)}
@@ -321,6 +575,7 @@ defmodule Backend.Stations.Conversation do
             {:reply, {:ok, final_session}, state}
 
           {:error, reason} ->
+            if turn.grace_ref, do: Process.cancel_timer(turn.grace_ref)
             state = %{state | turns: Map.delete(state.turns, session_id)}
             {:reply, {:error, reason}, state}
         end
@@ -359,7 +614,7 @@ defmodule Backend.Stations.Conversation do
         {:noreply, state}
 
       nil ->
-        {:reply, complete_now(session_id, reason), state}
+        complete_without_turn(session_id, reason, from, state)
     end
   end
 
@@ -374,6 +629,186 @@ defmodule Backend.Stations.Conversation do
 
       {:ok, %{status: :completed}} ->
         {:reply, {:error, :completed}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:commit_voice_turn, session_id, turn_id, text}, _from, state) do
+    do_voice_turn(session_id, turn_id, text, :legacy, state)
+  end
+
+  def handle_call({:begin_voice_turn, session_id, turn_id, text}, _from, state) do
+    do_voice_turn(session_id, turn_id, text, :with_generation, state)
+  end
+
+  def handle_call(
+        {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids},
+        _from,
+        state
+      ) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed} = session} ->
+        {:reply, {:error, completed_generation_error(session, generation_id)}, state}
+
+      {:ok, session} ->
+        active_gen = Map.get(session, :active_generation_id)
+
+        cond do
+          not valid_reply_text?(reply_text) ->
+            {:reply, {:error, :invalid_reply}, state}
+
+          is_nil(active_gen) or active_gen != generation_id ->
+            {:reply, {:error, :stale_generation}, state}
+
+          true ->
+            session =
+              session
+              |> Map.put(
+                :messages,
+                session.messages ++ patient_messages(reply_text, verified_fact_ids)
+              )
+              |> Map.put(:active_generation_id, nil)
+              |> Map.put(:active_voice_turn_id, nil)
+              |> Map.put(:active_generation_message_index, nil)
+
+            true = :ets.insert(__MODULE__, {session_id, session})
+            {final_session, state} = finalize_voice_grace(session_id, session, state)
+            {:reply, {:ok, final_session}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:fail_generation, session_id, generation_id}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        if session.active_generation_id == generation_id do
+          failure = %{
+            turn_id: session.active_voice_turn_id,
+            generation_id: generation_id,
+            reason: :station_ai_unavailable
+          }
+
+          session =
+            session
+            |> Map.put(:failed_voice_turn, failure)
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+            |> Map.put(:active_generation_message_index, nil)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :failed}, settle_abandoned_voice_grace(session_id, state)}
+        else
+          {:reply, {:error, :stale_generation}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:cancel_generation, session_id, generation_id}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        active_gen = Map.get(session, :active_generation_id)
+
+        if generation_id != nil and active_gen != generation_id do
+          {:reply, {:error, :stale_generation}, state}
+        else
+          session =
+            session
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+            |> Map.put(:active_generation_message_index, nil)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :cancelled}, settle_abandoned_voice_grace(session_id, state)}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:cancel_voice_turn, session_id, expected_turn_id}, from, state) do
+    handle_call({:cancel_by_criteria, session_id, [turn_id: expected_turn_id]}, from, state)
+  end
+
+  def handle_call({:cancel_by_criteria, session_id, criteria}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        active_turn = Map.get(session, :active_voice_turn_id)
+        active_gen = Map.get(session, :active_generation_id)
+
+        expected_turn =
+          get_criterion(criteria, :turn_id) || get_criterion(criteria, :expected_turn_id)
+
+        expected_gen = get_criterion(criteria, :generation_id)
+
+        stale? =
+          cond do
+            expected_turn != nil and (active_turn != expected_turn or is_nil(active_gen)) -> true
+            expected_gen != nil and active_gen != expected_gen -> true
+            true -> false
+          end
+
+        # Turn IDs order a session's stream. One high-water mark fences delayed
+        # POSTs/retries without an unbounded identity set or touching newer active
+        # work. A mismatched generation-qualified request has no side effects.
+        session =
+          if is_integer(expected_turn) and expected_turn > 0 and
+               (is_nil(expected_gen) or not stale?) do
+            fenced =
+              Map.put(
+                session,
+                :cancelled_voice_turn_id,
+                max(Map.get(session, :cancelled_voice_turn_id, 0), expected_turn)
+              )
+
+            true = :ets.insert(__MODULE__, {session_id, fenced})
+            fenced
+          else
+            session
+          end
+
+        if stale? do
+          {:reply, {:error, :stale_generation}, state}
+        else
+          session =
+            session
+            |> Map.put(:active_generation_id, nil)
+            |> Map.put(:active_voice_turn_id, nil)
+            |> Map.put(:active_generation_message_index, nil)
+
+          true = :ets.insert(__MODULE__, {session_id, session})
+          {:reply, {:ok, :cancelled}, settle_abandoned_voice_grace(session_id, state)}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:active_generation, session_id}, _from, state) do
+    case active_session(session_id) do
+      {:ok, %{status: :completed}} ->
+        {:reply, {:error, :completed}, state}
+
+      {:ok, session} ->
+        {:reply, {:ok, Map.get(session, :active_generation_id)}, state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -422,6 +857,53 @@ defmodule Backend.Stations.Conversation do
     end
   end
 
+  def handle_call({:record_patient_audit, session_id, message_at, entry}, _from, state) do
+    with {:ok, session} <- fetch_session(session_id),
+         index when is_integer(index) <-
+           Enum.find_index(session.messages, &match?(%{role: :patient, at: ^message_at}, &1)) do
+      audit = Map.put(entry.audit, :message_index, index)
+
+      messages =
+        case entry.verified_fact_ids do
+          ids when is_list(ids) ->
+            List.update_at(session.messages, index, &Map.put(&1, :verified_fact_ids, ids))
+
+          nil ->
+            session.messages
+        end
+
+      session =
+        session
+        |> Map.put(:messages, messages)
+        |> Map.put(:patient_audits, Map.get(session, :patient_audits, []) ++ [audit])
+
+      true = :ets.insert(__MODULE__, {session_id, session})
+      {:reply, {:ok, audit}, state}
+    else
+      nil -> {:reply, {:error, :message_not_found}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:put_rubric_assessment, session_id, assessment}, _from, state) do
+    case fetch_session(session_id) do
+      {:ok, %{status: :completed, rubric_assessment: %{}}} ->
+        {:reply, :ok, state}
+
+      {:ok, %{status: :completed} = session} ->
+        true =
+          :ets.insert(__MODULE__, {session_id, Map.put(session, :rubric_assessment, assessment)})
+
+        {:reply, :ok, state}
+
+      {:ok, _active} ->
+        {:reply, {:error, :session_not_finished}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call({:settle_learner_feedback, session_id, entries}, {pid, _tag}, state) do
     reply = merge_learner_feedback(session_id, entries)
 
@@ -448,6 +930,8 @@ defmodule Backend.Stations.Conversation do
           %{state | turns: state_turns}
       end
 
+    {voice_grace, state} = pop_voice_grace(state, session_id)
+    reply_waiters({:error, :not_found}, voice_grace.waiters)
     {:reply, :ok, release_flight(state, session_id)}
   end
 
@@ -472,8 +956,7 @@ defmodule Backend.Stations.Conversation do
         {:noreply, state}
 
       nil ->
-        _ = complete_now(session_id, :timer)
-        {:noreply, state}
+        {:noreply, defer_or_complete_timer(session_id, [], state)}
     end
   end
 
@@ -487,18 +970,112 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_info({:grace_expired, session_id, token}, state) do
-    case get_in(state, [:turns, session_id]) do
-      %{token: ^token} = turn ->
+    case {get_in(state, [:turns, session_id]), Map.get(state.voice_graces, session_id)} do
+      {%{token: ^token} = turn, _voice_grace} ->
         rollback_pending_message(session_id, turn)
         reason = turn.first_reason || :timer
-        reply_waiters(complete_now(session_id, reason), turn.waiters)
+        reply_waiters(complete_deferred(session_id, reason), turn.waiters)
         state = %{state | turns: Map.delete(state.turns, session_id)}
+        {:noreply, state}
+
+      {_turn, %{token: ^token} = voice_grace} ->
+        reply_waiters(complete_deferred(session_id, :timer), voice_grace.waiters)
+        state = %{state | voice_graces: Map.delete(state.voice_graces, session_id)}
         {:noreply, state}
 
       _ ->
         {:noreply, state}
     end
   end
+
+  defp do_voice_turn(session_id, turn_id, text, return_mode, state) do
+    case active_session(session_id) do
+      {:ok, session} ->
+        reply = commit_voice_turn(session_id, session, turn_id, text, return_mode)
+        {:reply, reply, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp commit_voice_turn(_session_id, %{status: :completed} = session, _turn_id, _text, _mode) do
+    {:error, completed_turn_error(session)}
+  end
+
+  defp commit_voice_turn(session_id, session, turn_id, text, return_mode) do
+    now = DateTime.utc_now()
+
+    cond do
+      turn_id <= Map.get(session, :last_voice_turn_id, 0) ->
+        case {return_mode, Map.get(session, :failed_voice_turn)} do
+          {:with_generation, %{turn_id: ^turn_id, reason: :station_ai_unavailable}} ->
+            {:error, :station_ai_unavailable}
+
+          _ ->
+            {:ok, :duplicate}
+        end
+
+      # Only a new turn starts work: retries of an admitted turn stay idempotent.
+      deadline_passed?(session, now) ->
+        {:error, :station_time_elapsed}
+
+      turn_id <= Map.get(session, :cancelled_voice_turn_id, 0) ->
+        {:error, :stale_generation}
+
+      true ->
+        gen_id = Map.get(session, :next_generation_id, 1)
+        message = %{role: :learner, modality: :voice, text: text, at: now}
+
+        session =
+          session
+          |> Map.put(:messages, session.messages ++ [message])
+          |> Map.put(:last_voice_turn_id, turn_id)
+          |> Map.put(:active_generation_id, gen_id)
+          |> Map.put(:active_voice_turn_id, turn_id)
+          |> Map.put(:active_generation_message_index, length(session.messages))
+          |> Map.put(:next_generation_id, gen_id + 1)
+          |> Map.put(:failed_voice_turn, nil)
+
+        true = :ets.insert(__MODULE__, {session_id, session})
+        voice_turn_reply(return_mode, gen_id)
+    end
+  end
+
+  defp voice_turn_reply(:legacy, _gen_id), do: {:ok, :committed}
+  defp voice_turn_reply(:with_generation, gen_id), do: {:ok, :committed, gen_id}
+
+  defp deadline_passed?(session, now) do
+    DateTime.compare(now, session.deadline_at) != :lt
+  end
+
+  defp completed_turn_error(%{completion_reason: :timer}), do: :station_time_elapsed
+  defp completed_turn_error(_session), do: :completed
+
+  defp completed_generation_error(
+         %{completion_reason: :timer, elapsed_generation_id: generation_id},
+         generation_id
+       ),
+       do: :station_time_elapsed
+
+  defp completed_generation_error(_session, _generation_id), do: :completed
+
+  defp voice_generation_in_flight?(session_id) do
+    case fetch_session(session_id) do
+      {:ok, %{status: :active} = session} -> is_integer(Map.get(session, :active_generation_id))
+      _ -> false
+    end
+  end
+
+  defp get_criterion(criteria, key) when is_list(criteria) do
+    Keyword.get(criteria, key)
+  end
+
+  defp get_criterion(criteria, key) when is_map(criteria) do
+    Map.get(criteria, key) || Map.get(criteria, to_string(key))
+  end
+
+  defp get_criterion(_criteria, _key), do: nil
 
   defp merge_learner_feedback(session_id, entries) do
     case fetch_session(session_id) do
@@ -556,6 +1133,28 @@ defmodule Backend.Stations.Conversation do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
   end
 
+  defp patient_messages(:keep_learner_turn, _verified_fact_ids), do: []
+
+  defp patient_messages(reply_text, verified_fact_ids) do
+    [
+      %{
+        role: :patient,
+        modality: :voice,
+        text: reply_text,
+        at: DateTime.utc_now(),
+        verified_fact_ids: Enum.filter(List.wrap(verified_fact_ids), &is_binary/1)
+      }
+    ]
+  end
+
+  defp valid_reply_text?(:keep_learner_turn), do: true
+
+  defp valid_reply_text?(text) when is_binary(text) do
+    String.trim(text) != ""
+  end
+
+  defp valid_reply_text?(_), do: false
+
   defp default_station_id do
     loader =
       Process.whereis(Backend.Stations.StationLoader) || Process.whereis(Backend.StationLoader)
@@ -609,7 +1208,11 @@ defmodule Backend.Stations.Conversation do
           Map.merge(session, %{
             status: :completed,
             completed_at: DateTime.utc_now(),
-            completion_reason: reason
+            completion_reason: reason,
+            active_generation_id: nil,
+            active_voice_turn_id: nil,
+            active_generation_message_index: nil,
+            failed_voice_turn: nil
           })
 
         true = :ets.insert(__MODULE__, {session_id, session})
@@ -631,17 +1234,142 @@ defmodule Backend.Stations.Conversation do
 
   defp ensure_grace_timer(_session_id, turn), do: turn
 
-  defp finalize_deferred_completion(session_id, turn, session, state) do
-    if turn.first_reason do
-      result = complete_now(session_id, turn.first_reason)
-      reply_waiters(result, turn.waiters)
+  defp complete_without_turn(session_id, :timer, from, state) do
+    {:noreply, defer_or_complete_timer(session_id, [from], state)}
+  end
 
-      case result do
-        {:ok, completed} -> {completed, state}
-        {:error, _reason} -> {session, state}
-      end
+  defp complete_without_turn(session_id, reason, _from, state) do
+    result = complete_now(session_id, reason)
+    {voice_grace, state} = pop_voice_grace(state, session_id)
+    reply_waiters(result, voice_grace.waiters)
+    {:reply, result, state}
+  end
+
+  # The one timer decision when no text turn is pending, shared by the deadline
+  # and a manual `:timer` completion: a voice generation in flight gets the
+  # session's single grace window, otherwise the session completes now.
+  defp defer_or_complete_timer(session_id, waiters, state) do
+    case Map.get(state.voice_graces, session_id) do
+      %{} = voice_grace ->
+        put_voice_grace(state, session_id, %{
+          voice_grace
+          | waiters: waiters ++ voice_grace.waiters
+        })
+
+      nil ->
+        if voice_generation_in_flight?(session_id) do
+          arm_voice_grace(state, session_id, waiters)
+        else
+          reply_waiters(complete_now(session_id, :timer), waiters)
+          state
+        end
+    end
+  end
+
+  defp arm_voice_grace(state, session_id, waiters) do
+    token = make_ref()
+    ref = Process.send_after(self(), {:grace_expired, session_id, token}, turn_grace_ms())
+    put_voice_grace(state, session_id, %{token: token, grace_ref: ref, waiters: waiters})
+  end
+
+  @spec put_voice_grace(map(), String.t(), voice_grace()) :: map()
+  defp put_voice_grace(state, session_id, voice_grace) do
+    %{state | voice_graces: Map.put(state.voice_graces, session_id, voice_grace)}
+  end
+
+  # Cancels and removes the session's voice grace; its waiters are the caller's to answer.
+  defp pop_voice_grace(state, session_id) do
+    case Map.pop(state.voice_graces, session_id) do
+      {nil, _voice_graces} ->
+        {%{waiters: []}, state}
+
+      {%{grace_ref: grace_ref} = voice_grace, voice_graces} ->
+        if grace_ref, do: Process.cancel_timer(grace_ref)
+        {voice_grace, %{state | voice_graces: voice_graces}}
+    end
+  end
+
+  defp finalize_deferred_completion(session_id, turn, session, state) do
+    cond do
+      is_nil(turn.first_reason) ->
+        {session, state}
+
+      # The timer's grace window keeps running for a voice generation still in
+      # flight, and callers waiting on the timer completion keep waiting with it.
+      turn.first_reason == :timer and is_integer(Map.get(session, :active_generation_id)) ->
+        voice_grace = %{token: turn.token, grace_ref: turn.grace_ref, waiters: turn.waiters}
+        {session, put_voice_grace(state, session_id, voice_grace)}
+
+      true ->
+        if turn.grace_ref, do: Process.cancel_timer(turn.grace_ref)
+        result = complete_deferred(session_id, turn.first_reason)
+        reply_waiters(result, turn.waiters)
+
+        case result do
+          {:ok, completed} -> {completed, state}
+          {:error, _reason} -> {session, state}
+        end
+    end
+  end
+
+  # A voice reply settled the generation the deadline was waiting for. A text
+  # turn still pending under grace owns the completion instead.
+  defp finalize_voice_grace(session_id, session, state) do
+    case complete_voice_grace(session_id, state) do
+      {{:ok, completed}, state} -> {completed, state}
+      {_no_completion, state} -> {session, state}
+    end
+  end
+
+  # The generation the deadline was waiting for was cancelled or failed, so no
+  # reply can arrive inside the window: the session completes now instead of at
+  # grace expiry. The learner message stays, as it does for a generation
+  # abandoned before the deadline. A pending text turn keeps the window.
+  defp settle_abandoned_voice_grace(session_id, state) do
+    if Map.has_key?(state.turns, session_id) do
+      state
     else
-      {session, state}
+      {_result, state} = complete_voice_grace(session_id, state)
+      state
+    end
+  end
+
+  # Ends an armed voice grace: the session completes with the timer's reason and
+  # the callers parked on it are answered. `:none` when no window is armed.
+  defp complete_voice_grace(session_id, state) do
+    if Map.has_key?(state.voice_graces, session_id) do
+      {voice_grace, state} = pop_voice_grace(state, session_id)
+      result = complete_now(session_id, :timer)
+      reply_waiters(result, voice_grace.waiters)
+      {result, state}
+    else
+      {:none, state}
+    end
+  end
+
+  # Completion that was deferred behind in-flight work. When the timer is the
+  # reason, a voice generation still unanswered has run out of time too.
+  defp complete_deferred(session_id, :timer) do
+    expire_voice_generation(session_id)
+    complete_now(session_id, :timer)
+  end
+
+  defp complete_deferred(session_id, reason), do: complete_now(session_id, reason)
+
+  defp expire_voice_generation(session_id) do
+    case fetch_session(session_id) do
+      {:ok, %{status: :active, active_generation_id: generation_id} = session}
+      when is_integer(generation_id) ->
+        updated =
+          session
+          |> remove_message_at(Map.get(session, :active_generation_message_index))
+          |> Map.put(:elapsed_generation_id, generation_id)
+
+        true = :ets.insert(__MODULE__, {session_id, updated})
+        :ok
+
+      _ ->
+        :ok
     end
   end
 
@@ -684,17 +1412,32 @@ defmodule Backend.Stations.Conversation do
   end
 
   defp do_rollback_pending_message(session_id, session, turn) do
-    updated =
-      case List.last(session.messages) do
-        last when last == turn.learner_message ->
-          %{session | messages: :lists.droplast(session.messages)}
+    # A voice turn may have been appended after the pending learner message, so
+    # it is found by identity rather than assumed to be the tail.
+    index =
+      session.messages
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.find_value(fn {message, index} -> message == turn.learner_message && index end)
 
-        _ ->
-          session
-      end
-
+    updated = remove_message_at(session, index)
     true = :ets.insert(__MODULE__, {session_id, updated})
     updated
+  end
+
+  defp remove_message_at(session, nil), do: session
+
+  defp remove_message_at(session, index) do
+    session = %{session | messages: List.delete_at(session.messages, index)}
+
+    # The generation origin is an absolute index: keep it on the same message.
+    case Map.get(session, :active_generation_message_index) do
+      origin when is_integer(origin) and origin > index ->
+        Map.put(session, :active_generation_message_index, origin - 1)
+
+      _ ->
+        session
+    end
   end
 
   defp session_id do
@@ -746,6 +1489,18 @@ defmodule Backend.Stations.Conversation do
   defp pop_if_matching(session, last_msg, expected_message) do
     if matches_expected?(last_msg, expected_message) do
       updated_messages = :lists.droplast(session.messages)
+
+      # Append/tail-pop keeps the origin's position stable even for identical messages.
+      session =
+        if Map.get(session, :active_generation_message_index) == length(updated_messages) do
+          session
+          |> Map.put(:active_generation_id, nil)
+          |> Map.put(:active_voice_turn_id, nil)
+          |> Map.put(:active_generation_message_index, nil)
+        else
+          session
+        end
+
       session = %{session | messages: updated_messages}
       true = :ets.insert(__MODULE__, {session.session_id, session})
       {:ok, session}

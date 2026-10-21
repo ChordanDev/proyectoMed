@@ -13,12 +13,13 @@ import {
   type SessionResult,
 } from "../api/client";
 import {
-  keptLearnerTurnNotice,
+  type ExaminerAcknowledgement,
+  isExaminerAcknowledgement,
+  isKeptLearnerTurn,
   sessionIdStorageKey,
   useStation,
   type StationApi,
 } from "./useStation";
-import strings from "../i18n/pt-BR.json";
 import { partialResult } from "../result/educational-result.fixture";
 
 afterEach(() => {
@@ -154,6 +155,7 @@ describe("useStation", () => {
       result: null,
       error: null,
       audioConsent: false,
+      sessionId: null,
     });
 
     let blockedReply: MessageReply | null = reply;
@@ -182,6 +184,7 @@ describe("useStation", () => {
       await startPromise;
     });
     expect(result.current.status).toBe("active");
+    expect(result.current.sessionId).toBe("session-1");
 
     await act(async () => {
       await result.current.start(false);
@@ -256,6 +259,7 @@ describe("useStation", () => {
 
     expect(result.current.status).toBe("failed");
     expect(result.current.error).toBe("Estação indisponível.");
+    expect(result.current.sessionId).toBeNull();
   });
 
   it("retries a failed start with exactly one replacement session", async () => {
@@ -482,10 +486,117 @@ describe("useStation", () => {
     });
 
     expect(caught).toBe(refusal);
-    expect(keptLearnerTurnNotice(caught)).toBe(strings.learnerTurnKeptNotice);
+    expect(isKeptLearnerTurn(caught)).toBe(true);
     expect(result.current.status).toBe("active");
     expect(result.current.error).toBeNull();
     expect(api.finishSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the station active and rethrows an examiner acknowledgement (#274)", async () => {
+    const acknowledged: MessageReply = {
+      outcome: "examiner_acknowledged",
+      reply_text: null,
+      learner_turn: { role: "learner", text: "Blumberg positivo." },
+      server_now: "2026-01-01T10:01:00Z",
+    };
+    const api = apiMock({
+      sendMessage: vi.fn().mockResolvedValueOnce(acknowledged),
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.send(message);
+      } catch (cause) {
+        caught = cause;
+      }
+    });
+
+    expect(isExaminerAcknowledgement(caught)).toBe(true);
+    expect(isKeptLearnerTurn(caught)).toBe(false);
+    expect(result.current.status).toBe("active");
+    expect(result.current.error).toBeNull();
+    expect((caught as ExaminerAcknowledgement).newlyReleased).toEqual([]);
+  });
+
+  it("refreshes the impressos after an examiner acknowledgement and carries the new ones (#302)", async () => {
+    const acknowledged: MessageReply = {
+      outcome: "examiner_acknowledged",
+      reply_text: null,
+      learner_turn: { role: "learner", text: "Solicito radiografia de tórax." },
+      server_now: "2026-01-01T10:01:00Z",
+    };
+    const getImpressos = vi.fn().mockResolvedValue(impressosListResponse);
+    const api = apiMock({
+      sendMessage: vi.fn().mockResolvedValueOnce(acknowledged),
+      getImpressos,
+    });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.send(message);
+      } catch (cause) {
+        caught = cause;
+      }
+    });
+
+    expect(getImpressos).toHaveBeenCalledWith("session-1");
+    expect((caught as ExaminerAcknowledgement).newlyReleased).toEqual([chestXray]);
+    expect(result.current.impressos).toEqual([chestXray]);
+  });
+
+  it("refreshImpressos returns only the impressos released since the last known list (#302)", async () => {
+    const getImpressos = vi.fn().mockResolvedValue(impressosListResponse);
+    const api = apiMock({ getImpressos });
+    const { result } = await renderHook(() => useStation(api));
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let first: Impresso[] = [];
+    let second: Impresso[] = [];
+    await act(async () => {
+      first = await result.current.refreshImpressos();
+    });
+    await act(async () => {
+      second = await result.current.refreshImpressos();
+    });
+
+    expect(first).toEqual([chestXray]);
+    expect(second).toEqual([]);
+    expect(result.current.impressos).toEqual([chestXray]);
+  });
+
+  it("refreshImpressos resolves empty when listing fails or there is no session (#302)", async () => {
+    const getImpressos = vi.fn().mockRejectedValue(new Error("network"));
+    const api = apiMock({ getImpressos });
+    const { result } = await renderHook(() => useStation(api));
+
+    await expect(result.current.refreshImpressos()).resolves.toEqual([]);
+    expect(getImpressos).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.start(true);
+    });
+
+    let refreshed: Impresso[] = [chestXray];
+    await act(async () => {
+      refreshed = await result.current.refreshImpressos();
+    });
+    expect(refreshed).toEqual([]);
+    expect(result.current.status).toBe("active");
   });
 
   it.each([
@@ -502,7 +613,7 @@ describe("useStation", () => {
     ],
     ["a non-object cause", "reply_verification_failed"],
   ])("reports no kept learner turn for %s", (_label, cause) => {
-    expect(keptLearnerTurnNotice(cause)).toBeNull();
+    expect(isKeptLearnerTurn(cause)).toBe(false);
   });
 
   it("keeps the station active and rethrows when a patient reply fails verification", async () => {
@@ -859,6 +970,34 @@ describe("useStation", () => {
       expect(result.current.status).toBe("active");
       expect(result.current.remainingMs).toBe(10 * 60 * 1000);
       expect(result.current.initialMessages).toEqual(resumedDetail.messages);
+    });
+
+    it("exposes the resumed session id for the voice panel and clears it after an acknowledged reset", async () => {
+      sessionStorage.setItem(sessionIdStorageKey, "session-1");
+      const resumedDetail: SessionDetail = {
+        ...session,
+        status: "active",
+        completion_reason: null,
+        messages: [],
+      };
+      const api = apiMock({
+        getSession: vi.fn().mockResolvedValue(resumedDetail),
+      });
+
+      const { result } = renderHook(() => useStation(api));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.status).toBe("active");
+      expect(result.current.sessionId).toBe("session-1");
+
+      await act(async () => {
+        await result.current.reset();
+      });
+      expect(api.discardSession).toHaveBeenCalledWith("session-1");
+      expect(result.current.status).toBe("idle");
+      expect(result.current.sessionId).toBeNull();
     });
 
     it("clears the stored session id and starts fresh when the resumed session is gone (404/410)", async () => {
@@ -1853,6 +1992,44 @@ describe("useStation", () => {
         await result.current.requestImpresso("Solicito radiografia");
       });
       expect(api.requestImpresso).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("fetchTranscript (#270)", () => {
+    const detail: SessionDetail = {
+      ...session,
+      status: "active",
+      completion_reason: null,
+      messages: [
+        { role: "learner", text: "Onde dói?" },
+        { role: "patient", text: "No peito. (leva a mão ao peito)" },
+      ],
+    };
+
+    it("reads the stored transcript of the running session", async () => {
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+      await act(async () => {
+        await result.current.start(true);
+      });
+      vi.mocked(api.getSession).mockResolvedValueOnce(detail);
+
+      await expect(result.current.fetchTranscript()).resolves.toEqual(
+        detail.messages,
+      );
+      expect(api.getSession).toHaveBeenLastCalledWith("session-1");
+    });
+
+    it("returns null without a session or when the read fails", async () => {
+      const api = apiMock();
+      const { result } = renderHook(() => useStation(api));
+      await expect(result.current.fetchTranscript()).resolves.toBeNull();
+
+      await act(async () => {
+        await result.current.start(true);
+      });
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("offline"));
+      await expect(result.current.fetchTranscript()).resolves.toBeNull();
     });
   });
 });

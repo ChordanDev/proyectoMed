@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import strings from "../i18n/pt-BR.json";
@@ -101,6 +101,62 @@ describe("StationScreen", () => {
     render(<StationScreen {...defaultProps} title="Dor torácica" />);
 
     expect(screen.getByText("Dor torácica")).toBeInTheDocument();
+  });
+
+  describe("candidate brief during the station (#239)", () => {
+    const brief = {
+      scenario: "Você é o médico de plantão em um pronto-socorro.",
+      tasks: ["Obter anamnese dirigida.", "Indicar a conduta inicial."],
+    };
+
+    it("hides the brief button when no brief is provided", () => {
+      render(<StationScreen {...defaultProps} />);
+
+      expect(
+        screen.queryByRole("button", { name: strings.briefOpenButton }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("opens and closes the brief without stopping the countdown", async () => {
+      const user = userEvent.setup();
+      const onFinish = vi.fn();
+      const { rerender } = render(
+        <StationScreen
+          {...defaultProps}
+          onFinish={onFinish}
+          brief={brief}
+          remainingMs={9 * 60 * 1000}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: strings.briefOpenButton }));
+
+      const dialog = screen.getByRole("dialog", { name: strings.briefDialogTitle });
+      expect(within(dialog).getByText(brief.scenario)).toBeInTheDocument();
+      expect(
+        within(dialog)
+          .getAllByRole("listitem")
+          .map((item) => item.textContent),
+      ).toEqual(brief.tasks);
+      expect(within(dialog).getByText(strings.briefFictionalNote)).toBeInTheDocument();
+
+      rerender(
+        <StationScreen
+          {...defaultProps}
+          onFinish={onFinish}
+          brief={brief}
+          remainingMs={8 * 60 * 1000 + 59 * 1000}
+        />,
+      );
+      expect(screen.getByRole("timer")).toHaveTextContent("08:59");
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+      await user.click(
+        within(dialog).getByRole("button", { name: strings.briefCloseButton }),
+      );
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(onFinish).not.toHaveBeenCalled();
+    });
   });
 
   it("disables send button when input is empty", () => {
@@ -580,25 +636,106 @@ describe("StationScreen", () => {
         learnerTurn: { role: "learner", text },
       });
 
-    it("keeps the learner bubble, clears the input, and says the message was recorded", async () => {
+    it("keeps the learner bubble and shows a neutral notice, never the examiner acknowledgement (#274)", async () => {
       const user = userEvent.setup();
-      const text = "Na palpação há dor no ponto de McBurney.";
+      const text = "Qual é o seu nome?";
       const onSend = vi.fn().mockRejectedValueOnce(keptTurnRefusal(text));
       render(<StationScreen {...defaultProps} onSend={onSend} />);
 
       await user.type(screen.getByTestId("message-input"), text);
       await user.click(screen.getByTestId("send-button"));
 
-      expect(
-        await screen.findByTestId("turn-retry-notice"),
-      ).toHaveTextContent(strings.learnerTurnKeptNotice);
-      expect(strings.learnerTurnKeptNotice).toBe(
-        "Sua mensagem foi registrada, mas o paciente não respondeu a ela.",
+      const notice = await screen.findByTestId("message-notice");
+      expect(notice).toHaveTextContent(strings.patientDidNotAnswerNotice);
+      expect(strings.patientDidNotAnswerNotice).toBe(
+        "O paciente não respondeu a essa mensagem. Você pode reformulá-la.",
       );
-      expect(screen.getByText(text)).toBeInTheDocument();
+      expect(notice).toHaveAttribute("role", "note");
+      expect(screen.queryByText(strings.examinerAcknowledgement)).not.toBeInTheDocument();
+
+      const entries = within(screen.getByTestId("message-list")).getAllByTestId(
+        /^message-/,
+      );
+      expect(entries.map((entry) => entry.dataset.testid)).toEqual([
+        "message-learner",
+        "message-notice",
+      ]);
       expect(screen.getByTestId("message-input")).toHaveValue("");
       expect(screen.queryByTestId("station-error")).not.toBeInTheDocument();
-      expect(screen.getByTestId("message-input")).not.toBeDisabled();
+    });
+
+    it("shows the examiner acknowledgement for a turn addressed to the examiner (#274)", async () => {
+      const user = userEvent.setup();
+      const text = "Na palpação há dor no ponto de McBurney.";
+      const acknowledgement = Object.assign(new Error("Anotado."), {
+        name: "ExaminerAcknowledgement",
+        learnerTurn: { role: "learner", text },
+      });
+      const onSend = vi.fn().mockRejectedValueOnce(acknowledgement);
+      render(<StationScreen {...defaultProps} onSend={onSend} />);
+
+      await user.type(screen.getByTestId("message-input"), text);
+      await user.click(screen.getByTestId("send-button"));
+
+      const entry = await screen.findByTestId("message-examiner");
+      expect(entry).toHaveTextContent(strings.examinerAcknowledgement);
+      expect(strings.examinerAcknowledgement).toBe("Anotado.");
+      expect(entry).toHaveAttribute("role", "note");
+      expect(entry).toHaveAccessibleName("Examinador: Anotado.");
+      expect(entry).toHaveClass("station-message--examiner");
+
+      const entries = within(screen.getByTestId("message-list")).getAllByTestId(
+        /^message-/,
+      );
+      expect(entries.map((item) => item.dataset.testid)).toEqual([
+        "message-learner",
+        "message-examiner",
+      ]);
+      expect(screen.queryByTestId("message-notice")).not.toBeInTheDocument();
+      expect(screen.getByTestId("impresso-drawer-toggle")).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+    });
+
+    it("hands over the impressos an examiner acknowledgement released and opens the drawer (#302)", async () => {
+      const user = userEvent.setup();
+      const text = "Solicito hemograma e PCR.";
+      const labs = {
+        id: "labs",
+        title: "Exames laboratoriais",
+        category: "laboratory",
+        content: "Hemoglobina 13,5 g/dL.",
+      };
+      const acknowledgement = Object.assign(new Error("Anotado."), {
+        name: "ExaminerAcknowledgement",
+        learnerTurn: { role: "learner", text },
+        newlyReleased: [labs],
+      });
+      const onSend = vi.fn().mockRejectedValueOnce(acknowledgement);
+      render(
+        <StationScreen {...defaultProps} onSend={onSend} impressos={[labs]} />,
+      );
+
+      await user.type(screen.getByTestId("message-input"), text);
+      await user.click(screen.getByTestId("send-button"));
+
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId("message-list"))
+            .getAllByTestId(/^message-/)
+            .map((item) => [item.dataset.testid, item.lastChild?.textContent]),
+        ).toEqual([
+          ["message-learner", text],
+          ["message-examiner", strings.examinerAcknowledgement],
+          ["message-examiner", `${strings.examinerHandsOver} ${labs.title}`],
+        ]),
+      );
+      expect(screen.getByTestId("impresso-drawer-toggle")).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByTestId("impresso-drawer")).toHaveTextContent(labs.title);
     });
 
     it("sends the next message after the kept turn without resending it", async () => {
@@ -611,7 +748,7 @@ describe("StationScreen", () => {
 
       await user.type(screen.getByTestId("message-input"), "Exame normal.");
       await user.click(screen.getByTestId("send-button"));
-      await screen.findByTestId("turn-retry-notice");
+      await screen.findByTestId("message-notice");
 
       await user.type(screen.getByTestId("message-input"), "Tem alergias?");
       await user.click(screen.getByTestId("send-button"));
@@ -619,7 +756,9 @@ describe("StationScreen", () => {
       expect(await screen.findByText("Entendi, doutor.")).toBeInTheDocument();
       expect(screen.getByText("Exame normal.")).toBeInTheDocument();
       expect(screen.getByText("Tem alergias?")).toBeInTheDocument();
+      expect(onSend).toHaveBeenCalledTimes(2);
       expect(onSend).toHaveBeenNthCalledWith(2, "Tem alergias?");
+      expect(screen.getAllByTestId("message-notice")).toHaveLength(1);
       expect(
         screen.queryByTestId("turn-retry-notice"),
       ).not.toBeInTheDocument();
@@ -878,7 +1017,7 @@ describe("StationScreen impresso requests", () => {
   const chestXray = {
     id: "chest-xray",
     title: "Radiografia de tórax",
-    category: "Exame de imagem",
+    category: "imaging",
     content: "Sem sinais de consolidação.",
   };
 
@@ -901,10 +1040,126 @@ describe("StationScreen impresso requests", () => {
     expect(screen.getByLabelText(strings.impressoModalLabel)).toBeInTheDocument();
   });
 
-  it("requests an impresso, shows the feedback message, and closes the modal", async () => {
+  const requestThroughModal = async (
+    user: ReturnType<typeof userEvent.setup>,
+    text: string,
+  ) => {
+    await user.click(screen.getByTestId("impresso-request-button"));
+    await user.type(screen.getByLabelText(strings.impressoModalLabel), text);
+    await user.click(screen.getByTestId("impresso-modal-submit"));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  };
+
+  it("shows a released impresso as an examiner entry in the transcript and closes the modal", async () => {
     const user = userEvent.setup();
+    const abdominalExam = {
+      id: "abdominal-exam",
+      title: "Exame físico abdominal",
+      category: "physical_exam",
+      content: "Dor à palpação no ponto de McBurney.",
+    };
+    const onSend = vi.fn().mockResolvedValue("Dói aqui embaixo, doutor.");
     const onRequestImpresso = vi.fn().mockResolvedValue({
       request_id: "req-1",
+      decision: "released",
+      released_impressos: [chestXray, abdominalExam],
+      newly_released: [chestXray, abdominalExam],
+      feedback_message:
+        "Impresso liberado: Radiografia de tórax, Exame físico abdominal",
+    });
+    render(
+      <StationScreen
+        {...defaultProps}
+        onSend={onSend}
+        onRequestImpresso={onRequestImpresso}
+        impressos={[chestXray, abdominalExam]}
+      />,
+    );
+
+    await user.type(screen.getByTestId("message-input"), "Onde dói?");
+    await user.click(screen.getByTestId("send-button"));
+    await screen.findByText("Dói aqui embaixo, doutor.");
+
+    await requestThroughModal(user, "Solicito exame físico");
+
+    expect(onRequestImpresso).toHaveBeenCalledWith("Solicito exame físico");
+    const entry = await screen.findByTestId("message-examiner");
+    const handOver = "Entrega: Radiografia de tórax, Exame físico abdominal";
+    expect(strings.examinerHandsOver).toBe("Entrega:");
+    expect(entry).toHaveTextContent(strings.roleExaminer);
+    expect(entry).toHaveTextContent(handOver);
+    expect(entry).toHaveAttribute("role", "note");
+    expect(entry).toHaveAccessibleName(`Examinador: ${handOver}`);
+    expect(entry).not.toHaveTextContent(abdominalExam.content);
+
+    const entries = within(screen.getByTestId("message-list")).getAllByTestId(
+      /^message-/,
+    );
+    expect(entries.map((item) => item.dataset.testid)).toEqual([
+      "message-learner",
+      "message-patient",
+      "message-examiner",
+    ]);
+    expect(screen.queryByTestId("impresso-feedback")).not.toBeInTheDocument();
+
+    // The drawer keeps listing the released impressos.
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+    expect(
+      screen.getByTestId(`impresso-item-${abdominalExam.id}`),
+    ).toBeInTheDocument();
+
+    // Display-only: the hand-over is never sent as a turn.
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["unavailable", "Exame não disponível nesta estação", []],
+    ["already_released", "Impresso já liberado: Radiografia de tórax", []],
+  ] as const)(
+    "keeps the plain feedback notice for a %s decision",
+    async (decision, feedback, newlyReleased) => {
+      const user = userEvent.setup();
+      const onRequestImpresso = vi.fn().mockResolvedValue({
+        request_id: "req-1",
+        decision,
+        released_impressos: [chestXray],
+        newly_released: newlyReleased,
+        feedback_message: feedback,
+      });
+      render(
+        <StationScreen
+          {...defaultProps}
+          onRequestImpresso={onRequestImpresso}
+          impressos={[chestXray]}
+        />,
+      );
+
+      await requestThroughModal(user, "Solicito tomografia");
+
+      expect(screen.getByTestId("impresso-feedback")).toHaveAttribute(
+        "role",
+        "status",
+      );
+      expect(screen.getByTestId("impresso-feedback")).toHaveTextContent(
+        feedback,
+      );
+      expect(screen.queryByTestId("message-examiner")).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps an examiner hand-over released mid-turn when the in-flight learner turn is rolled back", async () => {
+    const user = userEvent.setup();
+    let reject!: (cause: unknown) => void;
+    const onSend = vi.fn(
+      () =>
+        new Promise<string | null>((_resolve, r) => {
+          reject = r;
+        }),
+    );
+    const onRequestImpresso = vi.fn().mockResolvedValue({
+      request_id: "req-race",
       decision: "released",
       released_impressos: [chestXray],
       newly_released: [chestXray],
@@ -913,32 +1168,70 @@ describe("StationScreen impresso requests", () => {
     render(
       <StationScreen
         {...defaultProps}
+        onSend={onSend}
+        onRequestImpresso={onRequestImpresso}
+        impressos={[chestXray]}
+      />,
+    );
+
+    await user.type(screen.getByTestId("message-input"), "Pergunta pendente");
+    await user.click(screen.getByTestId("send-button"));
+    expect(screen.getByText("Pergunta pendente")).toBeInTheDocument();
+
+    // The impresso release resolves while the learner turn is still in flight.
+    await requestThroughModal(user, "Solicito radiografia");
+    const handOver = "Entrega: Radiografia de tórax";
+    expect(await screen.findByTestId("message-examiner")).toHaveTextContent(
+      handOver,
+    );
+
+    reject(
+      Object.assign(new Error("O tempo da estação se esgotou."), {
+        code: "station_time_elapsed",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Pergunta pendente")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("message-examiner")).toHaveTextContent(handOver);
+  });
+
+  it("replaces a stale feedback notice once an impresso is released", async () => {
+    const user = userEvent.setup();
+    const onRequestImpresso = vi
+      .fn()
+      .mockResolvedValueOnce({
+        request_id: "req-1",
+        decision: "unavailable",
+        released_impressos: [],
+        newly_released: [],
+        feedback_message: "Exame não disponível nesta estação",
+      })
+      .mockResolvedValueOnce({
+        request_id: "req-2",
+        decision: "released",
+        released_impressos: [chestXray],
+        newly_released: [chestXray],
+        feedback_message: "Impresso liberado: Radiografia de tórax",
+      });
+    render(
+      <StationScreen
+        {...defaultProps}
         onRequestImpresso={onRequestImpresso}
         impressos={[]}
       />,
     );
 
-    await user.click(screen.getByTestId("impresso-request-button"));
-    await user.type(
-      screen.getByLabelText(strings.impressoModalLabel),
-      "Solicito radiografia de tórax",
-    );
-    await user.click(screen.getByTestId("impresso-modal-submit"));
+    await requestThroughModal(user, "Solicito tomografia");
+    expect(screen.getByTestId("impresso-feedback")).toBeInTheDocument();
 
-    expect(onRequestImpresso).toHaveBeenCalledWith(
-      "Solicito radiografia de tórax",
-    );
+    await requestThroughModal(user, "Solicito radiografia de tórax");
 
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    });
-    expect(screen.getByTestId("impresso-feedback")).toHaveAttribute(
-      "role",
-      "status",
+    expect(await screen.findByTestId("message-examiner")).toHaveTextContent(
+      "Entrega: Radiografia de tórax",
     );
-    expect(
-      screen.getByText("Impresso liberado: Radiografia de tórax"),
-    ).toBeInTheDocument();
+    expect(screen.queryByTestId("impresso-feedback")).not.toBeInTheDocument();
   });
 
   it("closes the modal via the cancel button", async () => {
@@ -1032,12 +1325,57 @@ describe("StationScreen impresso requests", () => {
     await user.click(screen.getByTestId("impresso-drawer-toggle"));
 
     expect(screen.getByText(chestXray.title)).toBeInTheDocument();
-    expect(screen.getByText(chestXray.category)).toBeInTheDocument();
+    expect(screen.getByText("Exame de imagem")).toBeInTheDocument();
+    expect(screen.queryByText(chestXray.category)).not.toBeInTheDocument();
     expect(screen.queryByText(chestXray.content)).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId(`impresso-item-${chestXray.id}`));
 
     expect(screen.getByText(chestXray.content)).toBeInTheDocument();
+  });
+
+  it("shows no category label for an unknown impresso category", async () => {
+    const user = userEvent.setup();
+    const oddImpresso = { ...chestXray, category: "unknown_category" };
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[oddImpresso]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+
+    const item = screen.getByTestId(`impresso-item-${oddImpresso.id}`);
+    expect(item).toHaveTextContent(oddImpresso.title);
+    expect(item).not.toHaveTextContent("unknown_category");
+  });
+
+  it("renders selected impresso Markdown as formatted text in the drawer", async () => {
+    const user = userEvent.setup();
+    const physicalExam = {
+      id: "impresso-1",
+      title: "IMPRESSO 1 — EXAME FÍSICO SEGMENTAR",
+      category: "physical_exam",
+      content:
+        "- **Estado geral:** regular, consciente.\n- **Ausculta:** ruídos presentes.",
+    };
+    render(
+      <StationScreen
+        {...defaultProps}
+        onRequestImpresso={vi.fn()}
+        impressos={[physicalExam]}
+      />,
+    );
+
+    await user.click(screen.getByTestId("impresso-drawer-toggle"));
+    await user.click(screen.getByTestId(`impresso-item-${physicalExam.id}`));
+
+    const viewer = screen.getByTestId("impresso-content");
+    expect(within(viewer).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(viewer).getByText("Estado geral:").tagName).toBe("STRONG");
+    expect(viewer.textContent).not.toContain("**");
   });
 
   it("keeps the impressos drawer available while the station is disabled", async () => {

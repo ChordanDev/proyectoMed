@@ -23,7 +23,7 @@
           "semantic_refusal",
           "low_confidence"
         ],
-        "note": "The candidate reply reverses the order of the two locations authored in fact hda-01. Proposed: the gate does not deliver it."
+        "note": "The candidate reply reverses the order of the two locations authored in facts hda-01 and hda-01-migracao. Proposed: the gate does not deliver it."
       },
       "adjudication": {
         "status": "pending",

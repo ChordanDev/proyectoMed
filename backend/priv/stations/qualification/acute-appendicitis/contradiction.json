@@ -62,7 +62,7 @@
           "semantic_refusal",
           "low_confidence"
         ],
-        "note": "The candidate reply contradicts both fact hda-01 and the patient turn already delivered in this conversation. Proposed: the gate does not deliver it."
+        "note": "The candidate reply contradicts both fact hda-01-tempo and the patient turn already delivered in this conversation. Proposed: the gate does not deliver it."
       },
       "adjudication": {
         "status": "pending",

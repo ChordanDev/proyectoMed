@@ -2,6 +2,22 @@ defmodule Backend.StationsTest do
   use ExUnit.Case, async: false
 
   alias Backend.Stations
+  alias Backend.Stations.Conversation
+
+  test "voice worker allocation floor separates cancelled IDs from committed learner history" do
+    session = Stations.create_session(%{audio_consent: true})
+    id = session.session_id
+
+    assert {:ok, :committed} = Stations.commit_voice_transcript(id, 2, "Committed question")
+    assert {:error, :stale_generation} = Stations.cancel_voice_turn(id, turn_id: 7)
+    assert {:ok, %{last_turn_id: 2, turn_id_floor: 7}} = Stations.voice_worker_context(id)
+    assert {:ok, %{messages: [%{text: "Committed question"}]}} = Stations.get_session(id)
+
+    assert {:ok, :committed} = Stations.commit_voice_transcript(id, 9, "New question")
+    assert {:ok, %{last_turn_id: 9, turn_id_floor: 9}} = Stations.voice_worker_context(id)
+    assert {:error, :stale_generation} = Stations.cancel_voice_turn(id, 999)
+    assert {:ok, %{last_turn_id: 9, turn_id_floor: 9}} = Stations.voice_worker_context(id)
+  end
 
   defmodule TestSuccessAdapter do
     @behaviour Backend.Stations.StationAI
@@ -15,7 +31,8 @@ defmodule Backend.StationsTest do
     @behaviour Backend.Stations.StationAI
     @impl true
     def next_reply(_package, _context) do
-      {:error, :service_unavailable}
+      if caller = Process.get(:voice_turn_test_pid), do: send(caller, :failed_adapter_called)
+      {:error, Process.get(:voice_turn_test_error, :service_unavailable)}
     end
   end
 
@@ -34,6 +51,94 @@ defmodule Backend.StationsTest do
       end
 
       {:ok, %{text: "Resposta tardia", used_facts: []}}
+    end
+  end
+
+  defmodule TestRefusalAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok, %{text: "Não tenho essa informação", used_facts: []}}
+    end
+  end
+
+  defmodule TestFabricatedClinicalAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok, %{text: "Estou sentindo uma queimação forte e tomei omeprazol de manhã cedo."}}
+    end
+  end
+
+  defmodule TestNaturalReplyWithFactsAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok,
+       %{
+         text: "Começou quando eu estava caminhando, doutor, e ainda não passou.",
+         used_facts: [
+           %{"topic" => "onset", "content" => "A dor começou durante uma caminhada."}
+         ]
+       }}
+    end
+  end
+
+  defmodule TestRegeneratingAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      if Process.put(:voice_regeneration_requested, true) do
+        {:ok, %{text: "Foi durante uma caminhada, doutor.", used_facts: []}}
+      else
+        {:ok, %{text: "initial_refused", used_facts: ["fact-initial-stale"]}}
+      end
+    end
+  end
+
+  # Refused first candidate, then a regeneration slower than the Jev deadline
+  # the test configures (issue #269).
+  defmodule SlowRegenerationAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      if Process.put(:slow_regeneration_requested, true) do
+        Process.sleep(300)
+        {:ok, %{text: "Foi durante uma caminhada, doutor.", used_facts: []}}
+      else
+        {:ok, %{text: "initial_refused", used_facts: []}}
+      end
+    end
+  end
+
+  defmodule TestRevealableFactsAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context) do
+      {:ok, %{text: "A dor começou durante uma caminhada."}}
+    end
+  end
+
+  defmodule TestSlowBarrierAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, context) do
+      caller =
+        Process.get(:voice_turn_test_pid) ||
+          Application.get_env(:backend, :voice_turn_test_pid)
+
+      if caller, do: send(caller, {:adapter_called, context})
+
+      receive do
+        {:fail_adapter, reason} ->
+          {:error, reason}
+
+        {:resume_adapter, reply_text} ->
+          {:ok, %{text: reply_text, used_facts: []}}
+      after
+        5000 ->
+          {:ok, %{text: "Tempo esgotado no adaptador", used_facts: []}}
+      end
     end
   end
 
@@ -82,6 +187,20 @@ defmodule Backend.StationsTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  defmodule DeadlineProbeJevAdapter do
+    @moduledoc "Reports the verification budget each patient decision receives (issue #269)."
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(request) do
+      send(Application.fetch_env!(:backend, :jev_probe_pid), {:deadline_ms, request.deadline_ms})
+      {:ok, %{status: :verified}}
+    end
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   defmodule TemplateReplyAIAdapter do
     @behaviour Backend.Stations.StationAI
 
@@ -109,6 +228,50 @@ defmodule Backend.StationsTest do
     def decide_rubric(_request), do: {:error, :not_implemented}
   end
 
+  # Issue #242: the patient volunteers an unasked on_request fact unless the
+  # regeneration names it as withheld.
+  @volunteering_reply "Pioro ao andar, sem febre, e também perdi o apetite."
+  @compliant_reply "Pioro ao andar e não tive febre nem vômitos."
+
+  defmodule WithholdingAwareAIAdapter do
+    @behaviour Backend.Stations.StationAI
+
+    @impl true
+    def next_reply(_package, context) do
+      withheld = Map.get(context, :withheld_fact_ids, [])
+
+      if pid = Application.get_env(:backend, :test_withheld_probe_pid),
+        do: send(pid, {:withheld, withheld})
+
+      if withheld == [] do
+        {:ok, %{text: "Pioro ao andar, sem febre, e também perdi o apetite.", used_facts: []}}
+      else
+        {:ok, %{text: "Pioro ao andar e não tive febre nem vômitos.", used_facts: []}}
+      end
+    end
+  end
+
+  defmodule UnaskedFactJevAdapter do
+    @moduledoc "Refuses the volunteering reply, naming the first on_request fact as unasked."
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(
+          %{candidate_text: "Pioro ao andar, sem febre, e também perdi o apetite."} = request
+        ) do
+      fact =
+        request.package["revealable_facts"]
+        |> Enum.find(&(&1["disclosure_condition"] == "on_request"))
+
+      {:ok, %{status: :semantic_refusal, unasked_fact_ids: [fact["id"]]}}
+    end
+
+    def decide_patient(_request), do: {:ok, %{status: :verified}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup do
     prev_adapter = Application.get_env(:backend, :station_ai_adapter)
     prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
@@ -128,6 +291,8 @@ defmodule Backend.StationsTest do
       else
         Application.delete_env(:backend, :jev_decision_adapter)
       end
+
+      Application.delete_env(:backend, :voice_turn_test_pid)
     end)
 
     :ok
@@ -149,6 +314,18 @@ defmodule Backend.StationsTest do
                "language" => "pt-BR",
                "display_title" => "Avaliação inicial de dor torácica"
              } = station
+    end
+
+    test "get_active_station/0 projects the brief to scenario and tasks only (#239)" do
+      station = Stations.get_active_station()
+
+      assert Map.keys(station) |> Enum.sort() ==
+               ~w(candidate_brief display_title language station_id version)
+
+      assert %{"scenario" => scenario, "tasks" => tasks} = station["candidate_brief"]
+      assert map_size(station["candidate_brief"]) == 2
+      assert is_binary(scenario)
+      assert [_ | _] = tasks
     end
 
     test "get_active_package/0 returns full package" do
@@ -377,6 +554,39 @@ defmodule Backend.StationsTest do
         assert session_after.messages == [learner_turn]
         refute inspect(session_after) =~ "forte dor no peito"
       end
+    end
+
+    test "create_message/2 regenerates once naming the unasked fact and delivers the compliant reply" do
+      Application.put_env(:backend, :station_ai_adapter, WithholdingAwareAIAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, UnaskedFactJevAdapter)
+      Application.put_env(:backend, :test_withheld_probe_pid, self())
+      on_exit(fn -> Application.delete_env(:backend, :test_withheld_probe_pid) end)
+
+      session = Stations.create_session(%{audio_consent: true})
+
+      on_request_id =
+        Stations.get_active_package()["revealable_facts"]
+        |> Enum.find(&(&1["disclosure_condition"] == "on_request"))
+        |> Map.fetch!("id")
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          Stations.create_message(session.session_id, %{
+            role: "learner",
+            modality: "text",
+            text: "Alguma coisa piora a dor? Teve febre?"
+          })
+        end)
+
+      assert {:ok, %{reply_text: @compliant_reply}} = result
+      assert_received {:withheld, []}
+      assert_received {:withheld, [^on_request_id]}
+      refute_received {:withheld, _}
+
+      {:ok, session_after} = Stations.get_session(session.session_id)
+      refute inspect(session_after) =~ @volunteering_reply
+      refute inspect(result) =~ @volunteering_reply
+      refute log =~ @volunteering_reply
     end
 
     test "create_message/2 rolls the learner turn back when Jev fails technically" do
@@ -774,10 +984,6 @@ defmodule Backend.StationsTest do
                {:error, :not_found}
     end
 
-    test "create_voice_session/2 returns not_implemented" do
-      assert Stations.create_voice_session("session-id") == {:error, :not_implemented}
-    end
-
     test "verify_patient_reply/3 passes through reply" do
       pkg = Stations.get_active_package()
       reply = %{text: "dor forte"}
@@ -818,6 +1024,1105 @@ defmodule Backend.StationsTest do
       voices = Stations.allowed_tts_voices()
       assert is_list(voices)
       assert "alloy" in voices
+    end
+  end
+
+  describe "voice sessions" do
+    setup do
+      Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
+      Application.put_env(:backend, :livekit_api_key, "test-api-key")
+      Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :livekit_url)
+        Application.delete_env(:backend, :livekit_api_key)
+        Application.delete_env(:backend, :livekit_api_secret)
+        Application.delete_env(:backend, :livekit_rate_limit_max)
+        Application.delete_env(:backend, :conversation_timeout_ms)
+      end)
+
+      :ok
+    end
+
+    test "create_voice_session/2 issues a token for an active, consented session" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{url: url, token: token, room: room, identity: identity, expires_at: exp}} =
+               Stations.create_voice_session(session.session_id)
+
+      assert url == "wss://revalida.livekit.cloud"
+      assert is_binary(token)
+      assert room == "station-session-" <> session.session_id
+      assert identity == "learner-" <> session.session_id
+      assert %DateTime{} = exp
+    end
+
+    test "create_voice_session/2 returns :not_found for an unknown session" do
+      assert Stations.create_voice_session("unknown-id") == {:error, :not_found}
+    end
+
+    test "create_voice_session/2 returns :expired for an expired session" do
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :expired}
+    end
+
+    test "create_voice_session/2 returns :completed for a completed session" do
+      session = Stations.create_session(%{audio_consent: true})
+      {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :completed}
+    end
+
+    test "create_voice_session/2 returns :no_consent without audio consent" do
+      session = Stations.create_session(%{audio_consent: false})
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :no_consent}
+    end
+
+    test "create_voice_session/2 returns :voice_unavailable when LiveKit is not configured" do
+      Application.delete_env(:backend, :livekit_url)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.create_voice_session(session.session_id) == {:error, :voice_unavailable}
+    end
+
+    test "create_voice_session/2 rate-limits repeated issuance for the same session" do
+      Application.put_env(:backend, :livekit_rate_limit_max, 2)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.create_voice_session(session.session_id)
+      assert {:ok, _} = Stations.create_voice_session(session.session_id)
+      assert Stations.create_voice_session(session.session_id) == {:error, :rate_limited}
+    end
+
+    test "create_voice_session/2 rate limit does not affect other sessions" do
+      Application.put_env(:backend, :livekit_rate_limit_max, 1)
+      session_a = Stations.create_session(%{audio_consent: true})
+      session_b = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.create_voice_session(session_a.session_id)
+      assert Stations.create_voice_session(session_a.session_id) == {:error, :rate_limited}
+      assert {:ok, _} = Stations.create_voice_session(session_b.session_id)
+    end
+
+    test "create_voice_session/2 caps the token expiry to the session's expiry" do
+      Application.put_env(:backend, :conversation_timeout_ms, 5_000)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{expires_at: exp}} = Stations.create_voice_session(session.session_id)
+      assert DateTime.compare(exp, session.expires_at) != :gt
+      assert_in_delta DateTime.to_unix(exp), DateTime.to_unix(session.expires_at), 1
+    end
+  end
+
+  describe "voice room cleanup" do
+    defmodule RecordingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(room) do
+        send(Backend.StationsTest.cleanup_test_pid(), {:deleted_room, room})
+        :ok
+      end
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+    end
+
+    defmodule FailingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: {:error, :livekit_unavailable}
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+    end
+
+    def cleanup_test_pid, do: Process.get(:stations_cleanup_test_pid)
+
+    setup do
+      Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
+      Application.put_env(:backend, :livekit_api_key, "test-api-key")
+      Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
+      Process.put(:stations_cleanup_test_pid, self())
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :livekit_url)
+        Application.delete_env(:backend, :livekit_api_key)
+        Application.delete_env(:backend, :livekit_api_secret)
+        Application.delete_env(:backend, :livekit_room_service)
+      end)
+
+      :ok
+    end
+
+    test "complete_session/2 deletes the session's LiveKit room" do
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+      assert_receive {:deleted_room, room}
+      assert room == "station-session-" <> session.session_id
+    end
+
+    test "discard_session/1 deletes the session's LiveKit room" do
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.discard_session(session.session_id) == :ok
+      assert_receive {:deleted_room, room}
+      assert room == "station-session-" <> session.session_id
+    end
+
+    test "complete_session/2 succeeds even when room cleanup fails" do
+      Application.put_env(:backend, :livekit_room_service, FailingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, completed} = Stations.complete_session(session.session_id, :user)
+      assert completed.status == :completed
+    end
+
+    test "discard_session/1 succeeds even when room cleanup fails" do
+      Application.put_env(:backend, :livekit_room_service, FailingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert Stations.discard_session(session.session_id) == :ok
+    end
+
+    test "cleanup is skipped entirely when LiveKit is not configured" do
+      Application.delete_env(:backend, :livekit_url)
+      Application.put_env(:backend, :livekit_room_service, RecordingRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+      refute_receive {:deleted_room, _room}, 50
+    end
+  end
+
+  describe "real-time bounded voice turns (#119)" do
+    defmodule TestRefusingJevAdapter do
+      @behaviour Backend.Stations.JevDecision.Adapter
+
+      @impl true
+      def decide_patient(_request), do: {:ok, %{status: :semantic_refusal}}
+
+      @impl true
+      def decide_rubric(_request), do: {:error, :not_implemented}
+    end
+
+    test "process_voice_turn/3 verifies the generated reply through Jev before admitting it" do
+      Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, ProbingVerifyingJevAdapter)
+      Application.put_env(:backend, :jev_probe_pid, self())
+      on_exit(fn -> Application.delete_env(:backend, :jev_probe_pid) end)
+
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{reply_text: "A dor começou durante uma caminhada.", turn_id: 1}} =
+               Stations.process_voice_turn(session.session_id, 1, "Quando a dor começou?")
+
+      assert_receive :jev_verification_invoked
+    end
+
+    test "Jev unavailability fails the voice generation without releasing text" do
+      Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+
+      for jev_adapter <- [Backend.Stations.JevDecision.DisabledAdapter] do
+        Application.put_env(:backend, :jev_decision_adapter, jev_adapter)
+        session = Stations.create_session(%{audio_consent: true})
+
+        assert {:error, :station_ai_unavailable} =
+                 Stations.process_voice_turn(session.session_id, 1, "Quando a dor começou?")
+
+        assert {:error, :station_ai_unavailable} =
+                 Stations.process_voice_turn(session.session_id, 1, "Quando a dor começou?")
+
+        assert {:ok, stored} = Stations.get_session(session.session_id)
+        assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
+        assert stored.failed_voice_turn.turn_id == 1
+        assert {:ok, nil} = Conversation.active_generation(session.session_id)
+      end
+    end
+
+    # Issue #269: a refused voice reply follows the text path (#235): the
+    # learner turn is kept, no patient text is stored or spoken, and the
+    # result is a kept turn, not a technical failure.
+    for refusal <- [:semantic_refusal, :low_confidence] do
+      test "a #{refusal} keeps the learner voice turn without patient text" do
+        Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+        use_patient_decision({:ok, %{status: unquote(refusal), rationale: "refused"}})
+        session = Stations.create_session(%{audio_consent: true})
+        id = session.session_id
+
+        assert {:ok, {:kept, kept}} = Stations.process_voice_turn(id, 1, "Quando a dor começou?")
+
+        assert kept == %{
+                 turn_id: 1,
+                 generation_id: 1,
+                 refusal: unquote(refusal),
+                 addressee: :patient
+               }
+
+        assert {:ok, stored} = Stations.get_session(id)
+        assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
+        assert stored.failed_voice_turn == nil
+        assert {:ok, nil} = Conversation.active_generation(id)
+
+        # A retry of the kept turn never duplicates it or starts a new generation.
+        assert {:ok, :duplicate} = Stations.process_voice_turn(id, 1, "Quando a dor começou?")
+
+        # The next turn is processed normally.
+        use_patient_decision({:ok, %{status: :verified}})
+
+        assert {:ok, %{turn_id: 2, reply_text: _}} =
+                 Stations.process_voice_turn(id, 2, "E agora?")
+
+        assert {:ok, stored} = Stations.get_session(id)
+        assert Enum.map(stored.messages, & &1.role) == [:learner, :learner, :patient]
+      end
+    end
+
+    test "a refusal whose regeneration runs out of time keeps the learner voice turn" do
+      Application.put_env(:backend, :station_ai_adapter, SlowRegenerationAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, RefuseThenVerifyAdapter)
+      prev_deadline = Application.get_env(:backend, :jev_decision_default_deadline_ms)
+      Application.put_env(:backend, :jev_decision_default_deadline_ms, 100)
+
+      on_exit(fn ->
+        Application.put_env(:backend, :jev_decision_default_deadline_ms, prev_deadline)
+      end)
+
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      assert {:ok, {:kept, %{turn_id: 1, generation_id: 1, refusal: :semantic_refusal}}} =
+               Stations.process_voice_turn(id, 1, "Quando a dor começou?")
+
+      assert {:ok, stored} = Stations.get_session(id)
+      assert [%{role: :learner, text: "Quando a dor começou?"}] = stored.messages
+      assert stored.failed_voice_turn == nil
+      assert {:ok, nil} = Conversation.active_generation(id)
+    end
+
+    test "voice and text verification share the configured patient reply deadline" do
+      Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, DeadlineProbeJevAdapter)
+      Application.put_env(:backend, :jev_probe_pid, self())
+      prev_deadline = Application.get_env(:backend, :jev_decision_default_deadline_ms)
+      Application.put_env(:backend, :jev_decision_default_deadline_ms, 2_345)
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :jev_probe_pid)
+        Application.put_env(:backend, :jev_decision_default_deadline_ms, prev_deadline)
+      end)
+
+      voice = Stations.create_session(%{audio_consent: true})
+      assert {:ok, %{turn_id: 1}} = Stations.process_voice_turn(voice.session_id, 1, "Quando?")
+      assert_receive {:deadline_ms, voice_budget}
+
+      text = Stations.create_session()
+      assert {:ok, _reply} = Stations.create_message(text.session_id, %{text: "Quando?"})
+      assert_receive {:deadline_ms, text_budget}
+
+      for budget <- [voice_budget, text_budget], do: assert(budget in 2_000..2_345)
+    end
+
+    # Issue #269: the voice reply follows the #257 stage-direction rule, so the
+    # worker never reads a nonverbal action aloud. The transcript keeps the full
+    # verified reply, as on the text path.
+    test "process_voice_turn/3 returns reply_text without stage directions" do
+      Application.put_env(:backend, :station_ai_adapter, TemplateReplyAIAdapter)
+      Process.put(:template_reply_text, "*(curvado, com a mão na barriga)* Começou ontem. (geme)")
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{reply_text: "Começou ontem.", turn_id: 1}} =
+               Stations.process_voice_turn(session.session_id, 1, "Quando começou?")
+
+      assert {:ok, stored} = Stations.get_session(session.session_id)
+
+      assert [%{role: :learner}, %{role: :patient, text: full}] = stored.messages
+      assert full == "*(curvado, com a mão na barriga)* Começou ontem. (geme)"
+    end
+
+    test "a voice reply made only of stage directions keeps the learner turn" do
+      Application.put_env(:backend, :station_ai_adapter, TemplateReplyAIAdapter)
+      Process.put(:template_reply_text, "*(suspira e olha para o chão)*")
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, {:kept, %{turn_id: 1, generation_id: 1, refusal: :unspeakable}}} =
+               Stations.process_voice_turn(session.session_id, 1, "Como o senhor está?")
+
+      assert {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: "Como o senhor está?"}] = stored.messages
+      assert stored.failed_voice_turn == nil
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+    end
+
+    test "provider and model errors remain technical failures on retry without text or regeneration" do
+      Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
+      Process.put(:voice_turn_test_pid, self())
+
+      for reason <- [
+            :service_unavailable,
+            :timeout,
+            :network_error,
+            :malformed_response,
+            :model_error
+          ] do
+        Process.put(:voice_turn_test_error, reason)
+        session = Stations.create_session(%{audio_consent: true})
+
+        assert {:error, :station_ai_unavailable} =
+                 Stations.process_voice_turn(session.session_id, 1, "Learner question")
+
+        assert_receive :failed_adapter_called
+
+        assert {:error, :station_ai_unavailable} =
+                 Stations.process_voice_turn(session.session_id, 1, "Learner question")
+
+        refute_receive :failed_adapter_called
+        assert {:ok, stored} = Stations.get_session(session.session_id)
+        assert [%{role: :learner, text: "Learner question"}] = stored.messages
+        assert {:ok, nil} = Conversation.active_generation(session.session_id)
+      end
+    end
+
+    test "late provider failure cannot overwrite a newer pending or failed generation" do
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      for newer_outcome <- [:pending, :failed] do
+        session = Stations.create_session(%{audio_consent: true})
+        first = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "First") end)
+        assert_receive {:adapter_called, _}, 1000
+
+        second =
+          Task.async(fn -> Stations.process_voice_turn(session.session_id, 2, "Second") end)
+
+        assert_receive {:adapter_called, _}, 1000
+
+        if newer_outcome == :failed do
+          send(second.pid, {:fail_adapter, :model_error})
+          assert Task.await(second) == {:error, :station_ai_unavailable}
+        end
+
+        send(first.pid, {:fail_adapter, :timeout})
+        assert Task.await(first) == {:error, :stale_generation}
+        assert {:ok, :duplicate} = Stations.process_voice_turn(session.session_id, 1, "First")
+
+        if newer_outcome == :pending do
+          assert {:ok, 2} = Conversation.active_generation(session.session_id)
+          send(second.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+          assert {:ok, %{turn_id: 2}} = Task.await(second)
+        else
+          assert {:error, :station_ai_unavailable} =
+                   Stations.process_voice_turn(session.session_id, 2, "Second")
+
+          assert {:ok, stored} = Stations.get_session(session.session_id)
+          assert Enum.map(stored.messages, & &1.role) == [:learner, :learner]
+          assert stored.failed_voice_turn.generation_id == 2
+        end
+      end
+    end
+
+    test "late provider failure respects cancellation, completion, expiry and discard" do
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      for boundary <- [:cancelled, :completed, :expired, :discarded] do
+        session = Stations.create_session(%{audio_consent: true})
+
+        task =
+          Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Question") end)
+
+        assert_receive {:adapter_called, _}, 1000
+
+        expected =
+          case boundary do
+            :cancelled ->
+              assert {:ok, :cancelled} =
+                       Stations.cancel_voice_turn(session.session_id, turn_id: 1)
+
+              :stale_generation
+
+            :completed ->
+              assert {:ok, _} = Stations.complete_session(session.session_id)
+              :completed
+
+            :expired ->
+              {:ok, stored} = Stations.get_session(session.session_id)
+
+              :ets.insert(
+                Conversation,
+                {session.session_id, %{stored | expires_at: session.started_at}}
+              )
+
+              :expired
+
+            :discarded ->
+              assert :ok = Stations.discard_session(session.session_id)
+              :not_found
+          end
+
+        send(task.pid, {:fail_adapter, :model_error})
+        assert Task.await(task) == {:error, expected}
+
+        if boundary in [:cancelled, :completed] do
+          assert {:ok, stored} = Stations.get_session(session.session_id)
+          assert stored.failed_voice_turn == nil
+          assert [%{role: :learner}] = stored.messages
+        else
+          assert {:error, :not_found} = Stations.get_session(session.session_id)
+        end
+      end
+    end
+
+    for rule_id <- ["length-cap", "max-length"] do
+      test "process_voice_turn/3 denies a reply exceeding #{rule_id} without committing patient content" do
+        original_package = Stations.get_active_package()
+
+        package =
+          Path.expand("../../priv/stations/fixtures/valid-package.json", __DIR__)
+          |> File.read!()
+          |> Jason.decode!()
+          |> Map.put("response_rules", [
+            %{
+              "id" => unquote(rule_id),
+              "instruction" => "Keep replies within 35 characters.",
+              "max_length" => 35
+            }
+          ])
+
+        assert {:ok, package} = Backend.Stations.StationPackage.validate(package)
+        :sys.replace_state(Backend.Stations.StationLoader, fn _ -> package end)
+
+        on_exit(fn ->
+          :sys.replace_state(Backend.Stations.StationLoader, fn _ -> original_package end)
+        end)
+
+        # 36 characters, one over the cap
+        Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+        session = Stations.create_session(%{audio_consent: true})
+
+        assert {:error, :station_ai_unavailable} =
+                 Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
+
+        assert {:ok, updated_session} = Stations.get_session(session.session_id)
+        assert [%{role: :learner, text: "Quando começou a dor?"}] = updated_session.messages
+        assert updated_session.failed_voice_turn.turn_id == 1
+        assert {:ok, nil} = Conversation.active_generation(session.session_id)
+
+        assert {:error, :station_ai_unavailable} =
+                 Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
+
+        assert {:ok, unchanged_session} = Stations.get_session(session.session_id)
+        assert unchanged_session.messages == updated_session.messages
+      end
+    end
+
+    test "process_voice_turn/3 commits the verified reply and updates session" do
+      Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, result} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Quando começou a dor no peito?"
+               )
+
+      assert result.reply_text == "A dor começou durante uma caminhada."
+      assert result.turn_id == 1
+      assert result.generation_id == 1
+      # used_facts are the ones the verified reply carries, never re-derived from its text
+      assert result.used_facts == []
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      assert length(updated_session.messages) == 2
+
+      [msg1, msg2] = updated_session.messages
+      assert msg1.role == :learner
+      assert msg1.modality == :voice
+      assert msg1.text == "Quando começou a dor no peito?"
+      assert msg2.role == :patient
+      assert msg2.modality == :voice
+      assert msg2.text == "A dor começou durante uma caminhada."
+
+      assert updated_session.last_voice_turn_id == 1
+      assert {:ok, nil} = Conversation.active_generation(session.session_id)
+    end
+
+    test "process_voice_turn/3 returns canonical refusal when unknown question is asked" do
+      Application.put_env(:backend, :station_ai_adapter, TestRefusalAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, result} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Qual o seu time de futebol favorito?"
+               )
+
+      assert result.reply_text == "Não tenho essa informação"
+      assert result.turn_id == 1
+      assert result.generation_id == 1
+      assert result.used_facts == []
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      assert List.last(updated_session.messages).text == "Não tenho essa informação"
+    end
+
+    test "process_voice_turn/3 returns a Jev-approved reply verbatim with the used_facts it carries" do
+      Application.put_env(:backend, :station_ai_adapter, TestNaturalReplyWithFactsAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, result} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Quando começou a dor no peito?"
+               )
+
+      # Not an exact package fact: Jev approved it, so it is spoken as written
+      assert result.reply_text ==
+               "Começou quando eu estava caminhando, doutor, e ainda não passou."
+
+      assert result.used_facts == [
+               %{"topic" => "onset", "content" => "A dor começou durante uma caminhada."}
+             ]
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      patient = List.last(updated_session.messages)
+      assert patient.role == :patient
+      assert patient.modality == :voice
+      assert patient.text == result.reply_text
+    end
+
+    test "process_voice_turn/3 delivers the reply Jev replaced through regeneration" do
+      Application.put_env(:backend, :station_ai_adapter, TestRegeneratingAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, RefuseThenVerifyAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, result} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Quando começou a dor no peito?"
+               )
+
+      assert result.reply_text == "Foi durante uma caminhada, doutor."
+      # Facts claimed by the refused candidate never survive the replacement
+      assert result.used_facts == []
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      assert [%{role: :learner}, %{role: :patient, text: text}] = updated_session.messages
+      assert text == "Foi durante uma caminhada, doutor."
+    end
+
+    test "process_voice_turn/3 never commits or returns a fabricated assertion Jev refuses" do
+      Application.put_env(:backend, :station_ai_adapter, TestFabricatedClinicalAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, TestRefusingJevAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, {:kept, %{turn_id: 1, generation_id: 1, refusal: :semantic_refusal}}} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Você toma algum remédio para o estômago?"
+               )
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+
+      assert [%{role: :learner, text: "Você toma algum remédio para o estômago?"}] =
+               updated_session.messages
+    end
+
+    test "process_voice_turn/3 never commits or returns a reply without usable text" do
+      Application.put_env(:backend, :station_ai_adapter, TemplateReplyAIAdapter)
+      Process.put(:template_reply_text, "   ")
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:error, :station_ai_unavailable} =
+               Stations.process_voice_turn(session.session_id, 1, "Quando começou a dor?")
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: "Quando começou a dor?"}] = updated_session.messages
+    end
+
+    test "process_voice_turn/3 refuses duplicate or reordered turn_id without calling adapter or returning text" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{reply_text: _}} =
+               Stations.process_voice_turn(session.session_id, 1, "Primeira fala")
+
+      # Repeating turn_id 1 returns duplicate, no reply text
+      assert {:ok, :duplicate} =
+               Stations.process_voice_turn(session.session_id, 1, "Repetição do turno 1")
+
+      # Stale turn_id 0 returns invalid_transcript, no reply text
+      assert {:error, :invalid_transcript} =
+               Stations.process_voice_turn(session.session_id, 0, "Turno 0 inválido")
+
+      {:ok, updated_session} = Stations.get_session(session.session_id)
+      assert length(updated_session.messages) == 2
+      assert hd(updated_session.messages).text == "Primeira fala"
+    end
+
+    test "supersession during slow adapter call suppresses stale turn without returning text" do
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = Stations.create_session(%{audio_consent: true})
+
+      # Start Turn 1 in background task
+      task1 =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 1, "Pergunta 1 com adaptador lento")
+        end)
+
+      # Wait until Turn 1 enters adapter
+      assert_receive {:adapter_called, _context}, 1000
+
+      # While Turn 1 is suspended in adapter, Turn 2 arrives with RevealableFactsAdapter
+      Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+
+      assert {:ok, turn2_result} =
+               Stations.process_voice_turn(session.session_id, 2, "Pergunta 2 interrompendo")
+
+      assert turn2_result.turn_id == 2
+      assert turn2_result.generation_id == 2
+
+      # Now resume Turn 1's adapter
+      send(task1.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      # Turn 1 must fail with :stale_generation and NEVER return text
+      assert Task.await(task1) == {:error, :stale_generation}
+
+      # Verify session only contains Turn 1 (learner), Turn 2 (learner), and Turn 2 (patient)
+      {:ok, final_session} = Stations.get_session(session.session_id)
+      assert length(final_session.messages) == 3
+
+      assert Enum.map(final_session.messages, & &1.text) == [
+               "Pergunta 1 com adaptador lento",
+               "Pergunta 2 interrompendo",
+               turn2_result.reply_text
+             ]
+    end
+
+    test "cancellation during slow adapter call invalidates generation and suppresses text" do
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = Stations.create_session(%{audio_consent: true})
+
+      # Start Turn 1 in background task
+      task =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 1, "Pergunta a ser cancelada")
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      # Cancel generation 1 explicitly via public context API
+      assert {:ok, :cancelled} = Stations.cancel_voice_turn(session.session_id, 1)
+
+      # Resume adapter
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      # Awaited task returns stale_generation error, no text
+      assert Task.await(task) == {:error, :stale_generation}
+
+      # Session only has the learner message, no patient message was appended
+      {:ok, final_session} = Stations.get_session(session.session_id)
+      assert length(final_session.messages) == 1
+      assert hd(final_session.messages).text == "Pergunta a ser cancelada"
+    end
+
+    test "completion during slow adapter call suppresses text and locks session" do
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = Stations.create_session(%{audio_consent: true})
+
+      task =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 1, "Pergunta antes de completar")
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      assert Task.await(task) == {:error, :completed}
+
+      {:ok, completed_session} = Stations.get_session(session.session_id)
+      assert completed_session.status == :completed
+      assert length(completed_session.messages) == 1
+
+      # Calling on an already completed session also returns {:error, :completed}
+      assert Stations.process_voice_turn(session.session_id, 2, "Pergunta pós-conclusão") ==
+               {:error, :completed}
+    end
+
+    test "expiry during slow adapter call suppresses text" do
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = Stations.create_session(%{audio_consent: true})
+
+      task =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 1, "Pergunta antes de expirar")
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      # Force expiration by setting expires_at into the past in Conversation ETS
+      [{_id, stored_session}] = :ets.lookup(Conversation, session.session_id)
+
+      expired_session = %{
+        stored_session
+        | expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
+      }
+
+      :ets.insert(Conversation, {session.session_id, expired_session})
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      assert Task.await(task) == {:error, :expired}
+
+      # A fresh expired session also returns {:error, :expired} on first call
+      session2 = Stations.create_session(%{audio_consent: true})
+      [{_id, stored2}] = :ets.lookup(Conversation, session2.session_id)
+
+      expired2 = %{
+        stored2
+        | expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
+      }
+
+      :ets.insert(Conversation, {session2.session_id, expired2})
+
+      assert Stations.process_voice_turn(session2.session_id, 1, "Pergunta sessão expirada") ==
+               {:error, :expired}
+    end
+
+    test "evaluator consumes role-labelled voice turn transcript and produces rubric evaluation" do
+      Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, turn1} =
+               Stations.process_voice_turn(
+                 session.session_id,
+                 1,
+                 "Quando começou a dor no peito?"
+               )
+
+      assert turn1.reply_text == "A dor começou durante uma caminhada."
+
+      assert {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      assert {:ok, result} = Stations.get_session_result(session.session_id)
+      assert result.session_id == session.session_id
+      assert result.status == "completed"
+
+      onset_criterion = Enum.find(result.criteria, &(&1.id == "onset-assessment"))
+      assert onset_criterion != nil
+      assert onset_criterion.status == "met"
+      assert is_list(onset_criterion.evidence)
+      assert length(onset_criterion.evidence) > 0
+
+      # Learner question was properly captured and visible to Evaluator
+      assert Enum.any?(
+               onset_criterion.evidence,
+               &String.contains?(&1, "Quando começou a dor no peito?")
+             )
+    end
+
+    test "cancel_voice_turn/2 enforces generation match and session state" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      # No active generation initially
+      assert {:ok, :cancelled} = Stations.cancel_voice_turn(session.session_id)
+
+      # Start a turn and cancel it
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      task =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 1, "Pergunta para cancelamento")
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      # Stale generation cancel fails
+      assert {:error, :stale_generation} = Stations.cancel_voice_turn(session.session_id, 999)
+
+      # Matching generation cancel succeeds
+      assert {:ok, :cancelled} = Stations.cancel_voice_turn(session.session_id, 1)
+
+      send(task.pid, {:resume_adapter, "Resposta descartada"})
+      assert Task.await(task) == {:error, :stale_generation}
+
+      # Cancel on non-existent session returns :not_found
+      assert Stations.cancel_voice_turn("unknown-session-id", 1) == {:error, :not_found}
+    end
+
+    test "process_voice_turn/3 refuses turn without audio consent" do
+      session = Stations.create_session(%{audio_consent: false})
+
+      assert Stations.process_voice_turn(session.session_id, 1, "Tentativa sem consentimento") ==
+               {:error, :no_consent}
+
+      {:ok, current} = Stations.get_session(session.session_id)
+      assert current.messages == []
+    end
+
+    test "cancel_voice_turn with expected turn_id cancels matching active turn" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      task =
+        Task.async(fn ->
+          Stations.process_voice_turn(
+            session.session_id,
+            1,
+            "Pergunta para cancelamento por turn_id"
+          )
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+
+      # Cancel with matching expected turn_id
+      assert {:ok, :cancelled} =
+               Stations.cancel_voice_turn(session.session_id, turn_id: 1)
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+      assert Task.await(task) == {:error, :stale_generation}
+    end
+
+    test "delayed cancellation of earlier turn_id returns :stale_generation and does not invalidate newer turn" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      task1 =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 1, "Pergunta 1")
+        end)
+
+      assert_receive {:adapter_called, _ctx1}, 1000
+
+      # Newer turn 2 arrives and starts generation
+      task2 =
+        Task.async(fn ->
+          Stations.process_voice_turn(session.session_id, 2, "Pergunta 2")
+        end)
+
+      assert_receive {:adapter_called, _ctx2}, 1000
+
+      # Delayed cancellation for turn 1 arrives late
+      assert {:error, :stale_generation} =
+               Stations.cancel_voice_turn(session.session_id, turn_id: 1)
+
+      # Resume turn 1: superseded by turn 2
+      send(task1.pid, {:resume_adapter, "Resposta descartada 1"})
+      assert Task.await(task1) == {:error, :stale_generation}
+
+      # Turn 2 is untouched and resolves with authorized fact
+      send(task2.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      assert {:ok, result} = Task.await(task2)
+      assert result.turn_id == 2
+      assert result.reply_text == "A dor começou durante uma caminhada."
+    end
+
+    test "cancel_voice_turn and process_voice_turn enforce completed and expired session boundaries" do
+      session = Stations.create_session(%{audio_consent: true})
+      {:ok, _} = Stations.complete_session(session.session_id)
+
+      assert Stations.cancel_voice_turn(session.session_id, turn_id: 1) == {:error, :completed}
+      assert Stations.process_voice_turn(session.session_id, 1, "Fala") == {:error, :completed}
+
+      prev_timeout = Application.get_env(:backend, :conversation_timeout_ms)
+      Application.put_env(:backend, :conversation_timeout_ms, 0)
+
+      try do
+        expired1 = Stations.create_session(%{audio_consent: true})
+        assert Stations.cancel_voice_turn(expired1.session_id, turn_id: 1) == {:error, :expired}
+
+        expired2 = Stations.create_session(%{audio_consent: true})
+        assert Stations.process_voice_turn(expired2.session_id, 1, "Fala") == {:error, :expired}
+      after
+        if prev_timeout,
+          do: Application.put_env(:backend, :conversation_timeout_ms, prev_timeout),
+          else: Application.delete_env(:backend, :conversation_timeout_ms)
+      end
+    end
+
+    test "process_voice_turn/3 handles duplicate and older turn_ids idempotently" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{turn_id: 2}} =
+               Stations.process_voice_turn(session.session_id, 2, "Segunda pergunta")
+
+      assert {:ok, :duplicate} =
+               Stations.process_voice_turn(session.session_id, 2, "Segunda repetida")
+
+      assert {:ok, :duplicate} =
+               Stations.process_voice_turn(session.session_id, 1, "Primeira atrasada")
+
+      {:ok, current} = Stations.get_session(session.session_id)
+      # Exactly learner + patient messages from turn 2
+      assert length(current.messages) == 2
+    end
+
+    test "commit_voice_transcript/3 preserves #118 behavior" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, :committed} =
+               Stations.commit_voice_transcript(session.session_id, 1, "Fala legada")
+
+      assert {:ok, :duplicate} =
+               Stations.commit_voice_transcript(session.session_id, 1, "Fala repetida")
+
+      {:ok, current} = Stations.get_session(session.session_id)
+      assert length(current.messages) == 1
+      assert hd(current.messages).text == "Fala legada"
+    end
+  end
+
+  describe "station deadline on voice turns (#201)" do
+    setup do
+      original_duration = Application.get_env(:backend, :station_duration_ms)
+      original_grace = Application.get_env(:backend, :turn_grace_ms)
+
+      on_exit(fn ->
+        restore_env(:station_duration_ms, original_duration)
+        restore_env(:turn_grace_ms, original_grace)
+      end)
+
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+
+      :ok
+    end
+
+    test "a voice turn after the deadline returns :station_time_elapsed and leaves the transcript untouched" do
+      Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :turn_grace_ms, 3_000)
+
+      session = Stations.create_session(%{audio_consent: true})
+
+      # A generation in flight keeps the session active past the deadline.
+      first = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
+      assert_receive {:adapter_called, _}, 1000
+
+      Process.sleep(450)
+      assert {:ok, %{status: :active} = before_reject} = Stations.get_session(session.session_id)
+
+      assert {:error, :station_time_elapsed} =
+               Stations.process_voice_turn(session.session_id, 2, "Chegou tarde")
+
+      refute_receive {:adapter_called, _}
+
+      assert {:ok, after_reject} = Stations.get_session(session.session_id)
+      assert after_reject.messages == before_reject.messages
+      assert after_reject.last_voice_turn_id == 1
+      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+
+      send(first.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+      assert {:ok, %{turn_id: 1}} = Task.await(first)
+    end
+
+    test "a voice turn on a session completed by the timer returns :station_time_elapsed" do
+      Application.put_env(:backend, :station_duration_ms, 30)
+      session = Stations.create_session(%{audio_consent: true})
+
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
+      end)
+
+      assert {:error, :station_time_elapsed} =
+               Stations.process_voice_turn(session.session_id, 1, "Chegou tarde")
+
+      assert {:error, :station_time_elapsed} =
+               Stations.commit_voice_transcript(session.session_id, 1, "Chegou tarde")
+
+      refute_receive {:adapter_called, _}
+
+      assert {:ok, %{messages: [], completion_reason: :timer}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "a generation cut off by the deadline returns :station_time_elapsed when its reply resolves after grace" do
+      Application.put_env(:backend, :station_duration_ms, 200)
+      Application.put_env(:backend, :turn_grace_ms, 100)
+
+      session = Stations.create_session(%{audio_consent: true})
+      task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
+      assert_receive {:adapter_called, _}, 1000
+
+      # Let both the deadline and the grace window elapse without a reply.
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
+      end)
+
+      assert {:ok, forced} = Stations.get_session(session.session_id)
+      assert forced.completion_reason == :timer
+      assert forced.messages == []
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+      assert Task.await(task) == {:error, :station_time_elapsed}
+
+      # Not a technical failure: nothing is recorded against the generation.
+      assert {:ok, ^forced} = Stations.get_session(session.session_id)
+      assert Map.get(forced, :failed_voice_turn) == nil
+    end
+
+    test "a reply resolving inside the grace window succeeds and the timer completes the session" do
+      Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :turn_grace_ms, 3_000)
+
+      session = Stations.create_session(%{audio_consent: true})
+      task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
+      assert_receive {:adapter_called, _}, 1000
+
+      # Past the deadline, inside the grace window.
+      Process.sleep(450)
+      assert {:ok, %{status: :active}} = Stations.get_session(session.session_id)
+
+      send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
+
+      assert {:ok,
+              %{
+                reply_text: "A dor começou durante uma caminhada.",
+                turn_id: 1,
+                generation_id: 1
+              }} = Task.await(task)
+
+      assert {:ok, completed} = Stations.get_session(session.session_id)
+      assert completed.status == :completed
+      assert completed.completion_reason == :timer
+
+      assert Enum.map(completed.messages, &{&1.role, &1.text}) == [
+               {:learner, "Fala"},
+               {:patient, "A dor começou durante uma caminhada."}
+             ]
+    end
+
+    test "a session completed for another reason still returns :completed" do
+      session = Stations.create_session(%{audio_consent: true})
+      assert {:ok, _} = Stations.complete_session(session.session_id)
+
+      assert {:error, :completed} = Stations.process_voice_turn(session.session_id, 1, "Fala")
+
+      assert {:error, :completed} =
+               Stations.commit_voice_transcript(session.session_id, 1, "Fala")
     end
   end
 
@@ -1038,6 +2343,22 @@ defmodule Backend.StationsTest do
         end
 
       assert Stations.list_impressos(session.session_id) == {:error, :expired}
+    end
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:backend, key)
+  defp restore_env(key, value), do: Application.put_env(:backend, key, value)
+
+  defp wait_until(fun, attempts \\ 100)
+
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(20)
+      wait_until(fun, attempts - 1)
     end
   end
 end

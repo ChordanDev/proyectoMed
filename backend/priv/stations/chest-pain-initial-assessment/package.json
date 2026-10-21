@@ -3,6 +3,15 @@
   "version": "2.0.0",
   "language": "pt-BR",
   "display_title": "Avaliação inicial de dor torácica",
+  "candidate_brief": {
+    "scenario": "Você é o médico ou a médica de plantão em uma unidade de pronto atendimento. Um paciente de 56 anos procura atendimento por dor torácica.",
+    "tasks": [
+      "Apresentar-se ao paciente e obter anamnese dirigida à queixa de dor torácica.",
+      "Solicitar e interpretar o exame físico e os sinais vitais.",
+      "Solicitar e interpretar o eletrocardiograma e os exames complementares pertinentes.",
+      "Formular a hipótese diagnóstica principal e indicar a conduta inicial."
+    ]
+  },
   "placeholder": true,
   "patient_profile": {
     "persona": "Paciente fictício, colaborativo e preocupado",
@@ -57,7 +66,15 @@
         "ausculta cardíaca",
         "ausculta pulmonar",
         "temperatura",
-        "saturação"
+        "saturação",
+        "exame segmentar",
+        "exame do tórax",
+        "exame cardiovascular",
+        "exame cardíaco",
+        "exame pulmonar",
+        "examinar o paciente",
+        "examinar o tórax",
+        "ausculta"
       ],
       "content": "### SINAIS VITAIS:\n- PA: 150/90 mmHg\n- FC: 88 bpm, ritmo regular\n- FR: 18 irpm\n- SpO2: 97% em ar ambiente\n- Temperatura axilar: 36,5 °C\n\n### EXAME FÍSICO SEGMENTAR:\n- Geral: Bom estado geral, consciente e orientado no tempo e espaço, fácies de dor, anictérico, acianótico.\n- Aparelho Cardiovascular: Ictus cordis não visível, palpável no 5º espaço intercostal na linha hemiclavicular esquerda. Bulhas cardíacas rítmicas e normofonéticas em 2 tempos, sem sopros ou estalidos.\n- Aparelho Respiratório: Murmúrio vesicular universalmente audível, sem ruídos adventícios.\n- Abdome: Plano, flácido, indolor à palpação superficial e profunda, sem visceromegalias.\n- Extremidades: Pulsos periféricos presentes, simétricos e amplos; sem edema de membros inferiores; tempo de enchimento capilar < 2 segundos."
     },
@@ -74,7 +91,16 @@
         "hemograma",
         "glicemia",
         "ureia",
-        "creatinina"
+        "creatinina",
+        "ckmb",
+        "ck mb",
+        "marcadores de necrose",
+        "marcadores cardíacos",
+        "função renal",
+        "eletrólitos",
+        "sódio",
+        "potássio",
+        "exames de sangue"
       ],
       "content": "### MARCADORES DE NECROSE MIOCÁRDICA:\n- Troponina I ultrassensível: 0,45 ng/mL (Valor de referência: < 0,04 ng/mL) — ELEVADA\n- CK-MB massa: 28 ng/mL (Valor de referência: < 5,0 ng/mL) — ELEVADA\n\n### BIOQUÍMICA E FUNÇÃO RENAL:\n- Glicemia de jejum: 118 mg/dL (Valor de referência: 70 a 99 mg/dL)\n- Ureia: 38 mg/dL (Valor de referência: 15 a 45 mg/dL)\n- Creatinina: 1,0 mg/dL (Valor de referência: 0,7 a 1,3 mg/dL)\n- Potássio sérico: 4,2 mEq/L (Valor de referência: 3,5 a 5,0 mEq/L)\n- Sódio sérico: 140 mEq/L (Valor de referência: 135 a 145 mEq/L)\n\n### HEMOGRAMA COMPLETO:\n- Hemoglobina: 14,2 g/dL\n- Leucócitos: 8.500 /mm³ (sem desvio)\n- Plaquetas: 240.000 /mm³"
     },
@@ -86,7 +112,10 @@
         "radiografia de tórax",
         "raio-x de tórax",
         "rx de tórax",
-        "radiografia"
+        "radiografia",
+        "raio-x",
+        "raio x",
+        "rx"
       ],
       "content": "### RADIOGRAFIA DE TÓRAX (PA E PERFIL):\n- Índice cardiotorácico dentro dos limites normais (< 0,50).\n- Hilos pulmonares de configuração anatômica e dimensões preservadas.\n- Campos pleuropulmonares com transparência radiológica preservada, sem infiltrados, consolidações ou derrames pleurais.\n- Seios costofrênicos e cardiofrênicos livres.\n- Mediastino centrado, sem alargamento.\n- Estruturas ósseas da caixa torácica íntegras."
     },
@@ -98,9 +127,11 @@
         "eletrocardiograma",
         "ecg",
         "laudo de ecg",
-        "traçado de ecg"
+        "traçado de ecg",
+        "eletrocardiografia"
       ],
       "content": "### LAUDO DO ELETROCARDIOGRAMA DE 12 DERIVAÇÕES:\n- Ritmo: Sinusal, regular.\n- Frequência Cardíaca: 85 bpm.\n- Intervalo PR: 0,16 s (normal).\n- Complexo QRS: 0,08 s (normal).\n- Segmento ST: Supradesnivelamento convexo superior de 2,5 mm nas derivações DII, DIII e aVF, com infradesnivelamento recíproco em DI e aVL.\n- Conclusão: Infarto agudo do miocárdio com supradesnivelamento do segmento ST (IAMCSST) de parede inferior."
     }
-  ]
+  ],
+  "stt_keyterms": ["dor torácica", "precordial", "irradiação", "dispneia", "sudorese", "infarto", "angina", "eletrocardiograma"]
 }

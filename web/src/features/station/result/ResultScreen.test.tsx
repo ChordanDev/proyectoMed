@@ -47,6 +47,30 @@ describe("educational result presentation", () => {
     expect(screen.queryByText("criterion-a")).not.toBeInTheDocument();
   });
 
+  // Issue #291: an uncertain item shows what the learner asked and its written recommendation.
+  it("shows the evidence and the recommendation of an uncertain criterion", () => {
+    const recommendation = "Você investigou: Localização inicial; tempo de evolução. Ainda falta investigar: intensidade.";
+    const uncertain = {
+      ...partialResult.criteria[1],
+      evidence_ids: ["turn-1", "turn-3"],
+      evidence: [
+        { id: "turn-1", role: "learner" as const, text: "Onde começou a dor?" },
+        { id: "turn-3", role: "learner" as const, text: "Há quanto tempo está com essa dor?" },
+      ],
+      recommendation,
+    };
+    render(<ResultScreen status="finished" result={{ ...partialResult, criteria: [partialResult.criteria[0], uncertain] }} onRestart={vi.fn()} />);
+    const item = screen.getByText(uncertain.description).closest("li")!;
+    expect(within(item).getByText(/Incerto — sem pontos atribuídos/)).toBeInTheDocument();
+    expect(within(item).getByRole("heading", { name: strings.resultEvidenceHeading })).toBeInTheDocument();
+    expect(within(item).getAllByRole("blockquote").map((quote) => quote.textContent)).toEqual([
+      "Onde começou a dor?",
+      "Há quanto tempo está com essa dor?",
+    ]);
+    expect(within(item).getByText(recommendation)).toBeInTheDocument();
+    expect(within(item).queryByText(/Pontos:/)).not.toBeInTheDocument();
+  });
+
   it("lists each status count and each unresolved criterion as separate items", () => {
     render(<ResultScreen status="finished" result={partialResult} onRestart={vi.fn()} />);
     const coverage = screen.getByRole("region", { name: strings.resultCoverage });

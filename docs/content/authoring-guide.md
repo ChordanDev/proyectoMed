@@ -48,8 +48,9 @@ A package is one JSON file at `backend/priv/stations/<station_id>/package.json`.
 | `rubric` | List of criteria. Ids unique. | `validator:206`–`233` |
 | `approved_templates` | Optional: `null` or a list. | `validator:605` |
 | `impressos` | Optional: `null` or a list. | `validator:662` |
+| `candidate_brief` | Object with exactly `scenario` (non-empty string) and `tasks` (non-empty ordered list of non-empty strings). Returned to the learner's client and shown before and during the station. | `validate_candidate_brief` |
 
-There is no field for text shown to the learner before the station (scenario, tasks, available resources). `patient_profile` feeds the simulated patient, not the learner.
+`candidate_brief` is the only text shown to the learner before the station. `patient_profile` feeds the simulated patient, not the learner, and is never shown. Write the brief in the candidate's voice ("Você é…"), and keep out anything the learner must obtain in the station: facts the patient reveals on request, impresso contents (including vital signs when an impresso carries them), rubric wording and examiner answer keys. Available resources and the station duration have no field yet.
 
 ## Facts and disclosure conditions
 
@@ -92,6 +93,7 @@ A criterion lists `actions` (the things the learner may do) and `levels`. These 
 | `actions[].role: mandatory` | "Without this action the criterion scores its zero-point level" (`rules:13`). It also counts toward thresholds. | "Required for the top level only". | `validator:454`; needs a zero-point level `validator:523` |
 | `actions[].role: forbidden` | "Doing this scores the criterion's zero-point level" (`rules:12`). Never counts toward thresholds. | A penalty outside its own criterion; a partial deduction. | Needs `veto: true` `validator:513`; needs a zero-point level `validator:523` |
 | `actions[].impresso_ids` | Optional. The authored impressos whose release means the learner requested what the action asks ("Requests a blood count" → `["impresso-2-hemograma"]`). A verified Impressos request that released one of them makes the action performed, citing that request, without asking the classifier. An action without a matching release is still judged from the conversation. | Partial credit for a request; a request that released nothing; use on a `first_n` criterion. | Non-empty list of authored impresso ids; not on a `first_n` criterion (`backend/lib/backend/stations/station_package.ex`, `validate_action_impresso_ids`) |
+| `actions[].interprets_impresso_ids` | Optional. The authored impressos the action interprets ("Recognizes elevated CRP" → `["impresso-2-pcr"]`). Only learner turns sent after a verified Impressos request released one of them count as its evidence; an earlier turn, or the request itself, is dropped from its citations, and a performed action left with none is not performed. | Interpreting an impresso the station never releases; a request action (use `impresso_ids`). | Non-empty list of authored impresso ids; not together with `impresso_ids` on one action (`backend/lib/backend/stations/station_package.ex`, `validate_action_impresso_ids`) |
 | `veto` | Must be `true` when the criterion has a `forbidden` action. The role applies the veto, not this flag. | A veto without a forbidden action. | `validator:485`, `validator:513` |
 | `count_cap` | A maximum on the counted actions before thresholds apply (`rules:246`). | — | Integer ≥ 1 or `null` `validator:461`, `validator:473`; highest threshold ≤ cap `validator:401` |
 | `first_n` | "Only the learner's first N answers to this criterion are eligible" (`first_n:3`). | Use without thresholds. | Integer ≥ 1 or `null`; requires thresholds when there are actions `validator:416`; highest threshold ≤ N `validator:407` |
@@ -133,10 +135,14 @@ An impresso is a handout released when the learner asks for it.
 | `keywords` | List of non-empty strings (the list may be empty: never released). | `validator:714` |
 | `content` | Non-empty string (Markdown) or a non-empty object. | `validator:726` |
 
-How release works (`impressos:37`): the learner's text is lower-cased and stripped of accents; an impresso is released, whole, when any keyword is a substring of it.
+The web drawer renders a Markdown subset in string `content` (`web/src/features/station/screens/ImpressoContent.tsx`): `### ` headings, `**bold**`, `- ` bullet lists, paragraphs separated by a blank line, and single line breaks. Anything else, including HTML, is shown as literal text. Keep to this subset.
+
+How release works (`impressos:42`): the learner's text is lower-cased and stripped of accents; an impresso is released, whole, when any keyword occurs in it starting at the beginning of a word.
 
 - A keyword cannot tell a request from a mention, or a pertinent request from an impertinent one.
-- Short keywords match inside other words (`eas` in "áreas", `sódio` in "episódio"). Prefer full names.
+- A keyword never starts inside a word, so short abbreviations are safe to author (`eas` does not match "áreas", `sódio` does not match "episódio"). It may end inside one: `radiografia` matches "radiografias", and `eletro` would match "eletrólitos".
+- Never author a generic word such as `exame` alone: it would release the impresso on almost every request. Author each common clinical phrasing as its own keyword instead.
+- An impresso whose content is the expected answer (for example a receituário listing the conduct a rubric scores) must keep `keywords: []`. The learner verbalizes the conduct; the handout is never released.
 - One impresso is one unit. To release results test by test, author one impresso per test.
 - There is no "ask which tests" step. A request that matches no keyword is answered as unavailable.
 

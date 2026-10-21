@@ -32,7 +32,11 @@ defmodule Backend.Stations.RubricAssessment do
        reach other outcomes too), the criterion is `:uncertain`.
     5. **Deterministic post-processing** validates each cited evidence
        identifier and fails closed per criterion: nothing is repaired, dropped
-       or substituted.
+       or substituted. The one exception is an action authored with
+       `interprets_impresso_ids`: a learner cannot interpret an exam before
+       receiving it, so its citations that are not learner turns sent after the
+       release are dropped, and it is `"not_performed"` when none remains
+       (`Backend.Stations.RubricAssessment.InterpretationEvidence`).
     6. **The task-order criterion** (`rule: "task_order"`) is assessed in code
        from the results of the ranked criteria and the position of their
        earliest evidence (`Backend.Stations.RubricAssessment.TaskOrder`). It is
@@ -67,12 +71,14 @@ defmodule Backend.Stations.RubricAssessment do
   alias Backend.Stations.RubricAssessment.Evidence
   alias Backend.Stations.RubricAssessment.FirstN
   alias Backend.Stations.RubricAssessment.ImpressoActions
+  alias Backend.Stations.RubricAssessment.InterpretationEvidence
   alias Backend.Stations.RubricAssessment.Points
   alias Backend.Stations.RubricAssessment.Resolver
   alias Backend.Stations.RubricAssessment.TaskOrder
 
   @uncertain_class "uncertain"
   @not_performed_class "not_performed"
+  @performed_class "performed"
   @task_order "task_order"
   @own_opts [
     :max_questions_per_call,
@@ -101,6 +107,9 @@ defmodule Backend.Stations.RubricAssessment do
   @typedoc """
   The result of one criterion. `:level` (the authored label) and `:points` are
   present only when the status is `:assessed`; `:reason` is `nil` only then.
+  An `:uncertain` criterion whose evidence validated keeps its `:sub_actions`
+  and the evidence of its criterion and performed actions (issue #291); every
+  other unscored criterion reports none.
   """
   @type criterion_result :: %{
           required(:id) => String.t(),
@@ -165,6 +174,10 @@ defmodule Backend.Stations.RubricAssessment do
   @typep level :: %{label: String.t(), points: Points.t()}
 
   @typep draft :: %{level: level(), evidence: [Evidence.item()], sub_actions: [sub_action()]}
+
+  # What an uncertain criterion still reports: its validated actions and the
+  # evidence of its criterion and performed actions (issue #291).
+  @typep partial :: %{evidence: [Evidence.item()], sub_actions: [sub_action()]}
 
   @doc """
   Assesses a completed session against the rubric of its v2 Station Package.
@@ -504,6 +517,7 @@ defmodule Backend.Stations.RubricAssessment do
     case judge(plan, Map.fetch!(decisions, plan.id), pool) do
       {:assessed, draft} -> assessed(plan, draft)
       {:uncertain, reason} -> unscored(plan, :uncertain, reason)
+      {:uncertain, reason, partial} -> plan |> unscored(:uncertain, reason) |> reported(partial)
     end
   end
 
@@ -511,7 +525,7 @@ defmodule Backend.Stations.RubricAssessment do
   # actions. The criterion stays uncertain at once only when no rule field
   # could decide the level without the classifier's class.
   @spec judge(plan(), RubricBatch.decision(), Evidence.pool()) ::
-          {:assessed, draft()} | {:uncertain, reason()}
+          {:assessed, draft()} | {:uncertain, reason()} | {:uncertain, reason(), partial()}
   defp judge(%{criterion: criterion} = plan, %{classification: @uncertain_class} = decision, pool) do
     if AuthoredRules.decides?(criterion) do
       rule(plan, :uncertain, decision, pool)
@@ -524,21 +538,42 @@ defmodule Backend.Stations.RubricAssessment do
     rule(plan, level(criterion, decision.classification), decision, pool)
   end
 
+  # Once the criterion and action evidence validated, an uncertain outcome
+  # still reports them, so its recommendation can say what was asked. Any
+  # evidence that fails validation, the first-N answers' included, reports
+  # nothing.
   defp rule(%{requirement: requirement} = plan, jev_level, decision, pool) do
     with {:ok, evidence} <- Evidence.validate(pool, decision.evidence_ids, requirement),
-         {:ok, sub_actions} <- sub_actions(decision.actions, pool, requirement),
-         {:ok, level, grounding} <- decide(plan, jev_level, sub_actions, decision, pool),
+         {:ok, sub_actions} <- sub_actions(plan, decision.actions, pool) do
+      partial = %{
+        evidence: with_actions(evidence, performed(sub_actions), pool),
+        sub_actions: sub_actions
+      }
+
+      case level_from(plan, jev_level, evidence, sub_actions, decision, pool) do
+        {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
+        {:uncertain, reason} -> {:uncertain, reason, partial}
+        {:assessed, _draft} = assessed -> assessed
+      end
+    else
+      {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
+      {:uncertain, _reason} = uncertain -> uncertain
+    end
+  end
+
+  defp level_from(plan, jev_level, evidence, sub_actions, decision, pool) do
+    with {:ok, level, grounding} <- decide(plan, jev_level, sub_actions, decision, pool),
          :ok <- proven_zero(plan, jev_level, level, sub_actions, decision, pool) do
       grounded(%{
         level: level,
         evidence: with_actions(evidence, grounding, pool),
         sub_actions: sub_actions
       })
-    else
-      {:error, {rejection, id}} -> {:uncertain, {:invalid_evidence, rejection, id}}
-      {:uncertain, _reason} = uncertain -> uncertain
     end
   end
+
+  defp performed(sub_actions),
+    do: Enum.filter(sub_actions, &(&1.classification == @performed_class))
 
   defp decide(
          %{criterion: criterion, requirement: requirement},
@@ -611,17 +646,27 @@ defmodule Backend.Stations.RubricAssessment do
   # performed action left without evidence is unresolved, as any evidence-less one.
   # Every other rejection (an unknown id, a patient turn, an unverified event)
   # still fails the criterion closed.
-  defp sub_actions(action_decisions, pool, requirement) do
+  #
+  # An action that interprets an impresso then keeps only the learner turns sent
+  # after its release (`InterpretationEvidence`, issue #265). The resolver's
+  # answers are already merged here, so the rule covers its citations and Jev's.
+  defp sub_actions(%{criterion: criterion, requirement: requirement}, action_decisions, pool) do
+    interprets = InterpretationEvidence.dependencies(criterion)
+
     map_ok(action_decisions, fn action ->
       cited = Enum.reject(action.evidence_ids, &wrong_channel?(pool, &1, requirement))
 
       with {:ok, evidence} <- Evidence.validate(pool, cited, requirement) do
         {:ok,
-         %{
-           id: action.id,
-           classification: action.classification,
-           evidence_ids: Evidence.ids(evidence)
-         }}
+         InterpretationEvidence.restrict(
+           %{
+             id: action.id,
+             classification: action.classification,
+             evidence_ids: Evidence.ids(evidence)
+           },
+           interprets[action.id],
+           pool
+         )}
       end
     end)
   end
@@ -691,6 +736,15 @@ defmodule Backend.Stations.RubricAssessment do
   end
 
   defp unscored(plan, status, reason), do: base_result(plan, status, reason)
+
+  defp reported(result, %{evidence: evidence, sub_actions: sub_actions}) do
+    %{
+      result
+      | evidence_ids: Evidence.ids(evidence),
+        evidence: Enum.map(evidence, &Map.take(&1, [:id, :role, :text])),
+        sub_actions: sub_actions
+    }
+  end
 
   defp base_result(%{id: id, criterion: criterion, max_points: max_points}, status, reason) do
     %{

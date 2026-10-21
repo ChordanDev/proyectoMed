@@ -4,10 +4,15 @@ defmodule Backend.Stations.Impressos do
   imaging / report) requests against the active Station Package.
 
   Matching is a normalized (downcased, accent-stripped) keyword substring
-  match — no LLM involved.
+  match anchored at a word start — no LLM involved.
   """
 
   @combining_marks_range 0x0300..0x036F
+
+  # Word-start anchors: a cue or connector must be a whole word.
+  @clause_boundary ~r/[.!?;,]|(?<![[:alnum:]])(?:mas|porem)(?![[:alnum:]])|(?<![[:alnum:]])e(?=\s+(?:solicito|peco)(?![[:alnum:]]))/u
+  @leading_negation ~r/(?<![[:alnum:]])(?:nao|nem|sem|dispenso|dispensa)(?![[:alnum:]])/u
+  @trailing_negation ~r/(?<![[:alnum:]])nao(?:\s+(?:e\s+necessari[oa]s?|sera\s+necessari[oa]s?|precisa))?\s*$/u
 
   @doc """
   Downcases `text` and strips diacritics via NFD decomposition, so
@@ -29,19 +34,51 @@ defmodule Backend.Stations.Impressos do
   end
 
   @doc """
-  Returns the ids of every impresso (in authored order) whose keywords are a
-  substring of `normalized_text`. `impressos` is the raw package `impressos`
-  list (string-keyed maps).
+  Returns the ids of every impresso (in authored order) whose keywords occur
+  in `normalized_text` starting at a word boundary. `impressos` is the raw
+  package `impressos` list (string-keyed maps).
+
+  A keyword may end inside a longer word ("eletrocardiograma" matches
+  "eletrocardiogramas"), but must not start inside one, so short authored
+  abbreviations such as "EAS", "TC" or "sódio" do not match inside "áreas",
+  "etc" or "episódio".
+
+  A keyword occurrence the learner names only to decline it does not match
+  (#305). The text is split into clauses at sentence punctuation, ";", ",",
+  "mas", "porém", or an "e" that starts a new request ("e solicito",
+  "e peço"). Within a clause, an occurrence is declined when a negation cue
+  ("não", "nem", "sem", "dispenso", "dispensa", which also cover "não
+  preciso", "não vou pedir", "não é necessário"...) precedes it, or when the
+  clause ends in a trailing "não" / "não é necessário(a)" / "não precisa"
+  ("tomografia não é necessária"). An impresso matches when any occurrence of
+  any of its keywords is not declined.
   """
   @spec match([map()], String.t()) :: [String.t()]
   def match(impressos, normalized_text) when is_list(impressos) and is_binary(normalized_text) do
+    clauses = Regex.split(@clause_boundary, normalized_text)
+
     impressos
     |> Enum.filter(fn impresso ->
-      Enum.any?(impresso["keywords"] || [], fn keyword ->
-        String.contains?(normalized_text, normalize(keyword))
-      end)
+      Enum.any?(impresso["keywords"] || [], &requested?(clauses, &1))
     end)
     |> Enum.map(& &1["id"])
+  end
+
+  defp requested?(clauses, keyword) do
+    pattern = Regex.compile!("(?<![[:alnum:]])" <> Regex.escape(normalize(keyword)), "u")
+
+    Enum.any?(clauses, fn clause ->
+      pattern
+      |> Regex.scan(clause, return: :index)
+      |> Enum.any?(fn [{start, length}] -> not declined?(clause, start, length) end)
+    end)
+  end
+
+  defp declined?(clause, start, length) do
+    before = binary_part(clause, 0, start)
+    rest = binary_part(clause, start + length, byte_size(clause) - start - length)
+
+    Regex.match?(@leading_negation, before) or Regex.match?(@trailing_negation, rest)
   end
 
   @doc """

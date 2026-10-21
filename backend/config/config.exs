@@ -19,11 +19,29 @@ config :backend,
   jev_decision_max_context_characters: 24_000,
   jev_decision_max_rubric_context_characters: 120_000,
   learner_feedback_adapter: Backend.Stations.LearnerFeedback.OpenAIAdapter,
-  learner_feedback_deadline_ms: 60_000,
+  # resolver 30 s + feedback 45 s fit the web client's 95 s wait for the
+  # educational result (issue #301, see runtime.exs).
+  learner_feedback_deadline_ms: 45_000,
   learner_feedback_cooldown_ms: 30_000,
   rubric_resolver_adapter: Backend.Stations.RubricAssessment.Resolver.DisabledAdapter,
-  rubric_resolver_deadline_ms: 10_000,
-  learner_message_max_characters: 2_000
+  rubric_resolver_deadline_ms: 30_000,
+  # Undecided-verdict adjudicator (issue #290): off unless runtime.exs selects it.
+  patient_adjudicator_adapter: Backend.Stations.PatientAdjudicator.DisabledAdapter,
+  patient_adjudicator_deadline_ms: 2_000,
+  # Added to the turn's verification deadline only when the adjudicator asks for
+  # a regeneration (3 s + 1.5 s = 4.5 s at most on that path).
+  patient_adjudicator_regeneration_extension_ms: 1_500,
+  # Patient reply verification mode (issue #307): `:audit` delivers after the
+  # deterministic BoundedReply check and verifies with Jev afterwards;
+  # `:blocking` keeps the pre-delivery Jev gate; `:off` skips Jev. Resolved from
+  # PATIENT_VERIFICATION in runtime.exs outside :test.
+  patient_verification: :audit,
+  # Jev deadline of the after-delivery audit (off the critical path).
+  patient_audit_deadline_ms: 10_000,
+  learner_message_max_characters: 2_000,
+  active_station_id: "chest-pain-initial-assessment",
+  # Resolved from VOICE_MODE in runtime.exs outside :test (#270).
+  voice_mode: "turn"
 
 # Configure the endpoint
 config :backend, BackendWeb.Endpoint,
@@ -42,6 +60,9 @@ config :logger, :default_formatter,
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
+
+# Never leak a LiveKit token (or other secrets) into request logs.
+config :phoenix, :filter_parameters, ["password", "secret", "token", "text"]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

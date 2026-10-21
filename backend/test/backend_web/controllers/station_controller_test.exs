@@ -65,6 +65,31 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  # Starts its reply with the addressee marker of :controller_test_addressee
+  # (#309): the generation decides the addressee.
+  defmodule MarkedAddresseeAdapter do
+    @behaviour Backend.Stations.StationAI
+
+    @impl true
+    def next_reply(_package, _context) do
+      case Application.fetch_env!(:backend, :controller_test_addressee) do
+        :examiner -> {:ok, %{text: "[EXAMINADOR]"}}
+        :patient -> {:ok, %{text: "[PACIENTE] Estou com um aperto forte no peito há duas horas."}}
+      end
+    end
+  end
+
+  # Verifies every patient reply of the addressee tests.
+  defmodule AddresseeJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :verified}}
+
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
+
   setup do
     prev_jev_adapter = Application.get_env(:backend, :jev_decision_adapter)
     Application.put_env(:backend, :jev_decision_adapter, TestVerifyingJevAdapter)
@@ -86,12 +111,49 @@ defmodule BackendWeb.StationControllerTest do
     test "returns active station metadata", %{conn: conn} do
       conn = get(conn, ~p"/api/stations/active")
 
+      package = Stations.get_active_package()
+
       assert json_response(conn, 200) == %{
                "station_id" => "chest-pain-initial-assessment",
                "version" => "2.0.0",
                "language" => "pt-BR",
-               "display_title" => "Avaliação inicial de dor torácica"
+               "display_title" => "Avaliação inicial de dor torácica",
+               "candidate_brief" => package["candidate_brief"],
+               "voice_mode" => "turn"
              }
+    end
+
+    test "serves the configured voice mode (#270)", %{conn: conn} do
+      previous = Application.get_env(:backend, :voice_mode)
+      on_exit(fn -> Application.put_env(:backend, :voice_mode, previous) end)
+
+      for mode <- ["realtime", "turn", "off"] do
+        Application.put_env(:backend, :voice_mode, mode)
+        body = conn |> recycle() |> get(~p"/api/stations/active") |> json_response(200)
+        assert body["voice_mode"] == mode
+      end
+    end
+
+    test "returns the brief and nothing examiner-only (#239)", %{conn: conn} do
+      conn = get(conn, ~p"/api/stations/active")
+
+      body = json_response(conn, 200)
+      assert %{"scenario" => scenario, "tasks" => [_ | _]} = body["candidate_brief"]
+      assert is_binary(scenario) and scenario != ""
+
+      raw = Jason.encode!(body)
+      package = Stations.get_active_package()
+
+      hidden =
+        ["rubric", "expected_actions", "impressos", "patient_profile", "revealable_facts"] ++
+          Enum.map(package["rubric"], & &1["id"]) ++
+          Enum.map(package["expected_actions"], & &1["id"]) ++
+          Enum.flat_map(package["impressos"] || [], &[&1["id"], &1["title"]]) ++
+          [package["patient_profile"]["presenting_context"]]
+
+      for secret <- hidden do
+        refute String.contains?(raw, secret), "active station exposes: #{secret}"
+      end
     end
 
     test "returns the boot-loaded active version", %{conn: conn} do
@@ -767,6 +829,77 @@ defmodule BackendWeb.StationControllerTest do
       assert msg1.role == :learner
       assert msg2.role == :patient
       assert msg2.text == "Resposta do paciente gerada durante conclusão"
+    end
+  end
+
+  describe "POST /api/stations/active/sessions/:id/messages addressee (#274, #309)" do
+    setup do
+      prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+      Application.put_env(:backend, :station_ai_adapter, MarkedAddresseeAdapter)
+      Application.put_env(:backend, :jev_decision_adapter, AddresseeJevAdapter)
+
+      on_exit(fn ->
+        Application.put_env(:backend, :station_ai_adapter, prev_adapter)
+        Application.delete_env(:backend, :controller_test_addressee)
+      end)
+
+      pkg = StationLoader.active_package()
+
+      session =
+        Conversation.start(%{
+          station_id: pkg["station_id"],
+          station_version: pkg["version"],
+          audio_consent: false
+        })
+
+      {:ok, session: session}
+    end
+
+    test "an examiner-addressed turn answers 200 examiner_acknowledged with the kept turn",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :examiner)
+
+      body = conn |> post_learner_text(session, "Blumberg positivo.") |> json_response(200)
+
+      assert %{
+               "outcome" => "examiner_acknowledged",
+               "reply_text" => nil,
+               "learner_turn" => %{"role" => "learner", "text" => "Blumberg positivo."},
+               "server_now" => _
+             } = body
+
+      assert {:ok, %{messages: [%{role: :learner}]}} = Conversation.fetch(session.session_id)
+      assert body["newly_released"] == []
+    end
+
+    test "an examiner-addressed exam request answers with the newly released impressos (#302)",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :examiner)
+
+      body =
+        conn |> post_learner_text(session, "Solicito hemograma e PCR") |> json_response(200)
+
+      assert %{
+               "outcome" => "examiner_acknowledged",
+               "newly_released" => [
+                 %{
+                   "id" => "laboratorio-sangue-enzimas",
+                   "title" => "IMPRESSO" <> _,
+                   "category" => _,
+                   "content" => _
+                 }
+               ]
+             } = body
+    end
+
+    test "a patient-addressed turn answers 200 patient_reply with the reply",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :patient)
+
+      assert %{
+               "outcome" => "patient_reply",
+               "reply_text" => "Estou com um aperto forte no peito há duas horas."
+             } = conn |> post_learner_text(session, "Bom dia.") |> json_response(200)
     end
   end
 
