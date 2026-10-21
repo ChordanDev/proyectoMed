@@ -839,7 +839,11 @@ defmodule BackendWeb.StationControllerTest do
       Application.put_env(:backend, :jev_decision_adapter, AddresseeJevAdapter)
 
       on_exit(fn ->
-        Application.put_env(:backend, :station_ai_adapter, prev_adapter)
+        # An unset adapter is restored as unset, not as an explicit nil.
+        if prev_adapter,
+          do: Application.put_env(:backend, :station_ai_adapter, prev_adapter),
+          else: Application.delete_env(:backend, :station_ai_adapter)
+
         Application.delete_env(:backend, :controller_test_addressee)
       end)
 
