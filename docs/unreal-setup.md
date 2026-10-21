@@ -36,6 +36,13 @@ builds the `.app` from it. Regenerate IDE files from the `.uproject` (right-clic
 - **One editor instance.** On macOS, double-clicking a `.uproject` while an
   editor is already running (for example, the Project Browser) only brings that
   instance to the front. Quit it first.
+- **LiveKit C++ SDK.** The project links the official LiveKit C++ SDK
+  (Apache-2.0) as prebuilt libraries that are not committed. Run
+  `scripts/fetch-livekit-sdk.sh` once before the first build, and again when
+  the pinned version changes. It downloads the macOS and Windows packages,
+  checks their SHA-256 and unpacks them into the git-ignored
+  `unreal/Source/ThirdParty/LiveKitSDK/{Mac,Win64}`. Without them the build
+  stops with a message naming the script. Why this SDK: `docs/spike-189-metahuman-lipsync.md`.
 - **Command-line build.** To see compiler errors instead of a silent dialog:
   `"/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" ProyectoMedEditor Mac Development -Project="$PWD/unreal/ProyectoMed.uproject" -WaitMutex`.
 - **Editor log on macOS:** `~/Library/Logs/Unreal Engine/ProyectoMedEditor/ProyectoMed.log`.
