@@ -1,0 +1,38 @@
+# #190 Start a station run from the Unreal client and meet the patient
+
+Parent: #186, ADR-013 (#209). Branch `feat/190-unreal-station-run` from `origin/develop` (7d16ff4). Delivery: `ask-on-risk` with chain strategy `stacked-to-main` (each PR targets `develop` in order; slice 1 = T1+T2, the module and its documented interface; the last PR carries `Closes #190`). Checks: `Build.sh ProyectoMedEditor Mac Development`; Unreal automation tests (`Automation RunTests ProyectoMed.StationClient`) against a local Phoenix; `cd backend && mix test` if the backend changes; idle presence judged by the human (ChordanDev) by eye.
+
+## Specs
+
+Acceptance criteria quoted verbatim from #190:
+
+- S1 "The Pre-Station Notice is shown before the station and must be acknowledged to continue."
+- S2 "Starting the station creates an ephemeral session through the existing Phoenix HTTP API and loads the station content Phoenix serves for the scene."
+- S3 "The MetaHuman patient is visible in the consultation scene with an idle, alive presence."
+- S4 "A visible ten-minute countdown starts with the run."
+- S5 "The client receives a short-lived credential scoped to one LiveKit room."
+- S6 "The Unreal client holds no clinical rules and no Station Package content beyond what Phoenix serves."
+- S7 "Automated tests exercise the station client module against a locally running Phoenix."
+- S8 "Any behaviour missing from the Phoenix HTTP API is added and tested at that seam first."
+- S9 "The public interface of the single station client module that owns Phoenix and LiveKit communication is defined and documented, so the parallel slices (#191, #192, #194, #195, #196) consume it without changing it; later changes to it are agreed by both Unreal tracks before they land."
+
+Constraints:
+
+- S10 The human chose to commit the scene's MetaHuman (~330 MB) to Git LFS in this PR: "Sí, a LFS (Recommended)". Check the LFS usage first and `git lfs lock` every `.uasset`/`.umap` before editing it.
+- S11 In-client UI is native UMG; the MVP targets macOS and Windows desktop only. Scene and interface code depend on the station client module and never call the network directly.
+
+## Tasks
+
+- [x] T1 `StationClient` module: HTTP/JSON transport, active station, start, refresh and discard session, server-anchored countdown; automation tests against local Phoenix — S2, S4, S6, S7, S8 — inline — commit: see L5
+- [ ] T2 Rest of the public interface (voice credential, finish, discard, result, messages, impressos) with tests, and the interface doc under `docs/` — S5, S7, S9 — inline
+- [ ] T3 UMG: Pre-Station Notice (pt-BR, audio consent), station brief from Phoenix, Station Timer; game flow wired to the module — S1, S2, S4, S11 — inline
+- [ ] T4 Consultation scene with the MetaHuman in LFS and an idle, alive presence — S3, S10 — human + inline
+- [ ] T5 Setup and runbook docs; human end-to-end check in the editor — S1–S5 — human + inline
+
+## Log
+
+- L1 (2026-10-21) User request: "Hacé la 190". Issue #190 body as quoted in Specs; labels `ready-for-agent`, `jorge:required`.
+- L2 (2026-10-21) Phoenix map (explorer, sonnet): the public `/api/stations/*` routes have no auth, CSRF or CORS, and the session id acts as the bearer, so Unreal calls Phoenix directly with JSON on port 4000. `GET /api/stations/active` serves `display_title`, `candidate_brief{scenario,tasks}` and `voice_mode`. `POST /api/stations/active/sessions {audio_consent}` returns `started_at`, `deadline_at` (server-owned 10 min), `expires_at` (30 min) and `server_now`. `POST .../sessions/:id/voice` returns 201 `{url, token, room, identity, expires_at}`, with a 120 s join token scoped to `station-session-<id>`; it needs `audio_consent:true` and LiveKit env vars on Phoenix. The Pre-Station Notice text is not served by Phoenix: the SPA hardcodes it in `web/src/features/station/i18n/pt-BR.json`. It is UI copy, not Station Package content, so the Unreal client ships its own pt-BR copy (S6 holds). No HTTP API gap is known yet for S8.
+- L3 (2026-10-21) LFS decision: the human answered "Sí, a LFS (Recommended)" to committing the MetaHuman in #190's PR (S10).
+- L4 (2026-10-21) Delivery: the human chose "Encadenado a develop (Recommended)", that is `stacked-to-main` with `develop` as the base. Slice 1 (T1+T2) lands the module and its documented interface first, so #192/#194/#195 can start.
+- L5 (2026-10-21) T1 evidence. RED: with a stub implementation, `scripts/run-unreal-tests.sh ProyectoMed.StationClient.Unit` failed the parse, clock and no-session tests (`EXIT CODE: -1`). GREEN: with the real implementation and a local Phoenix (`VOICE_MODE=realtime LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret mix phx.server`), `scripts/run-unreal-tests.sh ProyectoMed.StationClient` passed 20 of 20 (`EXIT CODE: 0`): 12 unit and 8 Phoenix tests. The Phoenix tests confirm `deadline_at - started_at` is ten minutes, served by Phoenix (S4), and that a discarded session answers 404. S8: no HTTP API gap found for T1.
