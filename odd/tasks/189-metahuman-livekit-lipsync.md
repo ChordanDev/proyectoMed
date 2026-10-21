@@ -23,11 +23,11 @@ Constraints from the session brief:
 ## Tasks
 
 - [x] T0 Research: LiveKit client options, live-audio lip sync, voice branch map — delegated explorers (mapping trigger) — no commit
-- [ ] T1 LiveKit C++ SDK (official `client-sdk-cpp`, pinned) as a ThirdParty module; Unreal client joins a local room and receives `patient-voice` PCM — S1, S3 — inline
-- [ ] T2 Playback through `USoundWaveProcedural` and lip sync through Epic `StreamingADA` `SpeechAnimationSolverV4`, with envelope jaw-open fallback — S1, S2 — inline
-- [ ] T3 Minimal scene with a MetaHuman (human imports it) — S1, S4, S8 — human + inline
-- [ ] T4 End-to-end against the real voice worker; latency measurement; human verdict — S1, S2, S3, S5 — human + inline
-- [ ] T5 Findings doc under `docs/` and proposed amendment to #186 / ADR-013 — S3, S4, S6, S7 — inline
+- [x] T1 LiveKit C++ SDK (official `client-sdk-cpp`, pinned) as a ThirdParty module; Unreal client joins a local room and receives `patient-voice` PCM — S1, S3 — inline
+- [x] T2 Playback through `USoundWaveProcedural` and lip sync through Epic `StreamingADA` `SpeechAnimationSolverV4`, with envelope jaw-open fallback — S1, S2 — inline
+- [x] T3 Minimal scene with a MetaHuman (human imports it) — S1, S4, S8 — human + inline
+- [x] T4 End-to-end against the real voice worker; latency measurement; human verdict — S1, S2, S3, S5 — human + inline
+- [x] T5 Findings doc under `docs/` and proposed amendment to #186 / ADR-013 — S3, S4, S6, S7 — inline
 
 ## Log
 
@@ -71,3 +71,7 @@ Constraints from the session brief:
   - The room token expired after its 4 h validity; it was refreshed with `lk token create --valid-for 12h`.
 - L12 (2026-10-21) Human verdict (S5) on the Full Rig in PIE: "no se la verdad, tendría que verlos juntos, pero sigamos con este, ya fue". The approach is accepted to continue. No side-by-side comparison of the Joints Only and Full rigs was made.
 - L13 (2026-10-21) Paused stage 2 (T4). Human: "mi hermano tiene todo eso pero en otra rama, lo tiene que pasar a develop y ahi lo traemos acá y lo hacemos". The voice worker, Phoenix and the OpenAI/Deepgram/ElevenLabs keys arrive through develop. Resume: merge develop into this branch, run Phoenix and the worker locally, have the learner speak through the web harness, join Unreal as `unreal-observer` in `station-session-<sid>` with `TrackName=patient-voice`, then measure latency and record the verdict. T5 (findings doc and amendment) follows.
+- L14 (2026-10-21) develop merged (d7e98a3), which brought in the voice worker. The secrets live in a git-ignored root `.env` that only the human's shell can read. Stage 2 ran with Phoenix, the worker and Vite started by the human, LiveKit by the agent, and Unreal as `unreal-observer` in `station-session-<id>` with `TrackName=patient-voice`.
+  - Human: "Se escucha bien y acompaña la voz" (S1, S2).
+  - Measured over 271 s: solver median 3.8 ms (p95 5.2 ms). The playback backlog settled near 70 ms. Estimated offset from −42 to +39 ms.
+- L15 (2026-10-21) T5: findings in `docs/spike-189-metahuman-lipsync.md`, with draft amendments to ADR-013, #186 and the asset-storage rule. Nothing posted to GitHub. The MetaHuman footprint is 331 MB. That conflicts with the #314 rule that the scene's MetaHuman goes in LFS; the human chose to keep it local for the spike.
