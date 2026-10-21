@@ -92,7 +92,9 @@ assets, takes about 353 MB of LFS (#190).
 
 ## Running the station client
 
-The default map is `/Game/Station/Consultation`, played by `AStationGameMode`.
+The default map is `/Game/Station/Consultation`. `AStationGameMode` is the
+project's global default game mode, so every level without its own override
+shows the station screens.
 It needs a local Phoenix; the station client module (`StationClient`) is the
 only code that talks to it, and its interface is documented in
 `docs/unreal-station-client.md`.
