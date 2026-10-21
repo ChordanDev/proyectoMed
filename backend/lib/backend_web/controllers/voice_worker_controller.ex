@@ -18,6 +18,13 @@ defmodule BackendWeb.VoiceWorkerController do
       (`status: "committed"` with the spoken `reply_text`) or an `error` with
       the same code the status response would carry. A turn that speaks
       nothing answers exactly as without the header.
+      With `"deltas": true` in the body as well (#313, token TTS streaming,
+      `Backend.Stations.stream_voice_turn/6`), the stream may also carry
+      `{"type":"delta","turn_id","generation_id","text"}` lines, speakable text
+      as it is generated (the deltas add up to the spoken reply), and one
+      `{"type":"abort","turn_id","generation_id"}` line that withdraws the
+      deltas not covered by a sentence line; anything but the JSON `true`
+      asks for none.
       Duplicate finals stay 200 and never replay text. Once the station time is
       over it answers `409` with `station_time_elapsed`: a new turn at or after
       the deadline, any turn on a session the timer completed, or a reply that
@@ -50,7 +57,9 @@ defmodule BackendWeb.VoiceWorkerController do
       {:ok, turn_id, text} ->
         if sentence_stream?(conn) do
           {result, conn} =
-            Stations.stream_voice_turn(session_id, turn_id, text, conn, &send_sentence/2)
+            Stations.stream_voice_turn(session_id, turn_id, text, conn, &send_event/2,
+              deltas: params["deltas"] == true
+            )
 
           finish_transcript(conn, turn_id, result)
         else
@@ -68,14 +77,14 @@ defmodule BackendWeb.VoiceWorkerController do
     |> Enum.any?(&String.contains?(&1, @ndjson))
   end
 
-  # The first verified sentence opens the chunked NDJSON body (#271).
-  defp send_sentence({:sentence, sentence}, conn) do
+  # The first streamed event opens the chunked NDJSON body (#271, #313).
+  defp send_event({type, event}, conn) when type in [:sentence, :delta, :abort] do
     conn =
       if conn.state == :chunked,
         do: conn,
         else: conn |> put_resp_content_type(@ndjson) |> send_chunked(200)
 
-    line = Map.put(sentence, :type, "sentence")
+    line = Map.put(event, :type, Atom.to_string(type))
 
     case chunk(conn, [Jason.encode_to_iodata!(line), "\n"]) do
       {:ok, conn} -> {:cont, conn}

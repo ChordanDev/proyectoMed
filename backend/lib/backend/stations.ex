@@ -25,7 +25,9 @@ defmodule Backend.Stations do
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.Addressee
+  alias Backend.Stations.StationAI.BoundedReply
   alias Backend.Stations.StationAI.SentenceStream
+  alias Backend.Stations.StationAI.SpeechDeltas
   alias Backend.Stations.StationLoader
   alias Backend.Stations.SttKeyterms
   alias Backend.Stations.Transcription
@@ -1027,7 +1029,11 @@ defmodule Backend.Stations do
 
   def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
 
-  @typedoc "One verified sentence handed to the voice worker (#271)."
+  @typedoc """
+  One event handed to the voice worker: a verified sentence (#271), or in
+  token TTS streaming (#313) a speakable text delta and the abort that
+  withdraws the deltas not covered by a delivered sentence.
+  """
   @type voice_sentence ::
           {:sentence,
            %{
@@ -1036,6 +1042,8 @@ defmodule Backend.Stations do
              index: non_neg_integer(),
              text: String.t()
            }}
+          | {:delta, %{turn_id: pos_integer(), generation_id: pos_integer(), text: String.t()}}
+          | {:abort, %{turn_id: pos_integer(), generation_id: pos_integer()}}
 
   @doc """
   Processes a real-time learner voice turn like `process_voice_turn/3`, but
@@ -1078,6 +1086,19 @@ defmodule Backend.Stations do
   examiner-addressed turn hands nothing over, stores nothing of the generation
   and is kept as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
 
+  Token TTS streaming (#313): with `deltas: true` in `opts` (the worker asks
+  for it), `VOICE_TTS_STREAMING=token` (`Backend.Stations.StationAI.SpeechDeltas`)
+  and a verification mode other than `blocking` (deltas are spoken before any
+  Jev verdict), `sink` also gets `{:delta, %{turn_id, generation_id, text}}`
+  as the reply is generated, after the addressee marker: word-aligned
+  speakable text without stage directions, whose deltas add up to the spoken
+  reply. Before each delta, `BoundedReply` checks the accumulated text; a
+  violation sends `{:abort, %{turn_id, generation_id}}` and the reply so far
+  takes the sentence verification, so the single regeneration (first
+  sentence) or the refusal applies as in sentence mode. Any reply that stops
+  short of complete after a delta sends the abort too. Sentences are still
+  handed over, for the transcript; the worker speaks the deltas instead.
+
   Returns `{result, acc}`, where `result` has the shape of
   `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
   joined by a space. Each sentence logs its generation and verification
@@ -1091,22 +1112,26 @@ defmodule Backend.Stations do
           pos_integer(),
           String.t(),
           acc,
-          (voice_sentence(), acc -> {:cont, acc} | {:halt, acc})
+          (voice_sentence(), acc -> {:cont, acc} | {:halt, acc}),
+          keyword()
         ) :: {term(), acc}
         when acc: term()
-  def stream_voice_turn(session_id, turn_id, text, acc, sink)
+  def stream_voice_turn(session_id, turn_id, text, acc, sink, opts \\ [])
+
+  def stream_voice_turn(session_id, turn_id, text, acc, sink, opts)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) and
-             is_function(sink, 2) do
+             is_function(sink, 2) and is_list(opts) do
     case admit_voice_turn(session_id, turn_id, text) do
       {:ok, generation_id, learner_text} ->
-        stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
+        deltas? = Keyword.get(opts, :deltas, false) == true
+        stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, {sink, deltas?})
 
       other ->
         {other, acc}
     end
   end
 
-  def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink),
+  def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink, _opts),
     do: {{:error, :invalid_transcript}, acc}
 
   @doc """
@@ -1410,11 +1435,12 @@ defmodule Backend.Stations do
          {turn_id, generation_id, learner_text},
          started_at,
          acc,
-         sink
+         {sink, deltas?}
        ) do
     package = get_active_package()
     context = format_context(session, package)
     mode = PatientVerification.mode()
+    token? = deltas? and mode != :blocking and SpeechDeltas.mode() == :token
     parent = self()
     marker = make_ref()
 
@@ -1441,7 +1467,18 @@ defmodule Backend.Stations do
             timed_sink(sink)
           )
         end,
-        acc: %{acc: acc, first_text_at: nil, marker_at: nil}
+        delta:
+          if(token?,
+            do:
+              &voice_delta(
+                &1,
+                &2,
+                {session_id, turn_id, generation_id},
+                package,
+                timed_sink(sink)
+              )
+          ),
+        acc: %{acc: acc, first_text_at: nil, marker_at: nil, spoken: "", mode: delta_mode(token?)}
       )
 
     timed_acc = flush_marker(marker, timed_acc)
@@ -1464,6 +1501,52 @@ defmodule Backend.Stations do
 
     log_voice_turn_timing(started_at, timed_acc, result)
     {result, timed_acc.acc}
+  end
+
+  defp delta_mode(true), do: "token"
+  defp delta_mode(false), do: "sentence"
+
+  # Token TTS streaming (#313): the speakable text not handed over yet, once
+  # BoundedReply passes on the accumulated text. A cancelled or superseded turn
+  # hands nothing more over.
+  defp voice_delta(:abort, timed_acc, {_session_id, turn_id, generation_id}, _package, sink) do
+    if timed_acc.spoken == "",
+      do: {:cont, timed_acc},
+      else: sink.({:abort, %{turn_id: turn_id, generation_id: generation_id}}, timed_acc)
+  end
+
+  defp voice_delta({kind, raw}, timed_acc, ids, package, sink) do
+    settled = SpeechDeltas.settled(raw, kind == :final)
+
+    cond do
+      String.trim(settled) == "" ->
+        {:cont, timed_acc}
+
+      BoundedReply.check_violations(String.trim(settled), package) != :ok ->
+        Logger.info("[Stations] voice_delta bounded_reply=denied")
+        {:violation, timed_acc}
+
+      true ->
+        send_voice_delta(SpeechDeltas.take(timed_acc.spoken, settled), timed_acc, ids, sink)
+    end
+  end
+
+  defp send_voice_delta(:none, timed_acc, _ids, _sink), do: {:cont, timed_acc}
+
+  defp send_voice_delta(
+         {:delta, text, spoken},
+         timed_acc,
+         {session_id, turn_id, generation_id},
+         sink
+       ) do
+    case Conversation.active_generation(session_id) do
+      {:ok, ^generation_id} ->
+        event = %{turn_id: turn_id, generation_id: generation_id, text: text}
+        sink.({:delta, event}, %{timed_acc | spoken: spoken})
+
+      _other ->
+        {:halt, timed_acc}
+    end
   end
 
   # The first text handed to the worker is a timing mark (#313); `sink` sees
@@ -1491,7 +1574,7 @@ defmodule Backend.Stations do
     end
 
     Logger.info(
-      "[Stations] voice_turn_timing mode=sentence" <>
+      "[Stations] voice_turn_timing mode=#{timed_acc.mode}" <>
         " first_token_ms=#{since.(timed_acc[:first_token_at])}" <>
         " marker_ms=#{since.(timed_acc.marker_at)}" <>
         " first_text_ms=#{since.(timed_acc.first_text_at)}" <>

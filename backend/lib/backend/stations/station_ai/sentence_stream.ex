@@ -30,6 +30,19 @@ defmodule Backend.Stations.StationAI.SentenceStream do
       stream stops before any sentence was. `{:closed, reason}` stops the reply
       with outcome `{:closed, reason}` and stops the generation: nothing of it is
       verified, delivered or logged. Without a gate the stream is open.
+    * `:delta` - optional `fn event, acc -> {:cont, acc} | {:halt, acc} |
+      {:violation, acc} end` (issue #313, token TTS streaming), called in the
+      caller's process. `event` is `{:text, raw}` on every generated piece,
+      before its sentence is split or verified, `{:final, raw}` when the
+      generation ended, where `raw` is the whole reply so far; and `:abort`
+      once, after any other event, when the reply stops short of `:complete` or a verification does
+      not pass as it is (refused, regenerated or failed): what the callback
+      handed on beyond the delivered sentences must be withdrawn. The gate is
+      passed before the first event. `{:violation, acc}` aborts the deltas and
+      makes the reply so far (an unfinished sentence included) the next
+      sentence to verify, so the verifier's refusal or single regeneration
+      applies at once; `{:halt, acc}` stops the reply as `:halted`. After an
+      abort no more events are sent.
 
   ## Outcome
 
@@ -89,6 +102,8 @@ defmodule Backend.Stations.StationAI.SentenceStream do
       deliver: Keyword.fetch!(opts, :deliver),
       acc: Keyword.get(opts, :acc),
       gate: Keyword.get(opts, :gate),
+      delta: Keyword.get(opts, :delta),
+      delta_sent: false,
       idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms),
       buffer: "",
       prefix: "",
@@ -99,6 +114,7 @@ defmodule Backend.Stations.StationAI.SentenceStream do
     }
 
     {outcome, state} = state |> loop() |> close_gate()
+    state = if outcome == :complete, do: state, else: abort_deltas(state)
     stop_generation(state)
 
     %{
@@ -112,11 +128,20 @@ defmodule Backend.Stations.StationAI.SentenceStream do
   defp loop(%{task: %{ref: task_ref}, ref: ref} = state) do
     receive do
       {^ref, :text, text} ->
-        {sentences, rest} = Sentences.split(state.buffer <> text)
+        case stream_delta(text, state) do
+          {:split, state} ->
+            {sentences, rest} = Sentences.split(state.buffer <> text)
 
-        case handle_sentences(sentences, %{state | buffer: rest}) do
-          {:cont, state} -> loop(state)
-          {:stop, outcome, state} -> {outcome, state}
+            case handle_sentences(sentences, %{state | buffer: rest}) do
+              {:cont, state} -> loop(state)
+              {:stop, outcome, state} -> {outcome, state}
+            end
+
+          {:cont, state} ->
+            loop(state)
+
+          {:stop, outcome, state} ->
+            {outcome, state}
         end
 
       {^task_ref, result} ->
@@ -134,16 +159,72 @@ defmodule Backend.Stations.StationAI.SentenceStream do
   # The generation ended: its unfinished tail is the last sentence. A failed
   # generation discards the tail, which was never verified.
   defp finish({:ok, _reply}, state) do
-    tail = if String.trim(state.buffer) == "", do: [], else: [state.buffer]
-
-    case handle_sentences(tail, %{state | buffer: ""}) do
-      {:cont, state} -> {:complete, state}
+    with {:cont, state} <- final_delta(state),
+         tail = if(String.trim(state.buffer) == "", do: [], else: [state.buffer]),
+         {:cont, state} <- handle_sentences(tail, %{state | buffer: ""}) do
+      {:complete, state}
+    else
       {:stop, outcome, state} -> {outcome, state}
     end
   end
 
   defp finish({:error, reason}, state), do: {{:error, reason}, state}
   defp finish(other, state), do: {{:error, {:invalid_generator_output, other}}, state}
+
+  # Token TTS streaming (#313): the raw reply so far goes to the delta
+  # callback before the piece is split. `{:split, state}` lets the piece be
+  # split as usual; after a violation the reply so far was verified here.
+  defp stream_delta(_text, %{delta: nil} = state), do: {:split, state}
+
+  defp stream_delta(text, state) do
+    case pass_gate(state) do
+      {:closed, reason, state} ->
+        {:stop, {:closed, reason}, state}
+
+      {:open, state} ->
+        state = %{state | delta_sent: true}
+
+        case state.delta.({:text, state.prefix <> state.buffer <> text}, state.acc) do
+          {:cont, acc} ->
+            {:split, %{state | acc: acc}}
+
+          {:halt, acc} ->
+            {:stop, :halted, %{state | acc: acc}}
+
+          {:violation, acc} ->
+            sentence = state.buffer <> text
+            state = abort_deltas(%{state | acc: acc, buffer: ""})
+            verify_sentence(sentence, state)
+        end
+    end
+  end
+
+  defp final_delta(%{delta: nil} = state), do: {:cont, state}
+
+  defp final_delta(state) do
+    case pass_gate(state) do
+      {:closed, reason, state} ->
+        {:stop, {:closed, reason}, state}
+
+      {:open, state} ->
+        state = %{state | delta_sent: true}
+
+        case state.delta.({:final, state.prefix <> state.buffer}, state.acc) do
+          {:cont, acc} -> {:cont, %{state | acc: acc}}
+          {:halt, acc} -> {:stop, :halted, %{state | acc: acc}}
+          # The tail is verified next, as the sentence after the abort.
+          {:violation, acc} -> {:cont, abort_deltas(%{state | acc: acc})}
+        end
+    end
+  end
+
+  defp abort_deltas(%{delta: nil} = state), do: state
+  defp abort_deltas(%{delta_sent: false} = state), do: %{state | delta: nil}
+
+  defp abort_deltas(state) do
+    {_action, acc} = state.delta.(:abort, state.acc)
+    %{state | delta: nil, acc: acc}
+  end
 
   defp handle_sentences([], state), do: {:cont, state}
 
@@ -192,10 +273,10 @@ defmodule Backend.Stations.StationAI.SentenceStream do
     case result do
       :verified -> deliver(sentence, state, [])
       {:verified, fact_ids} -> deliver(sentence, state, fact_ids)
-      {:regenerated, text} -> deliver_regenerated(text, state, [])
-      {:regenerated, text, fact_ids} -> deliver_regenerated(text, state, fact_ids)
-      {:refused, reason} -> {:stop, {:refused, reason}, state}
-      {:error, reason} -> {:stop, {:error, reason}, state}
+      {:regenerated, text} -> deliver_regenerated(text, abort_deltas(state), [])
+      {:regenerated, text, fact_ids} -> deliver_regenerated(text, abort_deltas(state), fact_ids)
+      {:refused, reason} -> {:stop, {:refused, reason}, abort_deltas(state)}
+      {:error, reason} -> {:stop, {:error, reason}, abort_deltas(state)}
     end
   end
 

@@ -987,4 +987,91 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       end
     end
   end
+
+  describe "POST transcripts with token TTS streaming (#313)" do
+    defmodule TokenStreamAdapter do
+      @behaviour Backend.Stations.StationAI
+      @impl true
+      def next_reply(_package, _context), do: {:error, :no_regeneration}
+
+      @impl true
+      def stream_reply(_package, _context, on_text) do
+        pieces = Application.fetch_env!(:backend, :token_stream_script)
+        Enum.each(pieces, on_text)
+        {:ok, %{text: Enum.join(pieces)}}
+      end
+    end
+
+    setup do
+      keys = [:voice_tts_streaming, :patient_verification, :token_stream_script]
+      previous = Map.new(keys, &{&1, Application.get_env(:backend, &1)})
+      on_exit(fn -> Enum.each(previous, fn {key, value} -> restore_env(key, value) end) end)
+
+      Application.put_env(:backend, :station_ai_adapter, TokenStreamAdapter)
+      Application.put_env(:backend, :voice_tts_streaming, :token)
+      Application.put_env(:backend, :patient_verification, :off)
+
+      Application.put_env(:backend, :token_stream_script, [
+        "[PACIENTE] ",
+        "Começou ",
+        "ontem. ",
+        "Ainda dói."
+      ])
+
+      :ok
+    end
+
+    defp token_lines(conn, body) do
+      conn
+      |> put_req_header("accept", "application/x-ndjson, application/json")
+      |> post(transcripts_path(Map.fetch!(body, :id)), Map.delete(body, :id))
+      |> response(200)
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+    end
+
+    test "a worker asking for deltas gets them before the sentence lines", %{conn: conn} do
+      id = Stations.create_session(%{audio_consent: true}).session_id
+      lines = token_lines(conn, %{id: id, turn_id: 1, text: "Quando?", deltas: true})
+
+      assert [
+               %{"type" => "delta", "turn_id" => 1, "generation_id" => 1, "text" => "Começou"},
+               %{"type" => "delta", "text" => " ontem."},
+               %{"type" => "sentence", "index" => 0, "text" => "Começou ontem."},
+               %{"type" => "delta", "text" => " Ainda"},
+               %{"type" => "delta", "text" => " dói."},
+               %{"type" => "sentence", "index" => 1, "text" => "Ainda dói."},
+               %{"type" => "result", "status" => "committed"}
+             ] = lines
+    end
+
+    test "a BoundedReply violation streams an abort line", %{conn: conn} do
+      Application.put_env(:backend, :token_stream_script, [
+        "[PACIENTE] ",
+        "Começou ontem. ",
+        "Sou um modelo ",
+        "de linguagem."
+      ])
+
+      id = Stations.create_session(%{audio_consent: true}).session_id
+      lines = token_lines(conn, %{id: id, turn_id: 1, text: "Quando?", deltas: true})
+
+      assert %{"type" => "abort", "turn_id" => 1, "generation_id" => 1} =
+               Enum.find(lines, &(&1["type"] == "abort"))
+
+      refute Enum.any?(lines, &(&1["type"] == "delta" and &1["text"] =~ "modelo"))
+      assert %{"type" => "result", "reply_text" => "Começou ontem."} = List.last(lines)
+    end
+
+    test "without the deltas flag the stream has sentences only", %{conn: conn} do
+      id = Stations.create_session(%{audio_consent: true}).session_id
+
+      for flag <- [nil, false, "true"] do
+        body = %{id: id, turn_id: 1, text: "Quando?"}
+        body = if flag == nil, do: body, else: Map.put(body, :deltas, flag)
+        lines = token_lines(conn, body)
+        refute Enum.any?(lines, &(&1["type"] in ["delta", "abort"]))
+      end
+    end
+  end
 end

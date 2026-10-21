@@ -35,6 +35,11 @@ config :backend,
   # `:blocking` keeps the pre-delivery Jev gate; `:off` skips Jev. Resolved from
   # PATIENT_VERIFICATION in runtime.exs outside :test.
   patient_verification: :audit,
+  # Voice TTS streaming (issue #313): `:sentence` speaks one verified sentence
+  # at a time (#271); `:token` hands the patient text to the voice worker word
+  # by word as it is generated. Resolved from VOICE_TTS_STREAMING in runtime.exs
+  # outside :test.
+  voice_tts_streaming: :sentence,
   # Jev deadline of the after-delivery audit (off the critical path).
   patient_audit_deadline_ms: 10_000,
   learner_message_max_characters: 2_000,

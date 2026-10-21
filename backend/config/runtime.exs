@@ -170,6 +170,30 @@ if config_env() != :test do
   end
 end
 
+# Voice TTS streaming (issue #313): `VOICE_TTS_STREAMING=sentence` (the default)
+# hands the voice worker one verified sentence at a time (#271); `token` also
+# hands it the patient text word by word as it is generated, after the
+# addressee marker and a BoundedReply check of the accumulated text, so
+# ElevenLabs starts speaking before the first sentence is complete. Token mode
+# needs a voice worker that asks for deltas and a `PATIENT_VERIFICATION` other
+# than `blocking`; otherwise the sentence mode applies. Case and surrounding
+# whitespace are ignored. Any other value fails the boot, naming it. `:test`
+# reads none of it.
+if config_env() != :test do
+  case System.get_env("VOICE_TTS_STREAMING", "") |> String.trim() |> String.downcase() do
+    "" ->
+      :ok
+
+    mode when mode in ["sentence", "token"] ->
+      config :backend, :voice_tts_streaming, String.to_existing_atom(mode)
+
+    _invalid ->
+      raise ArgumentError,
+            "VOICE_TTS_STREAMING must be sentence or token, got: " <>
+              inspect(System.get_env("VOICE_TTS_STREAMING"))
+  end
+end
+
 # Text provider (issue #252): `LLM_PROVIDER=anthropic` serves the three text
 # seams (simulated patient, rubric resolver, learner feedback) from Claude's
 # Messages API. Unset, or any other value, keeps OpenAI exactly as before. Jev
