@@ -56,6 +56,8 @@ class SpeechPlayer:
         self._closed = False
         # Highest turn whose first audio frame was logged (#271).
         self._first_audio_turn = 0
+        # (turn_id, time) of the first text pushed to the provider for a turn (#313).
+        self._first_push: tuple[int, float] | None = None
 
     @property
     def speaking(self) -> VoiceTurnReply | None:
@@ -170,22 +172,40 @@ class SpeechPlayer:
             and reply.generation_id not in self.tracker.cancelled_generations
         )
 
-    def _log_first_audio(self, reply: VoiceTurnReply) -> None:
+    def _mark_push(self, reply: VoiceTurnReply) -> None:
+        """Remember when the turn's first text was pushed to the provider (#313)."""
+        if self._first_push is None or self._first_push[0] < reply.turn_id:
+            self._first_push = (reply.turn_id, asyncio.get_running_loop().time())
+
+    def _log_first_audio(self, reply: VoiceTurnReply, mode: str = "sentence") -> None:
         """Log, once per turn, the time from end of learner speech to first audio (#271).
 
-        Content-free: only identifiers and milliseconds.
+        With the per-stage marks (#313), also from the end of learner speech: the
+        turn's first text from Phoenix and its first text pushed to the provider
+        (`none` when unknown). Content-free: only identifiers and milliseconds.
         """
         ended_at = getattr(reply, "speech_ended_at", None)
         if ended_at is None or reply.turn_id <= self._first_audio_turn:
             return
         self._first_audio_turn = reply.turn_id
+
+        def since(at: float | None) -> str:
+            return "none" if at is None else str(round((at - ended_at) * 1000))
+
+        pushed_at = None
+        if self._first_push is not None and self._first_push[0] == reply.turn_id:
+            pushed_at = self._first_push[1]
         elapsed_ms = round((asyncio.get_running_loop().time() - ended_at) * 1000)
         logger.info(
-            "first patient audio for session %s turn %d generation %d after %d ms",
+            "first patient audio for session %s turn %d generation %d after %d ms"
+            " (mode=%s first_text=%s ms first_tts_push=%s ms)",
             self.session_id,
             reply.turn_id,
             reply.generation_id,
             elapsed_ms,
+            mode,
+            since(getattr(reply, "received_at", None)),
+            since(pushed_at),
         )
 
     def _stop(self) -> None:
@@ -201,6 +221,7 @@ class SpeechPlayer:
             await self.start()
             if self._speaking is not reply or not self._is_current(reply):
                 return None
+            self._mark_push(reply)
             stream = self.tts.synthesize(
                 reply.reply_text, conn_options=SYNTHESIS_OPTIONS
             )

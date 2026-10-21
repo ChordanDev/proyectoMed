@@ -86,7 +86,8 @@ class VoiceTurnReply:
     Phoenix kept a turn addressed to the examiner before any generation, `patient`
     when the patient reply was refused, and `None` from an older server.
     `speech_ended_at` is the event-loop time the learner's
-    utterance ended, set by `TurnManager` for the first-audio latency log.
+    utterance ended and `received_at` the time the turn's first text arrived
+    from Phoenix, both set by `TurnManager` for the first-audio timing log (#313).
     """
 
     def __init__(
@@ -105,6 +106,7 @@ class VoiceTurnReply:
         self.index = index
         self.addressee = addressee
         self.speech_ended_at: float | None = None
+        self.received_at: float | None = None
 
     def is_committed_receipt(self) -> bool:
         """Validate runtime metadata before trusting it as server fence evidence."""
@@ -721,6 +723,14 @@ class TurnManager:
             for older in [t for t in self._speech_ended_at if t < turn_id]:
                 del self._speech_ended_at[older]  # superseded before dispatch
             streamed = False
+            received_at = None
+
+            def first_received() -> float:
+                # The turn's first text from Phoenix, a timing mark (#313).
+                nonlocal received_at
+                if received_at is None:
+                    received_at = asyncio.get_running_loop().time()
+                return received_at
 
             async def on_sentence(sentence: VoiceTurnReply) -> None:
                 # Each verified sentence is spoken as it arrives (#271); the turn
@@ -733,6 +743,7 @@ class TurnManager:
                     return
                 streamed = True
                 accepted_sentence.speech_ended_at = speech_ended_at
+                accepted_sentence.received_at = first_received()
                 if self.on_reply is not None:
                     result = self.on_reply(accepted_sentence)
                     if asyncio.iscoroutine(result):
@@ -740,6 +751,7 @@ class TurnManager:
 
             reply = await self.phoenix.commit(turn_id, text, on_sentence=on_sentence)
             reply.speech_ended_at = speech_ended_at
+            reply.received_at = first_received()
             if (
                 isinstance(reply, VoiceTurnReply)
                 and reply.is_settled_receipt()

@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 import asyncio
+import re
 import json
 import os
 import unittest
@@ -314,6 +315,20 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         first_audio = [line for line in logs.output if "first patient audio" in line]
         self.assertEqual(len(first_audio), 1)
         self.assertRegex(first_audio[0], r"session s1 turn 1 generation 1 after \d+ ms")
+        # Per-stage marks (#313), from the end of learner speech.
+        self.assertRegex(
+            first_audio[0],
+            r"after (\d+) ms \(mode=sentence first_text=(\d+) ms first_tts_push=(\d+) ms\)$",
+        )
+        first_audio_ms, first_text_ms, first_push_ms = map(
+            int,
+            re.search(
+                r"after (\d+) ms \(mode=sentence first_text=(\d+) ms first_tts_push=(\d+) ms",
+                first_audio[0],
+            ).groups(),
+        )
+        self.assertLessEqual(first_text_ms, first_push_ms)
+        self.assertLessEqual(first_push_ms, first_audio_ms)
         self.assertNotIn("Começou", output)
         self.assertNotIn("Ainda", output)
         self.assertNotIn("quando", output)
