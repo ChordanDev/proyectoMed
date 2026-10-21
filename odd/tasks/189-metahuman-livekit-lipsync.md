@@ -51,3 +51,23 @@ Constraints from the session brief:
   - Estimated mouth-minus-audio: +9 to +32 ms (the mouth trails the audio).
   - When the publisher loop restarted, the track was resubscribed and PCM kept flowing.
   - Human (2026-10-20): "sí, se escucha bien". The voice is audible in PIE. Not yet observed: the MetaHuman face (no MetaHuman yet).
+- L8 (2026-10-20) MetaHuman created in-engine with MetaHuman Creator (UE 5.8, MetaHuman Creator plugin, beta). Asset `/Game/Spike/MHC_Patient`, from a stock preset, assembled with the UE Optimized pipeline into `/Game/Spike/MHC_Patient/BP_MHC_Patient`. Shared assets went to `/Game/MetaHumans/Common`.
+  - Setup needed: the "MetaHuman Creator Core Data" launcher component (5.8 GB), an Epic account login in the editor, and `r.GPUSkin.Support16BitBoneIndex` plus `r.GPUSkin.UnlimitedBoneInfluences` in `DefaultEngine.ini`.
+  - The Full Rig (joints and blend shapes) failed 3 of 3 times. Epic's auto-rig poll timed out after 300 s and the editor reported "Server Error"; it also warned "Falta memoria para hacer rigging automático con formas de mezcla". The Joints Only rig succeeded (204 s, then 50 s). The spike uses Joints Only.
+  - Texture-source download first failed with 30 s idle timeouts on S3 (`HttpConnectionTimeout=30`, link ~2.5 MB/s). It succeeded after launching the editor with `-ini:Engine:[HTTP]:HttpConnectionTimeout=300,[HTTP]:HttpActivityTimeout=300`. A `Saved/Config/MacEditor/Engine.ini` override was deleted by the editor at startup, and `open <file> --args` drops arguments; `open -a UnrealEditor.app --args <uproject> ...` works.
+  - MetaHuman Creator needs at least 10 GB of available memory (`AvailableVirtual < 10 GB` checks in its editor source). On this 24 GB Mac it warned during assembly, and one assembly attempt crashed the editor (SIGABRT in the `VisualLookUp` plugin's faiss code during a list drag-over). It assembled after closing other apps.
+  - On-disk size: `Content/Spike` 149 MB plus `Content/MetaHumans` 151 MB, 187 files. The repo currently tracks 0 LFS files.
+- L9 (2026-10-20) Scene `/Game/Spike/PatientVoice` (Basic level), set up via MCP:
+  - `BP_MHC_Patient` at (200, 0, 0), yaw 90, with `useLiveLink=true`, `liveLinkSubject=PatientVoice` and `useARKit=false`.
+  - An actor with `UPatientVoiceComponent` (TrackName empty).
+  - Human verdict in PIE (2026-10-20): "sisi se mueve bastante bien". The mouth moves with the live LiveKit voice, using the speech solver and the Joints Only rig.
+  - MCP `CaptureViewport` frames showed no mouth change (mean pixel diff about 1/255). They probably render the editor world rather than PIE, so they are not evidence either way.
+- L10 (2026-10-20) Human: "lo vamos a hacer siempre desde mi compu asi que no hace falta commitear". The MetaHuman, the scene and the default open-world map stay local, excluded through `.git/info/exclude`.
+  - Human asked whether a 4 TB SSD helps. It does not help the memory check: on Mac, `AvailableVirtual` is free RAM plus already-allocated swap (`MacPlatformMemory.cpp:199`), and macOS swaps only to the boot volume.
+- L11 (2026-10-20/21) The Full Rig succeeded on the fifth attempt (291 s).
+  - Root cause of the earlier failures: `UMetaHumanCloudServicesSettings.Timeout = 300` (MetaHumanSDK `DefaultMetaHumanSDK.ini`) caps each cloud request. Three attempts died at 300 s.
+  - One attempt with `-ini:MetaHumanSDK:[/Script/MetaHumanSDKEditor.MetaHumanCloudServicesSettings]:Timeout=1200` still hung for 1200 s. The next one finished in 291 s. Epic's auto-rig service is intermittent.
+  - Reassembled with UE Optimized. "Guardar todo" saved only `MHC_Patient`, so the 38 assembled assets were saved via MCP `save_assets`.
+  - The room token expired after its 4 h validity; it was refreshed with `lk token create --valid-for 12h`.
+- L12 (2026-10-21) Human verdict (S5) on the Full Rig in PIE: "no se la verdad, tendría que verlos juntos, pero sigamos con este, ya fue". The approach is accepted to continue. No side-by-side comparison of the Joints Only and Full rigs was made.
+- L13 (2026-10-21) Paused stage 2 (T4). Human: "mi hermano tiene todo eso pero en otra rama, lo tiene que pasar a develop y ahi lo traemos acá y lo hacemos". The voice worker, Phoenix and the OpenAI/Deepgram/ElevenLabs keys arrive through develop. Resume: merge develop into this branch, run Phoenix and the worker locally, have the learner speak through the web harness, join Unreal as `unreal-observer` in `station-session-<sid>` with `TrackName=patient-voice`, then measure latency and record the verdict. T5 (findings doc and amendment) follows.
