@@ -110,3 +110,7 @@ unreal/*.suo
 
 # Built lighting data, rebuilt from the map.
 unreal/**/*_BuiltData.uasset
+
+# LiveKit C++ SDK prebuilts, fetched by scripts/fetch-livekit-sdk.sh
+unreal/Source/ThirdParty/LiveKitSDK/Mac/
+unreal/Source/ThirdParty/LiveKitSDK/Win64/
