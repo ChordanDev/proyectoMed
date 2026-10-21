@@ -1081,7 +1081,10 @@ defmodule Backend.Stations do
   Returns `{result, acc}`, where `result` has the shape of
   `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
   joined by a space. Each sentence logs its generation and verification
-  latency without content (`Backend.Stations.StationAI.SentenceStream`).
+  latency without content (`Backend.Stations.StationAI.SentenceStream`), and
+  the turn logs one `voice_turn_timing` line (#313): milliseconds from the
+  turn start to the first model token, the addressee marker and the first
+  text handed over, the total, and the outcome; never any text.
   """
   @spec stream_voice_turn(
           String.t(),
@@ -1414,43 +1417,94 @@ defmodule Backend.Stations do
     mode = PatientVerification.mode()
     parent = self()
     marker = make_ref()
-    on_addressee = fn addressee, source -> send(parent, {marker, addressee, source}) end
 
-    %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: acc} =
+    on_addressee = fn addressee, source ->
+      send(parent, {marker, addressee, source, JevDecision.monotonic_now_ms()})
+    end
+
+    on_first_token = fn ->
+      send(parent, {marker, :first_token, JevDecision.monotonic_now_ms()})
+    end
+
+    %{outcome: outcome, delivered: delivered, fact_ids: fact_ids, acc: timed_acc} =
       SentenceStream.run(
         gate: fn -> marker_gate(marker, started_at) end,
-        generate: &stream_patient_reply(package, context, &1, on_addressee),
+        generate: &stream_patient_reply(package, context, &1, {on_addressee, on_first_token}),
         verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
-        deliver: fn sentence, index, acc ->
+        deliver: fn sentence, index, timed_acc ->
           deliver_voice_sentence(
             session_id,
             turn_id,
             generation_id,
             {sentence, index},
-            acc,
-            sink
+            timed_acc,
+            timed_sink(sink)
           )
         end,
-        acc: acc
+        acc: %{acc: acc, first_text_at: nil, marker_at: nil}
       )
 
-    flush_marker(marker)
+    timed_acc = flush_marker(marker, timed_acc)
 
-    case outcome do
-      {:closed, :examiner_addressed} ->
-        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+    result =
+      case outcome do
+        {:closed, :examiner_addressed} ->
+          keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
 
-      outcome ->
-        {resolve_streamed_reply(
-           session_id,
-           turn_id,
-           generation_id,
-           outcome,
-           {delivered, fact_ids},
-           fn stored -> audit_delivered_reply(session_id, stored, package, session) end
-         ), acc}
+        outcome ->
+          resolve_streamed_reply(
+            session_id,
+            turn_id,
+            generation_id,
+            outcome,
+            {delivered, fact_ids},
+            fn stored -> audit_delivered_reply(session_id, stored, package, session) end
+          )
+      end
+
+    log_voice_turn_timing(started_at, timed_acc, result)
+    {result, timed_acc.acc}
+  end
+
+  # The first text handed to the worker is a timing mark (#313); `sink` sees
+  # only the caller's accumulator.
+  defp timed_sink(sink) do
+    fn event, %{acc: acc} = timed_acc ->
+      timed_acc = %{
+        timed_acc
+        | first_text_at: timed_acc.first_text_at || JevDecision.monotonic_now_ms()
+      }
+
+      {action, acc} = sink.(event, acc)
+      {action, %{timed_acc | acc: acc}}
     end
   end
+
+  # One content-free line per streamed voice turn (#313): milliseconds from the
+  # start of the turn to the first model token, the parsed addressee marker and
+  # the first text handed to the worker (`none` when a stage never happened),
+  # the whole turn, and the outcome.
+  defp log_voice_turn_timing(started_at, timed_acc, result) do
+    since = fn
+      nil -> "none"
+      at -> Integer.to_string(at - started_at)
+    end
+
+    Logger.info(
+      "[Stations] voice_turn_timing mode=sentence" <>
+        " first_token_ms=#{since.(timed_acc[:first_token_at])}" <>
+        " marker_ms=#{since.(timed_acc.marker_at)}" <>
+        " first_text_ms=#{since.(timed_acc.first_text_at)}" <>
+        " total_ms=#{JevDecision.monotonic_now_ms() - started_at}" <>
+        " outcome=#{voice_turn_outcome(result)}"
+    )
+  end
+
+  defp voice_turn_outcome({:ok, %{reply_text: _text}}), do: "committed"
+  defp voice_turn_outcome({:ok, {:kept, %{addressee: :examiner}}}), do: "examiner"
+  defp voice_turn_outcome({:ok, {:kept, _kept}}), do: "kept"
+  defp voice_turn_outcome({:error, :stale_generation}), do: "stale"
+  defp voice_turn_outcome(_other), do: "error"
 
   # The gate runs before the first sentence, which the generation sends only
   # after its marker decision, or when the stream stops; a generation that
@@ -1458,7 +1512,9 @@ defmodule Backend.Stations do
   defp marker_gate(marker, started_at) do
     {addressee, source} =
       receive do
-        {^marker, addressee, source} -> {addressee, source}
+        {^marker, addressee, source, at} ->
+          Process.put({marker, :marker_at}, at)
+          {addressee, source}
       after
         0 -> {:patient, :missing_marker}
       end
@@ -1467,12 +1523,14 @@ defmodule Backend.Stations do
     if addressee == :examiner, do: {:closed, :examiner_addressed}, else: :open
   end
 
-  # A decision sent after the gate (a generation that timed out) is dropped.
-  defp flush_marker(marker) do
+  # A decision sent after the gate (a generation that timed out) is dropped;
+  # the timing marks the generation sent are read into `timed_acc` (#313).
+  defp flush_marker(marker, timed_acc) do
     receive do
-      {^marker, _addressee, _source} -> :ok
+      {^marker, :first_token, at} -> flush_marker(marker, Map.put(timed_acc, :first_token_at, at))
+      {^marker, _addressee, _source, _at} -> flush_marker(marker, timed_acc)
     after
-      0 -> :ok
+      0 -> %{timed_acc | marker_at: Process.delete({marker, :marker_at})}
     end
   end
 
@@ -1809,10 +1867,17 @@ defmodule Backend.Stations do
   # marker (#309) is decided from the first pieces and never handed to
   # `on_text`; `on_addressee` gets the decision first, once. Logs only the
   # outcome and latency, like `generate_patient_reply/2`.
-  defp stream_patient_reply(package, context, on_text, on_addressee) do
+  defp stream_patient_reply(package, context, on_text, {on_addressee, on_first_token}) do
     started_at = JevDecision.monotonic_now_ms()
     adapter = resolve_station_ai_adapter()
-    {filter, finish} = Addressee.stream(on_text, on_addressee)
+    {marker_filter, finish} = Addressee.stream(on_text, on_addressee)
+    first_token = make_ref()
+
+    # The first piece the model generated, marker included, is a timing mark (#313).
+    filter = fn piece ->
+      if Process.put(first_token, true) == nil, do: on_first_token.()
+      marker_filter.(piece)
+    end
 
     result =
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :stream_reply, 3) do
