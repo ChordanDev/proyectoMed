@@ -46,11 +46,16 @@ and asked to try word-level streaming and measure the gain.
 
 ## Checklist
 
-- [ ] T1 Phoenix per-turn timing line (turn start, first token, marker, first text) — route: inline (2 files, understood)
-- [ ] T2 Worker per-turn timing line (speech end, first text, first TTS push, first audio) — route: inline
-- [ ] T3 Phoenix token mode: config, `SpeechDeltas`, `SentenceStream` delta hook with BoundedReply abort, controller `delta`/`abort` lines — route: inline
-- [ ] T4 Worker token mode: client `delta`/`abort` parsing, streamed TTS per generation, abort and barge-in — route: inline
-- [ ] T5 Scripted live comparison and design note — route: inline
+- [x] T1 Phoenix per-turn timing line (turn start, first token, marker, first text) — route: inline — `a8ddb04`
+  - RED: `voice_turn_timing_test.exs` 0/2 (no timing line). GREEN 2/2; voice suites 76/76.
+- [x] T2 Worker per-turn timing line (speech end, first text, first TTS push, first audio) — route: inline — `1dbcc58`
+  - RED: `test_worker` 1 failure (line lacked the marks). GREEN: 152/152.
+- [x] T3 Phoenix token mode: config, `SpeechDeltas`, `SentenceStream` delta hook with BoundedReply abort, controller `delta`/`abort` lines — route: inline — `fe172c1`
+  - RED: `speech_deltas_test` 0/9 (module absent), `sentence_stream_deltas_test` 1/6, `voice_token_stream_test` 0/7 against the previous `stations.ex`, controller 34/36. GREEN all; full backend 1755/1755; credo clean.
+- [x] T4 Worker token mode: client `delta`/`abort` parsing, streamed TTS per generation, abort and barge-in — route: inline — `432ecef`
+  - RED: import errors (no `ReplyDelta`/`TextFeed`), then 1 failure (no `deltas` request). GREEN: 163/163.
+- [x] T5 Scripted live comparison and design note — route: inline — this commit
+  - No runnable RED (live measurement and docs). `voice-worker/measure_tts_streaming.py`, own Phoenix on 4313, real Haiku + ElevenLabs, 3x10 turns per mode. Result in `docs/design/token-tts-streaming.md`: median speech end → first audio 1318 ms (sentence) vs 1307 ms (token); default stays `sentence`.
 
 Route note: this worker is itself the delegated writer for #313; tasks run inline here.
 
@@ -73,8 +78,10 @@ Route note: this worker is itself the delegated writer for #313; tasks run inlin
 
 ## Progress
 
-(updated per task)
+All tasks done. Token mode works end to end (worker log `mode=token` on all 30 token turns, no aborts in the replay) but gains about 10 ms: Haiku finishes the short reply ~110 ms after its first token, and ElevenLabs' streaming input waits for 50 characters with a websocket first-audio time no better than HTTP.
+
+Not measured: true end-to-end audio through LiveKit and Deepgram (headless; same in both modes).
 
 ## Next step
 
-T1.
+Local CI, push, PR to `feat/237-clinician-demo-readiness`.
