@@ -174,6 +174,171 @@ void FStationClientUnitSpec::Define()
 			FDateTime ServerNow;
 			TestFalse("parsed", StationJson::ParseSession(*Json, Session, ServerNow));
 		});
+
+		It("parses a voice credential", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(R"({
+				"url": "ws://127.0.0.1:7880",
+				"token": "eyJ.test.token",
+				"room": "station-session-abc123",
+				"identity": "learner-abc123",
+				"expires_at": "2026-10-21T12:02:00.000000Z"
+			})"));
+			FStationVoiceCredential Credential;
+			TestTrue("parsed", StationJson::ParseVoiceCredential(*Json, Credential));
+			TestEqual("url", Credential.Url, TEXT("ws://127.0.0.1:7880"));
+			TestEqual("token", Credential.Token, TEXT("eyJ.test.token"));
+			TestEqual("room", Credential.Room, TEXT("station-session-abc123"));
+			TestEqual("identity", Credential.Identity, TEXT("learner-abc123"));
+			TestEqual("expires", Credential.ExpiresAt, FDateTime(2026, 10, 21, 12, 2, 0));
+		});
+
+		It("rejects a voice credential without a token", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(
+				R"({"url":"ws://x","room":"r","identity":"i","expires_at":"2026-10-21T12:02:00Z"})"));
+			FStationVoiceCredential Credential;
+			TestFalse("parsed", StationJson::ParseVoiceCredential(*Json, Credential));
+		});
+
+		It("parses a patient reply", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(
+				R"({"outcome":"patient_reply","reply_text":"Dói no peito, doutor.","reply_audio_url":null,"server_now":"2026-10-21T12:01:00Z"})"));
+			FStationTurnReply Reply;
+			TestTrue("parsed", StationJson::ParseTurnReply(*Json, Reply));
+			TestEqual("outcome", Reply.Outcome, EStationTurnOutcome::PatientReply);
+			TestEqual("text", Reply.ReplyText, TEXT("Dói no peito, doutor."));
+			TestTrue("no audio", Reply.ReplyAudioUrl.IsEmpty());
+		});
+
+		It("treats a reply without outcome as a patient reply", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(
+				R"({"reply_text":"Sim.","reply_audio_url":"/audio/1.mp3","server_now":"2026-10-21T12:01:00Z"})"));
+			FStationTurnReply Reply;
+			TestTrue("parsed", StationJson::ParseTurnReply(*Json, Reply));
+			TestEqual("outcome", Reply.Outcome, EStationTurnOutcome::PatientReply);
+			TestEqual("audio", Reply.ReplyAudioUrl, TEXT("/audio/1.mp3"));
+		});
+
+		It("parses an examiner-addressed turn with released impressos", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(R"({
+				"outcome": "examiner_acknowledged", "reply_text": null, "reply_audio_url": null,
+				"learner_turn": {"role": "learner", "modality": "text", "text": "Examino o tórax.", "at": "2026-10-21T12:01:00Z"},
+				"newly_released": [{"id": "exame-fisico", "title": "Exame físico", "category": "exam", "content": "Ausculta normal."}],
+				"server_now": "2026-10-21T12:01:00Z"
+			})"));
+			FStationTurnReply Reply;
+			TestTrue("parsed", StationJson::ParseTurnReply(*Json, Reply));
+			TestEqual("outcome", Reply.Outcome, EStationTurnOutcome::ExaminerAcknowledged);
+			TestTrue("no patient text", Reply.ReplyText.IsEmpty());
+			TestEqual("released", Reply.NewlyReleased.Num(), 1);
+			if (Reply.NewlyReleased.Num() == 1)
+			{
+				TestEqual("content", Reply.NewlyReleased[0].Content, TEXT("Ausculta normal."));
+			}
+		});
+
+		It("parses an impresso decision", [this]()
+		{
+			const TPair<const TCHAR*, EStationImpressoDecision> Cases[] = {
+				{TEXT("released"), EStationImpressoDecision::Released},
+				{TEXT("already_released"), EStationImpressoDecision::AlreadyReleased},
+				{TEXT("unavailable"), EStationImpressoDecision::Unavailable},
+			};
+			for (const TPair<const TCHAR*, EStationImpressoDecision>& Case : Cases)
+			{
+				const TSharedRef<FJsonObject> Json = ParseObject(FString::Printf(TEXT(
+					R"({"request_id":"r1","decision":"%s","released_impressos":[{"id":"ecg","title":"ECG","category":"report","content":"Ritmo sinusal."}],"newly_released":[],"feedback_message":"Ok."})"),
+					Case.Key));
+				FStationImpressoReply Reply;
+				TestTrue(FString::Printf(TEXT("parsed %s"), Case.Key), StationJson::ParseImpressoReply(*Json, Reply));
+				TestEqual(FString::Printf(TEXT("decision %s"), Case.Key), Reply.Decision, Case.Value);
+				TestEqual("request id", Reply.RequestId, TEXT("r1"));
+				TestEqual("released", Reply.ReleasedImpressos.Num(), 1);
+				TestEqual("feedback", Reply.FeedbackMessage, TEXT("Ok."));
+			}
+		});
+
+		It("parses the session transcript", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(SessionJson);
+			TArray<TSharedPtr<FJsonValue>> Messages;
+			for (const TPair<const TCHAR*, const TCHAR*>& Line : {TPair<const TCHAR*, const TCHAR*>(TEXT("learner"), TEXT("Olá.")), TPair<const TCHAR*, const TCHAR*>(TEXT("patient"), TEXT("Oi, doutor."))})
+			{
+				const TSharedRef<FJsonObject> Message = MakeShared<FJsonObject>();
+				Message->SetStringField(TEXT("role"), Line.Key);
+				Message->SetStringField(TEXT("modality"), TEXT("text"));
+				Message->SetStringField(TEXT("text"), Line.Value);
+				Messages.Add(MakeShared<FJsonValueObject>(Message));
+			}
+			Json->SetArrayField(TEXT("messages"), Messages);
+
+			FStationSession Session;
+			FDateTime ServerNow;
+			TestTrue("parsed", StationJson::ParseSession(*Json, Session, ServerNow));
+			TestEqual("lines", Session.Messages.Num(), 2);
+			if (Session.Messages.Num() == 2)
+			{
+				TestEqual("speaker", Session.Messages[1].Speaker, EStationSpeaker::Patient);
+				TestEqual("text", Session.Messages[1].Text, TEXT("Oi, doutor."));
+			}
+		});
+
+		It("parses an educational result", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(R"({
+				"schema_version": "2", "session_id": "abc123", "status": "completed", "placeholder": false,
+				"criteria": [
+					{"id": "c1", "description": "Pergunta sobre a dor", "max_points": "2.0", "evidence_ids": ["m1"],
+					 "evidence": [{"id": "m1", "role": "learner", "text": "Onde dói?"}], "recommendation": "Bom.",
+					 "status": "assessed", "reason": null, "level": "adequate", "level_description": "Adequado", "points": "2.0"},
+					{"id": "c2", "description": "Solicita ECG", "max_points": "1.0", "evidence_ids": [], "evidence": [],
+					 "recommendation": "Solicite o ECG.", "status": "not_observable", "reason": "Sem evidência na transcrição."}
+				],
+				"coverage": {"assessed": 1, "uncertain": 0, "not_observable": 1, "not_applicable": 0},
+				"estimates": {"total": null, "scored_subtotal": "2.0", "scored_max": "2.0", "eligible_max": "3.0",
+					"unresolved": [{"id": "c2", "status": "not_observable"}]}
+			})"));
+			FStationResult Result;
+			TestTrue("parsed", StationJson::ParseResult(*Json, Result));
+			TestEqual("session", Result.SessionId, TEXT("abc123"));
+			TestFalse("placeholder", Result.bPlaceholder);
+			TestTrue("no total while unresolved", Result.EstimatedTotal.IsEmpty());
+			TestEqual("subtotal", Result.ScoredSubtotal, TEXT("2.0"));
+			TestEqual("eligible", Result.EligibleMax, TEXT("3.0"));
+			TestEqual("criteria", Result.Criteria.Num(), 2);
+			if (Result.Criteria.Num() == 2)
+			{
+				const FStationCriterionResult& Assessed = Result.Criteria[0];
+				TestEqual("assessed", Assessed.Status, EStationCriterionStatus::Assessed);
+				TestEqual("points", Assessed.Points, TEXT("2.0"));
+				TestEqual("level", Assessed.LevelDescription, TEXT("Adequado"));
+				TestEqual("evidence", Assessed.Evidence.Num(), 1);
+				if (Assessed.Evidence.Num() == 1)
+				{
+					TestEqual("excerpt", Assessed.Evidence[0].Text, TEXT("Onde dói?"));
+				}
+				const FStationCriterionResult& Missing = Result.Criteria[1];
+				TestEqual("not observable", Missing.Status, EStationCriterionStatus::NotObservable);
+				TestEqual("reason", Missing.Reason, TEXT("Sem evidência na transcrição."));
+				TestTrue("no points", Missing.Points.IsEmpty());
+			}
+		});
+
+		It("parses a finish body into the session", [this]()
+		{
+			FStationSession Session;
+			Session.SessionId = TEXT("abc123");
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(
+				R"({"session_id":"abc123","status":"completed","completed_at":"2026-10-21T12:05:00Z","completion_reason":"user","deadline_at":"2026-10-21T12:10:00Z","server_now":"2026-10-21T12:05:00Z"})"));
+			TestTrue("parsed", StationJson::ParseFinish(*Json, Session));
+			TestEqual("status", Session.Status, EStationSessionStatus::Completed);
+			TestEqual("reason", Session.CompletionReason, TEXT("user"));
+			TestEqual("completed", Session.CompletedAt, FDateTime(2026, 10, 21, 12, 5, 0));
+		});
 	});
 
 	Describe("UStationClient without a session", [this]()
@@ -200,6 +365,24 @@ void FStationClientUnitSpec::Define()
 			});
 			TestEqual("refresh", RefreshCode, TEXT("no_session"));
 			TestEqual("discard", DiscardCode, TEXT("no_session"));
+		});
+
+		It("refuses every session operation with no_session", [this]()
+		{
+			UStationClient* Client = NewObject<UStationClient>();
+			TArray<FString> Codes;
+			auto Record = [&Codes](const auto& Result) { Codes.Add(Result.HasError() ? Result.GetError().Code : TEXT("ok")); };
+			Client->RequestVoiceCredential(Record);
+			Client->SendTurn(TEXT("Olá"), EStationTurnModality::Text, Record);
+			Client->RequestImpresso(TEXT("ECG"), FString(), Record);
+			Client->ListImpressos(Record);
+			Client->FinishSession(EStationFinishReason::User, Record);
+			Client->FetchResult(Record);
+			TestEqual("calls", Codes.Num(), 6);
+			for (const FString& Code : Codes)
+			{
+				TestEqual("code", Code, TEXT("no_session"));
+			}
 		});
 	});
 }
@@ -356,6 +539,162 @@ void FStationClientPhoenixSpec::Define()
 					TestEqual("Phoenix forgot it", Response.Status, 404);
 					Done.Execute();
 				});
+			});
+		});
+	});
+
+	LatentIt("receives a LiveKit credential scoped to the run's room", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(true, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			const FString SessionId = Started.GetValue().SessionId;
+			Client->RequestVoiceCredential([this, Done, SessionId](const TStationResult<FStationVoiceCredential>& Result)
+			{
+				if (TestFalse(TEXT("error (does Phoenix have LIVEKIT_* set?)"), Result.HasError()))
+				{
+					const FStationVoiceCredential& Credential = Result.GetValue();
+					TestFalse("url", Credential.Url.IsEmpty());
+					TestFalse("token", Credential.Token.IsEmpty());
+					TestEqual("room", Credential.Room, TEXT("station-session-") + SessionId);
+					TestEqual("identity", Credential.Identity, TEXT("learner-") + SessionId);
+					const FTimespan Lifetime = Credential.ExpiresAt - FDateTime::UtcNow();
+					TestTrue("short-lived", Lifetime > FTimespan::Zero() && Lifetime <= FTimespan::FromMinutes(5));
+				}
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("gets no LiveKit credential without audio consent", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->RequestVoiceCredential([this, Done](const TStationResult<FStationVoiceCredential>& Result)
+			{
+				if (TestTrue("refused", Result.HasError()))
+				{
+					TestEqual("status", Result.GetError().HttpStatus, 403);
+					TestEqual("code", Result.GetError().Code, TEXT("no_consent"));
+				}
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("requests and lists an impresso outside the patient dialogue", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->RequestImpresso(TEXT("Gostaria de ver o eletrocardiograma"), FString(),
+				[this, Done](const TStationResult<FStationImpressoReply>& Requested)
+				{
+					if (!TestFalse("request", Requested.HasError()))
+					{
+						Done.Execute();
+						return;
+					}
+					TestFalse("request id generated", Requested.GetValue().RequestId.IsEmpty());
+					TestFalse("feedback", Requested.GetValue().FeedbackMessage.IsEmpty());
+					const int32 Released = Requested.GetValue().ReleasedImpressos.Num();
+					Client->ListImpressos([this, Done, Released](const TStationResult<TArray<FStationImpresso>>& Listed)
+					{
+						if (TestFalse("list", Listed.HasError()))
+						{
+							TestEqual("same released set", Listed.GetValue().Num(), Released);
+						}
+						Done.Execute();
+					});
+				});
+		});
+	});
+
+	LatentIt("finishes the run for good and refuses later turns", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->FinishSession(EStationFinishReason::User, [this, Done](const TStationResult<FStationSession>& Finished)
+			{
+				if (TestFalse("finish", Finished.HasError()))
+				{
+					TestEqual("status", Finished.GetValue().Status, EStationSessionStatus::Completed);
+					TestEqual("reason", Finished.GetValue().CompletionReason, TEXT("user"));
+					TestEqual("held as completed", Client->GetSession() ? Client->GetSession()->Status : EStationSessionStatus::Active,
+						EStationSessionStatus::Completed);
+					TestEqual("timer stopped", Client->GetRemainingTime(), FTimespan::Zero());
+				}
+				Client->SendTurn(TEXT("Mais uma pergunta"), EStationTurnModality::Text,
+					[this, Done](const TStationResult<FStationTurnReply>& Turn)
+					{
+						if (TestTrue("refused", Turn.HasError()))
+						{
+							TestEqual("code", Turn.GetError().Code, TEXT("session_completed"));
+						}
+						Done.Execute();
+					});
+			});
+		});
+	});
+
+	LatentIt("is told the deadline is not reached when the timer finishes early", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->FinishSession(EStationFinishReason::Timer, [this, Done](const TStationResult<FStationSession>& Finished)
+			{
+				if (TestTrue("refused", Finished.HasError()))
+				{
+					TestEqual("status", Finished.GetError().HttpStatus, 409);
+					TestEqual("code", Finished.GetError().Code, TEXT("deadline_not_reached"));
+				}
+				TestEqual("still active", Client->GetSession() ? Client->GetSession()->Status : EStationSessionStatus::Completed,
+					EStationSessionStatus::Active);
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("gets no result before the run is finished", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->FetchResult([this, Done](const TStationResult<FStationResult>& Result)
+			{
+				if (TestTrue("refused", Result.HasError()))
+				{
+					TestEqual("status", Result.GetError().HttpStatus, 422);
+					TestEqual("code", Result.GetError().Code, TEXT("session_not_finished"));
+				}
+				Done.Execute();
 			});
 		});
 	});

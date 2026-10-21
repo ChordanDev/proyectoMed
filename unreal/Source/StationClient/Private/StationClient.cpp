@@ -3,6 +3,7 @@
 #include "Dom/JsonObject.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/CommandLine.h"
+#include "Misc/Guid.h"
 #include "Misc/Parse.h"
 #include "StationHttp.h"
 #include "StationJson.h"
@@ -11,10 +12,16 @@ namespace
 {
 	const TCHAR* ActiveStationPath = TEXT("/api/stations/active");
 	const TCHAR* SessionsPath = TEXT("/api/stations/active/sessions");
+	const TCHAR* ResultSessionsPath = TEXT("/api/v2/stations/active/sessions");
 
 	FStationClientError NoSessionError()
 	{
 		return StationHttp::ClientError(TEXT("no_session"), TEXT("No station run is in progress."));
+	}
+
+	FStationClientError SessionCompletedError()
+	{
+		return StationHttp::ClientError(TEXT("session_completed"), TEXT("The station run has ended."));
 	}
 
 	FStationClientError InvalidResponseError(int32 Status)
@@ -163,6 +170,110 @@ void UStationClient::DiscardSession(TStationCallback<FStationNone> OnDone)
 		});
 }
 
+void UStationClient::RequestVoiceCredential(TStationCallback<FStationVoiceCredential> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+	SendSessionRequest<FStationVoiceCredential>(TEXT("POST"), SessionUrl(TEXT("/voice")), nullptr,
+		&StationJson::ParseVoiceCredential, MoveTemp(OnDone));
+}
+
+void UStationClient::SendTurn(const FString& Text, EStationTurnModality Modality, TStationCallback<FStationTurnReply> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+	if (Session->Status == EStationSessionStatus::Completed)
+	{
+		OnDone(MakeError(SessionCompletedError()));
+		return;
+	}
+
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("role"), TEXT("learner"));
+	Body->SetStringField(TEXT("modality"), Modality == EStationTurnModality::Voice ? TEXT("voice") : TEXT("text"));
+	Body->SetStringField(TEXT("text"), Text);
+	SendSessionRequest<FStationTurnReply>(TEXT("POST"), SessionUrl(TEXT("/messages")), Body,
+		&StationJson::ParseTurnReply, MoveTemp(OnDone));
+}
+
+void UStationClient::RequestImpresso(const FString& Text, const FString& RequestId, TStationCallback<FStationImpressoReply> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("text"), Text);
+	Body->SetStringField(TEXT("request_id"),
+		RequestId.IsEmpty() ? FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower) : RequestId);
+	SendSessionRequest<FStationImpressoReply>(TEXT("POST"), SessionUrl(TEXT("/impressos/request")), Body,
+		&StationJson::ParseImpressoReply, MoveTemp(OnDone));
+}
+
+void UStationClient::ListImpressos(TStationCallback<TArray<FStationImpresso>> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+	SendSessionRequest<TArray<FStationImpresso>>(TEXT("GET"), SessionUrl(TEXT("/impressos")), nullptr,
+		&StationJson::ParseImpressoList, MoveTemp(OnDone));
+}
+
+void UStationClient::FinishSession(EStationFinishReason Reason, TStationCallback<FStationSession> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("reason"), Reason == EStationFinishReason::Timer ? TEXT("timer") : TEXT("user"));
+	const FStationSession Current = Session.GetValue();
+	StationHttp::Send(TEXT("POST"), SessionUrl(TEXT("/finish")), Body,
+		[WeakThis = TWeakObjectPtr<UStationClient>(this), Current, OnDone = MoveTemp(OnDone)](const FStationHttpResponse& Response)
+		{
+			if (Response.Error.IsSet())
+			{
+				OnDone(MakeError(Response.Error.GetValue()));
+				return;
+			}
+			FStationSession Finished = Current;
+			if (!Response.Json.IsValid() || !StationJson::ParseFinish(*Response.Json, Finished))
+			{
+				OnDone(MakeError(InvalidResponseError(Response.Status)));
+				return;
+			}
+			UStationClient* Self = WeakThis.Get();
+			if (Self && Self->Session.IsSet() && Self->Session->SessionId == Current.SessionId)
+			{
+				Self->Session = Finished;
+			}
+			OnDone(MakeValue(MoveTemp(Finished)));
+		});
+}
+
+void UStationClient::FetchResult(TStationCallback<FStationResult> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+	const FString Url = PhoenixBaseUrl + ResultSessionsPath + TEXT("/") + Session->SessionId + TEXT("/result");
+	SendSessionRequest<FStationResult>(TEXT("GET"), Url, nullptr, &StationJson::ParseResult, MoveTemp(OnDone));
+}
+
 FTimespan UStationClient::GetRemainingTime() const
 {
 	return GetRemainingTimeAt(FPlatformTime::Seconds());
@@ -170,7 +281,7 @@ FTimespan UStationClient::GetRemainingTime() const
 
 FTimespan UStationClient::GetRemainingTimeAt(double LocalSeconds) const
 {
-	if (!Session.IsSet() || !Clock.IsAnchored())
+	if (!Session.IsSet() || Session->Status == EStationSessionStatus::Completed || !Clock.IsAnchored())
 	{
 		return FTimespan::Zero();
 	}
@@ -181,4 +292,32 @@ void UStationClient::AcceptSession(const FStationSession& InSession, const FDate
 {
 	Session = InSession;
 	Clock = FStationClock::Anchor(ServerNow, FPlatformTime::Seconds());
+}
+
+
+FString UStationClient::SessionUrl(const TCHAR* Suffix) const
+{
+	return PhoenixBaseUrl + SessionsPath + TEXT("/") + Session->SessionId + Suffix;
+}
+
+template <typename T>
+void UStationClient::SendSessionRequest(const FString& Verb, const FString& Url, const TSharedPtr<FJsonObject>& Body,
+	TFunction<bool(const FJsonObject&, T&)> Parse, TStationCallback<T> OnDone)
+{
+	StationHttp::Send(Verb, Url, Body,
+		[Parse = MoveTemp(Parse), OnDone = MoveTemp(OnDone)](const FStationHttpResponse& Response)
+		{
+			if (Response.Error.IsSet())
+			{
+				OnDone(MakeError(Response.Error.GetValue()));
+				return;
+			}
+			T Value;
+			if (!Response.Json.IsValid() || !Parse(*Response.Json, Value))
+			{
+				OnDone(MakeError(InvalidResponseError(Response.Status)));
+				return;
+			}
+			OnDone(MakeValue(MoveTemp(Value)));
+		});
 }

@@ -23,4 +23,9 @@ set -e
 sed -n '/Found [0-9]* automation tests/,$p' "$LOG" \
   | grep -E "Found [0-9]+ automation tests|Test Completed\. Result=|Error: |TEST COMPLETE\. EXIT CODE" || true
 echo "Editor exit status: $STATUS (full log: $LOG)"
+
+# Pass only when tests ran, all passed, and the editor exited cleanly: a filter
+# that matches nothing also ends with exit code 0.
+grep -qE "Found [1-9][0-9]* automation tests" "$LOG" || { echo "No tests matched '$FILTER'."; exit 1; }
 grep -q "TEST COMPLETE. EXIT CODE: 0" "$LOG"
+[ "$STATUS" -eq 0 ]

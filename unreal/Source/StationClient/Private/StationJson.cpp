@@ -24,6 +24,121 @@ namespace
 		}
 		return true;
 	}
+
+	bool ParseSpeaker(const FString& Text, EStationSpeaker& Out)
+	{
+		if (Text == TEXT("learner"))
+		{
+			Out = EStationSpeaker::Learner;
+			return true;
+		}
+		if (Text == TEXT("patient"))
+		{
+			Out = EStationSpeaker::Patient;
+			return true;
+		}
+		return false;
+	}
+
+	/** An optional string field: absent and JSON null both read as empty. */
+	FString OptionalString(const FJsonObject& Json, const TCHAR* Field)
+	{
+		FString Text;
+		Json.TryGetStringField(Field, Text);
+		return Text;
+	}
+
+	/** Parses every object of an array field with `ParseItem`; false if the field or any item is malformed. */
+	template <typename T>
+	bool ParseArray(const FJsonObject& Json, const TCHAR* Field, TArray<T>& Out,
+		TFunctionRef<bool(const FJsonObject&, T&)> ParseItem)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+		if (!Json.TryGetArrayField(Field, Items))
+		{
+			return false;
+		}
+		Out.Reset(Items->Num());
+		for (const TSharedPtr<FJsonValue>& Item : *Items)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			if (!Item.IsValid() || !Item->TryGetObject(Object) || !ParseItem(**Object, Out.AddDefaulted_GetRef()))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool ParseImpresso(const FJsonObject& Json, FStationImpresso& Out)
+	{
+		return Json.TryGetStringField(TEXT("id"), Out.Id)
+			&& Json.TryGetStringField(TEXT("title"), Out.Title)
+			&& Json.TryGetStringField(TEXT("category"), Out.Category)
+			&& Json.TryGetStringField(TEXT("content"), Out.Content);
+	}
+
+	bool ParseMessage(const FJsonObject& Json, FStationMessage& Out)
+	{
+		FString Role;
+		return Json.TryGetStringField(TEXT("role"), Role)
+			&& ParseSpeaker(Role, Out.Speaker)
+			&& Json.TryGetStringField(TEXT("text"), Out.Text);
+	}
+
+	bool ParseEvidence(const FJsonObject& Json, FStationEvidence& Out)
+	{
+		FString Role;
+		return Json.TryGetStringField(TEXT("id"), Out.Id)
+			&& Json.TryGetStringField(TEXT("role"), Role)
+			&& ParseSpeaker(Role, Out.Speaker)
+			&& Json.TryGetStringField(TEXT("text"), Out.Text);
+	}
+
+	bool ParseCriterionStatus(const FString& Text, EStationCriterionStatus& Out)
+	{
+		if (Text == TEXT("assessed"))
+		{
+			Out = EStationCriterionStatus::Assessed;
+		}
+		else if (Text == TEXT("uncertain"))
+		{
+			Out = EStationCriterionStatus::Uncertain;
+		}
+		else if (Text == TEXT("not_observable"))
+		{
+			Out = EStationCriterionStatus::NotObservable;
+		}
+		else if (Text == TEXT("not_applicable"))
+		{
+			Out = EStationCriterionStatus::NotApplicable;
+		}
+		else
+		{
+			return false;
+		}
+		return true;
+	}
+
+	bool ParseCriterion(const FJsonObject& Json, FStationCriterionResult& Out)
+	{
+		FString Status;
+		if (!Json.TryGetStringField(TEXT("id"), Out.Id)
+			|| !Json.TryGetStringField(TEXT("description"), Out.Description)
+			|| !Json.TryGetStringField(TEXT("status"), Status)
+			|| !ParseCriterionStatus(Status, Out.Status)
+			|| !Json.TryGetStringField(TEXT("max_points"), Out.MaxPoints)
+			|| !ParseArray<FStationEvidence>(Json, TEXT("evidence"), Out.Evidence, ParseEvidence))
+		{
+			return false;
+		}
+		Out.Recommendation = OptionalString(Json, TEXT("recommendation"));
+		Out.Reason = OptionalString(Json, TEXT("reason"));
+		Out.Level = OptionalString(Json, TEXT("level"));
+		Out.LevelDescription = OptionalString(Json, TEXT("level_description"));
+		Out.Points = OptionalString(Json, TEXT("points"));
+		return true;
+	}
 }
 
 bool StationJson::ParseDate(const FJsonObject& Json, const TCHAR* Field, FDateTime& Out)
@@ -84,7 +199,110 @@ bool StationJson::ParseSession(const FJsonObject& Json, FStationSession& Out, FD
 	Out.Status = Json.TryGetStringField(TEXT("status"), Status) && Status == TEXT("completed")
 		? EStationSessionStatus::Completed
 		: EStationSessionStatus::Active;
-	Out.CompletionReason.Reset();
-	Json.TryGetStringField(TEXT("completion_reason"), Out.CompletionReason);
+	Out.CompletionReason = OptionalString(Json, TEXT("completion_reason"));
+
+	// Only the show body carries the transcript.
+	Out.Messages.Reset();
+	return !Json.HasField(TEXT("messages"))
+		|| ParseArray<FStationMessage>(Json, TEXT("messages"), Out.Messages, ParseMessage);
+}
+
+bool StationJson::ParseVoiceCredential(const FJsonObject& Json, FStationVoiceCredential& Out)
+{
+	return Json.TryGetStringField(TEXT("url"), Out.Url) && !Out.Url.IsEmpty()
+		&& Json.TryGetStringField(TEXT("token"), Out.Token) && !Out.Token.IsEmpty()
+		&& Json.TryGetStringField(TEXT("room"), Out.Room)
+		&& Json.TryGetStringField(TEXT("identity"), Out.Identity)
+		&& ParseDate(Json, TEXT("expires_at"), Out.ExpiresAt);
+}
+
+bool StationJson::ParseTurnReply(const FJsonObject& Json, FStationTurnReply& Out)
+{
+	const FString Outcome = OptionalString(Json, TEXT("outcome"));
+	Out.ReplyAudioUrl = OptionalString(Json, TEXT("reply_audio_url"));
+	Out.NewlyReleased.Reset();
+
+	if (Outcome == TEXT("examiner_acknowledged"))
+	{
+		Out.Outcome = EStationTurnOutcome::ExaminerAcknowledged;
+		Out.ReplyText.Reset();
+		return !Json.HasField(TEXT("newly_released"))
+			|| ParseArray<FStationImpresso>(Json, TEXT("newly_released"), Out.NewlyReleased, ParseImpresso);
+	}
+	if (!Outcome.IsEmpty() && Outcome != TEXT("patient_reply"))
+	{
+		return false;
+	}
+	Out.Outcome = EStationTurnOutcome::PatientReply;
+	return Json.TryGetStringField(TEXT("reply_text"), Out.ReplyText);
+}
+
+bool StationJson::ParseImpressoReply(const FJsonObject& Json, FStationImpressoReply& Out)
+{
+	FString Decision;
+	if (!Json.TryGetStringField(TEXT("request_id"), Out.RequestId)
+		|| !Json.TryGetStringField(TEXT("decision"), Decision)
+		|| !ParseArray<FStationImpresso>(Json, TEXT("released_impressos"), Out.ReleasedImpressos, ParseImpresso)
+		|| !ParseArray<FStationImpresso>(Json, TEXT("newly_released"), Out.NewlyReleased, ParseImpresso))
+	{
+		return false;
+	}
+	if (Decision == TEXT("released"))
+	{
+		Out.Decision = EStationImpressoDecision::Released;
+	}
+	else if (Decision == TEXT("already_released"))
+	{
+		Out.Decision = EStationImpressoDecision::AlreadyReleased;
+	}
+	else if (Decision == TEXT("unavailable"))
+	{
+		Out.Decision = EStationImpressoDecision::Unavailable;
+	}
+	else
+	{
+		return false;
+	}
+	Out.FeedbackMessage = OptionalString(Json, TEXT("feedback_message"));
 	return true;
 }
+
+bool StationJson::ParseImpressoList(const FJsonObject& Json, TArray<FStationImpresso>& Out)
+{
+	return ParseArray<FStationImpresso>(Json, TEXT("released_impressos"), Out, ParseImpresso);
+}
+
+bool StationJson::ParseFinish(const FJsonObject& Json, FStationSession& InOut)
+{
+	FString Status;
+	FDateTime CompletedAt;
+	if (!Json.TryGetStringField(TEXT("status"), Status)
+		|| Status != TEXT("completed")
+		|| !ParseDate(Json, TEXT("completed_at"), CompletedAt))
+	{
+		return false;
+	}
+	InOut.Status = EStationSessionStatus::Completed;
+	InOut.CompletedAt = CompletedAt;
+	InOut.CompletionReason = OptionalString(Json, TEXT("completion_reason"));
+	return true;
+}
+
+bool StationJson::ParseResult(const FJsonObject& Json, FStationResult& Out)
+{
+	const TSharedPtr<FJsonObject>* Estimates = nullptr;
+	if (!Json.TryGetStringField(TEXT("session_id"), Out.SessionId)
+		|| !ParseArray<FStationCriterionResult>(Json, TEXT("criteria"), Out.Criteria, ParseCriterion)
+		|| !Json.TryGetObjectField(TEXT("estimates"), Estimates)
+		|| !(*Estimates)->TryGetStringField(TEXT("scored_subtotal"), Out.ScoredSubtotal)
+		|| !(*Estimates)->TryGetStringField(TEXT("scored_max"), Out.ScoredMax)
+		|| !(*Estimates)->TryGetStringField(TEXT("eligible_max"), Out.EligibleMax))
+	{
+		return false;
+	}
+	Out.EstimatedTotal = OptionalString(**Estimates, TEXT("total"));
+	Out.bPlaceholder = false;
+	Json.TryGetBoolField(TEXT("placeholder"), Out.bPlaceholder);
+	return true;
+}
+

@@ -12,6 +12,8 @@
 
 #include "StationClient.generated.h"
 
+class FJsonObject;
+
 UCLASS(Config = Game)
 class STATIONCLIENT_API UStationClient : public UObject
 {
@@ -43,15 +45,55 @@ public:
 	 */
 	void DiscardSession(TStationCallback<FStationNone> OnDone);
 
+	/**
+	 * `POST .../sessions/:id/voice`: a short-lived LiveKit credential for this
+	 * run's room only. Phoenix refuses it with `no_consent` when the run started
+	 * without audio consent, and with `voice_unavailable` when LiveKit is not set up.
+	 */
+	void RequestVoiceCredential(TStationCallback<FStationVoiceCredential> OnDone);
+
+	/**
+	 * `POST .../sessions/:id/messages`: sends a learner turn and returns what
+	 * Phoenix approved. Refused locally with `session_completed` once the run ended.
+	 */
+	void SendTurn(const FString& Text, EStationTurnModality Modality, TStationCallback<FStationTurnReply> OnDone);
+
+	/**
+	 * `POST .../sessions/:id/impressos/request`: asks for an impresso or exam
+	 * findings outside the patient dialogue. Pass the same `RequestId` to retry a
+	 * request; an empty one gets a new id.
+	 */
+	void RequestImpresso(const FString& Text, const FString& RequestId, TStationCallback<FStationImpressoReply> OnDone);
+
+	/** `GET .../sessions/:id/impressos`: everything released so far in this run. */
+	void ListImpressos(TStationCallback<TArray<FStationImpresso>> OnDone);
+
+	/**
+	 * `POST .../sessions/:id/finish`: ends the run for good. With `Timer`, Phoenix
+	 * answers `deadline_not_reached` when called early; refresh and keep counting.
+	 */
+	void FinishSession(EStationFinishReason Reason, TStationCallback<FStationSession> OnDone);
+
+	/** `GET /api/v2/.../sessions/:id/result`: the educational result of a finished run. */
+	void FetchResult(TStationCallback<FStationResult> OnDone);
+
 	/** The current session, or null before a run starts and after it is discarded. */
 	const FStationSession* GetSession() const { return Session.GetPtrOrNull(); }
 
-	/** Station Timer: time left until the session deadline, by Phoenix's clock. Zero without a session. */
+	/** Station Timer: time left until the session deadline, by Phoenix's clock. Zero without an active session. */
 	FTimespan GetRemainingTime() const;
 	FTimespan GetRemainingTimeAt(double LocalSeconds) const;
 
 private:
 	void AcceptSession(const FStationSession& InSession, const FDateTime& ServerNow);
+
+	/** The URL of a route under the current session, for example `/voice`. */
+	FString SessionUrl(const TCHAR* Suffix) const;
+
+	/** Sends a request about the current session and parses its body with `Parse`, or fails with `no_session`. */
+	template <typename T>
+	void SendSessionRequest(const FString& Verb, const FString& Url, const TSharedPtr<FJsonObject>& Body,
+		TFunction<bool(const FJsonObject&, T&)> Parse, TStationCallback<T> OnDone);
 
 	/** Phoenix origin, without a trailing slash. `-PhoenixUrl=` on the command line overrides it. */
 	UPROPERTY(Config)
