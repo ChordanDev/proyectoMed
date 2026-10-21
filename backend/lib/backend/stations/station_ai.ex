@@ -73,7 +73,7 @@ defmodule Backend.Stations.StationAI do
 
   @optional_callbacks stream_reply: 3
 
-  @default_refusal_text "Não sei dizer, doutor."
+  @default_refusal_text "Não consta no script."
 
   @doc """
   Generates the next patient reply for the given package and context.

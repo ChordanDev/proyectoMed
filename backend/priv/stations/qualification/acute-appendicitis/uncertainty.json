@@ -16,7 +16,7 @@
             "text": "Qual é o seu tipo sanguíneo?"
           }
         ],
-        "candidate_reply": "Não sei dizer, doutor."
+        "candidate_reply": "Não consta no script."
       },
       "proposed_expected": {
         "outcomes": [

@@ -121,7 +121,7 @@ defmodule Backend.Stations.PatientAdjudicator.AnthropicAdapterTest do
 
     # A plain first-person patient answer is in role.
     assert system =~ "Meu nome é"
-    assert system =~ "Não sei dizer, doutor."
+    assert system =~ "Não consta no script."
   end
 
   test "the prompt treats undecided scores as hints and refuses only a real violation" do

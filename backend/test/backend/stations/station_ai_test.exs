@@ -239,7 +239,7 @@ defmodule Backend.StationAI.SystemPromptTest do
     test "uses the exact no-information template when the case does not have the fact",
          %{prompt: prompt} do
       assert prompt =~
-               ~s(Se o caso não trouxer a informação pedida, não deduza nem complete com o que seria comum: responda EXATAMENTE "Não sei dizer, doutor.")
+               ~s(Se o caso não trouxer a informação pedida, não deduza nem complete com o que seria comum: responda EXATAMENTE "Não consta no script.")
     end
 
     test "the rules are station-agnostic: identical for every package and free of package data" do

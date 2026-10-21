@@ -233,7 +233,7 @@ defmodule Backend.StationAITest do
       package = load_fixture("valid-package.json")
       prompt = StationAI.system_prompt(package)
 
-      assert prompt =~ ~s("Não sei dizer, doutor.")
+      assert prompt =~ ~s("Não consta no script.")
     end
 
     test "lists every response rule id so adapters can apply each one" do
@@ -288,7 +288,7 @@ defmodule Backend.StationAITest do
     test "returns the canonical pt-BR refusal by default" do
       Application.delete_env(:backend, :station_ai_refusal_text)
 
-      assert StationAI.refusal_text() == "Não sei dizer, doutor."
+      assert StationAI.refusal_text() == "Não consta no script."
     end
 
     test "honors application env override" do
