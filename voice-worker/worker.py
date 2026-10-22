@@ -140,9 +140,22 @@ def _required_setting(name: str) -> str:
     return value
 
 
+def _fake_transcript() -> str | None:
+    """The fixed fake transcript, None when the fake providers are off.
+
+    A switch that is on without a loopback `LIVEKIT_URL` fails the job like any other
+    voice failure: the error event reaches the room and no fake provider is built.
+    `--url` can point the worker elsewhere than the variable the startup check read.
+    """
+    try:
+        return fake_providers_from_env(os.environ)
+    except ValueError:
+        raise VoiceFailure("fake_providers_refused") from None
+
+
 def build_stt(context):
     """Deepgram, or the fake transcription when `VOICE_WORKER_FAKE_PROVIDERS` is on."""
-    fake_transcript = fake_providers_from_env(os.environ)
+    fake_transcript = _fake_transcript()
     if fake_transcript is not None:
         return FakeSTT(fake_transcript, context["language"])
     return deepgram.STT(
@@ -163,7 +176,7 @@ def build_tts(session_id: str, context):
     session language (`pt-BR`) is sent to Cartesia as its base code (`pt`). With
     `VOICE_WORKER_FAKE_PROVIDERS` on, the patient speaks a tone instead.
     """
-    if fake_providers_from_env(os.environ) is not None:
+    if _fake_transcript() is not None:
         return FakeTTS()
     try:
         return cartesia.TTS(
