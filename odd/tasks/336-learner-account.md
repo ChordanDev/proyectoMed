@@ -35,7 +35,7 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   `reset_password`, confirms an unconfirmed account on reset).
 - [x] T3 Account deletion that erases the learner and all their data, with the
   documented hook for later contexts (cascading foreign keys, enforced by a test).
-- [ ] T4 Production mail provider chosen by environment variables (`MAILER_PROVIDER`,
+- [x] T4 Production mail provider chosen by environment variables (`MAILER_PROVIDER`,
   `MAILER_API_KEY`, `MAILER_DOMAIN`, `MAILER_FROM_EMAIL`, `MAILER_FROM_NAME`).
 - [ ] T5 README documentation, local CI and screenshots on PORT=4138.
 
@@ -63,8 +63,15 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   section already held); GREEN 26/26 focused, full suite 1990 passed; compile and
   credo clean. Hook decision: later contexts erase their rows through
   `references(:users, on_delete: :delete_all)`, enforced by
-  `AccountDeletionTest`; Accounts keeps calling no other context.
+  `AccountDeletionTest`; Accounts keeps calling no other context. Commit 1378501.
+- T4: RED 7/11 failing (no `MAILER_PROVIDER` handling; the Req client delivery test
+  already passed, proving Swoosh's Req client works with req 0.7). A first version
+  refused to boot `:prod` without `MAILER_PROVIDER`; it broke 7 existing prod
+  runtime-config tests outside this issue's edit surface, so unset now keeps the
+  local adapter (documented: set a provider in every real deployment). GREEN full
+  suite 2000 passed; credo clean. README documents the account pages and the
+  `MAILER_*` variables.
 
 ## Next step
 
-T4.
+T5.

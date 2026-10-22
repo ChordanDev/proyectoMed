@@ -94,9 +94,12 @@ config :tailwind,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
-# Account emails (login links, email change). The local adapter keeps them in
-# memory (`/dev/mailbox` in development) until an email provider is chosen (#336).
+# Account emails (login links, confirmation, password reset, email change). The
+# local adapter keeps them in memory (`/dev/mailbox` in development);
+# config/runtime.exs switches to the provider named by `MAILER_PROVIDER` (#336),
+# which production requires. `:mailer_from` is the sender `{name, email}`.
 config :backend, Backend.Accounts.Mailer, adapter: Swoosh.Adapters.Local
+config :backend, :mailer_from, {"proyectoMed", "contact@example.com"}
 config :swoosh, :api_client, false
 
 # Configure Elixir's Logger

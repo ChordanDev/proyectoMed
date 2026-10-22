@@ -1,8 +1,8 @@
 defmodule Backend.Accounts.UserNotifier do
   @moduledoc """
   Account emails in pt-BR (`mix phx.gen.auth`): email change, login link,
-  account confirmation and password reset (#336). The sender address is a placeholder until an email
-  provider is chosen (#336).
+  account confirmation and password reset (#336). The sender is
+  `:mailer_from` (`MAILER_FROM_NAME` and `MAILER_FROM_EMAIL` in production).
   """
 
   import Swoosh.Email
@@ -15,7 +15,7 @@ defmodule Backend.Accounts.UserNotifier do
     email =
       new()
       |> to(recipient)
-      |> from({"proyectoMed", "contact@example.com"})
+      |> from(Application.fetch_env!(:backend, :mailer_from))
       |> subject(subject)
       |> text_body(body)
 
