@@ -9,6 +9,8 @@ defmodule BackendWeb.UserLive.Registration do
 
   alias Backend.Accounts
 
+  require Logger
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -109,18 +111,9 @@ defmodule BackendWeb.UserLive.Registration do
   def handle_event("save", %{"user" => user_params}, socket) do
     case Accounts.register_user(user_params) do
       {:ok, user} ->
-        {:ok, _} =
-          Accounts.deliver_login_instructions(
-            user,
-            &url(~p"/users/log-in/#{&1}")
-          )
-
         {:noreply,
          socket
-         |> put_flash(
-           :info,
-           "Enviamos um e-mail para #{user.email}. Acesse o link para confirmar a sua conta."
-         )
+         |> put_confirmation_flash(user)
          |> push_navigate(to: ~p"/users/log-in")}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -137,5 +130,27 @@ defmodule BackendWeb.UserLive.Registration do
 
   defp assign_form(socket, %Ecto.Changeset{} = changeset) do
     assign(socket, form: to_form(changeset, as: "user"))
+  end
+
+  # The account is already committed, so a provider failure must not crash the
+  # page: the learner can request a new link from the login page.
+  defp put_confirmation_flash(socket, user) do
+    case Accounts.deliver_login_instructions(user, &url(~p"/users/log-in/#{&1}")) do
+      {:ok, _} ->
+        put_flash(
+          socket,
+          :info,
+          "Enviamos um e-mail para #{user.email}. Acesse o link para confirmar a sua conta."
+        )
+
+      {:error, reason} ->
+        Logger.error("Sign-up confirmation email failed: #{inspect(reason)}")
+
+        put_flash(
+          socket,
+          :error,
+          "Não conseguimos enviar o e-mail de confirmação. Peça um link de acesso abaixo."
+        )
+    end
   end
 end
