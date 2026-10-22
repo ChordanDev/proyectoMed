@@ -1,5 +1,16 @@
 import Config
 
+# Local Postgres for tests (ADR-014 #346), checked out per test through the
+# SQL sandbox. Without a host, username or password, Postgrex uses `PGHOST`,
+# `PGUSER` and `PGPASSWORD` when set (the GitHub workflow sets them), otherwise
+# localhost and the operating system user with no password. `mix test` creates
+# and migrates this database first. `DATABASE_URL` is never read in `:test`.
+# `MIX_TEST_PARTITION` keeps partitioned runs on separate databases.
+config :backend, Backend.Repo,
+  database: "backend_test#{System.get_env("MIX_TEST_PARTITION")}",
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: System.schedulers_online() * 2
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :backend, BackendWeb.Endpoint,

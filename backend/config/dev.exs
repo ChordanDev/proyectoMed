@@ -1,5 +1,16 @@
 import Config
 
+# Local Postgres (ADR-014 #346). Without a host, username or password,
+# Postgrex uses `PGHOST`, `PGUSER` and `PGPASSWORD` when set, otherwise
+# localhost and the operating system user with no password, which matches a
+# Homebrew Postgres. `DATABASE_URL` overrides all of it (runtime.exs), for
+# example to develop against a Neon branch.
+config :backend, Backend.Repo,
+  database: "backend_dev",
+  stacktrace: true,
+  show_sensitive_data_on_connection_error: true,
+  pool_size: 10
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #

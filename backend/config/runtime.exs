@@ -334,6 +334,52 @@ if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true
   config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
 end
 
+# Database (ADR-014 #346, issue #329). `DATABASE_URL`
+# (`ecto://USER:PASS@HOST/DATABASE`) is required in `:prod` and optional in
+# `:dev`, where it replaces the local `backend_dev` database (config/dev.exs),
+# for example with a Neon branch. Never commit a URL with credentials.
+# `DATABASE_SSL` turns on TLS with peer and hostname verification against the
+# system CA store; it defaults to `true` in `:prod` and `false` in `:dev`. Neon
+# requires it. `POOL_SIZE` (default 10) and `ECTO_IPV6` (`true` or `1`) tune the
+# connection pool. `:test` reads none of it and always uses the local database.
+if config_env() != :test do
+  database_url = System.get_env("DATABASE_URL", "") |> String.trim()
+
+  if config_env() == :prod and database_url == "" do
+    raise """
+    environment variable DATABASE_URL is missing.
+    For example: ecto://USER:PASS@HOST/DATABASE
+    """
+  end
+
+  if database_url != "" do
+    default_ssl = if config_env() == :prod, do: "true", else: "false"
+    ssl? = (System.get_env("DATABASE_SSL", default_ssl) |> String.trim()) in ~w(true 1)
+
+    ssl =
+      if ssl? do
+        host = database_url |> URI.parse() |> Map.fetch!(:host) |> to_charlist()
+
+        [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          server_name_indication: host,
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+      else
+        false
+      end
+
+    config :backend, Backend.Repo,
+      url: database_url,
+      ssl: ssl,
+      pool_size: String.to_integer(System.get_env("POOL_SIZE", "10")),
+      socket_options: if(System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: [])
+  end
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

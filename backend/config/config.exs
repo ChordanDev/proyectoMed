@@ -8,6 +8,7 @@
 import Config
 
 config :backend,
+  ecto_repos: [Backend.Repo],
   generators: [timestamp_type: :utc_datetime],
   openai_transcription_model: "whisper-1",
   openai_tts_model: "tts-1",
