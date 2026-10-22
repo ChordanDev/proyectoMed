@@ -37,7 +37,7 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   documented hook for later contexts (cascading foreign keys, enforced by a test).
 - [x] T4 Production mail provider chosen by environment variables (`MAILER_PROVIDER`,
   `MAILER_API_KEY`, `MAILER_DOMAIN`, `MAILER_FROM_EMAIL`, `MAILER_FROM_NAME`).
-- [x] T5 README documentation, local CI and screenshots on PORT=4138.
+- [ ] T5 README documentation, local CI and screenshots on PORT=4138.
 
 ## Acceptance criteria
 
@@ -76,8 +76,10 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   deletes. Editors are admins and admins are never deleted, so the cascade test now
   lists admin-only references explicitly (commit f1fc8e5). Second run: LOCAL CI
   PASSED (web 337 tests, backend 2000 tests, typecheck, lint, format, compile,
-  credo, dialyzer). Screenshots taken on PORT=4138 against the isolated
-  `backend_dev_issue336` database (kept out of the repository).
+  credo, dialyzer). Screenshots NOT captured (no browser available: the Playwright
+  download hung, no Chrome installed); smoke check on PORT=4138 against the
+  isolated `backend_dev_issue336` database returned 200 for the sign-up, legal,
+  reset and login pages and 302 for unauthenticated settings. Pending: manual screenshots.
 
 ## Next step
 
