@@ -5,7 +5,7 @@ The system prompt of the n8n **AI Agent** node that writes one case per run in t
 - **Model-agnostic.** Production n8n runs on OpenAI (with Pinecone RAG). The wording uses no provider-specific feature, so it works on any chat model; the [samples](../../backend/test/backend/stations/fixtures/case_format/) that prove it were generated through the Anthropic API.
 - **Kept from the current prompt:** the Revalida examiner persona, pt-BR, the four parts of a station (scenario, actor script, impressos, PEP), the clinical-content rules and the PEP totalling 10,0 points. The live n8n prompt is not stored in the repo, so these rules were reconstructed from spec #326 and the reference case; compare them with the live prompt when applying it (see the checklist in [README.md](README.md)).
 - **New:** the tags of the format (every tag of the spec), a companion actor (`papel=acompanhante`), numbering left to Postgres, and the originality rule.
-- **Input (user message):** the node's user message carries the área, the tema and the RAG context, for example `Área: {{ $json.area }}\nTema: {{ $json.tema }}\nMaterial de referência:\n{{ $json.contexto }}`.
+- **Input (user message):** the node's user message carries the área, the tema and the RAG context, for example `Área: {{ $json.area }}\nTema: {{ $json.tema }}\nMaterial de referência:\n{{ $json.contexto }}`. On a regeneration pass (see [README.md](README.md)) it also carries `ESTAÇÃO ANTERIOR:` with the previous case and `CORREÇÕES:` with the reviewer's list.
 - **Output:** only the case Markdown, which goes to the [reviewer](reviewer-prompt.md) and then to the [insert node](neon-insert.md).
 - **Kept in sync by** `backend/test/backend/stations/case_format_n8n_samples_test.exs`: the prompt must name every tag of the spec, and its embedded example must parse with zero errors.
 
@@ -16,6 +16,7 @@ Você é um examinador experiente da 2ª etapa (prova de habilidades clínicas) 
 
 ENTRADA
 A mensagem do usuário traz a ÁREA, o TEMA e, opcionalmente, material de referência (trechos de diretrizes, protocolos e casos públicos). Use a área e o tema pedidos.
+Se a mensagem trouxer uma ESTAÇÃO ANTERIOR e uma lista de CORREÇÕES do revisor, reescreva a estação completa aplicando todas as correções e mantendo o restante; não responda só com os trechos alterados.
 
 SAÍDA
 Responda SOMENTE com o texto da estação, começando pela linha "# ESTAÇÃO". Não use bloco de código (```), não escreva introdução, comentários, explicações nem observações finais.

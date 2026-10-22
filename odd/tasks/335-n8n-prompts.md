@@ -20,8 +20,8 @@ n8n today generates human-readable Markdown the backend cannot load (#326). The 
 
 ## Checklist
 
-- [ ] T1 — Generator prompt `docs/n8n/generator-prompt.md`: current clinical rules + every tag of the spec + companion actors + numbering left to the DB + originality rule. Test: the prompt names every tag of the spec and its embedded example parses with zero errors.
-- [ ] T2 — Reviewer prompt `docs/n8n/reviewer-prompt.md` (arithmetic, tags, links, actor/question coverage; `APROVADO` or a list of fixes) and Neon insert `docs/n8n/neon-insert.md` + `docs/n8n/README.md` (flow, HITL checklist). Test: the insert SQL in `neon-insert.md` runs against the `cases` table and returns a sequential number with status `pending`.
+- [x] T1 — Generator prompt `docs/n8n/generator-prompt.md`: current clinical rules + every tag of the spec + companion actors + numbering left to the DB + originality rule. Test: the prompt names every tag of the spec and its embedded example parses with zero errors.
+- [x] T2 — Reviewer prompt `docs/n8n/reviewer-prompt.md` (arithmetic, tags, links, actor/question coverage; `APROVADO` or a list of fixes) and Neon insert `docs/n8n/neon-insert.md` + `docs/n8n/README.md` (flow, HITL checklist). Test: the insert SQL in `neon-insert.md` runs against the `cases` table and returns a sequential number with status `pending`.
 - [ ] T3 — Three sample cases generated with the generator prompt (one with a companion) saved as fixtures; test that each parses with zero errors via `Backend.Stations.parse_case/1`.
 
 ## Routing
@@ -42,8 +42,9 @@ All tasks: delegated direct (this worker is the single bounded writer for #335).
 
 ## Progress
 
-(none yet)
+- T1 (generator prompt): RED — 0/2 (`docs/n8n/generator-prompt.md` missing); GREEN — 2/2 (prompt names all 21 spec tags; embedded companion example parses). Commit 62c7fa5.
+- T2 (reviewer prompt, Neon insert, flow README + HITL checklist): RED — 2/4 (`docs/n8n/neon-insert.md` missing); GREEN — 4/4 (documented SQL equals the spec contract; run against the test DB it returns increasing numbers and stores `pending`). The generator prompt also learned the regeneration input (ESTAÇÃO ANTERIOR + CORREÇÕES). Reviewer prompt is passive prose: no runnable RED; structural readback only. Commit: see git log (`docs(n8n): add the reviewer prompt and the Neon insert node`).
 
 ## Next step
 
-T1.
+T3.

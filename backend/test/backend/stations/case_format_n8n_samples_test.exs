@@ -56,3 +56,41 @@ defmodule Backend.Stations.CaseFormatN8nSamplesTest do
     |> String.replace(~r/\p{Mn}/u, "")
   end
 end
+
+defmodule Backend.Stations.CaseFormatN8nInsertTest do
+  @moduledoc """
+  The Neon insert node instructions (issue #335) match the `cases` table
+  (issue #331): the documented SQL inserts a pending case and Postgres
+  returns its sequential number.
+  """
+  use Backend.DataCase, async: true
+
+  @repo_root Path.expand("../../../..", __DIR__)
+  @neon_insert Path.join(@repo_root, "docs/n8n/neon-insert.md")
+  @format_spec Path.join(@repo_root, "docs/case-format/README.md")
+
+  test "the documented insert is the contract of the format spec" do
+    assert insert_sql(@neon_insert) == insert_sql(@format_spec)
+  end
+
+  test "the documented insert stores a pending case and returns its sequential number" do
+    sql = insert_sql(@neon_insert)
+
+    markdown =
+      File.read!(Path.join(@repo_root, "backend/priv/stations/acute-appendicitis/case.md"))
+
+    %{rows: [[first]]} = Repo.query!(sql, ["Cirurgia Geral", "Apendicite aguda", markdown])
+    %{rows: [[second]]} = Repo.query!(sql, ["Pediatria", "Febre em lactente", markdown])
+
+    assert is_integer(first) and second > first
+
+    assert %{rows: [["pending", "Cirurgia Geral", ^markdown]]} =
+             Repo.query!("SELECT status, area, markdown FROM cases WHERE number = $1", [first])
+  end
+
+  defp insert_sql(path) do
+    # The block may be indented inside a Markdown list; compare it unindented.
+    assert [_, sql] = Regex.run(~r/```sql\n\s*(INSERT INTO cases.*?)```/s, File.read!(path))
+    sql |> String.split("\n") |> Enum.map_join("\n", &String.trim/1) |> String.trim()
+  end
+end

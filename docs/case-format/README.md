@@ -213,7 +213,7 @@ The parsed package is finally checked by `Backend.Stations.StationPackage.valida
 
 ## Inserting a case (n8n contract)
 
-n8n inserts each generated case as one pending row of the `cases` table (`Backend.Content`, issue #331). It sets only three columns; Postgres fills the rest.
+n8n inserts each generated case as one pending row of the `cases` table (`Backend.Content`, issue #331). It sets only three columns; Postgres fills the rest. The n8n prompts that write cases in this format, and the insert node configuration, are in [`docs/n8n`](../n8n/README.md) (issue #335).
 
 ```sql
 INSERT INTO cases (area, theme, markdown)
