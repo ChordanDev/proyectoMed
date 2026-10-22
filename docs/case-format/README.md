@@ -210,3 +210,34 @@ The parsed package is finally checked by `Backend.Stations.StationPackage.valida
 
 - `backend/test/backend/stations/case_format_test.exs`: the package parsed from `case.md` equals `package.json` on every field of `package.json`.
 - `backend/test/backend/stations/case_format_grade_equivalence_test.exs`: on the stored transcripts of the #228 and #243 regression harnesses (five scenarios), both packages yield the same criterion statuses, levels, points, evidence and estimates.
+
+## Inserting a case (n8n contract)
+
+n8n inserts each generated case as one pending row of the `cases` table (`Backend.Content`, issue #331). It sets only three columns; Postgres fills the rest.
+
+```sql
+INSERT INTO cases (area, theme, markdown)
+VALUES ($1, $2, $3)
+RETURNING number;
+```
+
+| Column | Type | Set by | Rule |
+|---|---|---|---|
+| `area` | `text`, not null | n8n | The `[ÁREA]` of the case, written the same way for every case of an area: the admin panel filters on the exact text. |
+| `theme` | `text`, not null | n8n | The `[TEMA]` of the case. |
+| `markdown` | `text`, not null | n8n | The whole case in this tagged format, UTF-8. |
+| `number` | `bigint`, `GENERATED ALWAYS AS IDENTITY`, unique | Postgres | The sequential human number doctors split work by. An insert that sets it is refused. Numbers grow in insertion order and may skip a value after a failed insert. |
+| `status` | `text`, default `pending` | Postgres | `pending`, `approved` or `disapproved` (check constraint). n8n never sets it: only the admin panel changes it. |
+| `inserted_at`, `updated_at` | `timestamp` without time zone, default `timezone('utc', now())` | Postgres | |
+| `id` | `bigint` primary key | Postgres | Internal; use `number` to talk about a case. |
+
+The insert does not validate the format: a case with format errors is stored as pending, and the admin panel shows its errors.
+
+### Format errors are computed on read
+
+The admin panel runs `Backend.Stations.parse_case/1` on a case's Markdown each time it shows the case; errors are not stored.
+
+- n8n writes the row directly, so Phoenix has no insert hook where it could compute and store errors.
+- Stored errors would go stale when the parser rules change (#330 follow-ups) or when an admin edits the case (#332); reading them from the current Markdown and the current parser is always right.
+- Parsing is pure and fast (milliseconds for one case), and the panel parses only the case being shown.
+- `Backend.Content` calls no other context (ADR-007 #92 amendment), so the panel LiveView composes `Backend.Content` (the row) and `Backend.Stations.parse_case/1` (the errors).

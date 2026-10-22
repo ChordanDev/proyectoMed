@@ -21,8 +21,8 @@ Doctor review is the critical path of the launch (#326, ADR-015 #347). n8n gener
 
 ## Checklist
 
-- [x] T1 — Accounts: `phx.gen.auth` LiveView variant with an `admin`/`student` role, registration removed, `mix accounts.create_admin` provisioning task, admin-only `/admin` (anonymous → login, student → redirected).
-- [ ] T2 — Content: `cases` migration (identity `number`, area, theme, markdown, status pending/approved/disapproved, DB-defaulted timestamps), `Backend.Content` list/filter/get, n8n insert contract in `docs/case-format`.
+- [x] T1 — Accounts: `phx.gen.auth` LiveView variant with an `admin`/`student` role, registration removed, admin provisioning through `priv/repo/seeds.exs` (the allowed edit surfaces exclude `lib/mix/tasks`), admin-only `/admin` (anonymous → login, student → redirected).
+- [x] T2 — Content: `cases` migration (identity `number`, area, theme, markdown, status pending/approved/disapproved, DB-defaulted timestamps), `Backend.Content` list/filter/get, n8n insert contract in `docs/case-format`.
 - [ ] T3 — Admin case panel: list with number, area, theme, status and status/area filters; case page with the located parser errors at the top; decision on computing errors on read documented.
 - [ ] T4 — Screenshots of the list and of an invalid case (seeded admin, `PORT=4135`, `MIX_ENV=dev`), PR.
 
@@ -46,6 +46,9 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 
 - T1 (Accounts): ran `mix phx.gen.auth Accounts User users --live`; added `role` (`admin`/`student`, DB check constraint, never cast), `Accounts.create_admin/1`, `Accounts.admin?/1`, admin provisioning in `priv/repo/seeds.exs` (`ADMIN_EMAIL`/`ADMIN_PASSWORD`), `require_admin_user` plug and `:require_admin` on_mount on `/admin`; removed the public registration page and route; mailer moved to `Backend.Accounts.Mailer` (Swoosh local adapter, `/dev/mailbox` in dev); generated copy translated to pt-BR. RED — 13/14 new role/seed/access tests failed (undefined `create_admin/1`, `admin?/1`, no role, `/admin` open to anyone); GREEN — 14/14, full backend suite 1926/1926 (MIX_TEST_PARTITION=_issue331). Credo strict clean, compile warnings-as-errors clean. One run showed a flaky failure in `Backend.LLMProviderConfigTest` (env-var test, passed alone and in two reruns; unrelated).
 
+- T1 commit: 9a9cc53.
+- T2 (Content): migration `create_cases` (`number` `GENERATED ALWAYS AS IDENTITY`, `status` check constraint, UTC `timezone('utc', now())` timestamp defaults), `Backend.Content.Case`, `Backend.Content` (`list_cases/1` with status/area filters, `list_areas/0`, `get_case!/1`, `get_case_by_number/1`, `statuses/0`); n8n insert contract and the compute-on-read decision in `docs/case-format/README.md`. RED — 12/12 new Content tests failed (no table, no module); GREEN — 12/12 (plus a UTC assertion), full backend suite 1938/1938.
+
 ## Next step
 
-T2.
+T3.
