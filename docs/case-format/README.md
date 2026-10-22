@@ -228,6 +228,7 @@ RETURNING number;
 | `markdown` | `text`, not null | n8n | The whole case in this tagged format, UTF-8. |
 | `number` | `bigint`, `GENERATED ALWAYS AS IDENTITY`, unique | Postgres | The sequential human number doctors split work by. An insert that sets it is refused. Numbers grow in insertion order and may skip a value after a failed insert. |
 | `status` | `text`, default `pending` | Postgres | `pending`, `approved` or `disapproved` (check constraint). n8n never sets it: only the admin panel changes it. |
+| `lock_version` | `integer`, default `1` | Postgres | The optimistic lock of admin edits (#332). n8n never sets it. |
 | `inserted_at`, `updated_at` | `timestamp` without time zone, default `timezone('utc', now())` | Postgres | |
 | `id` | `bigint` primary key | Postgres | Internal; use `number` to talk about a case. |
 
@@ -241,3 +242,12 @@ The admin panel runs `Backend.Stations.parse_case/1` on a case's Markdown each t
 - Stored errors would go stale when the parser rules change (#330 follow-ups) or when an admin edits the case (#332); reading them from the current Markdown and the current parser is always right.
 - Parsing is pure and fast (milliseconds for one case), and the panel parses only the case being shown.
 - `Backend.Content` calls no other context (ADR-007 #92 amendment), so the panel LiveView composes `Backend.Content` (the row) and `Backend.Stations.parse_case/1` (the errors).
+
+## Editing a case (admin panel)
+
+Any admin edits a case's Markdown in place on its panel page (issue #332, `Backend.Content.update_case_markdown/3`).
+
+- **Every save re-validates.** The save stores the Markdown even when it has format errors (a pending case may be fixed over several saves), and the page then shows the parser errors of the saved text, computed on read as above.
+- **Optimistic locking.** A save applies only over the `lock_version` the admin loaded, and increments it. If another admin saved the case in between, the save is refused with "Este caso mudou desde que você o abriu. Recarregue a página." and nothing is overwritten; the admin's text stays in the editor so it can be copied before reloading.
+- **Revisions.** Each save keeps the Markdown it replaces as a row of `case_revisions`: `markdown`, the `lock_version` that Markdown had, `editor_id` and an `editor_email` snapshot of the admin whose save replaced it, and `inserted_at` (when it was replaced). Revisions are never updated; deleting a case deletes its revisions, and deleting an admin account keeps its revisions with `editor_id` null. The panel lists them newest first. Saving an unchanged Markdown keeps no revision.
+- **Published versions stay as they are.** A save writes only `cases.markdown`, `cases.lock_version` and a new `case_revisions` row; it never changes the status, area or theme. A published Station version (a later child of #326) is an immutable copy made at approval, so an edit can never change one; republishing an edited approved case is the approval step's job.
