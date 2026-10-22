@@ -908,6 +908,18 @@ wheels = [
 ]
 
 [[package]]
+name = "livekit-plugins-cartesia"
+version = "1.8.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7b/ce/3532ffd84b935e8e95ce321d221a9cdff789add90e97bae0981fa37e4def/livekit_plugins_cartesia-1.8.3.tar.gz", hash = "sha256:cf367e625c375690e7994ae35a9b9ae59ace07df9916266dc22f4d45bb5f875f", size = 19654, upload-time = "2026-09-23T19:04:39.584Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/ac/89378adca890e84f09e293a52e8012ce4aca2ed10e91e91894600e13bb83/livekit_plugins_cartesia-1.8.3-py3-none-any.whl", hash = "sha256:5ae8d15ebc6230bb57037eb89cf0df44ff1f80a4caaad5f030bbc5703250a774", size = 27217, upload-time = "2026-09-23T19:04:38.07Z" },
+]
+
+[[package]]
 name = "livekit-plugins-deepgram"
 version = "1.8.3"
 source = { registry = "https://pypi.org/simple" }
@@ -918,18 +930,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/bd/25/eab580cc909aa0df1d4ffd88a34053e8646117d510a4f4df42c882f9db25/livekit_plugins_deepgram-1.8.3.tar.gz", hash = "sha256:9e3c350bea531dd45b7ac776011fb7b8879b1e02d618344e12148554d09d140a", size = 25848, upload-time = "2026-09-23T19:04:38.326Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/84/50/b68945531675f7b16b37b0c2f23bb11754546fd9243b8106c66c9be6f8a2/livekit_plugins_deepgram-1.8.3-py3-none-any.whl", hash = "sha256:64a18caf9a91f5ff852018765b8fe85ebbff5318cadffabef483c534133eb42c", size = 32749, upload-time = "2026-09-23T19:04:36.979Z" },
-]
-
-[[package]]
-name = "livekit-plugins-elevenlabs"
-version = "1.8.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "livekit-agents", extra = ["codecs"] },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/d4/47f4687634e1220c893b8cb08888e21532f04f644cc51812dfbb9ffe0571/livekit_plugins_elevenlabs-1.8.3.tar.gz", hash = "sha256:abb747f1127b29cc1624c3c4d2448c715d83957460e3a2729376ebb2f17912b1", size = 23872, upload-time = "2026-09-23T19:04:52.264Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/08/fd966a30d2bac815091509b6bb60bcaec33ae6a555e519a94f87d8baca6e/livekit_plugins_elevenlabs-1.8.3-py3-none-any.whl", hash = "sha256:e3b58c206e843449d093cbfb1f3f32b1c04b8f36960eef84d8ae8b8baaccb20a", size = 25653, upload-time = "2026-09-23T19:04:50.964Z" },
 ]
 
 [[package]]
@@ -1778,16 +1778,16 @@ source = { virtual = "." }
 dependencies = [
     { name = "httpx" },
     { name = "livekit-agents" },
+    { name = "livekit-plugins-cartesia" },
     { name = "livekit-plugins-deepgram" },
-    { name = "livekit-plugins-elevenlabs" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "livekit-agents", specifier = ">=1.2" },
+    { name = "livekit-plugins-cartesia", specifier = ">=1.2" },
     { name = "livekit-plugins-deepgram", specifier = ">=1.2" },
-    { name = "livekit-plugins-elevenlabs", specifier = ">=1.2" },
 ]
 
 [[package]]

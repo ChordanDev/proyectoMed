@@ -3,7 +3,7 @@
 Joins only `station-session-*` rooms, asks Phoenix whether the session may stream audio,
 publishes interim transcripts to the room (topic "transcript") and POSTs each final
 transcript to Phoenix, which owns the transcript. Each reply Phoenix approves is published
-to the room as patient text and then spoken through ElevenLabs (#120). A learner turn
+to the room as patient text and then spoken through Cartesia (#120, #360). A learner turn
 Phoenix kept without a reply is never spoken: a turn addressed to the examiner is
 published as an examiner acknowledgement (`status: acknowledged`, #274) and a refused
 patient reply as `status: kept` (#269). Never logs transcript text, reply text or audio.
@@ -19,7 +19,7 @@ import sys
 
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, cli
-from livekit.plugins import deepgram, elevenlabs
+from livekit.plugins import cartesia, deepgram
 from speech import SpeechPlayer
 from transcripts import (
     DEFAULT_TURN_RETRIES,
@@ -36,10 +36,11 @@ ROOM_PREFIX = "station-session-"
 # Silence that closes an utterance. Deepgram's plugin default (25 ms) split one sentence
 # into several turns in manual testing. ponytail: fixed value, tune from real sessions.
 ENDPOINTING_MS = 500
-# Lowest-latency ElevenLabs model that covers pt-BR; override with ELEVENLABS_MODEL.
-DEFAULT_TTS_MODEL = "eleven_flash_v2_5"
-# Raw PCM: frames reach the room as they arrive, with no decoder in between.
-TTS_ENCODING = "pcm_24000"
+# Cartesia model that covers Portuguese (#360); override with CARTESIA_MODEL.
+DEFAULT_TTS_MODEL = "sonic-3"
+# Raw 16-bit PCM at 24 kHz: frames reach the room as they arrive, with no decoder.
+TTS_ENCODING = "pcm_s16le"
+TTS_SAMPLE_RATE = 24000
 logger = logging.getLogger("voice-worker")
 server = AgentServer()
 
@@ -139,18 +140,20 @@ def _required_setting(name: str) -> str:
 
 
 def build_tts(session_id: str, context):
-    """Build the ElevenLabs provider from the worker environment, or None when unset.
+    """Build the Cartesia provider from the worker environment, or None when unset.
 
     Missing configuration disables patient audio only: replies still reach the room as
     text, each followed by a `synthesis_failed` event. A blank value counts as missing:
-    the provider would accept it and then fail every reply at request time.
+    the provider would accept it and then fail every reply at request time. The
+    session language (`pt-BR`) is sent to Cartesia as its base code (`pt`).
     """
     try:
-        return elevenlabs.TTS(
-            api_key=_required_setting("ELEVENLABS_API_KEY"),
-            voice_id=_required_setting("ELEVENLABS_VOICE_ID"),
-            model=os.environ.get("ELEVENLABS_MODEL", "").strip() or DEFAULT_TTS_MODEL,
+        return cartesia.TTS(
+            api_key=_required_setting("CARTESIA_API_KEY"),
+            voice=_required_setting("CARTESIA_VOICE_ID"),
+            model=os.environ.get("CARTESIA_MODEL", "").strip() or DEFAULT_TTS_MODEL,
             encoding=TTS_ENCODING,
+            sample_rate=TTS_SAMPLE_RATE,
             language=context["language"],
         )
     except (KeyError, ValueError):
