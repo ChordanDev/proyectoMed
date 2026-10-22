@@ -146,17 +146,7 @@ defmodule BackendWeb.AdminCaseLive.Show do
         </.link>
       </section>
 
-      <ol
-        id="case-markdown"
-        class="mt-6 overflow-x-auto rounded-box bg-base-200 p-4 font-mono text-sm"
-      >
-        <li :for={{line, number} <- @lines} id={"line-#{number}"} class="flex gap-4">
-          <span class="w-10 shrink-0 select-none text-right text-base-content/50">{number}</span>
-          <span class="whitespace-pre-wrap break-words">{line}</span>
-        </li>
-      </ol>
-
-      <section id="case-editor" class="mt-8">
+      <section id="case-editor" class="mt-6">
         <h2 class="text-lg font-semibold">Editar caso</h2>
         <p class="text-sm text-base-content/70">
           Ao salvar, o caso é validado de novo e a versão anterior fica guardada.
@@ -193,6 +183,17 @@ defmodule BackendWeb.AdminCaseLive.Show do
           </li>
         </ul>
       </section>
+
+      <h2 class="mt-8 text-lg font-semibold">Texto salvo</h2>
+      <ol
+        id="case-markdown"
+        class="mt-2 overflow-x-auto rounded-box bg-base-200 p-4 font-mono text-sm"
+      >
+        <li :for={{line, number} <- @lines} id={"line-#{number}"} class="flex gap-4">
+          <span class="w-10 shrink-0 select-none text-right text-base-content/50">{number}</span>
+          <span class="whitespace-pre-wrap break-words">{line}</span>
+        </li>
+      </ol>
     </Layouts.app>
     """
   end

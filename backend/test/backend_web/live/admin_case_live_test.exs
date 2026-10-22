@@ -174,7 +174,14 @@ defmodule BackendWeb.AdminCaseLiveTest do
     test "the editor holds the current Markdown", %{conn: conn} do
       number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
 
-      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+      {:ok, view, html} = live(conn, ~p"/admin/cases/#{number}")
+
+      # The editor and the revisions come before the long numbered text.
+      {editor_at, _} = :binary.match(html, "case-edit")
+      {revisions_at, _} = :binary.match(html, "case-revisions")
+      {text_at, _} = :binary.match(html, "case-markdown")
+      assert editor_at < revisions_at
+      assert revisions_at < text_at
 
       assert has_element?(
                view,
