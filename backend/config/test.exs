@@ -1,5 +1,22 @@
 import Config
 
+# Only in tests, remove the complexity from the password hashing algorithm
+config :bcrypt_elixir, :log_rounds, 1
+
+# Account emails are captured by the test adapter.
+config :backend, Backend.Accounts.Mailer, adapter: Swoosh.Adapters.Test
+
+# Local Postgres for tests (ADR-014 #346), checked out per test through the
+# SQL sandbox. Without a host, username or password, Postgrex uses `PGHOST`,
+# `PGUSER` and `PGPASSWORD` when set (the GitHub workflow sets them), otherwise
+# localhost and the operating system user with no password. `mix test` creates
+# and migrates this database first. `DATABASE_URL` is never read in `:test`.
+# `MIX_TEST_PARTITION` keeps partitioned runs on separate databases.
+config :backend, Backend.Repo,
+  database: "backend_test#{System.get_env("MIX_TEST_PARTITION")}",
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: System.schedulers_online() * 2
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :backend, BackendWeb.Endpoint,
@@ -16,6 +33,10 @@ config :backend, :livekit_orphan_sweep_enabled, false
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
+
+# Enable helpful, but potentially expensive runtime checks
+config :phoenix_live_view,
+  enable_expensive_runtime_checks: true
 
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,

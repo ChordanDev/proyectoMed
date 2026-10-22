@@ -1,8 +1,10 @@
 defmodule Backend.ArchitectureTest do
   @moduledoc """
-  Architecture boundary tests enforcing ADR-007:
-    - BackendWeb must only interact with the domain through Backend.Stations.
-    - BackendWeb must never call internal implementation modules directly.
+  Architecture boundary tests enforcing ADR-007 and its amendment (#92):
+    - BackendWeb (controllers and LiveViews) must only interact with the domain
+      through public context modules.
+    - BackendWeb must never call internal implementation modules or the Repo
+      directly (ADR-014 #346, ADR-015 #347).
     - Dependencies flow unidirectionally from web to domain.
   """
 
@@ -51,6 +53,21 @@ defmodule Backend.ArchitectureTest do
            Architecture violation detected!
            BackendWeb must only call the public Backend.Stations context interface.
            Direct calls to internal implementation modules are forbidden:
+           #{inspect(violations, pretty: true)}
+           """
+  end
+
+  test "BackendWeb never calls the Repo directly" do
+    violations =
+      for file <- Path.wildcard(Path.join(@web_dir, "**/*.{ex,heex}")),
+          referenced?(file, Backend.Repo) do
+        Path.relative_to(file, File.cwd!())
+      end
+
+    assert violations == [],
+           """
+           Architecture violation detected!
+           Only contexts use Backend.Repo; BackendWeb delegates to a public context:
            #{inspect(violations, pretty: true)}
            """
   end

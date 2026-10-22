@@ -1,8 +1,32 @@
 defmodule BackendWeb.Router do
   use BackendWeb, :router
 
+  import BackendWeb.UserAuth
+
+  # LiveView pages (ADR-015 #347): cookie session, CSRF and browser headers.
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {BackendWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+    plug :fetch_current_scope_for_user
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
+  end
+
+  # Admin case panel (#331): only the `admin` role (ADR-015 #347). The plugs
+  # guard the first HTTP request; the on_mount hook guards live navigation.
+  scope "/admin", BackendWeb do
+    pipe_through [:browser, :require_authenticated_user, :require_admin_user]
+
+    live_session :require_admin, on_mount: [{BackendWeb.UserAuth, :require_admin}] do
+      live "/", AdminCaseLive.Index, :index
+      live "/cases/:number", AdminCaseLive.Show, :show
+    end
   end
 
   scope "/", BackendWeb do
@@ -54,5 +78,49 @@ defmodule BackendWeb.Router do
   scope "/api/v2/stations", BackendWeb do
     pipe_through :api
     get "/active/sessions/:id/result", StationController, :show_educational_result
+  end
+
+  ## Authentication routes (`mix phx.gen.auth`). Public sign-up creates only
+  ## learner (`student`) accounts (#336); admins are provisioned by
+  ## `priv/repo/seeds.exs`.
+
+  scope "/", BackendWeb do
+    pipe_through [:browser, :require_authenticated_user]
+
+    live_session :require_authenticated_user,
+      on_mount: [{BackendWeb.UserAuth, :require_authenticated}] do
+      live "/users/settings", UserLive.Settings, :edit
+      live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
+    end
+
+    post "/users/update-password", UserSessionController, :update_password
+    post "/users/delete-account", UserAccountController, :delete
+  end
+
+  scope "/", BackendWeb do
+    pipe_through [:browser]
+
+    live_session :current_user,
+      on_mount: [{BackendWeb.UserAuth, :mount_current_scope}] do
+      live "/users/register", UserLive.Registration, :new
+      live "/users/log-in", UserLive.Login, :new
+      live "/users/log-in/:token", UserLive.Confirmation, :new
+      live "/users/reset-password", UserLive.ForgotPassword, :new
+      live "/users/reset-password/:token", UserLive.ResetPassword, :edit
+      live "/termos", UserLive.Legal, :terms
+      live "/privacidade", UserLive.Legal, :privacy
+    end
+
+    post "/users/log-in", UserSessionController, :create
+    delete "/users/log-out", UserSessionController, :delete
+  end
+
+  # Development only: the in-memory mailbox of the local mail adapter.
+  if Application.compile_env(:backend, :dev_routes) do
+    scope "/dev" do
+      pipe_through :browser
+
+      forward "/mailbox", Plug.Swoosh.MailboxPreview
+    end
   end
 end

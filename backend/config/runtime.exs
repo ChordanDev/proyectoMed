@@ -23,6 +23,21 @@ end
 config :backend, BackendWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+if config_env() == :dev do
+  # Reload browser tabs when matching files change.
+  config :backend, BackendWeb.Endpoint,
+    live_reload: [
+      web_console_logger: true,
+      patterns: [
+        # Static assets, except user uploads
+        ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$"E,
+        # Router, Controllers, LiveViews and LiveComponents
+        ~r"lib/backend_web/router\.ex$"E,
+        ~r"lib/backend_web/(controllers|live|components)/.*\.(ex|heex)$"E
+      ]
+    ]
+end
+
 if api_key = System.get_env("OPENAI_API_KEY") do
   config :backend, Backend.StationAI.OpenAIAdapter, api_key: api_key
 end
@@ -332,6 +347,160 @@ end
 # It is evaluated after the live selection above, so it wins when both are set.
 if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true" do
   config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
+end
+
+# Database (ADR-014 #346, issue #329). `DATABASE_URL`
+# (`ecto://USER:PASS@HOST/DATABASE`) is required in `:prod` and optional in
+# `:dev`, where it replaces the local `backend_dev` database (config/dev.exs),
+# for example with a Neon branch. Never commit a URL with credentials.
+# `DATABASE_SSL` turns on TLS with peer and hostname verification against the
+# system CA store; it defaults to `true` in `:prod` and `false` in `:dev`. Neon
+# requires it. It accepts true/1/yes/on or false/0/no/off (any case) and refuses
+# to boot on anything else. It is the only TLS switch: an `ssl` query parameter
+# in `DATABASE_URL` would override it inside Ecto, so it refuses to boot too
+# (Neon's `sslmode` and `channel_binding` parameters are inert and allowed).
+# `POOL_SIZE` (default 10) and `ECTO_IPV6` (`true` or `1`) tune the
+# connection pool. `:test` reads none of it and always uses the local database.
+if config_env() != :test do
+  database_url = System.get_env("DATABASE_URL", "") |> String.trim()
+
+  if config_env() == :prod and database_url == "" do
+    raise """
+    environment variable DATABASE_URL is missing.
+    For example: ecto://USER:PASS@HOST/DATABASE
+    """
+  end
+
+  if database_url != "" do
+    url_query = URI.parse(database_url).query || ""
+
+    # Never echo the URL: it carries the database password.
+    if url_query |> URI.decode_query() |> Map.has_key?("ssl") do
+      raise """
+      environment variable DATABASE_URL must not carry an `ssl` query parameter.
+      It would override DATABASE_SSL; remove it and set DATABASE_SSL instead.
+      """
+    end
+
+    default_ssl = if config_env() == :prod, do: "true", else: "false"
+    raw_ssl = System.get_env("DATABASE_SSL", default_ssl)
+
+    # Case- and whitespace-insensitive. An unrecognized value refuses to boot
+    # instead of silently disabling TLS.
+    ssl? =
+      case raw_ssl |> String.trim() |> String.downcase() do
+        value when value in ~w(true 1 yes on) ->
+          true
+
+        value when value in ~w(false 0 no off) ->
+          false
+
+        _other ->
+          raise """
+          environment variable DATABASE_SSL has an unrecognized value: #{inspect(raw_ssl)}.
+          Use true/1/yes/on to enable TLS or false/0/no/off to disable it.
+          """
+      end
+
+    ssl =
+      if ssl? do
+        host = database_url |> URI.parse() |> Map.fetch!(:host) |> to_charlist()
+
+        [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          server_name_indication: host,
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+      else
+        false
+      end
+
+    config :backend, Backend.Repo,
+      url: database_url,
+      ssl: ssl,
+      pool_size: String.to_integer(System.get_env("POOL_SIZE", "10")),
+      socket_options: if(System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: [])
+  end
+end
+
+# Account emails (#336): login links, confirmation, password reset and email
+# change. `MAILER_PROVIDER` picks the provider: `resend`, `postmark`,
+# `sendgrid`, `brevo` or `mailgun` send through the provider's HTTP API with
+# `MAILER_API_KEY` (mailgun also needs `MAILER_DOMAIN`) from `MAILER_FROM_EMAIL`
+# (required) and `MAILER_FROM_NAME` (default `proyectoMed`). `local` keeps the
+# in-memory adapter of config.exs, which never delivers an email; it is the
+# default in `:dev`, while `:prod` refuses to boot without MAILER_PROVIDER and
+# only warns when `local` is named on purpose. Case and surrounding whitespace
+# are ignored. An unknown provider or a missing key, domain or sender refuses to
+# boot, never echoing the key. `:test` reads none of it and keeps the test
+# adapter.
+if config_env() != :test do
+  mailer_env = fn name -> System.get_env(name, "") |> String.trim() end
+
+  mailer_adapters = %{
+    "resend" => Swoosh.Adapters.Resend,
+    "postmark" => Swoosh.Adapters.Postmark,
+    "sendgrid" => Swoosh.Adapters.Sendgrid,
+    "brevo" => Swoosh.Adapters.Brevo,
+    "mailgun" => Swoosh.Adapters.Mailgun
+  }
+
+  require_mailer_env! = fn name, provider ->
+    case mailer_env.(name) do
+      "" ->
+        raise ArgumentError,
+              "environment variable #{name} is required when MAILER_PROVIDER is #{provider}"
+
+      value ->
+        value
+    end
+  end
+
+  mailer_prod? = config_env() == :prod
+
+  case String.downcase(mailer_env.("MAILER_PROVIDER")) do
+    "" when mailer_prod? ->
+      raise ArgumentError,
+            "environment variable MAILER_PROVIDER is required in production: set resend, " <>
+              "postmark, sendgrid, brevo or mailgun, or local to deliberately keep the " <>
+              "in-memory adapter that never delivers an email"
+
+    "local" when mailer_prod? ->
+      IO.warn("MAILER_PROVIDER is local in production: account emails are never delivered")
+
+    provider when provider in ["", "local"] ->
+      :ok
+
+    provider when is_map_key(mailer_adapters, provider) ->
+      api_key = require_mailer_env!.("MAILER_API_KEY", provider)
+      from_email = require_mailer_env!.("MAILER_FROM_EMAIL", provider)
+
+      domain =
+        if provider == "mailgun",
+          do: [domain: require_mailer_env!.("MAILER_DOMAIN", provider)],
+          else: []
+
+      config :backend,
+             Backend.Accounts.Mailer,
+             [adapter: Map.fetch!(mailer_adapters, provider), api_key: api_key] ++ domain
+
+      from_name =
+        case mailer_env.("MAILER_FROM_NAME") do
+          "" -> "proyectoMed"
+          name -> name
+        end
+
+      config :backend, :mailer_from, {from_name, from_email}
+      config :swoosh, api_client: Swoosh.ApiClient.Req, local: false
+
+    _unknown ->
+      raise ArgumentError,
+            "MAILER_PROVIDER must be resend, postmark, sendgrid, brevo, mailgun or local, got: " <>
+              inspect(System.get_env("MAILER_PROVIDER"))
+  end
 end
 
 if config_env() == :prod do
