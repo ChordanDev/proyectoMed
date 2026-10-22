@@ -113,3 +113,25 @@ Branch: `feat/191-spoken-turn` from `develop`. Delivery: chained PRs to `develop
   - 05 patient face
   - 06 voice training
   A sonnet writer builds them in their own worktree (the context backstop). The last slice's tree must equal this branch. Push and PRs wait for the human.
+- L26 (2026-10-22) The slicing writer built the chain locally:
+  - the tracker, bdd2d96;
+  - 01, 4052209;
+  - 02, 9d58465;
+  - 03, e834580;
+  - 04, 421cffc;
+  - 05, cb2ac5b;
+  - 06, f7026c9.
+  Every slice builds and passes its checks, and the last tree equals this branch. Slices 04 (about 1,130 lines) and 06 (about 970) stay over 400, because the voice link and the voice training are each cohesive with their tests. The writer also found 3 run-flow unit specs from #355 that called `Begin(Client)` with the real microphone setup. That setup reads a git-ignored ini, so on a fresh checkout the first-launch disclosure step made "neither finishes nor discards before the run is running" fail. RED reproduced by removing the local flag. Fixed by injecting the fake microphone; GREEN 9/9 without the flag.
+- L27 (2026-10-22) Jorge findings fixed on the chain, one commit each, then merged forward through 02..06. Each fix has a test that failed first, except where stated.
+  - #366 loopback guard: a job with fake providers and a non-loopback `LIVEKIT_URL` (`--url` can bypass the startup check) now fails with `fake_providers_refused` and publishes the error event. 27d4886. RED: `uv run python -m unittest test_fake_providers`, the new entrypoint spec raised `ValueError`. GREEN: 170 worker tests OK.
+  - #366 docs: Cartesia in the fake providers docstring, and `VOICE_WORKER_FAKE_PROVIDERS` / `VOICE_WORKER_FAKE_TRANSCRIPT` in the README worker tables. db8b5d8. Docs only, no test.
+  - #368 spike SDK ownership: the spike shuts the LiveKit SDK down only when its own `initialize` started it. 6454080. RED: `ProyectoMed.PatientVoiceSpike` failed ("the spike left the other module's SDK running"). GREEN: passes.
+  - #368 case-sensitive parser: session, role and status compare exactly. 877157f. RED: `ProyectoMed.StationVoice.Unit` failed 4 expectations. GREEN: 12/12 with the spike spec.
+  - #369 reason of the voice loss: `FStationVoiceLiveness::GetFailure()` names the rule that fired and the log uses it. c5f4a36. RED: the new liveness spec failed on a stub (both reasons). GREEN: 18/18 unit specs.
+  - #369 out-of-order readiness: `PostReadiness` reads the signals on the game thread. 660274a. Test exception: nothing reachable through the public interface can race two LiveKit threads, and a test-only seam was refused. Evidence: 23/23 `ProyectoMed.StationVoice` specs pass in the voice stack.
+  - #369 docs: the capture-thread example keeps a `TWeakPtr` and `GetVoice` is marked game-thread only. c825974. Docs only, no test.
+  - #371 microphone that will not open: `UStationRunFlow::ReportMicrophoneUnavailable()` remembers it for the run, `IsListening()` turns false, and the HUD shows "Microfone indisponível. Continue por escrito.". fe3d042. RED: `ProyectoMed.StationRun.Voice` failed on a stub ("no retry while the voice is in the room", "the HUD is told"). GREEN: 2/2 in the voice stack. The HUD text itself has no automated test.
+  - #371 stale examiner note: `AddLine` clears `bExaminerNoted`. 866ba02. RED: `ProyectoMed.StationRun.Unit` failed ("gone once a later line joins"). GREEN: 10/10.
+- L28 (2026-10-22) Second round of Jorge findings on #369, one commit each, merged forward through 05 and 06.
+  - #369 connect scan overwrote a worker leave: presence is now unknown, present or absent (`FStationWorkerPresence`, a private type). Join and leave events store their result, the scan only settles unknown, and the game thread reads unknown as absent. 74d726c. RED: the type first had the old behaviour (the scan sets present), and `scripts/run-unreal-tests.sh "ProyectoMed.StationVoice.Unit"` failed "stays absent when the worker leaves during the connect scan" ("the leave event wins over the stale scan"). GREEN: the same command exits 0 with the 5 presence specs, and `scripts/run-voice-stack.sh -- scripts/run-unreal-tests.sh "ProyectoMed.StationVoice"` exits 0.
+  - #369 docs example dereferenced null: the weak reference now comes from the pointer `ConnectVoice` returns, inside the credential callback and null-checked, with no `UStationMicrophone` on the 04 branch. The 2 s quit wait is stated per room still closing (`StationLiveKit::Shutdown` waits for each pending teardown). a56d876 on 04. Docs only, no test. On this slice the example names `UStationMicrophone::Start`, which takes that weak reference.

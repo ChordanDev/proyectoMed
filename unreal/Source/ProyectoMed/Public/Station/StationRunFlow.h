@@ -1,14 +1,16 @@
-// The learner's way through a station run: Pre-Station Notice, then the brief
-// Phoenix serves with the choice of a text or a voice training, then the run,
-// where typed turns are always available and exam and impresso requests have
-// their own channel, then the feedback once the learner or the Station Timer
-// ends it. Interface code renders it; only the station client talks to the
-// network.
+// The learner's way through a station run: on first launch the microphone
+// disclosure, then the Pre-Station Notice, then the brief Phoenix serves with the
+// choice of a text or a voice training, then the run, where typed turns are
+// always available and exam and impresso requests have their own channel, then
+// the feedback once the learner or the Station Timer ends it. Interface code
+// renders it; only the station client talks to the network.
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Station/StationMicPermission.h"
 #include "StationClientTypes.h"
+#include "StationVoice.h"
 #include "UObject/Object.h"
 
 #include "StationRunFlow.generated.h"
@@ -18,6 +20,8 @@ class UStationClient;
 UENUM()
 enum class EStationRunStep : uint8
 {
+	/** First launch: what the microphone is used for, and the system permission. */
+	Microphone,
 	/** The Pre-Station Notice is shown and not yet acknowledged. */
 	Notice,
 	/** The brief is shown; the learner picks a text or a voice training. */
@@ -66,14 +70,57 @@ PROYECTOMED_API FText StationErrorText(const FStationClientError& Error, const F
 /** The Station Timer as `mm:ss`, rounding partial seconds up so it reads 00:00 only at the deadline. */
 PROYECTOMED_API FText FormatStationTimer(const FTimespan& Remaining);
 
+/** Where the flow asks for the microphone and remembers that it did; tests replace it. */
+struct PROYECTOMED_API FStationMicrophoneSetup
+{
+	TFunction<EStationMicPermission()> GetPermission;
+	TFunction<void(TFunction<void(EStationMicPermission)>)> RequestPermission;
+	TFunction<bool()> WasDisclosureShown;
+	TFunction<void()> RememberDisclosureShown;
+
+	/** The operating system's permission, remembered in the game user settings. */
+	static FStationMicrophoneSetup System();
+};
+
+/** What the voice of a running voice training shows the learner. */
+struct FStationVoiceView
+{
+	EStationVoiceState State = EStationVoiceState::Disconnected;
+	/**
+	 * The learner's words while they speak. The final transcript of the turn joins
+	 * the conversation (`GetTranscript`) and this is cleared.
+	 */
+	FString LearnerText;
+	/**
+	 * The patient's reply while it is spoken, as Phoenix approved it, sentence by
+	 * sentence. The whole reply joins the conversation and this is cleared.
+	 */
+	FString PatientText;
+	/** The latest spoken turn went to the examiner, who noted it without a reply. */
+	bool bExaminerNoted = false;
+	/** The voice stopped for good (`Fatal`, or the link failed). */
+	bool bLost = false;
+	/** The system microphone would not open for this run; the learner continues in writing. */
+	bool bMicrophoneUnavailable = false;
+};
+
 UCLASS()
 class PROYECTOMED_API UStationRunFlow : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	/** Shows the notice and loads the active station in the background. */
-	void Begin(UStationClient* InClient);
+	/**
+	 * Shows the microphone disclosure on first launch, otherwise the notice, and
+	 * loads the active station in the background.
+	 */
+	void Begin(UStationClient* InClient, FStationMicrophoneSetup InMicrophone = FStationMicrophoneSetup::System());
+
+	/**
+	 * Microphone to notice. `bAllow` asks the system for the microphone now; the
+	 * disclosure counts as shown either way, so it is not shown again.
+	 */
+	void AnswerMicrophone(bool bAllow);
 
 	/** Notice to brief. Does nothing on any other step. */
 	void AcknowledgeNotice();
@@ -81,15 +128,43 @@ public:
 	/** Reloads the station after a failed load. */
 	void RetryLoadStation();
 
-	/** True on the brief once the station is loaded, and for voice only when Phoenix serves realtime voice. */
+	/**
+	 * True on the brief once the station is loaded. Voice also needs Phoenix to serve
+	 * realtime voice and a microphone the system has not blocked.
+	 */
 	bool CanEnter(EStationTrainingMode Mode) const;
 
 	/**
 	 * Starts the run: the session's audio consent is the chosen mode. A voice
-	 * training then asks for the LiveKit credential; without one the run
-	 * continues as text and `IsVoiceFallback` is true.
+	 * training first asks the system for the microphone if it never did, then asks
+	 * Phoenix for the LiveKit credential and joins the room. Without a credential the
+	 * run continues as text and `IsVoiceFallback` is true.
 	 */
 	void Enter(EStationTrainingMode Mode);
+
+	/** The microphone as the system allows it now. */
+	EStationMicPermission GetMicrophonePermission() const;
+
+	/** What the voice of a voice training shows; empty otherwise. */
+	const FStationVoiceView& GetVoice() const { return Voice; }
+
+	/**
+	 * The microphone should capture: the run is going on, its voice link is in the room
+	 * and the microphone did not fail to open for this run.
+	 */
+	bool IsListening() const;
+
+	/**
+	 * The microphone would not open. Remembered until the run restarts, so the
+	 * capture is not retried on every change and the HUD says so.
+	 */
+	void ReportMicrophoneUnavailable();
+
+	/** Receives the patient's voice on a LiveKit thread; set it before entering. */
+	void SetPatientAudio(TFunction<void(TConstArrayView<int16>, int32, int32)> InPatientAudio)
+	{
+		PatientAudio = MoveTemp(InPatientAudio);
+	}
 
 	EStationRunStep GetStep() const { return Step; }
 	bool IsStationLoading() const { return bLoadingStation; }
@@ -210,8 +285,18 @@ public:
 	FSimpleMulticastDelegate OnChanged;
 
 private:
+	// Test access to the voice event handling (StationRunFlowSpec.cpp).
+	friend class FStationRunUnitSpec;
+
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
+	void StartSession();
+	void ConnectVoice();
+	void HandleVoiceEvent(const FStationVoiceEvent& Event);
+
+	/** Moves the spoken reply, if any, into the conversation. */
+	void CommitVoiceReply();
+
 	void SetExamError(const FStationClientError& Error);
 
 	void AddLine(EStationSpeaker Speaker, const FString& Text);
@@ -267,4 +352,10 @@ private:
 	bool bLoadingStation = false;
 	bool bReloadingTranscript = false;
 	bool bVoiceFallback = false;
+	FStationMicrophoneSetup Microphone;
+	FStationVoiceView Voice;
+	int32 VoiceTurnId = 0;
+	/** The final transcript of the current spoken turn is in the conversation. */
+	bool bVoiceLearnerCommitted = false;
+	TFunction<void(TConstArrayView<int16>, int32, int32)> PatientAudio;
 };

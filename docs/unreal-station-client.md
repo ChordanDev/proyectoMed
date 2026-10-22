@@ -168,15 +168,15 @@ Client->RequestVoiceCredential([WeakClient](const TStationResult<FStationVoiceCr
 
 	// The link exists only from here, and ConnectVoice returns nullptr without a session.
 	// Keep the shared reference it returns as a weak one: GetVoice() is a raw pointer the
-	// game thread may free when it replaces or drops the link, so the capture source
-	// (the game's microphone component arrives with the voice training slice) must not use it.
+	// game thread may free when it replaces or drops the link, so the capture thread must
+	// not use it (the game's UStationMicrophone::Start takes this weak reference).
 	if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakClient->ConnectVoice(Credential.GetValue(), MoveTemp(Handlers)))
 	{
-		WeakVoice = Voice;  // pin WeakVoice, a TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe>, in the capture source
+		Microphone->Start(Voice);  // takes a TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe>; pins it on the capture thread
 	}
 });
 
-// Then, from the capture thread:
+// Then, from the capture thread (WeakVoice is the weak reference the microphone holds):
 if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.Pin())
 {
 	Voice->PushMicrophonePcm(Samples, Rate, Channels);
@@ -230,7 +230,7 @@ local voice stack, which brings its own Phoenix (see README, "Voice worker fake
 speech providers"):
 
 ```bash
-scripts/run-voice-stack.sh -- scripts/run-unreal-tests.sh "ProyectoMed.StationVoice"
+scripts/run-voice-stack.sh -- scripts/run-unreal-tests.sh "ProyectoMed.StationVoice+ProyectoMed.StationRun.Voice+ProyectoMed.PatientVoice"
 ```
 
 The stack's Phoenix answers with the mock patient ("Meu nome é Carlos."), not the
@@ -239,7 +239,7 @@ specs above inside the stack, and the rest against the scripted Phoenix of the
 previous section:
 
 ```bash
-scripts/run-unreal-tests.sh "ProyectoMed.StationClient"
+scripts/run-unreal-tests.sh "ProyectoMed.StationClient+ProyectoMed.StationRun.Phoenix+ProyectoMed.StationRun.Unit"
 ```
 
 The stack test checks four things:
