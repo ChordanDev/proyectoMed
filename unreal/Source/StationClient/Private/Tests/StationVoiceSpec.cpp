@@ -135,6 +135,14 @@ void FStationVoiceUnitSpec::Define()
 			TestFalse("unknown status", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"other"})")).IsSet());
 		});
 
+		It("compares the session, role and status exactly, as the web parser does", [this]()
+		{
+			TestFalse("session in another case", Parse(TEXT(R"({"session_id":"S1","turn_id":3,"final":true,"text":"Oi"})")).IsSet());
+			TestFalse("role in another case", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"Patient","text":"Oi"})")).IsSet());
+			TestFalse("patient status in another case", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"patient","status":"COMPLETE"})")).IsSet());
+			TestFalse("examiner status in another case", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"Acknowledged"})")).IsSet());
+		});
+
 		It("reads turn failures and the worker stopping", [this]()
 		{
 			const TOptional<FStationVoiceEvent> Failure = Parse(TEXT(R"({"session_id":"s1","turn_id":5,"generation_id":2,"failure":"synthesis_failed"})"));
