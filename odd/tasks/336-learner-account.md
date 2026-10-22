@@ -37,7 +37,7 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   documented hook for later contexts (cascading foreign keys, enforced by a test).
 - [x] T4 Production mail provider chosen by environment variables (`MAILER_PROVIDER`,
   `MAILER_API_KEY`, `MAILER_DOMAIN`, `MAILER_FROM_EMAIL`, `MAILER_FROM_NAME`).
-- [ ] T5 README documentation, local CI and screenshots on PORT=4138.
+- [x] T5 README documentation, local CI and screenshots on PORT=4138.
 
 ## Acceptance criteria
 
@@ -70,8 +70,16 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   runtime-config tests outside this issue's edit surface, so unset now keeps the
   local adapter (documented: set a provider in every real deployment). GREEN full
   suite 2000 passed; credo clean. README documents the account pages and the
-  `MAILER_*` variables.
+  `MAILER_*` variables. Commit 06572ad.
+- T5: first local CI run failed 1/2000: the shared, non-partitioned `backend_test`
+  database carries `case_revisions.editor_id` from sibling #332, which restricts
+  deletes. Editors are admins and admins are never deleted, so the cascade test now
+  lists admin-only references explicitly (commit f1fc8e5). Second run: LOCAL CI
+  PASSED (web 337 tests, backend 2000 tests, typecheck, lint, format, compile,
+  credo, dialyzer). Screenshots taken on PORT=4138 against the isolated
+  `backend_dev_issue336` database (kept out of the repository).
 
 ## Next step
 
-T5.
+Review of the PR into `feat/326-production-launch`; replace the placeholder legal
+texts and set `MAILER_*` in the deployment.
