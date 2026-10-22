@@ -163,7 +163,15 @@ Client->RequestVoiceCredential([WeakClient](const TStationResult<FStationVoiceCr
 	Handlers.OnPatientPcm = [](TConstArrayView<int16> Pcm, int32 Rate, int32 Channels) { /* play, lip sync */ };
 	WeakClient->ConnectVoice(Credential.GetValue(), MoveTemp(Handlers));
 });
-// Then, from the capture thread: Client->GetVoice()->PushMicrophonePcm(Samples, Rate, Channels);
+
+// Game thread only: take a shared reference, because GetVoice() is a raw pointer the
+// game thread may free when it replaces or drops the link (UStationMicrophone does this).
+TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe> WeakVoice = Client->GetVoice()->AsShared();
+// Then, from the capture thread:
+if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.Pin())
+{
+	Voice->PushMicrophonePcm(Samples, Rate, Channels);
+}
 ```
 
 | Topic | Rule |

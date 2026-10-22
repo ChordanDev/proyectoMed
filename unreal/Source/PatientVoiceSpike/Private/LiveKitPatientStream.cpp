@@ -14,6 +14,8 @@ THIRD_PARTY_INCLUDES_END
 namespace
 {
 	std::atomic<bool> GSdkInitialized{false};
+	/** True only when this module's `initialize` call started the SDK, so only then does it shut it down. */
+	std::atomic<bool> GOwnsSdk{false};
 
 	std::string ToStd(const FString& Value)
 	{
@@ -214,15 +216,15 @@ bool FLiveKitPatientStream::InitializeSdk()
 		return true;
 	}
 
-	// `initialize` answers false when the station client already did it.
-	livekit::initialize(livekit::LogLevel::Warn);
+	// `initialize` answers false when the station client already did it: reuse that SDK, never own it.
+	GOwnsSdk = livekit::initialize(livekit::LogLevel::Warn);
 	GSdkInitialized = true;
 	return GSdkInitialized;
 }
 
 void FLiveKitPatientStream::ShutdownSdk()
 {
-	if (GSdkInitialized.exchange(false))
+	if (GSdkInitialized.exchange(false) && GOwnsSdk.exchange(false))
 	{
 		livekit::shutdown();
 	}

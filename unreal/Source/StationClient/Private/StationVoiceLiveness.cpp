@@ -37,6 +37,7 @@ EStationVoiceState FStationVoiceLiveness::Tick(double Now)
 		&& Now - WaitingSince.GetValue() >= FirstJoinSeconds;
 	if (bNotBack || bNeverJoined)
 	{
+		Failure = bNotBack ? EFailure::VoiceNotBack : EFailure::WorkerNeverJoined;
 		State = EStationVoiceState::Failed;
 	}
 	return State;

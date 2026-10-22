@@ -50,7 +50,7 @@ TOptional<FStationVoiceEvent> ParseStationVoiceEvent(TConstArrayView<uint8> Payl
 	}
 
 	FString EventSession;
-	if (!ReadString(*Body, TEXT("session_id"), EventSession) || EventSession != SessionId)
+	if (!ReadString(*Body, TEXT("session_id"), EventSession) || !EventSession.Equals(SessionId, ESearchCase::CaseSensitive))
 	{
 		return {};
 	}
@@ -81,9 +81,9 @@ TOptional<FStationVoiceEvent> ParseStationVoiceEvent(TConstArrayView<uint8> Payl
 		{
 			return {};
 		}
-		if (Role == TEXT("patient"))
+		if (Role.Equals(TEXT("patient"), ESearchCase::CaseSensitive))
 		{
-			if (Status == TEXT("complete"))
+			if (Status.Equals(TEXT("complete"), ESearchCase::CaseSensitive))
 			{
 				Event.Kind = EStationVoiceEventKind::PatientComplete;
 				return Event;
@@ -99,14 +99,14 @@ TOptional<FStationVoiceEvent> ParseStationVoiceEvent(TConstArrayView<uint8> Payl
 			Event.Kind = EStationVoiceEventKind::PatientText;
 			return Event;
 		}
-		if (Role == TEXT("examiner"))
+		if (Role.Equals(TEXT("examiner"), ESearchCase::CaseSensitive))
 		{
-			if (Status == TEXT("acknowledged"))
+			if (Status.Equals(TEXT("acknowledged"), ESearchCase::CaseSensitive))
 			{
 				Event.Kind = EStationVoiceEventKind::ExaminerAcknowledged;
 				return Event;
 			}
-			if (Status == TEXT("kept"))
+			if (Status.Equals(TEXT("kept"), ESearchCase::CaseSensitive))
 			{
 				Event.Kind = EStationVoiceEventKind::PatientUnanswered;
 				return Event;

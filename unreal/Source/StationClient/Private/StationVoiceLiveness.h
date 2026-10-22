@@ -18,6 +18,16 @@ public:
 	static constexpr double GraceSeconds = 10.0;
 	static constexpr double FirstJoinSeconds = 20.0;
 
+	/** The rule that made the voice lost. */
+	enum class EFailure : uint8
+	{
+		None,
+		/** The worker did not join within `FirstJoinSeconds`. */
+		WorkerNeverJoined,
+		/** The voice did not come back within `GraceSeconds`. */
+		VoiceNotBack,
+	};
+
 	/** What LiveKit reports, read on its thread. */
 	struct FSignals
 	{
@@ -31,7 +41,11 @@ public:
 	/** The state to show at `Now` with no news from LiveKit. */
 	EStationVoiceState Tick(double Now);
 
+	/** Which rule fired once the state is `Failed`, `None` before. */
+	EFailure GetFailure() const { return Failure; }
+
 private:
+	EFailure Failure = EFailure::None;
 	EStationVoiceState State = EStationVoiceState::WaitingForWorker;
 	bool bWorkerAnswered = false;
 	TOptional<double> WaitingSince;
