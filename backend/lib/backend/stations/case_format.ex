@@ -31,6 +31,10 @@ defmodule Backend.Stations.CaseFormat do
   @doc "Parses a tagged case into a Station Package or its located errors, sorted by line."
   @spec parse(String.t()) :: {:ok, map()} | {:error, [error()]}
   def parse(text) when is_binary(text) do
+    if String.valid?(text), do: parse_valid(text), else: {:error, [invalid_encoding(text)]}
+  end
+
+  defp parse_valid(text) do
     {tags, syntax_errors} = Tags.scan(text)
     {doc, document_errors} = Document.collect(tags)
 
@@ -38,6 +42,13 @@ defmodule Backend.Stations.CaseFormat do
       [] -> doc |> package() |> validate()
       errors -> {:error, errors}
     end
+  end
+
+  # The tag regexes are Unicode-aware and raise on invalid UTF-8, so the
+  # encoding is checked first and reported at the first line that breaks it.
+  defp invalid_encoding(text) do
+    index = text |> String.split("\n") |> Enum.find_index(&(not String.valid?(&1)))
+    %{line: index + 1, message: "case is not valid UTF-8"}
   end
 
   defp sort(errors), do: errors |> Enum.uniq() |> Enum.sort_by(&{&1.line, &1.message})

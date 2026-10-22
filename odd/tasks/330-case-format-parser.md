@@ -50,6 +50,8 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 
 - T4 (this commit): 5 equivalence tests (#228 transcript; #243 transcript under 4 recorded scenarios) compare criteria and estimates of the parsed and hand-tuned packages; all equal, no difference to explain. RED not observable test-first (the parsed package was already equal); mutation probe: pointing item-06 criterio-1 at the glicemia impresso made 4/5 fail on item-06, restored 5/5 pass. A probe raising item-06's top `mínimo` changed no grade on these transcripts, so transcript equivalence alone does not cover every field; the T1 field-by-field equality does.
 
+- Review round 1 (Jorge C1, deduped TR-1; inline route, one-file fix): invalid UTF-8 made `Tags.scan/1` raise `ArgumentError` from the Unicode regexes. `CaseFormat.parse/1` now checks `String.valid?/1` first and returns `{:error, [%{line: n, message: "case is not valid UTF-8"}]}` located at the first invalid line. RED — 2 new encoding tests failed with `ArgumentError`; GREEN — case_format tests 47/47.
+
 ## Next step
 
 Local CI, push, PR to `feat/326-production-launch`.

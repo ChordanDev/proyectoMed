@@ -380,4 +380,18 @@ defmodule Backend.Stations.CaseFormatValidationTest do
       assert [1, _fact_line] = lines
     end
   end
+
+  describe "encoding" do
+    test "a case that is not valid UTF-8 is a located error, not a crash" do
+      assert [%{line: 1, message: "case is not valid UTF-8"}] = errors(<<255, 10>>)
+    end
+
+    test "the error is located at the first line with an invalid byte" do
+      text = reference_case()
+      line = line_of(text, "[TAREFA tarefa-2]")
+      broken = String.replace(text, "[TAREFA tarefa-2]", <<"[TAREFA tarefa-2]", 255>>)
+
+      assert [%{line: ^line, message: "case is not valid UTF-8"}] = errors(broken)
+    end
+  end
 end
