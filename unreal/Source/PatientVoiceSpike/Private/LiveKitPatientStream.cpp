@@ -214,10 +214,9 @@ bool FLiveKitPatientStream::InitializeSdk()
 		return true;
 	}
 
-	if (livekit::initialize(livekit::LogLevel::Warn))
-	{
-		GSdkInitialized = true;
-	}
+	// `initialize` answers false when the station client already did it.
+	livekit::initialize(livekit::LogLevel::Warn);
+	GSdkInitialized = true;
 	return GSdkInitialized;
 }
 
