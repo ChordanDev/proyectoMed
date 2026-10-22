@@ -32,7 +32,8 @@ defmodule Backend.Application do
 
   # Mix runs migrations itself (`mix ecto.migrate`, and the `test` alias), so
   # only a release, which sets `RELEASE_NAME`, migrates on boot.
-  defp skip_migrations? do
+  @doc false
+  def skip_migrations? do
     System.get_env("RELEASE_NAME") == nil
   end
 

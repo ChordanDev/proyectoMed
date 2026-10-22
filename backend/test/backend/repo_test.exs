@@ -15,13 +15,16 @@ defmodule Backend.RepoTest do
     assert Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox
   end
 
-  test "runs the migrations from priv/repo/migrations" do
-    migrations_path = Ecto.Migrator.migrations_path(Repo)
+  test "reads migrations from priv/repo/migrations" do
+    assert Ecto.Migrator.migrations_path(Repo) ==
+             Application.app_dir(:backend, "priv/repo/migrations")
+  end
 
-    assert migrations_path == Application.app_dir(:backend, "priv/repo/migrations")
-
-    assert Enum.all?(Ecto.Migrator.migrations(Repo), fn {status, _version, _name} ->
-             status == :up
+  # Holds trivially until the first migration lands; from then on it guards
+  # that the `test` alias migrated the test database.
+  test "leaves no migration pending in the test database" do
+    refute Enum.any?(Ecto.Migrator.migrations(Repo), fn {status, _version, _name} ->
+             status == :down
            end)
   end
 end
