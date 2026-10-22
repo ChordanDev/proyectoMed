@@ -71,6 +71,45 @@ defmodule Backend.Stations do
   end
 
   # ============================================================================
+  # Catalog of Published Stations (#333, spec #326)
+  # ============================================================================
+
+  @doc """
+  Lists published stations for the catalog API (`GET /stations`): `id`, `area`,
+  `theme`, and public `actors` (`id`, `role`, `name`, `age`, `voice`).
+
+  Examiner-only data (`fact_ids`, `mandatory_question_ids`, `presenting_context`,
+  `persona`, `tone`) is stripped. Only approved cases appear; disapproved or
+  pending ones are hidden.
+  """
+  @spec list_catalog_stations() :: [map()]
+  def list_catalog_stations do
+    Backend.Content.list_published_stations()
+    |> Enum.map(&to_catalog_station/1)
+  end
+
+  defp to_catalog_station(version) do
+    %{
+      "id" => version.station_id,
+      "area" => version.area,
+      "theme" => version.theme,
+      "actors" => catalog_actors(version.package["actors"] || [])
+    }
+  end
+
+  defp catalog_actors(actors) do
+    Enum.map(actors, fn actor ->
+      %{
+        "id" => actor["id"],
+        "role" => actor["role"],
+        "name" => actor["name"],
+        "age" => actor["age"],
+        "voice" => actor["voice"]
+      }
+    end)
+  end
+
+  # ============================================================================
   # Session Lifecycle
   # ============================================================================
 

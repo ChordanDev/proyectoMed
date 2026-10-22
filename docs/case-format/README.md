@@ -229,6 +229,9 @@ RETURNING number;
 | `number` | `bigint`, `GENERATED ALWAYS AS IDENTITY`, unique | Postgres | The sequential human number doctors split work by. An insert that sets it is refused. Numbers grow in insertion order and may skip a value after a failed insert. |
 | `status` | `text`, default `pending` | Postgres | `pending`, `approved` or `disapproved` (check constraint). n8n never sets it: only the admin panel changes it. |
 | `lock_version` | `integer`, default `1` | Postgres | The optimistic lock of admin edits (#332). n8n never sets it. |
+| `approved_by_id` | `bigint` references `users(id)`, nullable | Postgres | Set on approval (#333); nilified on admin deletion. |
+| `approved_by_email` | `text`, nullable | Postgres | Email snapshot of the approving admin. |
+| `approved_at` | `timestamp` without time zone, nullable | Postgres | UTC timestamp when the case was approved. |
 | `inserted_at`, `updated_at` | `timestamp` without time zone, default `timezone('utc', now())` | Postgres | |
 | `id` | `bigint` primary key | Postgres | Internal; use `number` to talk about a case. |
 
@@ -250,4 +253,16 @@ Any admin edits a case's Markdown in place on its panel page (issue #332, `Backe
 - **Every save re-validates.** The save stores the Markdown even when it has format errors (a pending case may be fixed over several saves), and the page then shows the parser errors of the saved text, computed on read as above.
 - **Optimistic locking.** A save applies only over the `lock_version` the admin loaded, and increments it. If another admin saved the case in between, the save is refused with "Este caso mudou desde que você o abriu: recarregue a página antes de salvar." and nothing is overwritten; the admin's text stays in the editor so it can be copied before reloading.
 - **Revisions.** Each save keeps the Markdown it replaces as a row of `case_revisions`: `markdown`, the `lock_version` that Markdown had, `editor_id` and an `editor_email` snapshot of the admin whose save replaced it, and `inserted_at` (when it was replaced). Revisions are never updated; deleting a case deletes its revisions, and deleting an admin account keeps its revisions with `editor_id` null. The panel lists them newest first. Saving an unchanged Markdown keeps no revision.
-- **Published versions stay as they are.** A save writes only `cases.markdown`, `cases.lock_version` and a new `case_revisions` row; it never changes the status, area or theme. A published Station version (a later child of #326) is an immutable copy made at approval, so an edit can never change one; republishing an edited approved case is the approval step's job.
+- **Published versions stay as they are.** A save writes only `cases.markdown`, `cases.lock_version` and a new `case_revisions` row; it never changes the status, area or theme. A published Station version is an immutable copy made at approval, so an edit can never change one; republishing an edited approved case is the approval step's job.
+
+## Approving and publishing a case (admin panel, issue #333)
+
+Any admin approves or disapproves a case from its panel page (`Backend.Content.approve_case/3`, `Backend.Content.disapprove_case/1`).
+
+- **Approval requires valid format.** A case cannot be approved while it has parser errors; the button is disabled in the UI, and `Content.approve_case/3` returns `{:error, :invalid_case}` if called with parser errors or an invalid package.
+- **Immutable station versions.** Approving inserts a new immutable row in `station_versions`: sequential `version_number` per case, `station_id` (from `[ESTAÇÃO id]`), `area`, `theme`, `markdown`, the full parsed `package`, approver metadata (`approved_by_id`, `approved_by_email`, `approved_at`), and `case_revision_id` pointing to the latest revision (if the case was edited).
+- **Case status and metadata.** Approving sets `status = :approved`, stores `approved_by_id`, `approved_by_email` snapshot, `approved_at` timestamp, increments `lock_version`, and syncs `area` and `theme` with the parsed package.
+- **Disapprove hides the case.** Disapproving sets `status = :disapproved` with optimistic locking.
+- **Re-approving after edits.** When an approved case is edited and approved again, a new `StationVersion` row is created (`version_number: 2`). Previous versions are immutable and remain readable (`Content.get_station_version!/1`, `Content.list_station_versions/1`).
+- **Station catalog.** `Backend.Stations.list_catalog_stations/0` (backing `GET /stations`) returns the latest published version of each currently approved case (`id`, `area`, `theme`, `actors`), stripped of examiner secrets. Pending and disapproved cases do not appear in the catalog.
+

@@ -57,7 +57,11 @@ defmodule Backend.Accounts.AccountDeletionTest do
     # never deleted by `delete_user/1`, so these need not cascade: they nilify
     # (`case_revisions.editor_id` keeps the author in `editor_email`) or
     # restrict, so deleting an admin never erases the content they edited.
-    @admin_only_references MapSet.new(["case_revisions.editor_id"])
+    @admin_only_references MapSet.new([
+                             "case_revisions.editor_id",
+                             "cases.approved_by_id",
+                             "station_versions.approved_by_id"
+                           ])
 
     test "every foreign key to users cascades on delete, except admin-only ones" do
       %{rows: rows} =
