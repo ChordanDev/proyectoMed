@@ -17,18 +17,31 @@ Spec #326 (production launch: database, accounts, subscriptions, results history
 - Delivery: forecast well under 400 authored lines; strategy `single-pr` into `feat/326-production-launch`.
 
 ## Tasks
-- [ ] T1 (inline; one mechanical file) Feature document.
-- [ ] T2 (inline; GitHub writes only) Publish ADR-014 superseding ADR-001; mark #34 superseded (status line + comment).
-- [ ] T3 (inline; GitHub writes only) Amendment comments on ADR-013 #209, ADR-007 #92, ADR-002 #35, ADR-012 #124.
-- [ ] T4 (inline; GitHub write only) Publish ADR-015: Phoenix LiveView for account, billing and the admin case panel; the Vite/React SPA stays frozen.
-- [ ] T5 (inline; one file) Sync `CONTEXT.md`: Content Partner, MVP Data Retention, Session Data Lifecycle, Jev Gate and the other entries that contradict the new ADRs; add the new launch terms.
-- [ ] T6 (inline) Comment on #326 listing links to every ADR change; local CI; PR.
+- [x] T1 (inline; one mechanical file) Feature document. Commit `824324e`.
+- [x] T2 (inline; GitHub writes only) Publish ADR-014 superseding ADR-001; mark #34 superseded (status line + comment).
+- [x] T3 (inline; GitHub writes only) Amendment comments on ADR-013 #209, ADR-007 #92, ADR-002 #35, ADR-012 #124.
+- [x] T4 (inline; GitHub write only) Publish ADR-015: Phoenix LiveView for account, billing and the admin case panel; the Vite/React SPA stays frozen.
+- [x] T5 (inline; one file) Sync `CONTEXT.md`: Content Partner, MVP Data Retention, Session Data Lifecycle, Jev Gate and the other entries that contradict the new ADRs; add the new launch terms. Commit `646535e`.
+- [x] T6 (inline) Comment on #326 listing links to every ADR change; local CI; PR.
 
 ## Acceptance
 Per #327: each decision published with context, decision, alternatives and consequences; ADR-001 marked superseded with a link; #326 lists every ADR change; contradicting glossary entries updated; local CI passes.
 
 ## Progress / evidence
-(filled per task)
+- ADR-014 #346 (supersedes ADR-001): https://github.com/ChordanDev/proyectoMed/issues/346
+- ADR-001 #34: Status line edited to "Superseded by ADR-014 #346" and comment https://github.com/ChordanDev/proyectoMed/issues/34#issuecomment-6330999414 (issue kept open as history, like ADR-010 #115).
+- ADR-013 #209 amendment: https://github.com/ChordanDev/proyectoMed/issues/209#issuecomment-6331023393
+- ADR-007 #92 amendment: https://github.com/ChordanDev/proyectoMed/issues/92#issuecomment-6331035546
+- ADR-002 #35 amendment: https://github.com/ChordanDev/proyectoMed/issues/35#issuecomment-6331035877
+- ADR-012 #124 amendment: https://github.com/ChordanDev/proyectoMed/issues/124#issuecomment-6331036195
+- ADR-015 #347: https://github.com/ChordanDev/proyectoMed/issues/347
+- #326 link list: https://github.com/ChordanDev/proyectoMed/issues/326#issuecomment-6331057157
+- Readback: every issue and comment above fetched with `gh issue view --json`; titles, `type:docs` labels and first lines match.
+- Structural check on `CONTEXT.md` (not a test; no runnable RED applies): ripgrep for the contradicting statements ("no learner account", "no personal history", "no clinician workspace", the unconditional "must pass Jev before it is displayed", "supplies the one MVP station", "does not create personal history", "Content Partner's rubric") matched 8 lines before the edit and 0 after.
+- Local CI: see the PR evidence.
+
+## Follow-ups
+- `AGENTS.md` and `.agents/skills/backend-phoenix-contexts/SKILL.md` still describe one domain context and a JSON-only `BackendWeb`; update them to the ADR-007 amendment and ADR-015 (outside this issue's edit surface).
 
 ## Next
-T2.
+PR review and merge into `feat/326-production-launch`.
