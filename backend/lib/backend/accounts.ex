@@ -8,7 +8,7 @@ defmodule Backend.Accounts do
   import Ecto.Query, warn: false
   alias Backend.Repo
 
-  alias Backend.Accounts.{Scope, User, UserNotifier, UserToken}
+  alias Backend.Accounts.{LegalDocuments, Scope, User, UserNotifier, UserToken}
 
   ## Database getters
 
@@ -65,21 +65,49 @@ defmodule Backend.Accounts do
   ## User registration
 
   @doc """
-  Registers a user.
+  Registers a learner (#336): an unconfirmed `student` that accepted the
+  current terms of use and privacy policy. The accepted versions and the
+  acceptance time are stored; a role in `attrs` is ignored, so public sign-up
+  never creates an admin.
 
   ## Examples
 
-      iex> register_user(%{field: value})
+      iex> register_user(%{email: "a@b.c", terms_accepted: true, privacy_accepted: true})
       {:ok, %User{}}
 
-      iex> register_user(%{field: bad_value})
+      iex> register_user(%{email: "a@b.c"})
       {:error, %Ecto.Changeset{}}
 
   """
+  @spec register_user(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def register_user(attrs) do
     %User{}
-    |> User.email_changeset(attrs)
+    |> User.registration_changeset(attrs, legal_versions())
     |> Repo.insert()
+  end
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for the sign-up form. Takes the
+  `:validate_unique` option of `Backend.Accounts.User.email_changeset/3`.
+  """
+  @spec change_user_registration(map(), keyword()) :: Ecto.Changeset.t()
+  def change_user_registration(attrs \\ %{}, opts \\ []) do
+    User.registration_changeset(%User{}, attrs, Keyword.merge(opts, legal_versions()))
+  end
+
+  @doc """
+  Returns the current terms of use (`:terms`) or privacy policy (`:privacy`):
+  title, version and paragraphs. The texts are placeholders (see
+  `Backend.Accounts.LegalDocuments`).
+  """
+  @spec legal_document(LegalDocuments.kind()) :: LegalDocuments.t()
+  def legal_document(kind), do: LegalDocuments.get(kind)
+
+  defp legal_versions do
+    [
+      terms_version: LegalDocuments.get(:terms).version,
+      privacy_version: LegalDocuments.get(:privacy).version
+    ]
   end
 
   ## Settings

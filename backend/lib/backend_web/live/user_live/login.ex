@@ -1,8 +1,7 @@
 defmodule BackendWeb.UserLive.Login do
   @moduledoc """
-  Login by email link or by password (`mix phx.gen.auth`, copy in pt-BR).
-  There is no sign-up link: accounts are provisioned (#331) until learner
-  sign-up arrives (#336).
+  Login by email link or by password (`mix phx.gen.auth`, copy in pt-BR), with
+  a link to learner sign-up (#336).
   """
 
   use BackendWeb, :live_view
@@ -19,6 +18,12 @@ defmodule BackendWeb.UserLive.Login do
             <p>Entrar</p>
             <:subtitle :if={@current_scope}>
               Entre novamente para fazer alterações sensíveis na sua conta.
+            </:subtitle>
+            <:subtitle :if={!@current_scope}>
+              Ainda não tem uma conta?
+              <.link navigate={~p"/users/register"} class="font-semibold text-brand hover:underline">
+                Crie a sua conta
+              </.link>
             </:subtitle>
           </.header>
         </div>

@@ -17,9 +17,51 @@ defmodule Backend.Accounts.User do
     field :hashed_password, :string, redact: true
     field :confirmed_at, :utc_datetime
     field :authenticated_at, :utc_datetime, virtual: true
+    field :terms_accepted, :boolean, virtual: true
+    field :privacy_accepted, :boolean, virtual: true
+    field :terms_version, :string
+    field :terms_accepted_at, :utc_datetime
+    field :privacy_version, :string
+    field :privacy_accepted_at, :utc_datetime
 
     timestamps(type: :utc_datetime)
   end
+
+  @doc """
+  A changeset for a learner signing up (#336): the email and the acceptance of
+  the terms of use and of the privacy policy. Only `email`, `terms_accepted` and
+  `privacy_accepted` are cast; the accepted versions (`:terms_version` and
+  `:privacy_version` options, required) and the acceptance time are set here,
+  never taken from the attributes, and the role stays `:student`.
+
+  Takes the `:validate_unique` option of `email_changeset/3`.
+  """
+  def registration_changeset(user, attrs, opts) do
+    terms_version = Keyword.fetch!(opts, :terms_version)
+    privacy_version = Keyword.fetch!(opts, :privacy_version)
+
+    user
+    |> cast(attrs, [:email, :terms_accepted, :privacy_accepted])
+    |> validate_email(opts)
+    |> validate_acceptance(:terms_accepted, message: "você precisa aceitar os Termos de Uso")
+    |> validate_acceptance(:privacy_accepted,
+      message: "você precisa aceitar a Política de Privacidade"
+    )
+    |> put_acceptance(terms_version, privacy_version)
+  end
+
+  defp put_acceptance(%{valid?: true} = changeset, terms_version, privacy_version) do
+    now = DateTime.utc_now(:second)
+
+    change(changeset,
+      terms_version: terms_version,
+      terms_accepted_at: now,
+      privacy_version: privacy_version,
+      privacy_accepted_at: now
+    )
+  end
+
+  defp put_acceptance(changeset, _terms_version, _privacy_version), do: changeset
 
   @doc """
   A user changeset for registering or changing the email.

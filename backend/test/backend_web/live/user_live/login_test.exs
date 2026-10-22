@@ -9,7 +9,7 @@ defmodule BackendWeb.UserLive.LoginTest do
       {:ok, _lv, html} = live(conn, ~p"/users/log-in")
 
       assert html =~ "Entrar"
-      refute html =~ "/users/register"
+      assert html =~ "/users/register"
       assert html =~ "Entrar com um link por e-mail"
     end
   end
