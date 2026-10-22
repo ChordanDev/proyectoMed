@@ -21,7 +21,7 @@ The launch (target 2026-11-21) depends on Fly.io, Neon, RevenueCat Web Billing, 
 - No code. Allowed edit surfaces: `docs/research/**`, this file.
 
 ## Tasks
-- [ ] T1 (route: inline; no delegation trigger — single passive doc, research via web tools) Write `docs/research/production-infrastructure.md` covering every scope item, with a confirmed/changed verdict per spec assumption and an open-questions list.
+- [x] T1 (route: inline; no delegation trigger — single passive doc, research via web tools) Write `docs/research/production-infrastructure.md` covering every scope item, with a confirmed/changed verdict per spec assumption and an open-questions list.
 
 ## Test-first policy
 Exception: passive documentation-only change; there is no meaningful runnable RED. Checks are structural (every section has a verdict and sources) plus the local CI gate to prove nothing else regressed.
@@ -37,7 +37,16 @@ Per issue #328: report in `docs/` with each finding, source URL and date; each s
 Forecast ~300–450 authored lines (one doc). Strategy `single-pr` to `feat/326-production-launch`.
 
 ## Progress
-- T1: pending.
+- T1: done in commit `613dd62` (`docs(research): verify production infrastructure and billing assumptions`).
+  - RED/GREEN: not applicable (passive documentation, no runnable RED).
+  - Structural check: all 14 assumptions (A1–A14) have one verdict each, every finding carries a source URL, the access date is 2026-10-21, and open questions Q1–Q6 are listed.
+  - Local CI: `LOCAL CI PASSED`. Web: 337 tests in 16 files. Backend: 1743 passed. A second web suite: 4 passed.
+  - Key changed assumptions:
+    - A3: the deploy drain conflicts with Fly's `kill_timeout` maximum of 300 s.
+    - A9: quotas cannot come from RevenueCat plan metadata.
+    - A12: Anthropic's monthly spend cap is the real limit.
+    - A13: Deepgram Pay As You Go allows 150 streams, fewer than 200.
+    - A10: LiveKit has no South American region for hosted agents.
 
 ## Next step
-Research and write T1.
+The user answers Q1–Q6 in the report. The live checks it lists stay pending until accounts exist.
