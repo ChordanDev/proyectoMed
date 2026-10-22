@@ -23,7 +23,7 @@ Doctor review is the critical path of the launch (#326, ADR-015 #347). n8n gener
 
 - [x] T1 — Accounts: `phx.gen.auth` LiveView variant with an `admin`/`student` role, registration removed, admin provisioning through `priv/repo/seeds.exs` (the allowed edit surfaces exclude `lib/mix/tasks`), admin-only `/admin` (anonymous → login, student → redirected).
 - [x] T2 — Content: `cases` migration (identity `number`, area, theme, markdown, status pending/approved/disapproved, DB-defaulted timestamps), `Backend.Content` list/filter/get, n8n insert contract in `docs/case-format`.
-- [ ] T3 — Admin case panel: list with number, area, theme, status and status/area filters; case page with the located parser errors at the top; decision on computing errors on read documented.
+- [x] T3 — Admin case panel: list with number, area, theme, status and status/area filters; case page with the located parser errors at the top; decision on computing errors on read documented.
 - [ ] T4 — Screenshots of the list and of an invalid case (seeded admin, `PORT=4135`, `MIX_ENV=dev`), PR.
 
 ## Routing
@@ -49,6 +49,9 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 - T1 commit: 9a9cc53.
 - T2 (Content): migration `create_cases` (`number` `GENERATED ALWAYS AS IDENTITY`, `status` check constraint, UTC `timezone('utc', now())` timestamp defaults), `Backend.Content.Case`, `Backend.Content` (`list_cases/1` with status/area filters, `list_areas/0`, `get_case!/1`, `get_case_by_number/1`, `statuses/0`); n8n insert contract and the compute-on-read decision in `docs/case-format/README.md`. RED — 12/12 new Content tests failed (no table, no module); GREEN — 12/12 (plus a UTC assertion), full backend suite 1938/1938.
 
+- T2 commit: 2f3174f.
+- T3 (panel, commit 0e4b27c + this docs commit): `BackendWeb.AdminCaseLive.Index` (`/admin`, filters as URL params through `push_patch`) and `BackendWeb.AdminCaseLive.Show` (`/admin/cases/:number`: errors from `Backend.Stations.parse_case/1` at the top, each linked to its numbered line, then the Markdown with numbered lines); the #329 placeholder `AdminLive` is removed. Compute-on-read rationale is in `docs/case-format/README.md` and the Show moduledoc. RED — 10/10 new panel tests failed (no route/module); GREEN — 10/10, all LiveView tests 39/39. Parser messages stay in English (they come from #330); the surrounding copy is pt-BR.
+
 ## Next step
 
-T3.
+T4: local CI, screenshots, push and PR.

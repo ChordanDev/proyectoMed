@@ -88,7 +88,9 @@ npm --prefix web run dev
 In `dev`, `mix phx.server` also runs the esbuild and Tailwind watchers that build
 the LiveView assets from `backend/assets` (`mix setup` installs both binaries;
 `mix assets.build` builds once). http://localhost:4000/admin is the admin case
-panel (pt-BR, ADR-015 #347, #331); only a logged-in admin opens it (see
+panel (pt-BR, ADR-015 #347, #331): the cases n8n inserted, with number, area,
+theme and status, filtered by status and area; `/admin/cases/<number>` shows a
+case with its located format errors first. Only a logged-in admin opens it (see
 ["Admin accounts"](#admin-accounts)).
 
 The backend exposes health and Station HTTP routes. Representative responses:
