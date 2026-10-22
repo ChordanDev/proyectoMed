@@ -47,7 +47,10 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 - T2 done (delegated direct). RED: `test/backend_web/live/admin_live_test.exs` failed to compile (no `/admin` route, no `Phoenix.LiveViewTest`). GREEN: 1/1. Assets copied from a Phoenix 1.8.13 generator run (`mix phx.new backend --app backend --module Backend`), including daisyUI and Heroicons so `phx.gen.auth` (#331) finds the components it expects. Build output is ignored by `backend/priv/static/.gitignore`. `mix assets.build` and `PORT=4134 mix phx.server` serve `/admin` (200, CSS 200); `/` still answers `{"status":"ok"}`.
 - T2 commit: `95d0a88`.
 - T3 done (delegated direct). `AGENTS.md` and `.agents/skills/backend-phoenix-contexts/SKILL.md` describe the four contexts, their dependency direction, Ecto ownership and thin controllers and LiveViews. New guard in `test/backend/architecture_test.exs`: `BackendWeb` never references `Backend.Repo`. It passed on creation (no violation exists, so no RED); a planted `Backend.Repo` reference in `admin_live.ex` made it fail (3/4), then was removed.
+- T3 commit: `de8d991`.
+- Closure: local CI script printed `LOCAL CI PASSED` (web unit 337/337, ExUnit 1805/1805, E2E 4/4, typecheck, lint, format, compile, Credo strict, Dialyzer 0 errors). GitHub Actions is blocked by billing.
+- Pending: a browser screenshot of `/admin` (the headless browser download stalled; the page was checked with curl on port 4134), and a live boot against Neon with `DATABASE_SSL=true` (no remote database was used).
 
 ## Next step
 
-Local CI, then push and open the PR.
+Push and open the PR to `feat/326-production-launch`.
