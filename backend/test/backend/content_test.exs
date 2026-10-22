@@ -344,14 +344,35 @@ defmodule Backend.ContentTest do
       assert v1_version_reloaded.approved_by_email == admin.email
     end
 
-    test "disapproving transitions case to :disapproved and respects optimistic locking",
+    test "approving an already approved case with unchanged markdown is an idempotent no-op",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, approved} = Content.approve_case(kase, package, admin)
+      assert approved.lock_version == 2
+      assert length(Content.list_station_versions(approved)) == 1
+
+      # Re-approving without any markdown changes
+      assert {:ok, same} = Content.approve_case(approved, package, admin)
+      assert same.lock_version == 2
+      assert length(Content.list_station_versions(same)) == 1
+    end
+
+    test "disapproving transitions case to :disapproved, clears approval metadata, and respects optimistic locking",
          %{admin: admin, package: package} do
       kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
       {:ok, approved} = Content.approve_case(kase, package, admin)
 
       assert {:ok, disapproved} = Content.disapprove_case(approved)
       assert disapproved.status == :disapproved
-      assert Content.get_case!(kase.id).status == :disapproved
+      assert disapproved.approved_by_id == nil
+      assert disapproved.approved_by_email == nil
+      assert disapproved.approved_at == nil
+
+      reloaded = Content.get_case!(kase.id)
+      assert reloaded.status == :disapproved
+      assert reloaded.approved_by_id == nil
+      assert reloaded.approved_by_email == nil
+      assert reloaded.approved_at == nil
 
       # Attempting to disapprove with stale struct
       assert {:error, :stale} = Content.disapprove_case(approved)

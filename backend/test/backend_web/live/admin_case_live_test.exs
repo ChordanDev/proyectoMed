@@ -327,11 +327,13 @@ defmodule BackendWeb.AdminCaseLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
       assert has_element?(view, "#case-meta", "Aprovado")
+      assert has_element?(view, "#case-approval", admin.email)
 
       view |> element("#case-disapprove") |> render_click()
 
       assert has_element?(view, "#flash-info", "Caso reprovado")
       assert has_element?(view, "#case-meta", "Reprovado")
+      refute has_element?(view, "#case-approval")
 
       reloaded = Content.get_case_by_number(number)
       assert reloaded.status == :disapproved
@@ -363,8 +365,8 @@ defmodule BackendWeb.AdminCaseLiveTest do
       edited =
         String.replace(
           @reference_case,
-          "Dor abdominal há 24 horas",
-          "Dor forte na fossa ilíaca direita"
+          "dor abdominal iniciada há cerca de 18 horas",
+          "dor forte na fossa ilíaca direita há cerca de 18 horas"
         )
 
       save(view, edited)
@@ -397,15 +399,22 @@ defmodule BackendWeb.AdminCaseLiveTest do
   end
 
   describe "case index approver display (Story 19)" do
-    test "shows who approved the case when approved", %{conn: conn, admin: admin} do
+    test "shows who approved the case when approved, and dashes when disapproved", %{
+      conn: conn,
+      admin: admin
+    } do
       number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
       kase = Content.get_case_by_number(number)
       {:ok, package} = Backend.Stations.parse_case(@reference_case)
-      {:ok, _} = Content.approve_case(kase, package, admin)
+      {:ok, approved} = Content.approve_case(kase, package, admin)
 
       {:ok, view, _html} = live(conn, ~p"/admin")
-
       assert has_element?(view, "#case-#{number}", admin.email)
+
+      # When disapproved, approval attribution is hidden
+      {:ok, _disapproved} = Content.disapprove_case(approved)
+      {:ok, view2, _html} = live(conn, ~p"/admin")
+      refute has_element?(view2, "#case-#{number}", admin.email)
     end
   end
 

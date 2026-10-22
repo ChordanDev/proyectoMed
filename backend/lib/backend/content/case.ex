@@ -47,12 +47,18 @@ defmodule Backend.Content.Case do
   end
 
   @doc """
-  Disapproving a case (issue #333): sets status to :disapproved with optimistic locking.
+  Disapproving a case (issue #333): sets status to :disapproved with optimistic locking
+  and clears current approval attribution.
   """
   @spec disapprove_changeset(t()) :: Ecto.Changeset.t()
   def disapprove_changeset(kase) do
     kase
-    |> change(%{status: :disapproved})
+    |> change(%{
+      status: :disapproved,
+      approved_by_id: nil,
+      approved_by_email: nil,
+      approved_at: nil
+    })
     |> optimistic_lock(:lock_version)
   end
 

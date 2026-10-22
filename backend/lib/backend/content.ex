@@ -176,7 +176,15 @@ defmodule Backend.Content do
     end
   end
 
-  defp do_approve_case(%Case{} = kase, package, %{id: approver_id, email: approver_email}) do
+  defp do_approve_case(%Case{} = kase, package, approver) do
+    if already_approved_with_same_markdown?(kase) do
+      {:ok, kase}
+    else
+      execute_approval(kase, package, approver)
+    end
+  end
+
+  defp execute_approval(%Case{} = kase, package, %{id: approver_id, email: approver_email}) do
     now = DateTime.utc_now(:second)
 
     attrs = %{
@@ -202,6 +210,25 @@ defmodule Backend.Content do
       {:error, changeset} -> update_error(changeset)
     end
   end
+
+  defp already_approved_with_same_markdown?(%Case{
+         status: :approved,
+         id: case_id,
+         markdown: markdown
+       }) do
+    case Repo.one(
+           from sv in StationVersion,
+             where: sv.case_id == ^case_id,
+             order_by: [desc: sv.version_number],
+             limit: 1,
+             select: sv.markdown
+         ) do
+      ^markdown -> true
+      _other -> false
+    end
+  end
+
+  defp already_approved_with_same_markdown?(_kase), do: false
 
   defp insert_station_version(kase, package, approver_id, approver_email, now) do
     latest_revision =

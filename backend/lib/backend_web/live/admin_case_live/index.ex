@@ -105,10 +105,10 @@ defmodule BackendWeb.AdminCaseLive.Index do
             <td>{kase.theme}</td>
             <td><.status_badge status={kase.status} /></td>
             <td class="text-sm text-base-content/70">
-              <span :if={kase.approved_by_email}>
+              <span :if={kase.status == :approved && kase.approved_by_email}>
                 {kase.approved_by_email}
               </span>
-              <span :if={!kase.approved_by_email}>—</span>
+              <span :if={kase.status != :approved || !kase.approved_by_email}>—</span>
             </td>
           </tr>
         </tbody>

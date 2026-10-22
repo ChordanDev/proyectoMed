@@ -156,7 +156,7 @@ defmodule BackendWeb.AdminCaseLive.Show do
             <.status_badge status={@case.status} />
           </span>
           <span
-            :if={@case.approved_by_email && @case.approved_at}
+            :if={@case.status == :approved && @case.approved_by_email && @case.approved_at}
             id="case-approval"
             class="mt-1 block text-sm text-base-content/70"
           >
@@ -170,6 +170,7 @@ defmodule BackendWeb.AdminCaseLive.Show do
           id="case-approve"
           type="button"
           phx-click="approve"
+          phx-disable-with="Aprovando..."
           disabled={@errors != []}
           class="btn btn-success btn-sm"
         >
