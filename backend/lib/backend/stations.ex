@@ -13,6 +13,7 @@ defmodule Backend.Stations do
   require Logger
 
   alias Backend.Stations.CandidateGate
+  alias Backend.Stations.CaseFormat
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
   alias Backend.Stations.Impressos
@@ -697,6 +698,19 @@ defmodule Backend.Stations do
   @doc "Renders a qualification summary as a label-level plain-text report."
   @spec render_qualification(Qualification.summary()) :: String.t()
   def render_qualification(summary), do: Qualification.render(summary)
+
+  # ============================================================================
+  # Case format (#330)
+  # ============================================================================
+
+  @doc """
+  Parses a case written in the tagged Markdown case format into a Station
+  Package, or into the format errors located at a line of the case.
+
+  Pure and deterministic: no LLM, no database. See `docs/case-format/README.md`.
+  """
+  @spec parse_case(String.t()) :: {:ok, map()} | {:error, [CaseFormat.error()]}
+  def parse_case(text), do: CaseFormat.parse(text)
 
   # ============================================================================
   # Audio & Speech Operations
