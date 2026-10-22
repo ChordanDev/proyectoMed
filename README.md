@@ -78,12 +78,18 @@ The repository commits both lockfiles (`web/package-lock.json` and
 # Web SPA — boots Vite dev server on http://localhost:5173.
 npm --prefix web run dev
 
-# Backend — boots the JSON API on http://localhost:4000.
+# Backend — boots the JSON API and the LiveView pages on http://localhost:4000.
 ( cd backend && mix phx.server )
 
 # Backend with another active station (see "Active station" below).
 ( cd backend && ACTIVE_STATION_ID=acute-appendicitis mix phx.server )
 ```
+
+In `dev`, `mix phx.server` also runs the esbuild and Tailwind watchers that build
+the LiveView assets from `backend/assets` (`mix setup` installs both binaries;
+`mix assets.build` builds once). http://localhost:4000/admin is a placeholder
+LiveView page (pt-BR) that proves LiveView, the root layout and the assets
+render (ADR-015 #347); the admin case panel (#344) replaces it.
 
 The backend exposes health and Station HTTP routes. Representative responses:
 
@@ -906,7 +912,9 @@ above for how to exercise it locally.
 - **No stored data yet.** Postgres and Ecto are wired (see
   ["Database"](#database)), but no context stores data yet; accounts, billing
   and content arrive with the #326 slices.
-- **No view layer.** The backend serves only JSON responses.
+- **One placeholder LiveView page.** Besides the JSON API, the backend serves
+  only the placeholder `/admin` LiveView page; the account, billing and admin
+  screens arrive with the #326 slices.
 
 - **No strict TDD.** `openspec/config.yaml` keeps `strict_tdd: false`. The
   harness is available, but test-first discipline is left to the change that

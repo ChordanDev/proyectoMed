@@ -1,6 +1,20 @@
 defmodule BackendWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :backend
 
+  # The session will be stored in the cookie and signed, this means its
+  # contents can be read but not tampered with. It serves the LiveView pages
+  # (ADR-015 #347); the JSON API stays sessionless.
+  @session_options [
+    store: :cookie,
+    key: "_backend_key",
+    signing_salt: "hcRAAZvj",
+    same_site: "Lax"
+  ]
+
+  socket "/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: [connect_info: [session: @session_options]]
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),
@@ -16,6 +30,8 @@ defmodule BackendWeb.Endpoint do
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
   if code_reloading? do
+    socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
+    plug Phoenix.LiveReloader
     plug Phoenix.CodeReloader
   end
 
@@ -32,6 +48,8 @@ defmodule BackendWeb.Endpoint do
     length: 20_000_000,
     json_decoder: Phoenix.json_library()
 
+  plug Plug.MethodOverride
   plug Plug.Head
+  plug Plug.Session, @session_options
   plug BackendWeb.Router
 end
