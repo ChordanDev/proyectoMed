@@ -22,7 +22,7 @@ n8n today generates human-readable Markdown the backend cannot load (#326). The 
 
 - [x] T1 — Generator prompt `docs/n8n/generator-prompt.md`: current clinical rules + every tag of the spec + companion actors + numbering left to the DB + originality rule. Test: the prompt names every tag of the spec and its embedded example parses with zero errors.
 - [x] T2 — Reviewer prompt `docs/n8n/reviewer-prompt.md` (arithmetic, tags, links, actor/question coverage; `APROVADO` or a list of fixes) and Neon insert `docs/n8n/neon-insert.md` + `docs/n8n/README.md` (flow, HITL checklist). Test: the insert SQL in `neon-insert.md` runs against the `cases` table and returns a sequential number with status `pending`.
-- [ ] T3 — Three sample cases generated with the generator prompt (one with a companion) saved as fixtures; test that each parses with zero errors via `Backend.Stations.parse_case/1`.
+- [x] T3 — Three sample cases generated with the generator prompt (one with a companion) saved as fixtures; test that each parses with zero errors via `Backend.Stations.parse_case/1`.
 
 ## Routing
 
@@ -43,8 +43,10 @@ All tasks: delegated direct (this worker is the single bounded writer for #335).
 ## Progress
 
 - T1 (generator prompt): RED — 0/2 (`docs/n8n/generator-prompt.md` missing); GREEN — 2/2 (prompt names all 21 spec tags; embedded companion example parses). Commit 62c7fa5.
-- T2 (reviewer prompt, Neon insert, flow README + HITL checklist): RED — 2/4 (`docs/n8n/neon-insert.md` missing); GREEN — 4/4 (documented SQL equals the spec contract; run against the test DB it returns increasing numbers and stores `pending`). The generator prompt also learned the regeneration input (ESTAÇÃO ANTERIOR + CORREÇÕES). Reviewer prompt is passive prose: no runnable RED; structural readback only. Commit: see git log (`docs(n8n): add the reviewer prompt and the Neon insert node`).
+- T2 (reviewer prompt, Neon insert, flow README + HITL checklist): RED — 2/4 (`docs/n8n/neon-insert.md` missing); GREEN — 4/4 (documented SQL equals the spec contract; run against the test DB it returns increasing numbers and stores `pending`). The generator prompt also learned the regeneration input (ESTAÇÃO ANTERIOR + CORREÇÕES). Reviewer prompt is passive prose: no runnable RED; structural readback only. Commit 347c866.
+
+- T3 (three generated samples): generated with the generator prompt through the Anthropic API (`claude-opus-5-5`, effort medium, no RAG context): Clínica Médica (cetoacidose diabética), Pediatria (bronquiolite, patient + mother as companion), Ginecologia e Obstetrícia (pré-eclâmpsia grave). RED — 4/5 (no fixtures; the coverage test failed). First run: 2/3 parsed; the pré-eclâmpsia case had a Cyrillic `е` inside an id (`iеca-sublingual`). Fixed the prompts (ASCII-only ids: generator rule 9, reviewer rule A4) and regenerated all three; GREEN — 8/8 (all three samples parse with zero errors, one has a companion). Samples saved unedited. Commit: this task's `test(n8n)` commit.
 
 ## Next step
 
-T3.
+Full local CI, push, PR. Pending after merge: HITL — the user applies the prompts in n8n and confirms on #335.

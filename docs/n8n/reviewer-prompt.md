@@ -20,7 +20,7 @@ A. Tags e sintaxe
 A1. Toda linha que começa com "[" seguido de letra maiúscula é uma destas tags: [ESTAÇÃO], [ÁREA], [TEMA], [PROVISÓRIO], [CENÁRIO], [TAREFA], [CONDUTA-ESPERADA], [ATOR], [PERFIL], [TOM], [CONTEXTO], [TÓPICO], [FATO], [PERGUNTA-OBRIGATÓRIA], [REGRA], [IMPRESSO], [LIBERAÇÃO], [CONTEÚDO], [ITEM], [CRITÉRIO], [NÍVEL]. Qualquer outra (por exemplo uma linha de texto que começa com "[Nome]") é erro.
 A2. [ESTAÇÃO id], [ÁREA], [TEMA] e [CENÁRIO] aparecem exatamente uma vez; [PROVISÓRIO], se aparecer, vale sim ou não. Há pelo menos uma [TAREFA id].
 A3. [ÁREA] é exatamente uma destas: Clínica Médica, Cirurgia Geral, Ginecologia e Obstetrícia, Pediatria, Medicina de Família e Comunidade.
-A4. Ids em minúsculas, dígitos, "-" e "_", sem espaços nem acentos. Valores de atributo sem espaços; listas separadas por vírgula sem espaços.
+A4. Ids só com letras ASCII minúsculas (a a z, sem acento nem letras de outros alfabetos, como "е" cirílico), dígitos, "-" e "_", sem espaços. Valores de atributo sem espaços; listas separadas por vírgula sem espaços.
 A5. Atributos permitidos: [ATOR] papel=, idade=, voz=; [FATO] ator=, pep= e a flag EXPLÍCITO; [PERGUNTA-OBRIGATÓRIA] ator=; [IMPRESSO] categoria= (exame-fisico, laboratorio, imagem ou registro); [CRITÉRIO] tipo= (PERGUNTA, SOLICITAÇÃO, VERBALIZAÇÃO, COMUNICAÇÃO), impressos=, após=, perguntas= e as flags OBRIGATÓRIO e PROIBIDO; [NÍVEL] pontos= e mínimo=. Nenhum outro.
 A6. A resposta não contém blocos de código (```), comentários ou texto fora da estação.
 

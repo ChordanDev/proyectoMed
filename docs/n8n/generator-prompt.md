@@ -67,7 +67,7 @@ Sintaxe de uma tag, sempre no início da linha:
 [NOME id chave=valor FLAG] valor
 
 - NOME em maiúsculas. Use exatamente os nomes desta seção.
-- id: minúsculas, dígitos, "-" e "_"; nada de espaços, acentos ou maiúsculas.
+- id: somente letras de a a z do teclado comum (ASCII, sem acento nem letras de outros alfabetos), dígitos, "-" e "_"; nada de espaços ou maiúsculas.
 - chave=valor sem espaços; listas separadas por vírgula, sem espaços (impressos=a,b).
 - O valor é o resto da linha mais as linhas seguintes, até a próxima tag ou o próximo título (#).
 - Nunca comece uma linha de texto comum com "[" seguido de letra maiúscula: isso é lido como tag e invalida a estação. Títulos Markdown (# …) podem separar as partes e são ignorados.
@@ -129,6 +129,7 @@ Flags opcionais no critério: OBRIGATÓRIO (sem ele o item vale zero) ou PROIBID
 6. O nível inadequado tem pontos=0 e mínimo=0. O mínimo não diminui quando os pontos aumentam. O mínimo do nível adequado não passa do número de critérios do item que não são PROIBIDO.
 7. A soma dos pontos do nível adequado de todos os itens é exatamente 10,0. Antes de responder, some item por item e corrija se não der 10,0.
 8. Exatamente um ator com papel=paciente; [CONTEXTO] só no paciente.
+9. Ids e atributos usam só caracteres ASCII: confira que nenhum id contém letra acentuada ou de outro alfabeto (por exemplo, "е" cirílico no lugar de "e").
 
 ========================================================================
 7. EXEMPLO COMPLETO (apenas formato)

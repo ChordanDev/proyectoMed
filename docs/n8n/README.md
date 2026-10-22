@@ -24,7 +24,9 @@ Trigger (área, tema) → Pinecone retrieval → Generator (AI Agent)
 
 ## Models
 
-Production n8n uses **OpenAI** for both nodes. The prompts use no provider-specific feature, so they also run on other chat models. The three sample cases in `backend/test/backend/stations/fixtures/case_format/` (`n8n-sample-*.md`) were generated with the generator prompt through the Anthropic API, only to prove that the prompt yields cases the parser accepts; `case_format_n8n_samples_test.exs` parses them with zero errors.
+Production n8n uses **OpenAI** for both nodes. The prompts use no provider-specific feature, so they also run on other chat models. The three sample cases in `backend/test/backend/stations/fixtures/case_format/` (`n8n-sample-*.md`) were generated with the generator prompt through the Anthropic API, only to prove that the prompt yields cases the parser accepts; `case_format_n8n_samples_test.exs` parses them with zero errors. They are saved exactly as the model returned them (`claude-opus-5-5`, effort `medium`, no RAG context, 2026-10-22).
+
+The first run produced one case with a Cyrillic `е` inside an id (`iеca-sublingual`), which the parser rejects. The prompts now require ASCII-only ids (generator rule 9, reviewer rule A4), and the three samples come from the run after that change. Expect this class of error from any model; the reviewer and the admin panel's parser errors catch it.
 
 ## Voice keys
 

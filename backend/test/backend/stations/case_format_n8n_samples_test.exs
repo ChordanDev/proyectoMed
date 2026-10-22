@@ -36,6 +36,26 @@ defmodule Backend.Stations.CaseFormatN8nSamplesTest do
     end
   end
 
+  describe "cases generated with the generator prompt" do
+    # Raw model output for three themes, saved unedited (see docs/n8n/README.md).
+    @samples Path.wildcard(Path.expand("fixtures/case_format/n8n-sample-*.md", __DIR__))
+
+    test "cover at least three themes, one with a companion" do
+      assert length(@samples) >= 3
+
+      assert Enum.any?(@samples, fn path ->
+               {:ok, package} = path |> File.read!() |> Stations.parse_case()
+               Enum.any?(package["actors"], &(&1["role"] == "companion"))
+             end)
+    end
+
+    for path <- @samples do
+      test "#{Path.basename(path)} parses with zero errors" do
+        assert {:ok, _package} = unquote(path) |> File.read!() |> Stations.parse_case()
+      end
+    end
+  end
+
   # The text the user pastes into n8n: the body of the ~~~~text fence.
   defp system_prompt(path) do
     assert [_, prompt] = Regex.run(~r/~~~~text\n(.*?)~~~~/s, File.read!(path))
