@@ -4,13 +4,22 @@ import strings from "../i18n/pt-BR.json";
 export interface NoticeScreenProps {
   onStart: (consent: boolean) => void | Promise<void>;
   voiceSupport?: boolean;
+  /** Real-time voice (#360) sends audio to other providers than turn-based voice. */
+  realtimeVoice?: boolean;
 }
 
 export function NoticeScreen({
   onStart,
   voiceSupport = true,
+  realtimeVoice = false,
 }: NoticeScreenProps): React.JSX.Element {
   const [consentChecked, setConsentChecked] = useState(false);
+  const disclosure = realtimeVoice
+    ? strings.audioDisclosureRealtime
+    : strings.audioDisclosure;
+  const consentLabel = realtimeVoice
+    ? strings.consentCheckboxLabelRealtime
+    : strings.consentCheckboxLabel;
 
   const isButtonDisabled = voiceSupport && !consentChecked;
 
@@ -35,7 +44,7 @@ export function NoticeScreen({
       {/* Audio disclosure + consent (voice only) */}
       {voiceSupport && (
         <div className="disclosure-block">
-          <p className="disclosure">{strings.audioDisclosure}</p>
+          <p className="disclosure">{disclosure}</p>
           <label className="checkbox-row" data-testid="consent-checkbox">
             <input
               type="checkbox"
@@ -45,7 +54,7 @@ export function NoticeScreen({
               className="checkbox-input"
             />
             <span className="checkbox-label">
-              {strings.consentCheckboxLabel}
+              {consentLabel}
             </span>
           </label>
         </div>

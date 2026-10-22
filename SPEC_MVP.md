@@ -90,7 +90,7 @@ Some historical top-level compatibility delegates/configuration keys and test mo
 - `web/src/features/station/screens/StationScreen.tsx` — voice/text input, transcript, timer, and completion controls.
 - `web/src/features/station/result/ResultScreen.tsx` — four-state criteria, evidence, recommendations, coverage-aware estimates, fictional-data labels, and the educational disclaimer.
 - `web/src/features/station/i18n/pt-BR.json` — shared learner-facing copy.
-- The accepted prototype voice plan uses LiveKit/WebRTC with Deepgram transcription and ElevenLabs speech synthesis (ADR-009, #114). Text input remains an equal fallback path. Ticket 13 (#116) and children #117–#121 own the corresponding media and orchestration migration.
+- The accepted prototype voice plan uses LiveKit/WebRTC with Deepgram transcription and Cartesia speech synthesis (ADR-009, #114; ElevenLabs was replaced by Cartesia for real-time speech in #360). Text input remains an equal fallback path. Ticket 13 (#116) and children #117–#121 own the corresponding media and orchestration migration.
 
 ### Intended failure policy and current boundary
 
@@ -126,7 +126,7 @@ The governing design is `docs/design/jev-prototype.md`, under accepted ADR-011 (
 
 - Implemented dialogue gate: deterministic deny checks run first and immediately reject violations without fallback text. Exact package/version-bound templates with deterministic applicability may bypass Jev; all other candidates require the decision seam. A violation-specific approved fallback is an architectural allowance, not implemented routing.
 - The only ordinary bypass is an exact Approved Generic Reply with deterministic applicability. Shortness or length never authorizes text. "Estou bem" is eligible only when the authored case state makes it non-contradictory; "Não tenho alergias" is a clinical claim and is not generic.
-- The message path permits at most one semantic regeneration and full recheck within a monotonic deadline. Technical errors return without fallback clinical text; rejected candidates do not enter committed history or regeneration input. The accepted voice architecture requires only approved text to reach TTS; the LiveKit/Deepgram/ElevenLabs migration remains separate work, not proof supplied by this gate.
+- The message path permits at most one semantic regeneration and full recheck within a monotonic deadline. Technical errors return without fallback clinical text; rejected candidates do not enter committed history or regeneration input. The accepted voice architecture requires only approved text to reach TTS; the LiveKit/Deepgram/Cartesia migration remains separate work, not proof supplied by this gate.
 - Jev is a decision-model seam, not the generation model. One shared Phoenix proxy/domain interface may host distinct generation, transcription, text-to-speech, and decision-model adapters.
 - Implemented assessment builds shared, ordered, role-labelled evidence from transcript turns and Impressos events. Questions are batched once unless `max_questions_per_call` requires capacity chunks; task-order dependencies are computed in code. The batch contract takes classifications and code-supplied evidence IDs, not probability-weighted scores. Code validates IDs, learner role, provenance, and channel. Bad citations make a criterion uncertain; structural/provider failures invalidate the assessment without partial criteria. Span alignment for providers unable to cite supplied IDs is not implemented.
 - Deterministic code applies counts, required sub-actions, order, veto, and cancellation rules and maps authored levels to exact decimal points. Patient-role words never earn learner credit. Impressos events from #105–#108 are required only for criteria that depend on those events.
@@ -138,8 +138,8 @@ Remaining limits: no qualified live decision adapter (the TypeSafe adapter is op
 
 ### Architecture and tracker boundaries
 
-- ADR-009 (#114) is **Accepted** and defines the prototype voice stack: LiveKit/WebRTC, Deepgram, and ElevenLabs. Ticket 13 (#116) has children #117–#121.
-- The accepted Jev architecture integrates with, but does not duplicate, #119 (no patient response exits Phoenix before the safety boundary), #120 (only Phoenix-approved text reaches ElevenLabs), or #121 (cancellation, stale generation, failure recovery, and realism; not media, UI, or orchestration ownership).
+- ADR-009 (#114) is **Accepted** and defines the prototype voice stack: LiveKit/WebRTC, Deepgram, and Cartesia (amended in #360; originally ElevenLabs). Ticket 13 (#116) has children #117–#121.
+- The accepted Jev architecture integrates with, but does not duplicate, #119 (no patient response exits Phoenix before the safety boundary), #120 (only Phoenix-approved text reaches the TTS provider), or #121 (cancellation, stale generation, failure recovery, and realism; not media, UI, or orchestration ownership).
 - ADR-010 (#115), Proposed and V3-only, is superseded by accepted ADR-013 (#209). Neither is part of this Jev prototype.
 - The #105–#108 Impressos DAG is unchanged. Closed #27 and #44 remain prior evaluator and bounded-reply seams.
 - ADR-011 (#123) extends the ADR-002 safety contract; ADR-012 (#124) supersedes ADR-005's no-score rule only for Educational Point Estimates, never certification, pass/fail, or readiness claims. The legacy endpoint remains score-free; v2 exposes educational estimates without conferring clinical validation.
