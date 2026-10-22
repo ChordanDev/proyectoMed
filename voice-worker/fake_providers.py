@@ -1,7 +1,7 @@
 """Deterministic speech providers for local end-to-end tests (#191).
 
 With `VOICE_WORKER_FAKE_PROVIDERS=true` the worker transcribes and speaks without
-Deepgram or ElevenLabs: every learner utterance becomes one fixed transcript
+Deepgram or Cartesia: every learner utterance becomes one fixed transcript
 (`VOICE_WORKER_FAKE_TRANSCRIPT`), and every approved reply is spoken as a tone whose
 length follows the text. Everything else, from the room and Phoenix to turn tracking,
 is the real worker. The switch is refused unless LiveKit runs on this machine, so a

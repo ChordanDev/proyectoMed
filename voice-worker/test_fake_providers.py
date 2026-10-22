@@ -2,8 +2,11 @@
 import array
 import os
 import unittest
+from types import SimpleNamespace
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
+
+import httpx
 
 from livekit import rtc
 from livekit.agents.stt import SpeechEventType
@@ -200,6 +203,49 @@ class WorkerFakeModeTest(unittest.TestCase):
             endpointing_ms=worker.ENDPOINTING_MS,
             keyterm=[],
         )
+
+
+class WorkerFakeModeJobTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_non_loopback_livekit_url_fails_the_job_with_an_error_event(self):
+        # `--url` can point the worker elsewhere than LIVEKIT_URL, so each job re-checks.
+        def handler(request):
+            return httpx.Response(
+                200, json={"last_turn_id": 0, "language": "pt-BR", "keyterms": []}
+            )
+
+        room = SimpleNamespace(name="station-session-s1", isconnected=lambda: True)
+        ctx = SimpleNamespace(
+            room=room,
+            connect=AsyncMock(),
+            wait_for_participant=AsyncMock(),
+            shutdown=Mock(),
+        )
+        env = {
+            "VOICE_WORKER_FAKE_PROVIDERS": "true",
+            "LIVEKIT_URL": "wss://livekit.example.com",
+            "PHOENIX_URL": "http://phoenix",
+            "VOICE_WORKER_SECRET": "secret",
+        }
+        client = worker.PhoenixClient(
+            "http://phoenix", "secret", "s1", transport=httpx.MockTransport(handler)
+        )
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker, "PhoenixClient", return_value=client),
+            patch.object(worker, "publish", new=AsyncMock()) as publish,
+            patch.object(worker, "FakeTTS") as fake_tts,
+            patch.object(worker, "FakeSTT") as fake_stt,
+            self.assertLogs("voice-worker", level="WARNING"),
+        ):
+            await worker.entrypoint(ctx)
+
+        publish.assert_awaited_once_with(
+            room, {"session_id": "s1", "error": "fake_providers_refused"}
+        )
+        fake_tts.assert_not_called()
+        fake_stt.assert_not_called()
+        ctx.wait_for_participant.assert_not_awaited()
+        ctx.shutdown.assert_called_once()
 
 
 if __name__ == "__main__":
