@@ -9,6 +9,7 @@
 #include "StationPlayerController.generated.h"
 
 class UStationBriefWidget;
+class UStationFeedbackWidget;
 class UStationHudWidget;
 class UStationNoticeWidget;
 class UStationRunFlow;
@@ -43,4 +44,7 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStationHudWidget> Hud;
+
+	UPROPERTY()
+	TObjectPtr<UStationFeedbackWidget> Feedback;
 };

@@ -122,6 +122,14 @@ only code that talks to it, and its interface is documented in
    never to the patient, and never joins the conversation. Phoenix decides what
    is released: findings and impressos appear under "Documentos liberados", and
    a request Phoenix declines is shown as declined, with nothing in its place.
+6. "Finalizar estação" under the timer ends the run early; at 00:00 the Station
+   Timer ends it. Either way no turn or exam request can be sent any more, and
+   the feedback screen shows each criterion with the transcript excerpts that
+   support it, under the unofficial educational result notice. "Reiniciar
+   estação" asks Phoenix to forget the run and, once it confirms, goes back to
+   the brief for a new run. Grading needs Phoenix's text provider
+   (`LLM_PROVIDER` and its key); for a local check only,
+   `JEV_E2E_APPROVING_ADAPTER=true` grades with a fixed result that judges nothing.
 
 Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 `[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config.

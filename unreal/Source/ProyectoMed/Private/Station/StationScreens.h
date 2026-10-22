@@ -1,6 +1,7 @@
-// The station's native UMG screens: Pre-Station Notice, brief, and the
-// in-run HUD with the Station Timer, the typed conversation and the exam
-// panel. They render UStationRunFlow and never call the network.
+// The station's native UMG screens: Pre-Station Notice, brief, the in-run
+// HUD with the Station Timer, the typed conversation and the exam panel, and
+// the feedback once the run ends. They render UStationRunFlow and never call
+// the network.
 
 #pragma once
 
@@ -16,6 +17,7 @@ class UScrollBox;
 class UStationRunFlow;
 class UTextBlock;
 class UVerticalBox;
+struct FStationCriterionResult;
 
 UCLASS()
 class UStationNoticeWidget : public UUserWidget
@@ -130,6 +132,9 @@ private:
 	UFUNCTION()
 	void HandleExamCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 
+	UFUNCTION()
+	void HandleFinish();
+
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
 
@@ -177,4 +182,49 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> FallbackText;
+
+	UPROPERTY()
+	TObjectPtr<UButton> FinishButton;
+};
+
+UCLASS()
+class UStationFeedbackWidget : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	void SetFlow(UStationRunFlow* InFlow) { Flow = InFlow; }
+
+	/** Re-reads the flow: grading in progress, the feedback or why it is missing, and the discard. */
+	void Refresh();
+
+protected:
+	virtual TSharedRef<SWidget> RebuildWidget() override;
+
+private:
+	void AddCriterion(int32 Ordinal, const FStationCriterionResult& Criterion);
+
+	UFUNCTION()
+	void HandleRestart();
+
+	UPROPERTY()
+	TObjectPtr<UStationRunFlow> Flow;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> LoadingBox;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ErrorText;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> RestartNote;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> ResultBox;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> SessionNote;
+
+	UPROPERTY()
+	TObjectPtr<UButton> RestartButton;
 };

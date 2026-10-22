@@ -1,8 +1,9 @@
-// The learner's way into a station run: Pre-Station Notice, then the brief
+// The learner's way through a station run: Pre-Station Notice, then the brief
 // Phoenix serves with the choice of a text or a voice training, then the run,
 // where typed turns are always available and exam and impresso requests have
-// their own channel. Interface code renders it; only the station client talks
-// to the network.
+// their own channel, then the feedback once the learner or the Station Timer
+// ends it. Interface code renders it; only the station client talks to the
+// network.
 
 #pragma once
 
@@ -25,6 +26,10 @@ enum class EStationRunStep : uint8
 	Starting,
 	/** The session exists and the Station Timer is counting down. */
 	Running,
+	/** The run has ended for the learner: Phoenix is closing and grading it. */
+	Finishing,
+	/** The feedback, or why it could not be loaded, until the learner discards the run. */
+	Feedback,
 };
 
 UENUM()
@@ -162,6 +167,40 @@ public:
 	/** The last exam request failure, in Brazilian Portuguese; empty when there is none. */
 	const FText& GetExamErrorText() const { return ExamErrorText; }
 
+	/** True while the run is running. */
+	bool CanFinish() const;
+
+	/**
+	 * The learner ends the run early. No turn or exam request can be sent from
+	 * here on; one still waiting for Phoenix is answered first, so Phoenix grades
+	 * it. Then Phoenix closes the run and the flow loads its feedback.
+	 */
+	void Finish();
+
+	/**
+	 * Ends the run as `Finish` does, with the reason `timer`. Phoenix refuses it
+	 * before its deadline: the run then goes on, with the deadline read again.
+	 */
+	void ExpireTimer();
+
+	/** Calls `ExpireTimer` once the Station Timer reads zero. The interface calls it every frame. */
+	void CheckStationTimer();
+
+	/** The feedback of the ended run; null until Phoenix serves it. */
+	const FStationResult* GetResult() const { return Result.GetPtrOrNull(); }
+
+	/** True on the feedback while no discard is waiting for Phoenix. */
+	bool CanDiscard() const;
+
+	/**
+	 * Asks Phoenix to forget the run. Once it confirms, everything this run
+	 * held is cleared and the brief is shown, ready for a new run; until then
+	 * no new run can start.
+	 */
+	void Discard();
+
+	bool IsDiscarding() const { return bDiscarding; }
+
 	UStationClient* GetClient() const { return Client; }
 
 	/** Broadcast after every change the interface should render. */
@@ -173,6 +212,16 @@ private:
 	void SetExamError(const FStationClientError& Error);
 
 	void AddLine(EStationSpeaker Speaker, const FString& Text);
+
+	/** Forgets everything the last run held. */
+	void ResetRun();
+
+	void BeginFinish(EStationFinishReason Reason);
+
+	/** Closes the run once no turn or exam request is waiting for Phoenix. */
+	void ContinueFinish();
+
+	void LoadResult();
 
 	/**
 	 * Replaces the transcript with Phoenix's record, for when `Turn`'s fate is
@@ -203,6 +252,12 @@ private:
 	TArray<FStationImpresso> ReleasedImpressos;
 	FString UnsentExamRequest;
 	FText ExamErrorText;
+	EStationFinishReason FinishReason = EStationFinishReason::User;
+	TOptional<FStationResult> Result;
+	/** `FPlatformTime::Seconds()` before which the timer does not end the run again after Phoenix refused it. */
+	double TimerRetryNotBefore = 0.0;
+	bool bFinishInFlight = false;
+	bool bDiscarding = false;
 	bool bLoadingStation = false;
 	bool bReloadingTranscript = false;
 	bool bVoiceFallback = false;
