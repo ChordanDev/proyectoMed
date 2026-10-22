@@ -121,6 +121,24 @@ void FStationRunUnitSpec::Define()
 		TestEqual("no requests", Flow->GetExamRequests().Num(), 0);
 		TestEqual("nothing released", Flow->GetReleasedImpressos().Num(), 0);
 	});
+
+	It("neither finishes nor discards before the run is running", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client);
+
+		TestFalse("cannot finish", Flow->CanFinish());
+		Flow->Finish();
+		Flow->ExpireTimer();
+		Flow->CheckStationTimer();
+		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestFalse("cannot discard", Flow->CanDiscard());
+		Flow->Discard();
+		TestFalse("no discard", Flow->IsDiscarding());
+		TestNull("no result", Flow->GetResult());
+	});
 }
 
 BEGIN_DEFINE_SPEC(FStationRunPhoenixSpec, "ProyectoMed.StationRun.Phoenix",
@@ -457,6 +475,215 @@ void FStationRunPhoenixSpec::Define()
 				}
 				TestEqual("no document", Flow->GetReleasedImpressos().Num(), 0);
 				ExpectNoDialogue(Done);
+			});
+		});
+	});
+
+	// The finish tests read the educational result, which Phoenix grades with
+	// the E2E approving Jev adapter (JEV_E2E_APPROVING_ADAPTER): it cites the
+	// first learner line for every criterion it can ground.
+	const FTimespan ResultTimeout = FTimespan::FromSeconds(60);
+	const FString Turn = TEXT("Bom dia, quando começou a dor?");
+
+	/** Ends the running run early and calls `Then` on the feedback. */
+	auto WhenFeedback = [this](const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		Flow->Finish();
+		WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done, Then]()
+		{
+			if (TestNotNull(TEXT("result (is Phoenix on JEV_E2E_APPROVING_ADAPTER=true?)"), Flow->GetResult()))
+			{
+				Then();
+				return;
+			}
+			Done.Execute();
+		});
+	};
+
+	LatentIt("finishes early, after the turn still waiting for Phoenix, and shows the feedback with its evidence", ResultTimeout,
+		[this, WhenRunning, Turn](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, Turn]()
+		{
+			TestTrue("can finish", Flow->CanFinish());
+			TestTrue("turn accepted", Flow->SendTypedTurn(Turn));
+			Flow->Finish();
+			TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
+			TestTrue("the turn still waits for Phoenix", Flow->IsTurnInFlight());
+			TestFalse("no turn after the end", Flow->CanSendTurn());
+			TestFalse("turn refused", Flow->SendTypedTurn(TEXT("Mais uma pergunta")));
+			TestFalse("exam refused", Flow->RequestExam(TEXT("Exame físico")));
+			TestFalse("finishes once", Flow->CanFinish());
+			TestFalse("no discard while grading", Flow->CanDiscard());
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done, Turn]()
+			{
+				TestTrue(TEXT("no error (is Phoenix on JEV_E2E_APPROVING_ADAPTER=true?)"), Flow->GetErrorText().IsEmpty());
+				TestEqual("the turn joined the run before it ended", Flow->GetTranscript().Num(), 2);
+				if (TestNotNull("session", Client->GetSession()))
+				{
+					TestEqual("completed", Client->GetSession()->Status, EStationSessionStatus::Completed);
+					TestEqual("ended by the learner", Client->GetSession()->CompletionReason, TEXT("user"));
+				}
+				const FStationResult* Result = Flow->GetResult();
+				if (TestNotNull("result", Result) && TestTrue("criteria", Result->Criteria.Num() > 0))
+				{
+					TestEqual("this run's result", Result->SessionId, Client->GetSession()->SessionId);
+					const bool bCited = Result->Criteria.ContainsByPredicate([&Turn](const FStationCriterionResult& Criterion)
+					{
+						return Criterion.Evidence.ContainsByPredicate([&Turn](const FStationEvidence& Excerpt)
+						{
+							return Excerpt.Speaker == EStationSpeaker::Learner && Excerpt.Text == Turn;
+						});
+					});
+					TestTrue("a criterion cites the learner's turn", bCited);
+				}
+				TestFalse("still no turn", Flow->SendTypedTurn(TEXT("Mais uma pergunta")));
+				TestTrue("can discard", Flow->CanDiscard());
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("keeps the run going when the timer ends it before Phoenix's deadline", Timeout,
+		[this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			// The local timer has not run out: Phoenix refuses a timer finish this early.
+			Flow->ExpireTimer();
+			TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+			{
+				TestEqual("running again", Flow->GetStep(), EStationRunStep::Running);
+				TestTrue("no error shown", Flow->GetErrorText().IsEmpty());
+				TestTrue("can send a turn", Flow->CanSendTurn());
+				if (TestNotNull("session", Client->GetSession()))
+				{
+					TestEqual("still active", Client->GetSession()->Status, EStationSessionStatus::Active);
+				}
+				Flow->CheckStationTimer();
+				TestEqual("the timer has time left", Flow->GetStep(), EStationRunStep::Running);
+				Done.Execute();
+			});
+		});
+	});
+
+	/**
+	 * Ends the run in Phoenix behind the flow's back, as Phoenix does itself at
+	 * the deadline, and calls `Then` with the flow still running.
+	 */
+	auto WhenPhoenixEndedRun = [this](const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		Client->FinishSession(EStationFinishReason::User, [this, Done, Then](const TStationResult<FStationSession>& Ended)
+		{
+			if (TestFalse("Phoenix ended the run", Ended.HasError()))
+			{
+				TestEqual("the flow still runs", Flow->GetStep(), EStationRunStep::Running);
+				Then();
+				return;
+			}
+			Done.Execute();
+		});
+	};
+
+	LatentIt("ends the run and shows the feedback once the Station Timer reads zero", ResultTimeout,
+		[this, WhenRunning, WhenPhoenixEndedRun](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenPhoenixEndedRun]()
+		{
+			WhenPhoenixEndedRun(Done, [this, Done]()
+			{
+				TestTrue("the timer reads zero", Client->GetRemainingTime() == FTimespan::Zero());
+				Flow->CheckStationTimer();
+				TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
+				TestFalse("no turn after the end", Flow->CanSendTurn());
+				WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+				{
+					TestTrue("no error", Flow->GetErrorText().IsEmpty());
+					TestNotNull("feedback", Flow->GetResult());
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("ends the run when a turn is refused because the run is over", ResultTimeout,
+		[this, WhenRunning, WhenPhoenixEndedRun](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenPhoenixEndedRun]()
+		{
+			WhenPhoenixEndedRun(Done, [this, Done]()
+			{
+				TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Bom dia")));
+				WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+				{
+					TestTrue("no error", Flow->GetErrorText().IsEmpty());
+					TestNotNull("feedback", Flow->GetResult());
+					TestEqual("the refused turn is not in the transcript", Flow->GetTranscript().Num(), 0);
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("discards the run only once Phoenix confirms, then offers a new run", ResultTimeout,
+		[this, WhenRunning, WhenFeedback](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenFeedback]()
+		{
+			WhenFeedback(Done, [this, Done]()
+			{
+				// Phoenix stops answering: the run stays, and so does its feedback.
+				Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+				Flow->Discard();
+				TestTrue("discarding", Flow->IsDiscarding());
+				TestFalse("one discard at a time", Flow->CanDiscard());
+				WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
+				{
+					Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+					TestEqual("still on the feedback", Flow->GetStep(), EStationRunStep::Feedback);
+					TestFalse("error shown", Flow->GetErrorText().IsEmpty());
+					TestNotNull("session kept", Client->GetSession());
+					TestNotNull("feedback kept", Flow->GetResult());
+					TestFalse("no new run", Flow->CanEnter(EStationTrainingMode::Text));
+
+					Flow->Discard();
+					TestNotNull("session kept until Phoenix confirms", Client->GetSession());
+					WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
+					{
+						TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
+						TestTrue("error cleared", Flow->GetErrorText().IsEmpty());
+						TestNull("session forgotten", Client->GetSession());
+						TestNull("feedback forgotten", Flow->GetResult());
+						TestEqual("transcript forgotten", Flow->GetTranscript().Num(), 0);
+						TestTrue("can start a new run", Flow->CanEnter(EStationTrainingMode::Text));
+						Done.Execute();
+					});
+				});
+			});
+		});
+	});
+
+	LatentIt("shows why the feedback is missing when the run cannot be closed, and still discards it", Timeout,
+		[this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+			Flow->Finish();
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+			{
+				Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+				TestFalse("error shown", Flow->GetErrorText().IsEmpty());
+				TestNull("no result", Flow->GetResult());
+				TestFalse("no turn", Flow->CanSendTurn());
+				Flow->Discard();
+				WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
+				{
+					TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
+					TestNull("session forgotten", Client->GetSession());
+					Done.Execute();
+				});
 			});
 		});
 	});

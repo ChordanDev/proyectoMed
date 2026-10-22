@@ -29,12 +29,15 @@ void AStationPlayerController::BeginPlay()
 	Notice = CreateWidget<UStationNoticeWidget>(this, UStationNoticeWidget::StaticClass());
 	Brief = CreateWidget<UStationBriefWidget>(this, UStationBriefWidget::StaticClass());
 	Hud = CreateWidget<UStationHudWidget>(this, UStationHudWidget::StaticClass());
+	Feedback = CreateWidget<UStationFeedbackWidget>(this, UStationFeedbackWidget::StaticClass());
 	Brief->SetFlow(Flow);
 	Hud->SetFlow(Flow);
+	Feedback->SetFlow(Flow);
 	Notice->OnAcknowledged.BindWeakLambda(this, [this]() { Flow->AcknowledgeNotice(); });
 	Notice->AddToViewport();
 	Brief->AddToViewport();
 	Hud->AddToViewport();
+	Feedback->AddToViewport();
 
 	bShowMouseCursor = true;
 	Flow->OnChanged.AddUObject(this, &AStationPlayerController::Render);
@@ -44,8 +47,8 @@ void AStationPlayerController::BeginPlay()
 
 void AStationPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	// A run left mid-way is ephemeral: ask Phoenix to forget it now instead of
-	// waiting for the session to expire.
+	// A run left mid-way or on its feedback is ephemeral: ask Phoenix to forget
+	// it now instead of waiting for the session to expire.
 	if (Flow && Flow->GetClient() && Flow->GetClient()->GetSession())
 	{
 		Flow->GetClient()->DiscardSession([](const TStationResult<FStationNone>&) {});
@@ -55,7 +58,7 @@ void AStationPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AStationPlayerController::Render()
 {
-	if (!Flow || !Notice || !Brief || !Hud)
+	if (!Flow || !Notice || !Brief || !Hud || !Feedback)
 	{
 		return;
 	}
@@ -67,8 +70,12 @@ void AStationPlayerController::Render()
 		? ESlateVisibility::Visible
 		: ESlateVisibility::Collapsed);
 	Hud->SetVisibility(bRunning ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+	Feedback->SetVisibility(Step == EStationRunStep::Finishing || Step == EStationRunStep::Feedback
+		? ESlateVisibility::Visible
+		: ESlateVisibility::Collapsed);
 	Brief->Refresh();
 	Hud->Refresh();
+	Feedback->Refresh();
 
 	if (bRunning)
 	{

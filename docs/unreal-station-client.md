@@ -181,9 +181,8 @@ no test matches the filter.
 The Phoenix tests cover the deterministic paths: station, session lifecycle,
 voice credential, impressos, finish and the errors above. An educational result
 needs Phoenix's text provider (`LLM_PROVIDER` and its key), so its parsing is
-covered by unit tests on Phoenix's real response shapes. A slice that needs a
-full result against local Phoenix in CI adds that seam to Phoenix first, as #190
-asks.
+covered by unit tests on Phoenix's real response shapes. The E2E approving Jev
+adapter below is the seam that grades a run without one (#195).
 
 A full patient turn has that seam (#192). `ProyectoMed.StationRun.Phoenix` sends
 typed turns and expects Phoenix's scripted patient, a dev-only adapter that
@@ -203,3 +202,13 @@ matches keywords without a model. Those tests expect the default station
 (`chest-pain-initial-assessment`), so leave `ACTIVE_STATION_ID` unset: it authors
 the physical exam and an ECG, and no tomography, which the tests ask for to see
 a declined request.
+
+Finishing a run and its feedback (#195) are covered through
+`UStationRunFlow::Finish`, `ExpireTimer` and `Discard`. They read the result the
+E2E approving Jev adapter grades: it cites the learner's first line for every
+criterion it can ground, so the tests check that a criterion cites the typed
+turn. A timer finish is tested before Phoenix's deadline, where Phoenix refuses
+it and the run goes on, and on a run Phoenix already ended, which is what Phoenix
+does itself at the deadline: the tests end it through `FinishSession` instead of
+waiting ten minutes. A turn or exam request Phoenix refuses with
+`station_time_elapsed` or `session_completed` ends the run the same way.

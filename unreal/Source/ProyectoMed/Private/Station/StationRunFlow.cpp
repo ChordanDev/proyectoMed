@@ -1,5 +1,6 @@
 #include "Station/StationRunFlow.h"
 
+#include "HAL/PlatformTime.h"
 #include "StationClient.h"
 
 #define LOCTEXT_NAMESPACE "StationRunFlow"
@@ -9,6 +10,15 @@ DEFINE_LOG_CATEGORY_STATIC(LogStationRun, Log, All);
 bool IsVoiceTrainingAvailable(const FStationSummary& Station)
 {
 	return Station.VoiceMode == EStationVoiceMode::Realtime;
+}
+
+namespace
+{
+	/** Phoenix ended the run itself, at its deadline: the run is over for this client too. */
+	bool IsRunOver(const FStationClientError& Error)
+	{
+		return Error.Code == TEXT("station_time_elapsed") || Error.Code == TEXT("session_completed");
+	}
 }
 
 FText FormatStationTimer(const FTimespan& Remaining)
@@ -56,21 +66,9 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 		return;
 	}
 
+	ResetRun();
 	Mode = InMode;
 	Step = EStationRunStep::Starting;
-	ErrorText = FText::GetEmpty();
-	bVoiceFallback = false;
-	VoiceCredential.Reset();
-	PendingTurn.Reset();
-	Transcript.Reset();
-	UnsentTurn.Reset();
-	bReloadingTranscript = false;
-	PendingExamRequest.Reset();
-	UnansweredExamRequest.Reset();
-	ExamRequests.Reset();
-	ReleasedImpressos.Reset();
-	UnsentExamRequest.Reset();
-	ExamErrorText = FText::GetEmpty();
 	OnChanged.Broadcast();
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
@@ -170,17 +168,24 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 			}
 			Self->SetError(Reply.GetError(),
 				LOCTEXT("TurnFailed", "Não foi possível enviar sua mensagem. Tente novamente."));
-			return;
+			if (IsRunOver(Reply.GetError()))
+			{
+				Self->ExpireTimer();
+			}
 		}
-
-		Self->AddLine(EStationSpeaker::Learner, Turn);
-		const FStationTurnReply& Value = Reply.GetValue();
-		// An examiner-addressed turn is kept with no patient reply.
-		if (Value.Outcome == EStationTurnOutcome::PatientReply && !Value.ReplyText.IsEmpty())
+		else
 		{
-			Self->AddLine(EStationSpeaker::Patient, Value.ReplyText);
+			Self->AddLine(EStationSpeaker::Learner, Turn);
+			const FStationTurnReply& Value = Reply.GetValue();
+			// An examiner-addressed turn is kept with no patient reply.
+			if (Value.Outcome == EStationTurnOutcome::PatientReply && !Value.ReplyText.IsEmpty())
+			{
+				Self->AddLine(EStationSpeaker::Patient, Value.ReplyText);
+			}
+			Self->OnChanged.Broadcast();
 		}
-		Self->OnChanged.Broadcast();
+		// A finish waits for this answer, so Phoenix grades the turn.
+		Self->ContinueFinish();
 	});
 	return true;
 }
@@ -235,14 +240,20 @@ bool UStationRunFlow::RequestExam(const FString& Text)
 				Self->UnansweredExamRequest = Attempt;
 			}
 			Self->SetExamError(Reply.GetError());
-			return;
+			if (IsRunOver(Reply.GetError()))
+			{
+				Self->ExpireTimer();
+			}
 		}
-
-		FStationExamRequest& Answered = Self->ExamRequests.AddDefaulted_GetRef();
-		Answered.Text = Attempt.Text;
-		Answered.Reply = Reply.GetValue();
-		Self->ReleasedImpressos = Reply.GetValue().ReleasedImpressos;
-		Self->OnChanged.Broadcast();
+		else
+		{
+			FStationExamRequest& Answered = Self->ExamRequests.AddDefaulted_GetRef();
+			Answered.Text = Attempt.Text;
+			Answered.Reply = Reply.GetValue();
+			Self->ReleasedImpressos = Reply.GetValue().ReleasedImpressos;
+			Self->OnChanged.Broadcast();
+		}
+		Self->ContinueFinish();
 	});
 	return true;
 }
@@ -281,7 +292,178 @@ void UStationRunFlow::ReloadTranscript(const FString& Turn)
 			}
 		}
 		Self->OnChanged.Broadcast();
+		Self->ContinueFinish();
 	});
+}
+
+bool UStationRunFlow::CanFinish() const
+{
+	return Step == EStationRunStep::Running;
+}
+
+void UStationRunFlow::Finish()
+{
+	if (CanFinish())
+	{
+		BeginFinish(EStationFinishReason::User);
+	}
+}
+
+void UStationRunFlow::ExpireTimer()
+{
+	if (CanFinish())
+	{
+		BeginFinish(EStationFinishReason::Timer);
+	}
+}
+
+void UStationRunFlow::CheckStationTimer()
+{
+	if (CanFinish() && FPlatformTime::Seconds() >= TimerRetryNotBefore
+		&& Client->GetRemainingTime() <= FTimespan::Zero())
+	{
+		ExpireTimer();
+	}
+}
+
+void UStationRunFlow::BeginFinish(EStationFinishReason Reason)
+{
+	// Leaving `Running` stops every new turn and exam request at once.
+	FinishReason = Reason;
+	Step = EStationRunStep::Finishing;
+	OnChanged.Broadcast();
+	ContinueFinish();
+}
+
+void UStationRunFlow::ContinueFinish()
+{
+	if (Step != EStationRunStep::Finishing || bFinishInFlight
+		|| PendingTurn.IsSet() || bReloadingTranscript || PendingExamRequest.IsSet())
+	{
+		return;
+	}
+
+	bFinishInFlight = true;
+	ErrorText = FText::GetEmpty();
+
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	Client->FinishSession(FinishReason, [WeakThis](const TStationResult<FStationSession>& Finished)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self)
+		{
+			return;
+		}
+		Self->bFinishInFlight = false;
+		if (Finished.HasError())
+		{
+			if (Self->FinishReason == EStationFinishReason::Timer && Finished.GetError().Code == TEXT("deadline_not_reached"))
+			{
+				// This clock ran ahead of Phoenix's: read the deadline again and
+				// keep the run going until the timer reads zero once more.
+				UE_LOG(LogStationRun, Log, TEXT("Phoenix's deadline is not reached yet; the run goes on."));
+				Self->Step = EStationRunStep::Running;
+				Self->TimerRetryNotBefore = FPlatformTime::Seconds() + 1.0;
+				Self->Client->RefreshSession([WeakThis](const TStationResult<FStationSession>&)
+				{
+					if (UStationRunFlow* Flow = WeakThis.Get())
+					{
+						Flow->OnChanged.Broadcast();
+					}
+				});
+				Self->OnChanged.Broadcast();
+				return;
+			}
+			Self->FailResult(Finished.GetError());
+			return;
+		}
+		Self->LoadResult();
+	});
+}
+
+void UStationRunFlow::LoadResult()
+{
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	Client->FetchResult([WeakThis](const TStationResult<FStationResult>& Loaded)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self)
+		{
+			return;
+		}
+		if (Loaded.HasError())
+		{
+			Self->FailResult(Loaded.GetError());
+			return;
+		}
+		Self->Step = EStationRunStep::Feedback;
+		Self->Result = Loaded.GetValue();
+		Self->OnChanged.Broadcast();
+	});
+}
+
+void UStationRunFlow::FailResult(const FStationClientError& Error)
+{
+	Step = EStationRunStep::Feedback;
+	SetError(Error, LOCTEXT("ResultUnavailable", "Não foi possível carregar o resultado da estação."));
+}
+
+bool UStationRunFlow::CanDiscard() const
+{
+	return Step == EStationRunStep::Feedback && !bDiscarding;
+}
+
+void UStationRunFlow::Discard()
+{
+	if (!CanDiscard())
+	{
+		return;
+	}
+
+	bDiscarding = true;
+	ErrorText = FText::GetEmpty();
+	OnChanged.Broadcast();
+
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	Client->DiscardSession([WeakThis](const TStationResult<FStationNone>& Discarded)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self)
+		{
+			return;
+		}
+		Self->bDiscarding = false;
+		// Without a session there is nothing left for Phoenix to forget.
+		if (Discarded.HasError() && Discarded.GetError().Code != TEXT("no_session"))
+		{
+			Self->SetError(Discarded.GetError(),
+				LOCTEXT("DiscardFailed", "Não foi possível encerrar a sessão no servidor. Tente novamente."));
+			return;
+		}
+		Self->ResetRun();
+		Self->Step = EStationRunStep::Brief;
+		Self->OnChanged.Broadcast();
+	});
+}
+
+void UStationRunFlow::ResetRun()
+{
+	ErrorText = FText::GetEmpty();
+	bVoiceFallback = false;
+	VoiceCredential.Reset();
+	PendingTurn.Reset();
+	Transcript.Reset();
+	UnsentTurn.Reset();
+	bReloadingTranscript = false;
+	PendingExamRequest.Reset();
+	UnansweredExamRequest.Reset();
+	ExamRequests.Reset();
+	ReleasedImpressos.Reset();
+	UnsentExamRequest.Reset();
+	ExamErrorText = FText::GetEmpty();
+	FinishReason = EStationFinishReason::User;
+	Result.Reset();
+	TimerRetryNotBefore = 0.0;
 }
 
 void UStationRunFlow::LoadStation()

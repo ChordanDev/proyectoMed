@@ -36,6 +36,12 @@ namespace
 			}
 		}
 	}
+
+	/** Phoenix's exact points with a decimal comma; never parsed, rounded or rescaled. */
+	FText DisplayPoints(const FString& Points)
+	{
+		return FText::FromString(Points.Replace(TEXT("."), TEXT(",")));
+	}
 }
 
 // The learner-facing copy is Brazilian Portuguese, matching the web station
@@ -194,6 +200,8 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		ModeText->SetJustification(ETextJustify::Center);
 		TimerText->SetJustification(ETextJustify::Center);
 		FallbackText->SetJustification(ETextJustify::Center);
+		FinishButton = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("FinishStation", "Finalizar estação"), 8.f);
+		FinishButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleFinish);
 
 		BuildConversation(*Root);
 		BuildExams(*Root);
@@ -426,12 +434,21 @@ void UStationHudWidget::HandleExamCommitted(const FText& Text, ETextCommit::Type
 	}
 }
 
+void UStationHudWidget::HandleFinish()
+{
+	if (Flow)
+	{
+		Flow->Finish();
+	}
+}
+
 void UStationHudWidget::Refresh()
 {
 	if (!Flow || !ModeText)
 	{
 		return;
 	}
+	FinishButton->SetIsEnabled(Flow->CanFinish());
 	ModeText->SetText(Flow->GetMode() == EStationTrainingMode::Voice
 		? LOCTEXT("VoiceTrainingLabel", "Treino por voz · Tempo restante")
 		: LOCTEXT("TextTrainingLabel", "Treino por texto · Tempo restante"));
@@ -446,6 +463,161 @@ void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	if (Flow && Flow->GetClient() && TimerText)
 	{
 		TimerText->SetText(FormatStationTimer(Flow->GetClient()->GetRemainingTime()));
+		Flow->CheckStationTimer();
+	}
+}
+
+TSharedRef<SWidget> UStationFeedbackWidget::RebuildWidget()
+{
+	if (WidgetTree && !WidgetTree->RootWidget)
+	{
+		UVerticalBox* Column = StationUi::MakeCenteredCard(*WidgetTree, 920.f, 960.f, true);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("ResultTitle", "Resultado educacional da estação"), 30, true,
+			StationUi::Ink, 0.f);
+		// Every state of this screen says what the result is not.
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("ResultDisclaimer",
+			"Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame."),
+			16, false, StationUi::Muted);
+
+		LoadingBox = WidgetTree->ConstructWidget<UVerticalBox>();
+		Column->AddChild(LoadingBox);
+		StationUi::AddText(*WidgetTree, *LoadingBox, LOCTEXT("LoadingResult", "Gerando o resultado da estação..."), 18);
+		StationUi::AddText(*WidgetTree, *LoadingBox, LOCTEXT("LoadingResultWait",
+			"Gerando feedback da estação… isso pode levar até um minuto."), 15, false, StationUi::Muted, 4.f);
+
+		ErrorText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 18, false, StationUi::Caution);
+		RestartNote = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("RestartDiscards",
+			"Ao reiniciar, esta tentativa é descartada e não poderá ser recuperada."), 15, false, StationUi::Muted, 4.f);
+
+		ResultBox = WidgetTree->ConstructWidget<UVerticalBox>();
+		Column->AddChild(ResultBox);
+
+		SessionNote = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("SessionOnly",
+			"Evidências apenas desta sessão. Ao reiniciar, os dados são descartados; não há histórico pessoal."),
+			15, false, StationUi::Muted, 24.f);
+		RestartButton = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("RestartStation", "Reiniciar estação"));
+		RestartButton->OnClicked.AddDynamic(this, &UStationFeedbackWidget::HandleRestart);
+	}
+	return Super::RebuildWidget();
+}
+
+void UStationFeedbackWidget::Refresh()
+{
+	if (!Flow || !ResultBox)
+	{
+		return;
+	}
+
+	const bool bFeedback = Flow->GetStep() == EStationRunStep::Feedback;
+	const FStationResult* Result = Flow->GetResult();
+
+	StationUi::SetShown(LoadingBox, Flow->GetStep() == EStationRunStep::Finishing);
+	StationUi::SetShown(ErrorText, !Flow->GetErrorText().IsEmpty());
+	ErrorText->SetText(Flow->GetErrorText());
+	StationUi::SetShown(RestartNote, bFeedback && !Result);
+	StationUi::SetShown(SessionNote, Result != nullptr);
+	StationUi::SetShown(RestartButton, bFeedback);
+	RestartButton->SetIsEnabled(Flow->CanDiscard());
+
+	ResultBox->ClearChildren();
+	StationUi::SetShown(ResultBox, Result != nullptr);
+	if (!Result)
+	{
+		return;
+	}
+
+	if (Result->bPlaceholder)
+	{
+		StationUi::AddText(*WidgetTree, *ResultBox, LOCTEXT("FictionalResult", "Exemplo — dados fictícios"), 15, true,
+			StationUi::Caution);
+	}
+
+	auto Count = [Result](EStationCriterionStatus Status)
+	{
+		return Result->Criteria.FilterByPredicate(
+			[Status](const FStationCriterionResult& Criterion) { return Criterion.Status == Status; }).Num();
+	};
+	StationUi::AddText(*WidgetTree, *ResultBox, LOCTEXT("Coverage", "Cobertura dos critérios"), 20, true, StationUi::Ink, 24.f);
+	StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("CoverageCounts",
+		"Avaliados: {0} · Incertos: {1} · Não observáveis: {2} · Excluídos: {3}"),
+		Count(EStationCriterionStatus::Assessed), Count(EStationCriterionStatus::Uncertain),
+		Count(EStationCriterionStatus::NotObservable), Count(EStationCriterionStatus::NotApplicable)),
+		16, false, StationUi::Ink, 8.f);
+	StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("ScoredPoints",
+		"Pontos obtidos nos critérios avaliados: {0} de {1}"),
+		DisplayPoints(Result->ScoredSubtotal), DisplayPoints(Result->ScoredMax)), 16, false, StationUi::Ink, 8.f);
+	StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("EligibleMax",
+		"Máximo da estação (todos os critérios elegíveis): {0}"), DisplayPoints(Result->EligibleMax)), 16, false,
+		StationUi::Ink, 4.f);
+	const bool bNoneEligible = Result->Criteria.Num() == Count(EStationCriterionStatus::NotApplicable);
+	StationUi::AddText(*WidgetTree, *ResultBox, !Result->EstimatedTotal.IsEmpty()
+		? FText::Format(LOCTEXT("Total", "Total educacional: {0}"), DisplayPoints(Result->EstimatedTotal))
+		: bNoneEligible
+		? LOCTEXT("NoEligible", "Nenhum critério elegível — não há estimativa total.")
+		: LOCTEXT("OpenTotal",
+			"Total indisponível — há critérios não resolvidos. Os pontos acima contam apenas os critérios avaliados e não representam a estação inteira."),
+		16, true, StationUi::Ink, 4.f);
+
+	for (int32 Index = 0; Index < Result->Criteria.Num(); ++Index)
+	{
+		AddCriterion(Index + 1, Result->Criteria[Index]);
+	}
+}
+
+void UStationFeedbackWidget::AddCriterion(int32 Ordinal, const FStationCriterionResult& Criterion)
+{
+	FText Status;
+	switch (Criterion.Status)
+	{
+	case EStationCriterionStatus::Assessed:
+		Status = LOCTEXT("CriterionAssessed", "Avaliado");
+		break;
+	case EStationCriterionStatus::Uncertain:
+		Status = LOCTEXT("CriterionUncertain", "Incerto — sem pontos atribuídos");
+		break;
+	case EStationCriterionStatus::NotObservable:
+		Status = LOCTEXT("CriterionNotObservable", "Não observável — modalidade indisponível; sem pontos atribuídos");
+		break;
+	case EStationCriterionStatus::NotApplicable:
+		Status = LOCTEXT("CriterionExcluded", "Excluído pelo autor — fora dos máximos; sem pontos atribuídos");
+		break;
+	}
+
+	StationUi::AddText(*WidgetTree, *ResultBox,
+		FText::Format(LOCTEXT("CriterionHeading", "Critério {0} · {1}"), Ordinal, Status), 18, true, StationUi::Ink, 28.f);
+	StationUi::AddText(*WidgetTree, *ResultBox, FText::FromString(Criterion.Description), 16, false, StationUi::Ink, 6.f);
+	if (Criterion.Status == EStationCriterionStatus::Assessed)
+	{
+		if (!Criterion.LevelDescription.TrimStartAndEnd().IsEmpty())
+		{
+			StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("CriterionLevel", "Nível autoral: {0}"),
+				FText::FromString(Criterion.LevelDescription)), 15, false, StationUi::Muted, 4.f);
+		}
+		StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("CriterionPoints", "Pontos: {0} de {1}"),
+			DisplayPoints(Criterion.Points), DisplayPoints(Criterion.MaxPoints)), 15, false, StationUi::Muted, 4.f);
+	}
+
+	if (Criterion.Evidence.Num() > 0)
+	{
+		StationUi::AddText(*WidgetTree, *ResultBox, LOCTEXT("EvidenceHeading", "Evidências"), 16, true, StationUi::Ink, 12.f);
+		for (const FStationEvidence& Excerpt : Criterion.Evidence)
+		{
+			StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(Excerpt.Speaker == EStationSpeaker::Learner
+				? LOCTEXT("EvidenceLearner", "Você: “{0}”")
+				: LOCTEXT("EvidencePatient", "Paciente: “{0}”"), FText::FromString(Excerpt.Text)),
+				15, false, StationUi::Ink, 4.f);
+		}
+	}
+
+	StationUi::AddText(*WidgetTree, *ResultBox, LOCTEXT("RecommendationHeading", "Recomendação"), 16, true, StationUi::Ink, 12.f);
+	StationUi::AddText(*WidgetTree, *ResultBox, FText::FromString(Criterion.Recommendation), 15, false, StationUi::Ink, 4.f);
+}
+
+void UStationFeedbackWidget::HandleRestart()
+{
+	if (Flow)
+	{
+		Flow->Discard();
 	}
 }
 
