@@ -207,7 +207,7 @@ bool UStationRunFlow::RequestExam(const FString& Text)
 
 	// Phoenix may have recorded an unanswered request: asking again with its id
 	// lets Phoenix answer it instead of recording a second one.
-	FExamRequestAttempt Attempt;
+	FPendingExamRequest Attempt;
 	Attempt.Text = Request;
 	Attempt.RequestId = UnansweredExamRequest.IsSet() && UnansweredExamRequest->Text == Request
 		? UnansweredExamRequest->RequestId
@@ -234,14 +234,10 @@ bool UStationRunFlow::RequestExam(const FString& Text)
 			{
 				Self->UnansweredExamRequest = Attempt;
 			}
-			Self->ExamErrorText = StationErrorText(Reply.GetError(),
-				LOCTEXT("ExamRequestFailed", "Não foi possível enviar sua solicitação. Tente novamente."));
-			Self->OnChanged.Broadcast();
+			Self->SetExamError(Reply.GetError());
 			return;
 		}
 
-		// Phoenix's answer is the whole record: a declined request releases
-		// nothing and the client shows nothing in its place.
 		FStationExamRequest& Answered = Self->ExamRequests.AddDefaulted_GetRef();
 		Answered.Text = Attempt.Text;
 		Answered.Reply = Reply.GetValue();
@@ -326,6 +322,13 @@ FText StationErrorText(const FStationClientError& Error, const FText& Fallback)
 void UStationRunFlow::SetError(const FStationClientError& Error, const FText& Fallback)
 {
 	ErrorText = StationErrorText(Error, Fallback);
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::SetExamError(const FStationClientError& Error)
+{
+	ExamErrorText = StationErrorText(Error,
+		LOCTEXT("ExamRequestFailed", "Não foi possível enviar sua solicitação. Tente novamente."));
 	OnChanged.Broadcast();
 }
 

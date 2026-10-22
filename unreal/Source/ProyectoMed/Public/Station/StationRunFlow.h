@@ -137,7 +137,7 @@ public:
 	bool CanRequestExam() const;
 
 	/**
-	 * Asks Phoenix for physical exam findings or an impresso, trimmed. Returns
+	 * Asks Phoenix, with the text trimmed, for physical exam findings or an impresso. Returns
 	 * false, and sends nothing, when the text is blank or `CanRequestExam` is
 	 * false. Phoenix decides what is released; the flow only keeps its answer.
 	 * Resending the text of a request Phoenix did not answer reuses its request
@@ -170,6 +170,7 @@ public:
 private:
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
+	void SetExamError(const FStationClientError& Error);
 
 	void AddLine(EStationSpeaker Speaker, const FString& Text);
 
@@ -191,13 +192,13 @@ private:
 	FString UnsentTurn;
 	FText ErrorText;
 
-	struct FExamRequestAttempt
+	struct FPendingExamRequest
 	{
 		FString Text;
 		FString RequestId;
 	};
-	TOptional<FExamRequestAttempt> PendingExamRequest;
-	TOptional<FExamRequestAttempt> UnansweredExamRequest;
+	TOptional<FPendingExamRequest> PendingExamRequest;
+	TOptional<FPendingExamRequest> UnansweredExamRequest;
 	TArray<FStationExamRequest> ExamRequests;
 	TArray<FStationImpresso> ReleasedImpressos;
 	FString UnsentExamRequest;

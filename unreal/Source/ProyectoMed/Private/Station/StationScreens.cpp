@@ -19,6 +19,25 @@
 
 #define LOCTEXT_NAMESPACE "StationScreens"
 
+namespace
+{
+	/**
+	 * Gives what Phoenix did not take back to its box, unless the learner
+	 * already started typing something else. `Take` is called only then.
+	 */
+	void RestoreUnsent(UEditableTextBox& Input, TFunctionRef<FString()> Take)
+	{
+		if (Input.GetText().IsEmpty())
+		{
+			const FString Unsent = Take();
+			if (!Unsent.IsEmpty())
+			{
+				Input.SetText(FText::FromString(Unsent));
+			}
+		}
+	}
+}
+
 // The learner-facing copy is Brazilian Portuguese, matching the web station
 // (web/src/features/station/i18n/pt-BR.json) where both say the same thing.
 
@@ -258,16 +277,7 @@ void UStationHudWidget::RefreshConversation()
 	TurnErrorText->SetText(Flow->GetErrorText());
 	SendButton->SetIsEnabled(Flow->CanSendTurn());
 
-	// A turn Phoenix did not take goes back into the box, unless the learner
-	// already started typing another one.
-	if (TurnInput->GetText().IsEmpty())
-	{
-		const FString Unsent = Flow->TakeUnsentTurn();
-		if (!Unsent.IsEmpty())
-		{
-			TurnInput->SetText(FText::FromString(Unsent));
-		}
-	}
+	RestoreUnsent(*TurnInput, [this]() { return Flow->TakeUnsentTurn(); });
 }
 
 void UStationHudWidget::AddTranscriptLine(const FText& Text, const FLinearColor& Color)
@@ -359,27 +369,14 @@ void UStationHudWidget::RefreshExams()
 		// Phoenix's feedback is the whole answer: a declined request shows that
 		// it was declined and nothing else.
 		const FStationImpressoReply& Reply = Request.Reply;
-		FText Decision;
-		FLinearColor Color = StationUi::Ink;
-		switch (Reply.Decision)
-		{
-		case EStationImpressoDecision::Released:
-			Decision = LOCTEXT("ExamReleased", "Liberado");
-			break;
-		case EStationImpressoDecision::AlreadyReleased:
-			Decision = LOCTEXT("ExamAlreadyReleased", "Já liberado");
-			Color = StationUi::Muted;
-			break;
-		case EStationImpressoDecision::Unavailable:
-			Decision = LOCTEXT("ExamUnavailable", "Não disponível");
-			Color = StationUi::Caution;
-			break;
-		}
+		const FLinearColor Color = Reply.Decision == EStationImpressoDecision::Unavailable ? StationUi::Caution
+			: Reply.Decision == EStationImpressoDecision::AlreadyReleased ? StationUi::Muted
+			: StationUi::Ink;
 		StationUi::AddText(*WidgetTree, *ExamRequestBox,
 			FText::Format(LOCTEXT("ExamRequestLine", "Você solicitou: {0}"), FText::FromString(Request.Text)),
 			15, false, StationUi::Muted, 12.f);
 		StationUi::AddText(*WidgetTree, *ExamRequestBox,
-			Reply.FeedbackMessage.IsEmpty() ? Decision : FText::FromString(Reply.FeedbackMessage), 15, true, Color, 2.f);
+			FText::FromString(Reply.FeedbackMessage), 15, true, Color, 2.f);
 	}
 	if (Flow->IsExamRequestInFlight())
 	{
@@ -400,15 +397,7 @@ void UStationHudWidget::RefreshExams()
 	StationUi::SetShown(ExamErrorText, !Flow->GetExamErrorText().IsEmpty());
 	ExamErrorText->SetText(Flow->GetExamErrorText());
 	ExamButton->SetIsEnabled(Flow->CanRequestExam());
-
-	if (ExamInput->GetText().IsEmpty())
-	{
-		const FString Unsent = Flow->TakeUnsentExamRequest();
-		if (!Unsent.IsEmpty())
-		{
-			ExamInput->SetText(FText::FromString(Unsent));
-		}
-	}
+	RestoreUnsent(*ExamInput, [this]() { return Flow->TakeUnsentExamRequest(); });
 }
 
 void UStationHudWidget::RequestExam()
@@ -421,7 +410,7 @@ void UStationHudWidget::RequestExam()
 
 void UStationHudWidget::HandleToggleExams()
 {
-	StationUi::SetShown(ExamPanel, !ExamPanel->IsVisible());
+	StationUi::SetShown(ExamPanel, ExamPanel->GetVisibility() == ESlateVisibility::Collapsed);
 }
 
 void UStationHudWidget::HandleRequestExam()
