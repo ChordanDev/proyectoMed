@@ -3,10 +3,16 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/EditableTextBox.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
+#include "Components/ScrollBox.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationUi.h"
 #include "StationClient.h"
@@ -169,8 +175,124 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		ModeText->SetJustification(ETextJustify::Center);
 		TimerText->SetJustification(ETextJustify::Center);
 		FallbackText->SetJustification(ETextJustify::Center);
+
+		BuildConversation(*Root);
 	}
 	return Super::RebuildWidget();
+}
+
+void UStationHudWidget::BuildConversation(UOverlay& Root)
+{
+	// The typed Station Input: available for the whole run, in either training,
+	// so the station can be completed without a microphone.
+	USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>();
+	Size->SetWidthOverride(860.f);
+	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Size))
+	{
+		Slot->SetHorizontalAlignment(HAlign_Center);
+		Slot->SetVerticalAlignment(VAlign_Bottom);
+		Slot->SetPadding(FMargin(16.f, 0.f, 16.f, 24.f));
+	}
+
+	UBorder* Panel = WidgetTree->ConstructWidget<UBorder>();
+	Panel->SetBrushColor(FLinearColor(0.f, 0.f, 0.f, 0.65f));
+	Panel->SetPadding(FMargin(20.f, 16.f));
+	Size->SetContent(Panel);
+
+	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
+	Panel->SetContent(Column);
+
+	USizeBox* ScrollSize = WidgetTree->ConstructWidget<USizeBox>();
+	ScrollSize->SetMaxDesiredHeight(260.f);
+	Column->AddChild(ScrollSize);
+	TranscriptScroll = WidgetTree->ConstructWidget<UScrollBox>();
+	ScrollSize->SetContent(TranscriptScroll);
+	TranscriptBox = WidgetTree->ConstructWidget<UVerticalBox>();
+	TranscriptScroll->AddChild(TranscriptBox);
+
+	TurnErrorText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 15, false, StationUi::Caution, 8.f);
+
+	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
+	if (UVerticalBoxSlot* RowSlot = Column->AddChildToVerticalBox(Row))
+	{
+		RowSlot->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
+	}
+
+	TurnInput = WidgetTree->ConstructWidget<UEditableTextBox>();
+	TurnInput->SetHintText(LOCTEXT("TurnHint", "Digite sua mensagem ao paciente"));
+	TurnInput->OnTextCommitted.AddDynamic(this, &UStationHudWidget::HandleTurnCommitted);
+	if (UHorizontalBoxSlot* InputSlot = Row->AddChildToHorizontalBox(TurnInput))
+	{
+		InputSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		InputSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	SendButton = StationUi::AddButton(*WidgetTree, *Row, LOCTEXT("SendTurn", "Enviar"));
+	SendButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleSend);
+	if (UHorizontalBoxSlot* ButtonSlot = Cast<UHorizontalBoxSlot>(SendButton->Slot))
+	{
+		ButtonSlot->SetPadding(FMargin(12.f, 0.f, 0.f, 0.f));
+		ButtonSlot->SetVerticalAlignment(VAlign_Center);
+	}
+}
+
+void UStationHudWidget::RefreshConversation()
+{
+	TranscriptBox->ClearChildren();
+	for (const FStationMessage& Line : Flow->GetTranscript())
+	{
+		AddTranscriptLine(Line.Speaker == EStationSpeaker::Learner
+			? FText::Format(LOCTEXT("LearnerLine", "Você: {0}"), FText::FromString(Line.Text))
+			: FText::Format(LOCTEXT("PatientLine", "Paciente: {0}"), FText::FromString(Line.Text)),
+			StationUi::Ink);
+	}
+	if (Flow->IsTurnInFlight())
+	{
+		AddTranscriptLine(FText::Format(LOCTEXT("PendingLine", "Você: {0} (enviando...)"),
+			FText::FromString(Flow->GetPendingTurnText())), StationUi::Muted);
+	}
+	TranscriptScroll->ScrollToEnd();
+
+	StationUi::SetShown(TurnErrorText, !Flow->GetErrorText().IsEmpty());
+	TurnErrorText->SetText(Flow->GetErrorText());
+	SendButton->SetIsEnabled(Flow->CanSendTurn());
+
+	// A turn Phoenix did not take goes back into the box, unless the learner
+	// already started typing another one.
+	if (TurnInput->GetText().IsEmpty())
+	{
+		const FString Unsent = Flow->TakeUnsentTurn();
+		if (!Unsent.IsEmpty())
+		{
+			TurnInput->SetText(FText::FromString(Unsent));
+		}
+	}
+}
+
+void UStationHudWidget::AddTranscriptLine(const FText& Text, const FLinearColor& Color)
+{
+	StationUi::AddText(*WidgetTree, *TranscriptBox, Text, 17, false, Color, TranscriptBox->GetChildrenCount() ? 8.f : 0.f);
+}
+
+void UStationHudWidget::SendTypedTurn()
+{
+	if (Flow && TurnInput && Flow->SendTypedTurn(TurnInput->GetText().ToString()))
+	{
+		TurnInput->SetText(FText::GetEmpty());
+	}
+}
+
+void UStationHudWidget::HandleSend()
+{
+	SendTypedTurn();
+}
+
+void UStationHudWidget::HandleTurnCommitted(const FText& Text, ETextCommit::Type CommitMethod)
+{
+	if (CommitMethod == ETextCommit::OnEnter)
+	{
+		SendTypedTurn();
+	}
 }
 
 void UStationHudWidget::Refresh()
@@ -183,6 +305,7 @@ void UStationHudWidget::Refresh()
 		? LOCTEXT("VoiceTrainingLabel", "Treino por voz · Tempo restante")
 		: LOCTEXT("TextTrainingLabel", "Treino por texto · Tempo restante"));
 	StationUi::SetShown(FallbackText, Flow->IsVoiceFallback());
+	RefreshConversation();
 }
 
 void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)

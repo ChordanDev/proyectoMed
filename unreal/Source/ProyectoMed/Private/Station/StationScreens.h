@@ -1,6 +1,6 @@
 // The station's native UMG screens: Pre-Station Notice, brief, and the
-// in-run HUD with the Station Timer. They render UStationRunFlow and never call
-// the network.
+// in-run HUD with the Station Timer and the typed conversation. They render
+// UStationRunFlow and never call the network.
 
 #pragma once
 
@@ -10,6 +10,9 @@
 #include "StationScreens.generated.h"
 
 class UButton;
+class UEditableTextBox;
+class UOverlay;
+class UScrollBox;
 class UStationRunFlow;
 class UTextBlock;
 class UVerticalBox;
@@ -96,7 +99,7 @@ class UStationHudWidget : public UUserWidget
 public:
 	void SetFlow(UStationRunFlow* InFlow) { Flow = InFlow; }
 
-	/** Re-reads the training mode and the voice fallback notice. */
+	/** Re-reads the training mode, the voice fallback notice, and the conversation. */
 	void Refresh();
 
 protected:
@@ -104,8 +107,34 @@ protected:
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
+	void BuildConversation(UOverlay& Root);
+	void RefreshConversation();
+	void AddTranscriptLine(const FText& Text, const FLinearColor& Color);
+	void SendTypedTurn();
+
+	UFUNCTION()
+	void HandleSend();
+
+	UFUNCTION()
+	void HandleTurnCommitted(const FText& Text, ETextCommit::Type CommitMethod);
+
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
+
+	UPROPERTY()
+	TObjectPtr<UScrollBox> TranscriptScroll;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> TranscriptBox;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> TurnErrorText;
+
+	UPROPERTY()
+	TObjectPtr<UEditableTextBox> TurnInput;
+
+	UPROPERTY()
+	TObjectPtr<UButton> SendButton;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> ModeText;

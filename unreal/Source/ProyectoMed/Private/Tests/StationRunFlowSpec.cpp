@@ -1,6 +1,6 @@
 // Run flow tests. `ProyectoMed.StationRun.Unit` needs nothing else;
-// `ProyectoMed.StationRun.Phoenix` needs a local Phoenix with realtime voice
-// (see docs/unreal-station-client.md).
+// `ProyectoMed.StationRun.Phoenix` needs a local Phoenix with realtime voice and
+// the scripted patient (see docs/unreal-station-client.md).
 
 #include "Misc/AutomationTest.h"
 #include "Station/StationRunFlow.h"
@@ -93,6 +93,19 @@ void FStationRunUnitSpec::Define()
 		Flow->Enter(EStationTrainingMode::Text);
 		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
 		TestNull("no session", Client->GetSession());
+	});
+
+	It("takes no typed turn before the run is running", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client);
+
+		TestFalse("cannot send", Flow->CanSendTurn());
+		TestFalse("refused", Flow->SendTypedTurn(TEXT("Bom dia")));
+		TestFalse("nothing in flight", Flow->IsTurnInFlight());
+		TestEqual("empty transcript", Flow->GetTranscript().Num(), 0);
 	});
 }
 
@@ -195,6 +208,136 @@ void FStationRunPhoenixSpec::Define()
 					}
 					Done.Execute();
 				});
+		});
+	});
+
+	// The typed-turn tests need Phoenix's scripted patient (STATION_AI_E2E_SCRIPTED_ADAPTER).
+	auto ExpectTypedTurn = [this](EStationTrainingMode Mode, const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Mode, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			if (!TestTrue(TEXT("can enter (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnter(Mode)))
+			{
+				Done.Execute();
+				return;
+			}
+			Flow->Enter(Mode);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+				[this, Done]()
+				{
+					if (!TestTrue("can send a typed turn", Flow->CanSendTurn()))
+					{
+						Done.Execute();
+						return;
+					}
+					TestFalse("blank text refused", Flow->SendTypedTurn(TEXT("   ")));
+					TestTrue("accepted", Flow->SendTypedTurn(TEXT("  Bom dia, como o senhor está?  ")));
+					TestTrue("in flight", Flow->IsTurnInFlight());
+					TestFalse("one turn at a time", Flow->SendTypedTurn(TEXT("Mais uma")));
+					WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done]()
+					{
+						TestTrue(TEXT("no error (is Phoenix on STATION_AI_E2E_SCRIPTED_ADAPTER=true?)"),
+							Flow->GetErrorText().IsEmpty());
+						const TArray<FStationMessage>& Transcript = Flow->GetTranscript();
+						if (TestEqual("learner and patient lines", Transcript.Num(), 2))
+						{
+							TestEqual("learner speaker", Transcript[0].Speaker, EStationSpeaker::Learner);
+							TestEqual("learner text, trimmed", Transcript[0].Text, TEXT("Bom dia, como o senhor está?"));
+							TestEqual("patient speaker", Transcript[1].Speaker, EStationSpeaker::Patient);
+							TestEqual("approved reply", Transcript[1].Text, TEXT("Bom dia, doutor."));
+						}
+						// Phoenix kept the same turn: the transcript is its record, not a local guess.
+						Client->RefreshSession([this, Done](const TStationResult<FStationSession>& Refreshed)
+						{
+							if (TestFalse("refreshed", Refreshed.HasError()))
+							{
+								const TArray<FStationMessage>& Kept = Refreshed.GetValue().Messages;
+								if (TestEqual("Phoenix transcript", Kept.Num(), 2))
+								{
+									TestEqual("kept learner turn", Kept[0].Text, TEXT("Bom dia, como o senhor está?"));
+									TestEqual("kept patient reply", Kept[1].Text, TEXT("Bom dia, doutor."));
+								}
+							}
+							Done.Execute();
+						});
+					});
+				});
+		});
+	};
+
+	LatentIt("answers a typed turn in a text training, without audio consent", Timeout, [this, ExpectTypedTurn](const FDoneDelegate& Done)
+	{
+		ExpectTypedTurn(EStationTrainingMode::Text, Done);
+	});
+
+	LatentIt("answers a typed turn in a voice training too", Timeout, [this, ExpectTypedTurn](const FDoneDelegate& Done)
+	{
+		ExpectTypedTurn(EStationTrainingMode::Voice, Done);
+	});
+
+	/** Enters a text training and calls `Then` once it runs. */
+	auto WhenRunning = [this](const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done, Then]()
+		{
+			Flow->AcknowledgeNotice();
+			Flow->Enter(EStationTrainingMode::Text);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+				[this, Done, Then]()
+				{
+					if (TestEqual("running", Flow->GetStep(), EStationRunStep::Running))
+					{
+						Then();
+						return;
+					}
+					Done.Execute();
+				});
+		});
+	};
+
+	LatentIt("gives a turn Phoenix refused back to the learner", Timeout, [this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			// Phoenix refuses turns over 2,000 characters with `message_too_long`.
+			const FString TooLong = FString::ChrN(2001, TEXT('a'));
+			TestTrue("accepted locally", Flow->SendTypedTurn(TooLong));
+			WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done, TooLong]()
+			{
+				TestFalse("Phoenix's message is shown", Flow->GetErrorText().IsEmpty());
+				TestEqual("nothing joined the transcript", Flow->GetTranscript().Num(), 0);
+				TestTrue("can send again", Flow->CanSendTurn());
+				TestEqual("the turn comes back", Flow->TakeUnsentTurn(), TooLong);
+				TestEqual("only once", Flow->TakeUnsentTurn(), FString());
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("waits for Phoenix's record before the next turn after a lost answer", Timeout, [this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			// The run exists in Phoenix; only this client stops hearing back.
+			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+			TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Bom dia")));
+			WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done]()
+			{
+				TestTrue("reloading the transcript", Flow->IsReloadingTranscript());
+				TestFalse("no new turn meanwhile", Flow->CanSendTurn());
+				TestFalse("refused meanwhile", Flow->SendTypedTurn(TEXT("Outra pergunta")));
+				TestEqual("the turn is held until Phoenix's record is known", Flow->TakeUnsentTurn(), FString());
+				WhenFlow(Flow, [this]() { return !Flow->IsReloadingTranscript(); }, [this, Done]()
+				{
+					TestTrue("can send again", Flow->CanSendTurn());
+					TestFalse("error shown", Flow->GetErrorText().IsEmpty());
+					// The record could not be read either, so the learner may resend.
+					TestEqual("the turn comes back", Flow->TakeUnsentTurn(), TEXT("Bom dia"));
+					Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+					Done.Execute();
+				});
+			});
 		});
 	});
 }

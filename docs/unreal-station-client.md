@@ -179,8 +179,20 @@ Set `STATION_PHOENIX_URL` to test against another Phoenix. The runner fails when
 no test matches the filter.
 
 The Phoenix tests cover the deterministic paths: station, session lifecycle,
-voice credential, impressos, finish and the errors above. A patient reply and an
-educational result need Phoenix's text provider (`LLM_PROVIDER` and its key), so
-their parsing is covered by unit tests on Phoenix's real response shapes. A slice
-that needs a full turn or result against local Phoenix in CI adds that seam to
-Phoenix first, as #190 asks.
+voice credential, impressos, finish and the errors above. An educational result
+needs Phoenix's text provider (`LLM_PROVIDER` and its key), so its parsing is
+covered by unit tests on Phoenix's real response shapes. A slice that needs a
+full result against local Phoenix in CI adds that seam to Phoenix first, as #190
+asks.
+
+A full patient turn has that seam (#192). `ProyectoMed.StationRun.Phoenix` sends
+typed turns and expects Phoenix's scripted patient, a dev-only adapter that
+answers every turn with "Bom dia, doutor." Start Phoenix with it and with the
+E2E approving Jev adapter:
+
+```bash
+( cd backend && VOICE_MODE=realtime LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret JEV_E2E_APPROVING_ADAPTER=true STATION_AI_E2E_SCRIPTED_ADAPTER=true mix phx.server )
+```
+
+Both variables are honored only under `MIX_ENV=dev`. Never set them for a
+clinician or a learner session: the patient then says nothing from the case.

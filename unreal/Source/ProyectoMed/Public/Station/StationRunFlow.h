@@ -1,6 +1,7 @@
 // The learner's way into a station run: Pre-Station Notice, then the brief
-// Phoenix serves with the choice of a text or a voice training, then the run.
-// Interface code renders it; only the station client talks to the network.
+// Phoenix serves with the choice of a text or a voice training, then the run,
+// where typed turns are always available. Interface code renders it; only the
+// station client talks to the network.
 
 #pragma once
 
@@ -79,6 +80,37 @@ public:
 	/** For #191 to join the room. Secret: never log or display the token. */
 	const FStationVoiceCredential* GetVoiceCredential() const { return VoiceCredential.GetPtrOrNull(); }
 
+	/**
+	 * True while the run is running, no typed turn is waiting for Phoenix and the
+	 * transcript is not being reloaded, whatever the microphone does.
+	 */
+	bool CanSendTurn() const;
+
+	/**
+	 * Sends a typed turn, trimmed. Returns false, and sends nothing, when the
+	 * text is blank or `CanSendTurn` is false. Once Phoenix answers, the turn and
+	 * the reply Phoenix approved join the transcript.
+	 */
+	bool SendTypedTurn(const FString& Text);
+
+	bool IsTurnInFlight() const { return PendingTurn.IsSet(); }
+
+	/** The typed turn waiting for Phoenix; empty when there is none. */
+	FString GetPendingTurnText() const { return PendingTurn.Get(FString()); }
+
+	/** The conversation of this run, in order: only turns Phoenix took and replies it approved. */
+	const TArray<FStationMessage>& GetTranscript() const { return Transcript; }
+
+	/** True after a lost answer, while the transcript is reloaded from Phoenix. */
+	bool IsReloadingTranscript() const { return bReloadingTranscript; }
+
+	/**
+	 * The last typed turn Phoenix did not take, for the interface to give back to
+	 * the learner; it is returned once. Empty while the transcript is reloading,
+	 * because Phoenix may still have taken it.
+	 */
+	FString TakeUnsentTurn();
+
 	/** The last failure, in Brazilian Portuguese; empty when there is none. */
 	const FText& GetErrorText() const { return ErrorText; }
 
@@ -91,6 +123,14 @@ private:
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
 
+	void AddLine(EStationSpeaker Speaker, const FString& Text);
+
+	/**
+	 * Replaces the transcript with Phoenix's record, for when `Turn`'s fate is
+	 * unknown. `Turn` stays unsent unless the record ends with it.
+	 */
+	void ReloadTranscript(const FString& Turn);
+
 	UPROPERTY()
 	TObjectPtr<UStationClient> Client;
 
@@ -98,7 +138,11 @@ private:
 	EStationTrainingMode Mode = EStationTrainingMode::Text;
 	TOptional<FStationSummary> Station;
 	TOptional<FStationVoiceCredential> VoiceCredential;
+	TOptional<FString> PendingTurn;
+	TArray<FStationMessage> Transcript;
+	FString UnsentTurn;
 	FText ErrorText;
 	bool bLoadingStation = false;
+	bool bReloadingTranscript = false;
 	bool bVoiceFallback = false;
 };

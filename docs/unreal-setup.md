@@ -112,6 +112,11 @@ only code that talks to it, and its interface is documented in
    only appears when Phoenix serves `voice_mode: realtime`.
 3. A voice training logs `LogStationRun: Voice credential received for room
    station-session-<id>`; the token itself is never logged.
+4. In either training, the conversation panel at the bottom takes typed turns
+   (Enter or "Enviar") and shows each turn with the reply Phoenix approved. It
+   does not depend on the microphone, so a learner who declined audio completes
+   the station by typing. Replies to typed turns are shown as text only; speaking
+   them is a later slice.
 
 Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 `[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config.
