@@ -355,7 +355,8 @@ end
 # for example with a Neon branch. Never commit a URL with credentials.
 # `DATABASE_SSL` turns on TLS with peer and hostname verification against the
 # system CA store; it defaults to `true` in `:prod` and `false` in `:dev`. Neon
-# requires it. `POOL_SIZE` (default 10) and `ECTO_IPV6` (`true` or `1`) tune the
+# requires it. It accepts true/1/yes/on or false/0/no/off (any case) and refuses
+# to boot on anything else. `POOL_SIZE` (default 10) and `ECTO_IPV6` (`true` or `1`) tune the
 # connection pool. `:test` reads none of it and always uses the local database.
 if config_env() != :test do
   database_url = System.get_env("DATABASE_URL", "") |> String.trim()
@@ -369,7 +370,24 @@ if config_env() != :test do
 
   if database_url != "" do
     default_ssl = if config_env() == :prod, do: "true", else: "false"
-    ssl? = (System.get_env("DATABASE_SSL", default_ssl) |> String.trim()) in ~w(true 1)
+    raw_ssl = System.get_env("DATABASE_SSL", default_ssl)
+
+    # Case- and whitespace-insensitive. An unrecognized value refuses to boot
+    # instead of silently disabling TLS.
+    ssl? =
+      case raw_ssl |> String.trim() |> String.downcase() do
+        value when value in ~w(true 1 yes on) ->
+          true
+
+        value when value in ~w(false 0 no off) ->
+          false
+
+        _other ->
+          raise """
+          environment variable DATABASE_SSL has an unrecognized value: #{inspect(raw_ssl)}.
+          Use true/1/yes/on to enable TLS or false/0/no/off to disable it.
+          """
+      end
 
     ssl =
       if ssl? do

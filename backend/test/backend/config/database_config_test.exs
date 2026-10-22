@@ -64,6 +64,32 @@ defmodule Backend.Config.DatabaseConfigTest do
     assert repo_config(:prod)[:ssl] == false
   end
 
+  test "DATABASE_SSL accepts boolean spellings regardless of case and whitespace" do
+    System.put_env("DATABASE_URL", @url)
+
+    for value <- ["TRUE", "True", " yes ", "On", "1"] do
+      System.put_env("DATABASE_SSL", value)
+
+      assert repo_config(:prod)[:ssl][:verify] == :verify_peer,
+             "expected TLS for #{inspect(value)}"
+    end
+
+    for value <- ["FALSE", "False", " no ", "Off", "0"] do
+      System.put_env("DATABASE_SSL", value)
+      assert repo_config(:prod)[:ssl] == false, "expected no TLS for #{inspect(value)}"
+    end
+  end
+
+  test "DATABASE_SSL refuses to boot on an unrecognized value instead of disabling TLS" do
+    System.put_env("DATABASE_URL", @url)
+
+    for value <- ["ture", "enabled", ""] do
+      System.put_env("DATABASE_SSL", value)
+      error = assert_raise RuntimeError, fn -> repo_config(:prod) end
+      assert error.message =~ "DATABASE_SSL"
+    end
+  end
+
   test "POOL_SIZE and ECTO_IPV6 tune the pool" do
     System.put_env("DATABASE_URL", @url)
     System.put_env("POOL_SIZE", "4")
