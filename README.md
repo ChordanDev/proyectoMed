@@ -207,6 +207,8 @@ openssl rand -hex 32   # paste as VOICE_WORKER_SECRET
 | `CARTESIA_API_KEY` / `CARTESIA_VOICE_ID` | Patient voice. Without them the reply is still shown as text. |
 | `CARTESIA_MODEL` | Optional, default `sonic-3`. |
 | `PHOENIX_TURN_TIMEOUT_S` / `PHOENIX_TURN_RETRIES` | Optional, defaults `35` and `1`. |
+| `VOICE_WORKER_FAKE_PROVIDERS` | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on; the worker refuses it unless `LIVEKIT_URL` is on loopback. |
+| `VOICE_WORKER_FAKE_TRANSCRIPT` | Optional. The fixed phrase the fake speech-to-text returns. Default `Qual é o seu nome?`. |
 
 Never commit `.env`. No secret reaches the browser: it only receives a short-lived
 LiveKit token.
@@ -475,6 +477,8 @@ through the subscribed audio track.
 | `CARTESIA_MODEL`      | no       | TTS model. Default `sonic-3` (low latency, supports Portuguese).        |
 | `PHOENIX_TURN_TIMEOUT_S` | no    | Seconds each transcript POST waits for Phoenix. Default `35` (see below). |
 | `PHOENIX_TURN_RETRIES`   | no    | Retries of a transcript POST after a timeout or disconnect. Default `1`.  |
+| `VOICE_WORKER_FAKE_PROVIDERS` | no | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on, and LiveKit must be on loopback or the job fails with `fake_providers_refused`. |
+| `VOICE_WORKER_FAKE_TRANSCRIPT` | no | The fixed phrase the fake speech-to-text returns. Default `Qual é o seu nome?`. |
 
 Without the sentence stream Phoenix answers a transcript only after the patient reply
 is generated and verified; with it, the timeout applies to each wait for the next line.
@@ -646,6 +650,47 @@ prove the result contract, not the quality of any assessment.
   harness runs; in `test` and `prod` it is ignored and the default adapter stays
   in place.
 - Do not set the variable outside the E2E suite.
+
+### Voice worker fake speech providers
+
+The Unreal spoken-turn test (#191) runs the real voice worker without Deepgram
+or ElevenLabs. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
+
+- Every learner utterance becomes one final transcript,
+  `VOICE_WORKER_FAKE_TRANSCRIPT` (default `Qual é o seu nome?`). An utterance
+  starts when the microphone is loud and ends after 500 ms of quiet, like the
+  Deepgram endpointing.
+- Every approved reply is spoken as a 220 Hz tone, 80 ms per character, from
+  0.4 s to 3 s.
+- Rooms, Phoenix calls, turn tracking and the `transcript` events are the real
+  worker's.
+
+**The switch is test-only.** The worker refuses to start with it unless
+`LIVEKIT_URL` points at a loopback address (`127.0.0.1`, `localhost` or
+`::1`). The worker's unit tests (`cd voice-worker && uv run python -m unittest`)
+cover the fakes in `test_fake_providers.py`.
+
+`scripts/run-voice-stack.sh` starts the whole stack with no paid provider and
+never reads `.env`:
+
+- `livekit-server --dev` on `ws://127.0.0.1:7880`;
+- a mock OpenAI (`scripts/voice-stack/mock_openai.py`) that answers every
+  patient turn with `VOICE_STACK_PATIENT_REPLY` (default `Meu nome é Carlos.`);
+- Phoenix in `dev` with `VOICE_MODE=realtime` and the E2E-only approving Jev
+  adapter, on port `VOICE_STACK_PHOENIX_PORT` (default `4000`);
+- the voice worker with its fake speech providers, hearing
+  `VOICE_STACK_TRANSCRIPT` (default `Qual é o seu nome?`). It runs in `dev`
+  mode without reload, which has no CPU-load cap, so it still takes rooms
+  while the Unreal editor starts.
+
+It runs until Ctrl-C, or runs one command once the stack is up and exits with
+that command's status. The probe joins as the learner, speaks a tone burst and
+checks the transcript events and the patient's audio:
+
+```sh
+scripts/run-voice-stack.sh -- \
+  uv run --project voice-worker python scripts/voice-stack/probe_spoken_turn.py
+```
 
 ### Active station
 

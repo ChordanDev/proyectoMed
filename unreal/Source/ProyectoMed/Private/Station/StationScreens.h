@@ -1,7 +1,7 @@
-// The station's native UMG screens: Pre-Station Notice, brief, the in-run
-// HUD with the Station Timer, the typed conversation and the exam panel, and
-// the feedback once the run ends. They render UStationRunFlow and never call
-// the network.
+// The station's native UMG screens: the first-launch microphone disclosure,
+// Pre-Station Notice, brief, the in-run HUD with the Station Timer, the voice
+// status, the conversation and the exam panel, and the feedback once the run
+// ends. They render UStationRunFlow and never call the network.
 
 #pragma once
 
@@ -17,6 +17,26 @@ class UScrollBox;
 class UStationRunFlow;
 class UTextBlock;
 class UVerticalBox;
+
+UCLASS()
+class UStationMicrophoneWidget : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	/** True to ask the system for the microphone, false for "not now". */
+	TDelegate<void(bool)> OnAnswered;
+
+protected:
+	virtual TSharedRef<SWidget> RebuildWidget() override;
+
+private:
+	UFUNCTION()
+	void HandleAllow();
+
+	UFUNCTION()
+	void HandleNotNow();
+};
 struct FStationCriterionResult;
 
 UCLASS()
@@ -182,6 +202,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> FallbackText;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> VoiceStatusText;
 
 	UPROPERTY()
 	TObjectPtr<UButton> FinishButton;

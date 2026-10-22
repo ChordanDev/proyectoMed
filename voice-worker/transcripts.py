@@ -54,7 +54,8 @@ _STREAM_ERROR_KINDS = {
 class VoiceFailure(Exception):
     """Typed failure. `kind` is one of: auth, timeout, disconnected, malformed, session_inactive, stale_generation,
     station_time_elapsed (the station deadline ended the session; never retried),
-    synthesis_failed (patient speech only; never stops the worker job).
+    synthesis_failed (patient speech only; never stops the worker job),
+    fake_providers_refused (the test-only fake providers were requested off loopback).
     The room `failure` event may also carry text_delivery_failed (see worker.PatientVoice).
 
     The message is only the kind, so provider errors (which may echo credentials) never leak.

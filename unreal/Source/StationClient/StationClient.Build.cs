@@ -10,6 +10,9 @@ public class StationClient : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// The LiveKit SDK headers use std::exception types.
+		bEnableExceptions = true;
+
 		PublicDependencyModuleNames.AddRange(new string[] {
 			"Core",
 			"CoreUObject",
@@ -19,6 +22,7 @@ public class StationClient : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"HTTP",
 			"Json",
+			"LiveKitSDK",
 		});
 
 		// The automation tests serve a fake Phoenix to control response timing.

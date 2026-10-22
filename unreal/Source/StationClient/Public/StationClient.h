@@ -8,6 +8,7 @@
 #include "CoreMinimal.h"
 #include "StationClientTypes.h"
 #include "StationClock.h"
+#include "StationVoice.h"
 #include "UObject/Object.h"
 
 #include "StationClient.generated.h"
@@ -21,6 +22,7 @@ class STATIONCLIENT_API UStationClient : public UObject
 
 public:
 	virtual void PostInitProperties() override;
+	virtual void BeginDestroy() override;
 
 	/** Points the client at another Phoenix, for example a test server. */
 	void SetPhoenixBaseUrl(const FString& InBaseUrl);
@@ -81,6 +83,26 @@ public:
 	 */
 	void FinishSession(EStationFinishReason Reason, TStationCallback<FStationSession> OnDone);
 
+	/**
+	 * Joins this run's LiveKit room with a credential from `RequestVoiceCredential`
+	 * and publishes the microphone the caller pushes into the returned link. The
+	 * link leaves the room when the run finishes or is discarded, when
+	 * `DisconnectVoice` is called and when this client goes away, so no learner
+	 * audio outlives the run. Replaces any link already open. Returns null without
+	 * a session in progress.
+	 */
+	TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> ConnectVoice(const FStationVoiceCredential& Credential,
+		FStationVoiceHandlers Handlers);
+
+	/** Leaves the room at once (see `FStationVoiceLink::Disconnect`). */
+	void DisconnectVoice();
+
+	/**
+	 * The open voice link, or null. Game thread only: the pointer dies when the link is
+	 * replaced or dropped. Other threads keep `AsShared()` in a `TWeakPtr` and `Pin()` it.
+	 */
+	FStationVoiceLink* GetVoice() const { return Voice.Get(); }
+
 	/** `GET /api/v2/.../sessions/:id/result`: the educational result of a finished run. */
 	void FetchResult(TStationCallback<FStationResult> OnDone);
 
@@ -115,4 +137,5 @@ private:
 	TOptional<FStationSession> Session;
 	FStationClock Clock;
 	bool bStartInFlight = false;
+	TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice;
 };

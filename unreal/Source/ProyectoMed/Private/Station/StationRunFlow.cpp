@@ -1,6 +1,7 @@
 #include "Station/StationRunFlow.h"
 
 #include "HAL/PlatformTime.h"
+#include "Misc/ConfigCacheIni.h"
 #include "StationClient.h"
 
 #define LOCTEXT_NAMESPACE "StationRunFlow"
@@ -27,11 +28,66 @@ FText FormatStationTimer(const FTimespan& Remaining)
 	return FText::FromString(FString::Printf(TEXT("%02lld:%02lld"), Seconds / 60, Seconds % 60));
 }
 
-void UStationRunFlow::Begin(UStationClient* InClient)
+namespace
+{
+	const TCHAR* VoiceSettingsSection = TEXT("StationVoice");
+	const TCHAR* DisclosureShownKey = TEXT("bMicrophoneDisclosureShown");
+}
+
+FStationMicrophoneSetup FStationMicrophoneSetup::System()
+{
+	FStationMicrophoneSetup Setup;
+	Setup.GetPermission = []() { return StationMicPermission::Get(); };
+	Setup.RequestPermission = [](TFunction<void(EStationMicPermission)> OnDone) { StationMicPermission::Request(MoveTemp(OnDone)); };
+	Setup.WasDisclosureShown = []()
+	{
+		bool bShown = false;
+		GConfig->GetBool(VoiceSettingsSection, DisclosureShownKey, bShown, GGameUserSettingsIni);
+		return bShown;
+	};
+	Setup.RememberDisclosureShown = []()
+	{
+		GConfig->SetBool(VoiceSettingsSection, DisclosureShownKey, true, GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+	};
+	return Setup;
+}
+
+void UStationRunFlow::Begin(UStationClient* InClient, FStationMicrophoneSetup InMicrophone)
 {
 	Client = InClient;
-	Step = EStationRunStep::Notice;
+	Microphone = MoveTemp(InMicrophone);
+	Step = Microphone.WasDisclosureShown() ? EStationRunStep::Notice : EStationRunStep::Microphone;
 	LoadStation();
+}
+
+void UStationRunFlow::AnswerMicrophone(bool bAllow)
+{
+	if (Step != EStationRunStep::Microphone)
+	{
+		return;
+	}
+	Microphone.RememberDisclosureShown();
+	if (!bAllow)
+	{
+		Step = EStationRunStep::Notice;
+		OnChanged.Broadcast();
+		return;
+	}
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	Microphone.RequestPermission([WeakThis](EStationMicPermission)
+	{
+		if (UStationRunFlow* Self = WeakThis.Get(); Self && Self->Step == EStationRunStep::Microphone)
+		{
+			Self->Step = EStationRunStep::Notice;
+			Self->OnChanged.Broadcast();
+		}
+	});
+}
+
+EStationMicPermission UStationRunFlow::GetMicrophonePermission() const
+{
+	return Microphone.GetPermission ? Microphone.GetPermission() : EStationMicPermission::Denied;
 }
 
 void UStationRunFlow::AcknowledgeNotice()
@@ -56,7 +112,8 @@ bool UStationRunFlow::CanEnter(EStationTrainingMode InMode) const
 {
 	return Step == EStationRunStep::Brief
 		&& Station.IsSet()
-		&& (InMode == EStationTrainingMode::Text || IsVoiceTrainingAvailable(Station.GetValue()));
+		&& (InMode == EStationTrainingMode::Text
+			|| (IsVoiceTrainingAvailable(Station.GetValue()) && GetMicrophonePermission() != EStationMicPermission::Denied));
 }
 
 void UStationRunFlow::Enter(EStationTrainingMode InMode)
@@ -71,8 +128,35 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 	Step = EStationRunStep::Starting;
 	OnChanged.Broadcast();
 
+	if (InMode == EStationTrainingMode::Voice && GetMicrophonePermission() == EStationMicPermission::NotDetermined)
+	{
+		// The learner skipped the first-launch request; choosing voice is the moment to ask.
+		TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+		Microphone.RequestPermission([WeakThis](EStationMicPermission Permission)
+		{
+			UStationRunFlow* Self = WeakThis.Get();
+			if (!Self || Self->Step != EStationRunStep::Starting)
+			{
+				return;
+			}
+			if (Permission != EStationMicPermission::Granted)
+			{
+				Self->Step = EStationRunStep::Brief;
+				Self->ErrorText = LOCTEXT("MicrophoneBlocked", "Sem acesso ao microfone, o treino por voz não pode começar.");
+				Self->OnChanged.Broadcast();
+				return;
+			}
+			Self->StartSession();
+		});
+		return;
+	}
+	StartSession();
+}
+
+void UStationRunFlow::StartSession()
+{
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->StartSession(InMode == EStationTrainingMode::Voice, [WeakThis](const TStationResult<FStationSession>& Started)
+	Client->StartSession(Mode == EStationTrainingMode::Voice, [WeakThis](const TStationResult<FStationSession>& Started)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
 		if (!Self)
@@ -115,6 +199,10 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 					*Credential.GetValue().Room, *Credential.GetValue().ExpiresAt.ToIso8601());
 			}
 			Flow->Step = EStationRunStep::Running;
+			if (Flow->VoiceCredential.IsSet())
+			{
+				Flow->ConnectVoice();
+			}
 			Flow->OnChanged.Broadcast();
 		});
 	});
@@ -263,6 +351,8 @@ void UStationRunFlow::AddLine(EStationSpeaker Speaker, const FString& Text)
 	FStationMessage& Line = Transcript.AddDefaulted_GetRef();
 	Line.Speaker = Speaker;
 	Line.Text = Text;
+	// The examiner's note belongs right after its own spoken turn; any later line ends it.
+	Voice.bExaminerNoted = false;
 }
 
 void UStationRunFlow::ReloadTranscript(const FString& Turn)
@@ -451,6 +541,9 @@ void UStationRunFlow::ResetRun()
 	ErrorText = FText::GetEmpty();
 	bVoiceFallback = false;
 	VoiceCredential.Reset();
+	Voice = FStationVoiceView();
+	VoiceTurnId = 0;
+	bVoiceLearnerCommitted = false;
 	PendingTurn.Reset();
 	Transcript.Reset();
 	UnsentTurn.Reset();
@@ -490,6 +583,131 @@ void UStationRunFlow::LoadStation()
 		Self->Station = Result.GetValue();
 		Self->OnChanged.Broadcast();
 	});
+}
+
+void UStationRunFlow::ConnectVoice()
+{
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	FStationVoiceHandlers Handlers;
+	Handlers.OnEvent = [WeakThis](const FStationVoiceEvent& Event)
+	{
+		if (UStationRunFlow* Self = WeakThis.Get())
+		{
+			Self->HandleVoiceEvent(Event);
+		}
+	};
+	Handlers.OnStateChanged = [WeakThis](EStationVoiceState State)
+	{
+		if (UStationRunFlow* Self = WeakThis.Get())
+		{
+			Self->Voice.State = State;
+			Self->Voice.bLost |= State == EStationVoiceState::Failed;
+			Self->OnChanged.Broadcast();
+		}
+	};
+	// Runs on a LiveKit thread: copy the handler so the flow is never touched there.
+	Handlers.OnPatientPcm = [PatientAudio = PatientAudio](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
+	{
+		if (PatientAudio)
+		{
+			PatientAudio(Samples, SampleRate, NumChannels);
+		}
+	};
+	Voice.State = EStationVoiceState::Connecting;
+	if (!Client->ConnectVoice(VoiceCredential.GetValue(), MoveTemp(Handlers)))
+	{
+		Voice.State = EStationVoiceState::Failed;
+		Voice.bLost = true;
+	}
+}
+
+void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
+{
+	if (Event.Kind == EStationVoiceEventKind::Fatal)
+	{
+		Voice.bLost = true;
+		OnChanged.Broadcast();
+		return;
+	}
+	if (Event.TurnId < VoiceTurnId)
+	{
+		return; // a late event of an earlier turn
+	}
+	if (Event.TurnId > VoiceTurnId)
+	{
+		// A reply whose end never arrived is still kept.
+		CommitVoiceReply();
+		VoiceTurnId = Event.TurnId;
+		bVoiceLearnerCommitted = false;
+		Voice.LearnerText.Reset();
+		Voice.bExaminerNoted = false;
+	}
+	switch (Event.Kind)
+	{
+	case EStationVoiceEventKind::Learner:
+		if (bVoiceLearnerCommitted)
+		{
+			return;
+		}
+		if (Event.bFinal)
+		{
+			// Spoken turns join the same conversation as typed ones.
+			AddLine(EStationSpeaker::Learner, Event.Text);
+			bVoiceLearnerCommitted = true;
+			Voice.LearnerText.Reset();
+		}
+		else
+		{
+			Voice.LearnerText = Event.Text;
+		}
+		break;
+	case EStationVoiceEventKind::PatientText:
+		Voice.PatientText = Event.Segment > 0 && !Voice.PatientText.IsEmpty()
+			? Voice.PatientText + TEXT(" ") + Event.Text
+			: Event.Text;
+		if (Event.Segment == INDEX_NONE)
+		{
+			// A reply sent whole, not sentence by sentence.
+			CommitVoiceReply();
+		}
+		break;
+	case EStationVoiceEventKind::PatientComplete:
+		CommitVoiceReply();
+		break;
+	case EStationVoiceEventKind::ExaminerAcknowledged:
+		Voice.bExaminerNoted = true;
+		break;
+	default:
+		// A refused reply and a failed synthesis change nothing shown.
+		return;
+	}
+	OnChanged.Broadcast();
+}
+
+bool UStationRunFlow::IsListening() const
+{
+	const FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr;
+	return Step == EStationRunStep::Running && Link && !Voice.bMicrophoneUnavailable
+		&& (Link->GetState() == EStationVoiceState::WaitingForWorker || Link->GetState() == EStationVoiceState::Ready);
+}
+
+void UStationRunFlow::ReportMicrophoneUnavailable()
+{
+	if (Voice.bMicrophoneUnavailable)
+	{
+		return;
+	}
+	Voice.bMicrophoneUnavailable = true;
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::CommitVoiceReply()
+{
+	if (!Voice.PatientText.IsEmpty())
+	{
+		AddLine(EStationSpeaker::Patient, Voice.PatientText);
+		Voice.PatientText.Reset();
+	}
 }
 
 FText StationErrorText(const FStationClientError& Error, const FText& Fallback)
