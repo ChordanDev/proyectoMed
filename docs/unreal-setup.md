@@ -117,6 +117,11 @@ only code that talks to it, and its interface is documented in
    does not depend on the microphone, so a learner who declined audio completes
    the station by typing. Replies to typed turns are shown as text only; speaking
    them is a later slice.
+5. The "Exames" button at the top right opens the exam panel. A request typed
+   there ("exame físico", "eletrocardiograma") goes to Phoenix's impresso route,
+   never to the patient, and never joins the conversation. Phoenix decides what
+   is released: findings and impressos appear under "Documentos liberados", and
+   a request Phoenix declines is shown as declined, with nothing in its place.
 
 Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 `[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config.

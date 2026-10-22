@@ -1,6 +1,6 @@
 // Run flow tests. `ProyectoMed.StationRun.Unit` needs nothing else;
-// `ProyectoMed.StationRun.Phoenix` needs a local Phoenix with realtime voice and
-// the scripted patient (see docs/unreal-station-client.md).
+// `ProyectoMed.StationRun.Phoenix` needs a local Phoenix with realtime voice, the
+// scripted patient and the default station (see docs/unreal-station-client.md).
 
 #include "Misc/AutomationTest.h"
 #include "Station/StationRunFlow.h"
@@ -106,6 +106,20 @@ void FStationRunUnitSpec::Define()
 		TestFalse("refused", Flow->SendTypedTurn(TEXT("Bom dia")));
 		TestFalse("nothing in flight", Flow->IsTurnInFlight());
 		TestEqual("empty transcript", Flow->GetTranscript().Num(), 0);
+	});
+
+	It("takes no exam request before the run is running", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client);
+
+		TestFalse("cannot request", Flow->CanRequestExam());
+		TestFalse("refused", Flow->RequestExam(TEXT("Exame físico")));
+		TestFalse("nothing in flight", Flow->IsExamRequestInFlight());
+		TestEqual("no requests", Flow->GetExamRequests().Num(), 0);
+		TestEqual("nothing released", Flow->GetReleasedImpressos().Num(), 0);
 	});
 }
 
@@ -335,6 +349,140 @@ void FStationRunPhoenixSpec::Define()
 					// The record could not be read either, so the learner may resend.
 					TestEqual("the turn comes back", Flow->TakeUnsentTurn(), TEXT("Bom dia"));
 					Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	// The exam tests read the default station (chest-pain-initial-assessment),
+	// which authors the physical exam and an ECG and no tomography.
+
+	/** Checks that Phoenix's own transcript of the run is still empty. */
+	auto ExpectNoDialogue = [this](const FDoneDelegate& Done)
+	{
+		TestEqual("no line in the conversation", Flow->GetTranscript().Num(), 0);
+		Client->RefreshSession([this, Done](const TStationResult<FStationSession>& Refreshed)
+		{
+			if (TestFalse("refreshed", Refreshed.HasError()))
+			{
+				TestEqual("no line in Phoenix's transcript", Refreshed.GetValue().Messages.Num(), 0);
+			}
+			Done.Execute();
+		});
+	};
+
+	LatentIt("shows the physical exam findings Phoenix releases, without addressing the patient", Timeout,
+		[this, WhenRunning, ExpectNoDialogue](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, ExpectNoDialogue]()
+		{
+			TestTrue("can request an exam", Flow->CanRequestExam());
+			TestFalse("blank text refused", Flow->RequestExam(TEXT("   ")));
+			TestTrue("accepted", Flow->RequestExam(TEXT("  Vou realizar o exame físico  ")));
+			TestTrue("in flight", Flow->IsExamRequestInFlight());
+			TestFalse("one request at a time", Flow->RequestExam(TEXT("Sinais vitais")));
+			TestTrue("the dialogue stays open", Flow->CanSendTurn());
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue]()
+			{
+				TestTrue("no error", Flow->GetExamErrorText().IsEmpty());
+				const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+				if (TestEqual("one request", Requests.Num(), 1))
+				{
+					TestEqual("request text, trimmed", Requests[0].Text, TEXT("Vou realizar o exame físico"));
+					TestEqual("released", Requests[0].Reply.Decision, EStationImpressoDecision::Released);
+					TestFalse("Phoenix's feedback", Requests[0].Reply.FeedbackMessage.IsEmpty());
+				}
+				const TArray<FStationImpresso>& Released = Flow->GetReleasedImpressos();
+				if (TestEqual("one document", Released.Num(), 1))
+				{
+					TestEqual("physical exam", Released[0].Category, TEXT("physical_exam"));
+					TestFalse("findings", Released[0].Content.IsEmpty());
+				}
+				ExpectNoDialogue(Done);
+			});
+		});
+	});
+
+	LatentIt("shows an impresso Phoenix releases, and releases it once", Timeout,
+		[this, WhenRunning, ExpectNoDialogue](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, ExpectNoDialogue]()
+		{
+			TestTrue("accepted", Flow->RequestExam(TEXT("Gostaria de ver o eletrocardiograma")));
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue]()
+			{
+				if (!TestEqual("one document", Flow->GetReleasedImpressos().Num(), 1))
+				{
+					Done.Execute();
+					return;
+				}
+				const FString Id = Flow->GetReleasedImpressos()[0].Id;
+				TestFalse("content", Flow->GetReleasedImpressos()[0].Content.IsEmpty());
+				TestTrue("asked again", Flow->RequestExam(TEXT("Gostaria de ver o eletrocardiograma")));
+				WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue, Id]()
+				{
+					const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+					if (TestEqual("two requests", Requests.Num(), 2))
+					{
+						TestEqual("first released", Requests[0].Reply.Decision, EStationImpressoDecision::Released);
+						TestEqual("then already released", Requests[1].Reply.Decision, EStationImpressoDecision::AlreadyReleased);
+						TestEqual("nothing new", Requests[1].Reply.NewlyReleased.Num(), 0);
+					}
+					if (TestEqual("still one document", Flow->GetReleasedImpressos().Num(), 1))
+					{
+						TestEqual("same document", Flow->GetReleasedImpressos()[0].Id, Id);
+					}
+					ExpectNoDialogue(Done);
+				});
+			});
+		});
+	});
+
+	LatentIt("shows a request Phoenix declines as declined, with nothing released", Timeout,
+		[this, WhenRunning, ExpectNoDialogue](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, ExpectNoDialogue]()
+		{
+			TestTrue("accepted", Flow->RequestExam(TEXT("Solicito uma tomografia de crânio")));
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue]()
+			{
+				TestTrue("a decline is no error", Flow->GetExamErrorText().IsEmpty());
+				const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+				if (TestEqual("one request", Requests.Num(), 1))
+				{
+					TestEqual("declined", Requests[0].Reply.Decision, EStationImpressoDecision::Unavailable);
+					TestEqual("nothing new", Requests[0].Reply.NewlyReleased.Num(), 0);
+					TestFalse("Phoenix's feedback", Requests[0].Reply.FeedbackMessage.IsEmpty());
+				}
+				TestEqual("no document", Flow->GetReleasedImpressos().Num(), 0);
+				ExpectNoDialogue(Done);
+			});
+		});
+	});
+
+	LatentIt("gives an exam request Phoenix did not answer back to the learner", Timeout,
+		[this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+			TestTrue("accepted locally", Flow->RequestExam(TEXT("Exame físico")));
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done]()
+			{
+				Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+				TestFalse("error shown", Flow->GetExamErrorText().IsEmpty());
+				TestTrue("the conversation shows no error", Flow->GetErrorText().IsEmpty());
+				TestEqual("no answered request", Flow->GetExamRequests().Num(), 0);
+				TestEqual("no document", Flow->GetReleasedImpressos().Num(), 0);
+				TestTrue("can request again", Flow->CanRequestExam());
+				TestEqual("the request comes back", Flow->TakeUnsentExamRequest(), TEXT("Exame físico"));
+				TestEqual("only once", Flow->TakeUnsentExamRequest(), FString());
+				TestTrue("resent", Flow->RequestExam(TEXT("Exame físico")));
+				WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done]()
+				{
+					TestTrue("error cleared", Flow->GetExamErrorText().IsEmpty());
+					TestEqual("released on the retry", Flow->GetReleasedImpressos().Num(), 1);
 					Done.Execute();
 				});
 			});

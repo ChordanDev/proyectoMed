@@ -177,6 +177,7 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		FallbackText->SetJustification(ETextJustify::Center);
 
 		BuildConversation(*Root);
+		BuildExams(*Root);
 	}
 	return Super::RebuildWidget();
 }
@@ -295,6 +296,147 @@ void UStationHudWidget::HandleTurnCommitted(const FText& Text, ETextCommit::Type
 	}
 }
 
+void UStationHudWidget::BuildExams(UOverlay& Root)
+{
+	// Exam and impresso requests have their own control and their own Phoenix
+	// route (ADR-008): what is asked here never reaches the patient.
+	USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>();
+	Size->SetWidthOverride(420.f);
+	Size->SetMaxDesiredHeight(640.f);
+	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Size))
+	{
+		Slot->SetHorizontalAlignment(HAlign_Right);
+		Slot->SetVerticalAlignment(VAlign_Top);
+		Slot->SetPadding(FMargin(0.f, 24.f, 24.f, 0.f));
+	}
+
+	UBorder* Panel = WidgetTree->ConstructWidget<UBorder>();
+	Panel->SetBrushColor(FLinearColor(0.f, 0.f, 0.f, 0.65f));
+	Panel->SetPadding(FMargin(20.f, 16.f));
+	Size->SetContent(Panel);
+
+	UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>();
+	Panel->SetContent(Scroll);
+	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
+	Scroll->AddChild(Column);
+
+	UButton* Toggle = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("ExamsButton", "Exames"), 0.f);
+	Toggle->OnClicked.AddDynamic(this, &UStationHudWidget::HandleToggleExams);
+
+	ExamPanel = WidgetTree->ConstructWidget<UVerticalBox>();
+	Column->AddChild(ExamPanel);
+	StationUi::SetShown(ExamPanel, false);
+
+	StationUi::AddText(*WidgetTree, *ExamPanel, LOCTEXT("ExamHeading", "Solicitar Exame Físico ou Exame Complementar"),
+		18, true, StationUi::Ink, 16.f);
+	ExamInput = WidgetTree->ConstructWidget<UEditableTextBox>();
+	ExamInput->SetHintText(LOCTEXT("ExamHint", "Descreva a manobra de exame físico ou o exame complementar solicitado"));
+	ExamInput->OnTextCommitted.AddDynamic(this, &UStationHudWidget::HandleExamCommitted);
+	if (UVerticalBoxSlot* InputSlot = ExamPanel->AddChildToVerticalBox(ExamInput))
+	{
+		InputSlot->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
+	}
+	ExamButton = StationUi::AddButton(*WidgetTree, *ExamPanel, LOCTEXT("ExamSubmit", "Solicitar"), 12.f);
+	ExamButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleRequestExam);
+	ExamErrorText = StationUi::AddText(*WidgetTree, *ExamPanel, FText::GetEmpty(), 15, false, StationUi::Caution, 8.f);
+
+	ExamRequestBox = WidgetTree->ConstructWidget<UVerticalBox>();
+	ExamPanel->AddChild(ExamRequestBox);
+
+	StationUi::AddText(*WidgetTree, *ExamPanel, LOCTEXT("DocumentsHeading", "Documentos liberados"), 18, true,
+		StationUi::Ink, 20.f);
+	NoDocumentText = StationUi::AddText(*WidgetTree, *ExamPanel,
+		LOCTEXT("NoDocuments", "Nenhum documento liberado ainda."), 15, false, StationUi::Muted, 8.f);
+	DocumentBox = WidgetTree->ConstructWidget<UVerticalBox>();
+	ExamPanel->AddChild(DocumentBox);
+}
+
+void UStationHudWidget::RefreshExams()
+{
+	ExamRequestBox->ClearChildren();
+	for (const FStationExamRequest& Request : Flow->GetExamRequests())
+	{
+		// Phoenix's feedback is the whole answer: a declined request shows that
+		// it was declined and nothing else.
+		const FStationImpressoReply& Reply = Request.Reply;
+		FText Decision;
+		FLinearColor Color = StationUi::Ink;
+		switch (Reply.Decision)
+		{
+		case EStationImpressoDecision::Released:
+			Decision = LOCTEXT("ExamReleased", "Liberado");
+			break;
+		case EStationImpressoDecision::AlreadyReleased:
+			Decision = LOCTEXT("ExamAlreadyReleased", "Já liberado");
+			Color = StationUi::Muted;
+			break;
+		case EStationImpressoDecision::Unavailable:
+			Decision = LOCTEXT("ExamUnavailable", "Não disponível");
+			Color = StationUi::Caution;
+			break;
+		}
+		StationUi::AddText(*WidgetTree, *ExamRequestBox,
+			FText::Format(LOCTEXT("ExamRequestLine", "Você solicitou: {0}"), FText::FromString(Request.Text)),
+			15, false, StationUi::Muted, 12.f);
+		StationUi::AddText(*WidgetTree, *ExamRequestBox,
+			Reply.FeedbackMessage.IsEmpty() ? Decision : FText::FromString(Reply.FeedbackMessage), 15, true, Color, 2.f);
+	}
+	if (Flow->IsExamRequestInFlight())
+	{
+		StationUi::AddText(*WidgetTree, *ExamRequestBox,
+			FText::Format(LOCTEXT("ExamPendingLine", "Você solicitou: {0} (solicitando...)"),
+				FText::FromString(Flow->GetPendingExamRequestText())), 15, false, StationUi::Muted, 12.f);
+	}
+
+	DocumentBox->ClearChildren();
+	const TArray<FStationImpresso>& Released = Flow->GetReleasedImpressos();
+	StationUi::SetShown(NoDocumentText, Released.Num() == 0);
+	for (const FStationImpresso& Impresso : Released)
+	{
+		StationUi::AddText(*WidgetTree, *DocumentBox, FText::FromString(Impresso.Title), 16, true, StationUi::Ink, 12.f);
+		StationUi::AddText(*WidgetTree, *DocumentBox, FText::FromString(Impresso.Content), 15, false, StationUi::Ink, 4.f);
+	}
+
+	StationUi::SetShown(ExamErrorText, !Flow->GetExamErrorText().IsEmpty());
+	ExamErrorText->SetText(Flow->GetExamErrorText());
+	ExamButton->SetIsEnabled(Flow->CanRequestExam());
+
+	if (ExamInput->GetText().IsEmpty())
+	{
+		const FString Unsent = Flow->TakeUnsentExamRequest();
+		if (!Unsent.IsEmpty())
+		{
+			ExamInput->SetText(FText::FromString(Unsent));
+		}
+	}
+}
+
+void UStationHudWidget::RequestExam()
+{
+	if (Flow && ExamInput && Flow->RequestExam(ExamInput->GetText().ToString()))
+	{
+		ExamInput->SetText(FText::GetEmpty());
+	}
+}
+
+void UStationHudWidget::HandleToggleExams()
+{
+	StationUi::SetShown(ExamPanel, !ExamPanel->IsVisible());
+}
+
+void UStationHudWidget::HandleRequestExam()
+{
+	RequestExam();
+}
+
+void UStationHudWidget::HandleExamCommitted(const FText& Text, ETextCommit::Type CommitMethod)
+{
+	if (CommitMethod == ETextCommit::OnEnter)
+	{
+		RequestExam();
+	}
+}
+
 void UStationHudWidget::Refresh()
 {
 	if (!Flow || !ModeText)
@@ -306,6 +448,7 @@ void UStationHudWidget::Refresh()
 		: LOCTEXT("TextTrainingLabel", "Treino por texto · Tempo restante"));
 	StationUi::SetShown(FallbackText, Flow->IsVoiceFallback());
 	RefreshConversation();
+	RefreshExams();
 }
 
 void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)

@@ -65,6 +65,12 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 	Transcript.Reset();
 	UnsentTurn.Reset();
 	bReloadingTranscript = false;
+	PendingExamRequest.Reset();
+	UnansweredExamRequest.Reset();
+	ExamRequests.Reset();
+	ReleasedImpressos.Reset();
+	UnsentExamRequest.Reset();
+	ExamErrorText = FText::GetEmpty();
 	OnChanged.Broadcast();
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
@@ -174,6 +180,72 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 		{
 			Self->AddLine(EStationSpeaker::Patient, Value.ReplyText);
 		}
+		Self->OnChanged.Broadcast();
+	});
+	return true;
+}
+
+bool UStationRunFlow::CanRequestExam() const
+{
+	return Step == EStationRunStep::Running && !PendingExamRequest.IsSet();
+}
+
+FString UStationRunFlow::TakeUnsentExamRequest()
+{
+	FString Request = MoveTemp(UnsentExamRequest);
+	UnsentExamRequest.Reset();
+	return Request;
+}
+
+bool UStationRunFlow::RequestExam(const FString& Text)
+{
+	const FString Request = Text.TrimStartAndEnd();
+	if (Request.IsEmpty() || !CanRequestExam())
+	{
+		return false;
+	}
+
+	// Phoenix may have recorded an unanswered request: asking again with its id
+	// lets Phoenix answer it instead of recording a second one.
+	FExamRequestAttempt Attempt;
+	Attempt.Text = Request;
+	Attempt.RequestId = UnansweredExamRequest.IsSet() && UnansweredExamRequest->Text == Request
+		? UnansweredExamRequest->RequestId
+		: FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	PendingExamRequest = Attempt;
+	UnansweredExamRequest.Reset();
+	UnsentExamRequest.Reset();
+	ExamErrorText = FText::GetEmpty();
+	OnChanged.Broadcast();
+
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	Client->RequestImpresso(Attempt.Text, Attempt.RequestId, [WeakThis, Attempt](const TStationResult<FStationImpressoReply>& Reply)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self)
+		{
+			return;
+		}
+		Self->PendingExamRequest.Reset();
+		if (Reply.HasError())
+		{
+			Self->UnsentExamRequest = Attempt.Text;
+			if (Reply.GetError().Code == TEXT("network_error"))
+			{
+				Self->UnansweredExamRequest = Attempt;
+			}
+			Self->ExamErrorText = StationErrorText(Reply.GetError(),
+				LOCTEXT("ExamRequestFailed", "Não foi possível enviar sua solicitação. Tente novamente."));
+			Self->OnChanged.Broadcast();
+			return;
+		}
+
+		// Phoenix's answer is the whole record: a declined request releases
+		// nothing and the client shows nothing in its place.
+		FStationExamRequest& Answered = Self->ExamRequests.AddDefaulted_GetRef();
+		Answered.Text = Attempt.Text;
+		Answered.Reply = Reply.GetValue();
+		Self->ReleasedImpressos = Reply.GetValue().ReleasedImpressos;
 		Self->OnChanged.Broadcast();
 	});
 	return true;

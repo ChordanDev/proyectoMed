@@ -1,6 +1,6 @@
 // The station's native UMG screens: Pre-Station Notice, brief, and the
-// in-run HUD with the Station Timer and the typed conversation. They render
-// UStationRunFlow and never call the network.
+// in-run HUD with the Station Timer, the typed conversation and the exam
+// panel. They render UStationRunFlow and never call the network.
 
 #pragma once
 
@@ -99,7 +99,7 @@ class UStationHudWidget : public UUserWidget
 public:
 	void SetFlow(UStationRunFlow* InFlow) { Flow = InFlow; }
 
-	/** Re-reads the training mode, the voice fallback notice, and the conversation. */
+	/** Re-reads the training mode, the voice fallback notice, the conversation and the exam panel. */
 	void Refresh();
 
 protected:
@@ -111,12 +111,24 @@ private:
 	void RefreshConversation();
 	void AddTranscriptLine(const FText& Text, const FLinearColor& Color);
 	void SendTypedTurn();
+	void BuildExams(UOverlay& Root);
+	void RefreshExams();
+	void RequestExam();
 
 	UFUNCTION()
 	void HandleSend();
 
 	UFUNCTION()
 	void HandleTurnCommitted(const FText& Text, ETextCommit::Type CommitMethod);
+
+	UFUNCTION()
+	void HandleToggleExams();
+
+	UFUNCTION()
+	void HandleRequestExam();
+
+	UFUNCTION()
+	void HandleExamCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
@@ -135,6 +147,27 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UButton> SendButton;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> ExamPanel;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> ExamRequestBox;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> DocumentBox;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> NoDocumentText;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ExamErrorText;
+
+	UPROPERTY()
+	TObjectPtr<UEditableTextBox> ExamInput;
+
+	UPROPERTY()
+	TObjectPtr<UButton> ExamButton;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> ModeText;
