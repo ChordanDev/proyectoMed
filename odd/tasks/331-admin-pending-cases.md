@@ -1,0 +1,51 @@
+# 331 — Show pending cases to an admin in the case panel
+
+Issue: #331 (parent spec #326). Branch: `feat/331-admin-pending-cases` → PR base `feat/326-production-launch`.
+
+## Objective
+
+A pending case row inserted into the `cases` table (as n8n will do: area, theme, Markdown) appears in a LiveView admin panel that only admins can open. The list shows number, area, theme and status, filters by status and area, and a pending case shows its located parser errors at the top.
+
+## Why
+
+Doctor review is the critical path of the launch (#326, ADR-015 #347). n8n generates cases and inserts them as pending rows; doctors need a place to find them and see at once whether a case can be published as is.
+
+## Constraints
+
+- Accounts via `phx.gen.auth` (Phoenix 1.8, LiveView variant) inside `Backend.Accounts`, with roles `admin` and `student` (ADR-014 #346). No public sign-up path in this issue: admins are provisioned by a mix task (student sign-up is #336).
+- Content context `Backend.Content` owns the `cases` table (ADR-007 #92 amendment). `Content` and `Accounts` call no other context.
+- Parser errors come from `Backend.Stations.parse_case/1` (#330). The LiveView composes `Content` and `Stations`; `Content` never calls `Stations`.
+- `BackendWeb` stays thin and never calls the Repo (architecture test).
+- Panel copy in pt-BR. Local Postgres only; never Neon.
+- Planning heuristic: about 400 authored changed lines per task (T1 is larger because `phx.gen.auth` output is generated).
+
+## Checklist
+
+- [x] T1 — Accounts: `phx.gen.auth` LiveView variant with an `admin`/`student` role, registration removed, `mix accounts.create_admin` provisioning task, admin-only `/admin` (anonymous → login, student → redirected).
+- [ ] T2 — Content: `cases` migration (identity `number`, area, theme, markdown, status pending/approved/disapproved, DB-defaulted timestamps), `Backend.Content` list/filter/get, n8n insert contract in `docs/case-format`.
+- [ ] T3 — Admin case panel: list with number, area, theme, status and status/area filters; case page with the located parser errors at the top; decision on computing errors on read documented.
+- [ ] T4 — Screenshots of the list and of an invalid case (seeded admin, `PORT=4135`, `MIX_ENV=dev`), PR.
+
+## Routing
+
+All tasks: delegated direct (this worker is the single bounded writer for the issue; 2+ non-trivial files per task).
+
+## Acceptance criteria
+
+- Inserting a valid pending row makes it appear in the list with its sequential number.
+- Inserting an invalid row shows its located parser errors.
+- Only admin users can open the panel; others are redirected.
+- Filtering by status and area works.
+
+## Checks
+
+- Focused: `mix test test/backend/accounts_test.exs test/backend/content_test.exs test/backend_web/live`.
+- Full: local CI script (backend tests, web typecheck/lint, format, compile warnings, credo strict, dialyzer).
+
+## Progress
+
+- T1 (Accounts): ran `mix phx.gen.auth Accounts User users --live`; added `role` (`admin`/`student`, DB check constraint, never cast), `Accounts.create_admin/1`, `Accounts.admin?/1`, admin provisioning in `priv/repo/seeds.exs` (`ADMIN_EMAIL`/`ADMIN_PASSWORD`), `require_admin_user` plug and `:require_admin` on_mount on `/admin`; removed the public registration page and route; mailer moved to `Backend.Accounts.Mailer` (Swoosh local adapter, `/dev/mailbox` in dev); generated copy translated to pt-BR. RED — 13/14 new role/seed/access tests failed (undefined `create_admin/1`, `admin?/1`, no role, `/admin` open to anyone); GREEN — 14/14, full backend suite 1926/1926 (MIX_TEST_PARTITION=_issue331). Credo strict clean, compile warnings-as-errors clean. One run showed a flaky failure in `Backend.LLMProviderConfigTest` (env-var test, passed alone and in two reruns; unrelated).
+
+## Next step
+
+T2.

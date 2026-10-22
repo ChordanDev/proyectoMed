@@ -1,8 +1,8 @@
 defmodule BackendWeb.AdminLive do
   @moduledoc """
   Placeholder admin page (issue #329): proves that LiveView, the root layout and
-  the assets render. The admin case panel (#344) replaces it behind the `admin`
-  role (ADR-015 #347). It calls no context and reads no data.
+  the assets render, behind the `admin` role (#331, ADR-015 #347). It calls no
+  context and reads no data.
   """
 
   use BackendWeb, :live_view
@@ -15,7 +15,7 @@ defmodule BackendWeb.AdminLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
+    <Layouts.app flash={@flash} current_scope={@current_scope}>
       <.header>
         Painel administrativo
         <:subtitle>A revisão de casos chega em breve.</:subtitle>
