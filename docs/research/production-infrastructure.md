@@ -24,7 +24,7 @@ Method: read-only reading of official documentation and pricing pages. No accoun
 | A8 | Webhook is signature-verified and idempotent | Confirmed (optional HMAC-SHA256 signature plus event `id`) |
 | A9 | Daily quota per plan comes from RevenueCat plan metadata | **Changed**: webhooks carry no plan metadata |
 | A10 | LiveKit Cloud has a region near Brazil | Confirmed for media. **Changed** for hosted agents: no South American agent region |
-| A11 | LiveKit Cloud plan for ~200 concurrent sessions | Depends on where the voice workers run (see the LiveKit section) |
+| A11 | LiveKit Cloud plan for ~200 concurrent sessions | Unverified: the plan depends on where the voice workers run (see the LiveKit section) |
 | A12 | Anthropic limits allow ~200 simultaneous sessions | **Changed**: the binding limit is the monthly spend cap, not RPM |
 | A13 | Deepgram limits allow ~200 simultaneous sessions | **Changed**: Pay As You Go allows 150 concurrent streams. Growth or Enterprise is needed |
 | A14 | ElevenLabs limits allow ~200 simultaneous sessions | Confirmed with conditions: WebSocket streaming and a Scale or higher plan |
@@ -139,7 +139,7 @@ The current voice worker (`voice-worker/worker.py`) is a LiveKit Agents process.
 ### Verdicts
 
 - **A10 Confirmed for media, Changed for hosted agents.** Learner media can stay in Brazil (the `sa` edge). Hosted agents would run in `us-east`, adding a Brazil-to-US hop between the room and the agent. The agent already calls US-hosted STT, TTS and LLM providers, so whether that hop matters is **unverified**: measure the end-to-end turn latency before deciding.
-- **A11 depends on where the workers run.** About 200 sessions means about 400 connections (learner plus agent), which fits within Ship's 1,000.
+- **A11 Unverified: the plan depends on where the workers run.** About 200 sessions means about 400 connections (learner plus agent), which fits within Ship's 1,000.
   - **Option A: self-host the workers** (for example, a Fly process group in `gru`). Ship ($50/month) is enough if the self-hosted exemption holds. It needs about 8 to 20 worker machines of 4 vCPU and 8 GB for 200 jobs.
   - Fly's 300 s `kill_timeout` is shorter than the 10-minute grace LiveKit recommends. The workers would need the same drain gate or app-level blue/green as Phoenix (A3).
   - **Option B: LiveKit Cloud Agents.** Ship allows only 20 concurrent agent sessions. About 200 sessions needs **Scale (from $500/month, up to 600 sessions)**. Agents run in `us-east`, and LiveKit handles drain and scaling.
