@@ -39,9 +39,13 @@ defmodule BackendWeb.AdminCaseLive.Show do
     end
   end
 
+  # Case numbers are a Postgres bigint; anything outside that range cannot
+  # exist and would make Postgrex raise while encoding the query.
+  @max_bigint 9_223_372_036_854_775_807
+
   defp fetch_case(number) do
     case Integer.parse(number) do
-      {number, ""} -> Content.get_case_by_number(number)
+      {number, ""} when number in 1..@max_bigint -> Content.get_case_by_number(number)
       _invalid -> nil
     end
   end

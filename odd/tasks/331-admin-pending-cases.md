@@ -25,6 +25,7 @@ Doctor review is the critical path of the launch (#326, ADR-015 #347). n8n gener
 - [x] T2 — Content: `cases` migration (identity `number`, area, theme, markdown, status pending/approved/disapproved, DB-defaulted timestamps), `Backend.Content` list/filter/get, n8n insert contract in `docs/case-format`.
 - [x] T3 — Admin case panel: list with number, area, theme, status and status/area filters; case page with the located parser errors at the top; decision on computing errors on read documented.
 - [x] T4 — Screenshots of the list and of an invalid case (seeded admin, `PORT=4135`, `MIX_ENV=dev`), PR.
+- [x] R1-C1 — Review fix (PR #356, Jorge round 1, C1): `/admin/cases/:number` with a number outside the bigint range redirects to `/admin` with the not-found flash instead of raising.
 
 ## Routing
 
@@ -54,6 +55,8 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 
 - T3 commits: 0e4b27c, b6ef296.
 - T4 (checks and evidence): local CI script — LOCAL CI PASSED: web unit 337/337, backend ExUnit 1947/1947, E2E 4/4, typecheck, lint, format, compile warnings-as-errors, credo strict, dialyzer 0 errors. Two earlier CI runs failed only web vitest timeouts with ~1 050 000 ms durations (the machine was suspended mid-run; no web files changed); the third run passed. Screenshots (seeded admin `medica@example.com`, isolated dev database `backend_dev_issue331`, `PORT=4135`, `MIX_ENV=dev`, Firefox headless `-no-remote` with a throwaway profile): case list with four statuses, invalid case 2 with four located errors at the top. The flash toast overlaps the generated top menu (cosmetic, follow-up).
+
+- R1-C1 (review fix, delegated direct): `AdminCaseLive.Show.fetch_case/1` now only queries numbers in `1..9_223_372_036_854_775_807`; anything else is treated as not found. RED — new test visiting `/admin/cases/99999999999999999999` raised in Postgrex encode (10/11); GREEN — 11/11.
 
 ## Next step
 

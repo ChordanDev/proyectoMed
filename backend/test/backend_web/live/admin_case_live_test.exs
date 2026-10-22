@@ -153,6 +153,15 @@ defmodule BackendWeb.AdminCaseLiveTest do
 
       assert message =~ "não encontrado"
     end
+
+    test "a number beyond the bigint range goes back to the list with a message", %{
+      conn: conn
+    } do
+      assert {:error, {:live_redirect, %{to: "/admin", flash: %{"error" => message}}}} =
+               live(conn, ~p"/admin/cases/99999999999999999999")
+
+      assert message =~ "não encontrado"
+    end
   end
 
   test "a student cannot open a case page" do
