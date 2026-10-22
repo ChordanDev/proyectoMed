@@ -21,7 +21,7 @@ Status: **Accepted architecture as of 2026-09-21; implementation cross-checked a
 |---|---|---|
 | Reply boundary | `Backend.Stations.create_message/2` rejects learner text over 2,000 characters (422 `message_too_long`), then invokes `verify_patient_reply/3` → `Backend.Stations.CandidateGate` before committing patient text. `JevDecision` fails closed over its total text caps instead of truncating. Internals live under `backend/lib/backend/stations/`; #44 is the prior bounded-reply seam. | The default decision adapter is disabled; the opt-in TypeSafe patient adapter awaits #183 and uses uncalibrated thresholds. Live-provider qualification and the #119–#121 voice integration remain distinct from the implemented gate. |
 | Evaluation | #128 implements four-state assessment and exact estimates via `Backend.Stations.assess_session/2`. The legacy `/api/stations/.../result` still uses `Evaluator` without points; `/api/v2/stations/.../result` exposes the new assessment and is consumed by the web client. | A qualified live decision adapter and clinical qualification remain absent; HTTP/UI integration does not establish clinical accuracy. |
-| Voice | ADR-009 (#114) is **Accepted** for prototype LiveKit/WebRTC + Deepgram + ElevenLabs. Ticket 13 (#116) owns children #117–#121. | Integrate verification at the established Phoenix safety boundary; do not create another media or orchestration path. |
+| Voice | ADR-009 (#114) is **Accepted** for prototype LiveKit/WebRTC + Deepgram + Cartesia (amended in #360; originally ElevenLabs). Ticket 13 (#116) owns children #117–#121. | Integrate verification at the established Phoenix safety boundary; do not create another media or orchestration path. |
 | Avatar | ADR-010 (#115), **Proposed** and V3-only, is superseded by accepted ADR-013 (#209, Unreal Engine 5.8 + MetaHuman client). | No dependency; ADR-013 does not change the Jev Gate or evaluation. |
 | Impressos | The #105–#108 dependency graph is unchanged. | Consume Impressos events only for criteria whose evidence requires those events. |
 | Context governance | `Backend.Stations` is the public context module, with its internals under `backend/lib/backend/stations/`. | No further change from this design. |
@@ -50,7 +50,7 @@ Implementation note: `CandidateGate` implements deny-first checks, exact-templat
 1. **Run deny-only checks.** A known violation blocks the candidate. A clean result does not prove safety.
 2. **Check exact approved-template identity and applicability.** If both pass, the safe renderer may emit the stored text.
 3. **Send every other candidate to Jev.** Check groundedness, contradiction, disclosure timing, patient-role relevance, and prompt-injection evidence.
-4. **Deliver only a verified result.** Rejected text never reaches the learner or ElevenLabs.
+4. **Deliver only a verified result.** Rejected text never reaches the learner or the TTS provider (Cartesia).
 
 Learner turns may reach generation as untrusted evidence. A rejected or otherwise unverified patient candidate is not added to trusted conversation history or a regeneration prompt. Generation may receive package facts, untrusted learner evidence, and previously approved patient history; TTS receives only Phoenix-approved patient text.
 
@@ -94,7 +94,7 @@ One shared Phoenix proxy/domain interface can host separate adapters for:
 
 - patient-response generation;
 - Deepgram transcription;
-- ElevenLabs text-to-speech; and
+- Cartesia text-to-speech (#360); and
 - the Jev decision model.
 
 Sharing an interface boundary does not collapse those capabilities into one adapter. Jev verifies generation output; it does not author or replace it. The public entry point is `Backend.Stations`.
@@ -103,10 +103,10 @@ Provider selection, credentials, API limits, zero-data-retention terms, legal te
 
 ## Integration with real-time voice
 
-ADR-009 (#114) already selects LiveKit/WebRTC + Deepgram + ElevenLabs for the prototype. Issues #119–#121 are integration boundaries, not blanket blockers for every Ticket 14 child. Jev integration must extend their flow without duplicating ownership:
+ADR-009 (#114) already selects LiveKit/WebRTC + Deepgram + Cartesia for the prototype (Cartesia replaced ElevenLabs in #360). Issues #119–#121 are integration boundaries, not blanket blockers for every Ticket 14 child. Jev integration must extend their flow without duplicating ownership:
 
 - **#119:** no patient response exits Phoenix before the safety boundary passes it;
-- **#120:** ElevenLabs receives only text Phoenix has approved; and
+- **#120:** Cartesia receives only text Phoenix has approved; and
 - **#121:** owns cancellation, stale generation, failure recovery, and realism, without absorbing media, UI, or orchestration concerns.
 
 Ticket 14 children own only net-new Jev, content, evaluation, result, and qualification behavior. They reference the applicable #119–#121 contracts at integration time rather than recreating them or claiming their work.
@@ -120,7 +120,7 @@ flowchart LR
   GEN --> B{Phoenix safety boundary<br/>#119}
   B --> J[Jev decision adapter<br/>ADR-011 #123 — Accepted]
   J -- verified --> A[Phoenix-approved text<br/>#120]
-  A --> TTS[ElevenLabs TTS]
+  A --> TTS[Cartesia TTS]
   J -- rejected --> R[Bounded retry or stop]
   P -. cancellation / stale generation /<br/>failure recovery / realism .-> C[#121]
 ```
@@ -341,7 +341,7 @@ Cite the INEP URL, not a local PDF. The corrupt repository copies named `revalid
 |---|---|---|
 | ADR-002 (#35) | The message path uses `CandidateGate` before committing patient text. | ADR-011 (#123) extends the safety contract; a live qualified provider remains pending. |
 | ADR-005 (#38) | The legacy endpoint remains score-free; v2 exposes educational estimates. | ADR-012 (#124) supersedes the no-score rule only for estimates while preserving no certification, pass/fail, or readiness claim. Implementation is not clinical validation. |
-| ADR-009 (#114) | **Accepted** prototype LiveKit/WebRTC + Deepgram + ElevenLabs | Reused as the voice foundation; not reopened. |
+| ADR-009 (#114) | **Accepted** prototype LiveKit/WebRTC + Deepgram + Cartesia (amended in #360) | Reused as the voice foundation; not reopened. |
 | ADR-010 (#115) | **Proposed**, V3 only; superseded by ADR-013 (#209) | Excluded from the Jev prototype. |
 | ADR-008 (#104), #105–#108 | Accepted channel decision and unchanged Impressos DAG | Reused only when a criterion needs event evidence. |
 | #27 and #44 | Closed prior evaluator and bounded-reply seams | Extended through new work; not reopened. |
