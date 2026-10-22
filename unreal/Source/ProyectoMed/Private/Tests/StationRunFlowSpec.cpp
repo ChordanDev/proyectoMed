@@ -568,6 +568,64 @@ void FStationRunPhoenixSpec::Define()
 		});
 	});
 
+	/**
+	 * Ends the run in Phoenix behind the flow's back, as Phoenix does itself at
+	 * the deadline, and calls `Then` with the flow still running.
+	 */
+	auto WhenPhoenixEndedRun = [this](const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		Client->FinishSession(EStationFinishReason::User, [this, Done, Then](const TStationResult<FStationSession>& Ended)
+		{
+			if (TestFalse("Phoenix ended the run", Ended.HasError()))
+			{
+				TestEqual("the flow still runs", Flow->GetStep(), EStationRunStep::Running);
+				Then();
+				return;
+			}
+			Done.Execute();
+		});
+	};
+
+	LatentIt("ends the run and shows the feedback once the Station Timer reads zero", ResultTimeout,
+		[this, WhenRunning, WhenPhoenixEndedRun](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenPhoenixEndedRun]()
+		{
+			WhenPhoenixEndedRun(Done, [this, Done]()
+			{
+				TestTrue("the timer reads zero", Client->GetRemainingTime() == FTimespan::Zero());
+				Flow->CheckStationTimer();
+				TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
+				TestFalse("no turn after the end", Flow->CanSendTurn());
+				WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+				{
+					TestTrue("no error", Flow->GetErrorText().IsEmpty());
+					TestNotNull("feedback", Flow->GetResult());
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("ends the run when a turn is refused because the run is over", ResultTimeout,
+		[this, WhenRunning, WhenPhoenixEndedRun](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenPhoenixEndedRun]()
+		{
+			WhenPhoenixEndedRun(Done, [this, Done]()
+			{
+				TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Bom dia")));
+				WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+				{
+					TestTrue("no error", Flow->GetErrorText().IsEmpty());
+					TestNotNull("feedback", Flow->GetResult());
+					TestEqual("the refused turn is not in the transcript", Flow->GetTranscript().Num(), 0);
+					Done.Execute();
+				});
+			});
+		});
+	});
+
 	LatentIt("discards the run only once Phoenix confirms, then offers a new run", ResultTimeout,
 		[this, WhenRunning, WhenFeedback](const FDoneDelegate& Done)
 	{

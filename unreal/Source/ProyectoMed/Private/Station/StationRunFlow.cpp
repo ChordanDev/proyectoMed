@@ -12,6 +12,15 @@ bool IsVoiceTrainingAvailable(const FStationSummary& Station)
 	return Station.VoiceMode == EStationVoiceMode::Realtime;
 }
 
+namespace
+{
+	/** Phoenix ended the run itself, at its deadline: the run is over for this client too. */
+	bool IsRunOver(const FStationClientError& Error)
+	{
+		return Error.Code == TEXT("station_time_elapsed") || Error.Code == TEXT("session_completed");
+	}
+}
+
 FText FormatStationTimer(const FTimespan& Remaining)
 {
 	const int64 Seconds = FMath::Max<int64>(0, FMath::CeilToInt64(Remaining.GetTotalSeconds()));
@@ -159,6 +168,10 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 			}
 			Self->SetError(Reply.GetError(),
 				LOCTEXT("TurnFailed", "Não foi possível enviar sua mensagem. Tente novamente."));
+			if (IsRunOver(Reply.GetError()))
+			{
+				Self->ExpireTimer();
+			}
 		}
 		else
 		{
@@ -227,6 +240,10 @@ bool UStationRunFlow::RequestExam(const FString& Text)
 				Self->UnansweredExamRequest = Attempt;
 			}
 			Self->SetExamError(Reply.GetError());
+			if (IsRunOver(Reply.GetError()))
+			{
+				Self->ExpireTimer();
+			}
 		}
 		else
 		{
@@ -357,9 +374,7 @@ void UStationRunFlow::ContinueFinish()
 				Self->OnChanged.Broadcast();
 				return;
 			}
-			Self->Step = EStationRunStep::Feedback;
-			Self->SetError(Finished.GetError(),
-				LOCTEXT("ResultUnavailable", "Não foi possível carregar o resultado da estação."));
+			Self->FailResult(Finished.GetError());
 			return;
 		}
 		Self->LoadResult();
@@ -376,16 +391,21 @@ void UStationRunFlow::LoadResult()
 		{
 			return;
 		}
-		Self->Step = EStationRunStep::Feedback;
 		if (Loaded.HasError())
 		{
-			Self->SetError(Loaded.GetError(),
-				LOCTEXT("ResultUnavailable", "Não foi possível carregar o resultado da estação."));
+			Self->FailResult(Loaded.GetError());
 			return;
 		}
+		Self->Step = EStationRunStep::Feedback;
 		Self->Result = Loaded.GetValue();
 		Self->OnChanged.Broadcast();
 	});
+}
+
+void UStationRunFlow::FailResult(const FStationClientError& Error)
+{
+	Step = EStationRunStep::Feedback;
+	SetError(Error, LOCTEXT("ResultUnavailable", "Não foi possível carregar o resultado da estação."));
 }
 
 bool UStationRunFlow::CanDiscard() const

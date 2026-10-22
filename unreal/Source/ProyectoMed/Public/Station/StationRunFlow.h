@@ -180,6 +180,8 @@ public:
 	/**
 	 * Ends the run as `Finish` does, with the reason `timer`. Phoenix refuses it
 	 * before its deadline: the run then goes on, with the deadline read again.
+	 * The flow also calls it when Phoenix refuses a turn or exam request because
+	 * Phoenix already ended the run, for example after the Mac slept.
 	 */
 	void ExpireTimer();
 
@@ -199,6 +201,7 @@ public:
 	 */
 	void Discard();
 
+	/** True while a discard waits for Phoenix. */
 	bool IsDiscarding() const { return bDiscarding; }
 
 	UStationClient* GetClient() const { return Client; }
@@ -222,6 +225,9 @@ private:
 	void ContinueFinish();
 
 	void LoadResult();
+
+	/** The run is over, but its feedback could not be loaded. */
+	void FailResult(const FStationClientError& Error);
 
 	/**
 	 * Replaces the transcript with Phoenix's record, for when `Turn`'s fate is

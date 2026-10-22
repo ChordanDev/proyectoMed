@@ -208,5 +208,7 @@ Finishing a run and its feedback (#195) are covered through
 E2E approving Jev adapter grades: it cites the learner's first line for every
 criterion it can ground, so the tests check that a criterion cites the typed
 turn. A timer finish is tested before Phoenix's deadline, where Phoenix refuses
-it and the run goes on; ending a run at the real deadline would make the suite
-wait ten minutes.
+it and the run goes on, and on a run Phoenix already ended, which is what Phoenix
+does itself at the deadline: the tests end it through `FinishSession` instead of
+waiting ten minutes. A turn or exam request Phoenix refuses with
+`station_time_elapsed` or `session_completed` ends the run the same way.

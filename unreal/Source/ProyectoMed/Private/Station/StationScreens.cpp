@@ -532,25 +532,24 @@ void UStationFeedbackWidget::Refresh()
 			StationUi::Caution);
 	}
 
-	int32 Counts[4] = {0, 0, 0, 0};
-	for (const FStationCriterionResult& Criterion : Result->Criteria)
+	auto Count = [Result](EStationCriterionStatus Status)
 	{
-		++Counts[static_cast<int32>(Criterion.Status)];
-	}
+		return Result->Criteria.FilterByPredicate(
+			[Status](const FStationCriterionResult& Criterion) { return Criterion.Status == Status; }).Num();
+	};
 	StationUi::AddText(*WidgetTree, *ResultBox, LOCTEXT("Coverage", "Cobertura dos critérios"), 20, true, StationUi::Ink, 24.f);
 	StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("CoverageCounts",
 		"Avaliados: {0} · Incertos: {1} · Não observáveis: {2} · Excluídos: {3}"),
-		Counts[static_cast<int32>(EStationCriterionStatus::Assessed)],
-		Counts[static_cast<int32>(EStationCriterionStatus::Uncertain)],
-		Counts[static_cast<int32>(EStationCriterionStatus::NotObservable)],
-		Counts[static_cast<int32>(EStationCriterionStatus::NotApplicable)]), 16, false, StationUi::Ink, 8.f);
+		Count(EStationCriterionStatus::Assessed), Count(EStationCriterionStatus::Uncertain),
+		Count(EStationCriterionStatus::NotObservable), Count(EStationCriterionStatus::NotApplicable)),
+		16, false, StationUi::Ink, 8.f);
 	StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("ScoredPoints",
 		"Pontos obtidos nos critérios avaliados: {0} de {1}"),
 		DisplayPoints(Result->ScoredSubtotal), DisplayPoints(Result->ScoredMax)), 16, false, StationUi::Ink, 8.f);
 	StationUi::AddText(*WidgetTree, *ResultBox, FText::Format(LOCTEXT("EligibleMax",
 		"Máximo da estação (todos os critérios elegíveis): {0}"), DisplayPoints(Result->EligibleMax)), 16, false,
 		StationUi::Ink, 4.f);
-	const bool bNoneEligible = Result->Criteria.Num() == Counts[static_cast<int32>(EStationCriterionStatus::NotApplicable)];
+	const bool bNoneEligible = Result->Criteria.Num() == Count(EStationCriterionStatus::NotApplicable);
 	StationUi::AddText(*WidgetTree, *ResultBox, !Result->EstimatedTotal.IsEmpty()
 		? FText::Format(LOCTEXT("Total", "Total educacional: {0}"), DisplayPoints(Result->EstimatedTotal))
 		: bNoneEligible
