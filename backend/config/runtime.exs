@@ -356,7 +356,10 @@ end
 # `DATABASE_SSL` turns on TLS with peer and hostname verification against the
 # system CA store; it defaults to `true` in `:prod` and `false` in `:dev`. Neon
 # requires it. It accepts true/1/yes/on or false/0/no/off (any case) and refuses
-# to boot on anything else. `POOL_SIZE` (default 10) and `ECTO_IPV6` (`true` or `1`) tune the
+# to boot on anything else. It is the only TLS switch: an `ssl` query parameter
+# in `DATABASE_URL` would override it inside Ecto, so it refuses to boot too
+# (Neon's `sslmode` and `channel_binding` parameters are inert and allowed).
+# `POOL_SIZE` (default 10) and `ECTO_IPV6` (`true` or `1`) tune the
 # connection pool. `:test` reads none of it and always uses the local database.
 if config_env() != :test do
   database_url = System.get_env("DATABASE_URL", "") |> String.trim()
@@ -369,6 +372,16 @@ if config_env() != :test do
   end
 
   if database_url != "" do
+    url_query = URI.parse(database_url).query || ""
+
+    # Never echo the URL: it carries the database password.
+    if url_query |> URI.decode_query() |> Map.has_key?("ssl") do
+      raise """
+      environment variable DATABASE_URL must not carry an `ssl` query parameter.
+      It would override DATABASE_SSL; remove it and set DATABASE_SSL instead.
+      """
+    end
+
     default_ssl = if config_env() == :prod, do: "true", else: "false"
     raw_ssl = System.get_env("DATABASE_SSL", default_ssl)
 

@@ -90,6 +90,26 @@ defmodule Backend.Config.DatabaseConfigTest do
     end
   end
 
+  test "an ssl query parameter in DATABASE_URL refuses to boot instead of overriding DATABASE_SSL" do
+    for query <- ["ssl=false", "ssl=true", "sslmode=require&ssl=false"] do
+      System.put_env("DATABASE_URL", "#{@url}?#{query}")
+
+      error = assert_raise RuntimeError, fn -> repo_config(:prod) end
+      assert error.message =~ "DATABASE_SSL"
+      refute error.message =~ "example", "the error must not echo the URL credentials"
+    end
+  end
+
+  test "Neon's sslmode and channel_binding query parameters keep verified TLS" do
+    url = "#{@url}?sslmode=require&channel_binding=require"
+    System.put_env("DATABASE_URL", url)
+
+    config = repo_config(:prod)
+
+    assert config[:url] == url
+    assert config[:ssl][:verify] == :verify_peer
+  end
+
   test "POOL_SIZE and ECTO_IPV6 tune the pool" do
     System.put_env("DATABASE_URL", @url)
     System.put_env("POOL_SIZE", "4")

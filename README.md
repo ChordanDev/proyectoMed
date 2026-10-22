@@ -667,8 +667,8 @@ Migrations live in `backend/priv/repo/migrations`: run `mix ecto.migrate` in
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `DATABASE_URL` | `ecto://USER:PASS@HOST/DATABASE`. Required in `prod`; in `dev` it replaces the local `backend_dev`, for example with a Neon branch. Ignored in `test`. Never commit it. | unset (local `backend_dev`) |
-| `DATABASE_SSL` | `true` or `1` turns on TLS with peer and hostname verification against the system CA store (Neon requires it). Read only with `DATABASE_URL`. | `true` in `prod`, `false` in `dev` |
+| `DATABASE_URL` | `ecto://USER:PASS@HOST/DATABASE`. Required in `prod`; in `dev` it replaces the local `backend_dev`, for example with a Neon branch. Ignored in `test`. Never commit it. An `ssl` query parameter refuses to boot (use `DATABASE_SSL`); Neon's `sslmode` and `channel_binding` parameters are allowed. | unset (local `backend_dev`) |
+| `DATABASE_SSL` | `true`, `1`, `yes` or `on` turns on TLS with peer and hostname verification against the system CA store (Neon requires it); `false`, `0`, `no` or `off` turns it off. Case-insensitive; any other value, including an empty one, refuses to boot. Read only with `DATABASE_URL`. | `true` in `prod`, `false` in `dev` |
 | `POOL_SIZE` | Connection pool size. Read only with `DATABASE_URL`. | `10` |
 | `ECTO_IPV6` | `true` or `1` connects over IPv6. Read only with `DATABASE_URL`. | unset |
 | `PGHOST`, `PGUSER`, `PGPASSWORD` | Local server, user and password for `dev` and `test` when `DATABASE_URL` is unset (read by Postgrex). | `localhost`, the operating system user, no password |
