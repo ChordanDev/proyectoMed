@@ -270,6 +270,41 @@ defmodule Backend.Accounts do
 
   defp confirm_if_unconfirmed(changeset), do: changeset
 
+  ## Account deletion (#336)
+
+  @doc """
+  Deletes a learner account and all its data, returning the tokens whose
+  sessions the caller disconnects. Admin accounts are never deleted here.
+
+  The deletion hook for the other contexts is the database: every table that
+  holds a user's data references `users` with `on_delete: :delete_all`, so this
+  single `DELETE` erases it in the same transaction (results #338, billing
+  #339). `Backend.Accounts.AccountDeletionTest` fails for any foreign key to
+  `users` that does not cascade. Data kept outside Postgres needs its own
+  cleanup, added with the context that introduces it.
+  """
+  @spec delete_user(User.t()) :: {:ok, [UserToken.t()]} | {:error, :admin_account}
+  def delete_user(%User{role: :admin}), do: {:error, :admin_account}
+
+  def delete_user(%User{} = user) do
+    Repo.transact(fn ->
+      tokens = Repo.all_by(UserToken, user_id: user.id)
+      Repo.delete!(user)
+      {:ok, tokens}
+    end)
+  end
+
+  @doc """
+  Returns true when the typed email confirms deleting the user's account
+  (case and surrounding whitespace are ignored).
+  """
+  @spec account_deletion_confirmed?(User.t(), term()) :: boolean()
+  def account_deletion_confirmed?(%User{email: email}, typed_email) when is_binary(typed_email) do
+    String.downcase(String.trim(typed_email)) == String.downcase(email)
+  end
+
+  def account_deletion_confirmed?(_user, _typed_email), do: false
+
   ## Session
 
   @doc """

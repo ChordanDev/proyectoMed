@@ -1,7 +1,7 @@
 defmodule BackendWeb.UserLive.Settings do
   @moduledoc """
   Account settings: change the email or the password (`mix phx.gen.auth`,
-  copy in pt-BR).
+  copy in pt-BR) and, for a learner, delete the account (#336).
   """
 
   use BackendWeb, :live_view
@@ -70,6 +70,42 @@ defmodule BackendWeb.UserLive.Settings do
           Salvar senha
         </.button>
       </.form>
+
+      <section :if={!@admin?} id="delete_account" class="space-y-2">
+        <div class="divider" />
+        <.header>
+          Excluir conta
+          <:subtitle>
+            Apaga a sua conta e todos os seus dados de forma definitiva. Esta ação não pode ser desfeita.
+          </:subtitle>
+        </.header>
+
+        <.form
+          for={@delete_form}
+          id="delete_account_form"
+          action={~p"/users/delete-account"}
+          method="post"
+          phx-submit="delete_account"
+          phx-trigger-action={@trigger_delete}
+        >
+          <.input
+            field={@delete_form[:email]}
+            id="delete_account_email"
+            type="email"
+            label="Digite o seu e-mail para confirmar"
+            autocomplete="off"
+            spellcheck="false"
+            required
+          />
+          <p :if={@delete_error} class="mb-2 flex gap-2 items-center text-sm text-error">
+            <.icon name="hero-exclamation-circle" class="size-5" />
+            {@delete_error}
+          </p>
+          <.button class="btn btn-error w-full" phx-disable-with="Excluindo...">
+            Excluir a minha conta
+          </.button>
+        </.form>
+      </section>
     </Layouts.app>
     """
   end
@@ -99,6 +135,10 @@ defmodule BackendWeb.UserLive.Settings do
       |> assign(:email_form, to_form(email_changeset))
       |> assign(:password_form, to_form(password_changeset))
       |> assign(:trigger_submit, false)
+      |> assign(:admin?, Accounts.admin?(socket.assigns.current_scope))
+      |> assign(:delete_form, to_form(%{"email" => ""}, as: "user"))
+      |> assign(:delete_error, nil)
+      |> assign(:trigger_delete, false)
 
     {:ok, socket}
   end
@@ -134,6 +174,22 @@ defmodule BackendWeb.UserLive.Settings do
 
       changeset ->
         {:noreply, assign(socket, :email_form, to_form(changeset, action: :insert))}
+    end
+  end
+
+  def handle_event("delete_account", %{"user" => %{"email" => typed_email}}, socket) do
+    user = socket.assigns.current_scope.user
+    delete_form = to_form(%{"email" => typed_email}, as: "user")
+
+    if Accounts.account_deletion_confirmed?(user, typed_email) do
+      {:noreply,
+       assign(socket, delete_form: delete_form, delete_error: nil, trigger_delete: true)}
+    else
+      {:noreply,
+       assign(socket,
+         delete_form: delete_form,
+         delete_error: "Digite o seu e-mail para confirmar a exclusão da conta."
+       )}
     end
   end
 

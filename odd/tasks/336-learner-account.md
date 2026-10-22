@@ -33,7 +33,7 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   changeset, legal document versions, `/users/register`, `/termos`, `/privacidade`).
 - [x] T2 Password recovery by email (`/users/reset-password`, token context
   `reset_password`, confirms an unconfirmed account on reset).
-- [ ] T3 Account deletion that erases the learner and all their data, with the
+- [x] T3 Account deletion that erases the learner and all their data, with the
   documented hook for later contexts (cascading foreign keys, enforced by a test).
 - [ ] T4 Production mail provider chosen by environment variables (`MAILER_PROVIDER`,
   `MAILER_API_KEY`, `MAILER_DOMAIN`, `MAILER_FROM_EMAIL`, `MAILER_FROM_NAME`).
@@ -58,8 +58,13 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   GREEN full backend suite 1962 passed; format, compile --warnings-as-errors, credo --strict clean.
   Commit a38ea73.
 - T2: RED 14/14 failing (no reset functions or routes); GREEN 14/14, full suite 1976
-  passed; compile and credo clean.
+  passed; compile and credo clean. Commit cc2cd07.
+- T3: RED 12 of 14 new tests failing (the foreign-key invariant and the hidden admin
+  section already held); GREEN 26/26 focused, full suite 1990 passed; compile and
+  credo clean. Hook decision: later contexts erase their rows through
+  `references(:users, on_delete: :delete_all)`, enforced by
+  `AccountDeletionTest`; Accounts keeps calling no other context.
 
 ## Next step
 
-T3.
+T4.

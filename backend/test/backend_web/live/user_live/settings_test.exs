@@ -209,4 +209,51 @@ defmodule BackendWeb.UserLive.SettingsTest do
       assert message == "Entre na sua conta para acessar esta página."
     end
   end
+
+  describe "delete account form (#336)" do
+    setup %{conn: conn} do
+      user = user_fixture()
+      %{conn: log_in_user(conn, user), user: user}
+    end
+
+    test "a learner sees the delete account section", %{conn: conn} do
+      {:ok, lv, html} = live(conn, ~p"/users/settings")
+
+      assert html =~ "Excluir conta"
+      assert has_element?(lv, "#delete_account_form")
+    end
+
+    test "an admin does not see it" do
+      {:ok, lv, _html} =
+        build_conn()
+        |> log_in_user(admin_fixture())
+        |> live(~p"/users/settings")
+
+      refute has_element?(lv, "#delete_account_form")
+    end
+
+    test "a wrong email keeps the account", %{conn: conn, user: user} do
+      {:ok, lv, _html} = live(conn, ~p"/users/settings")
+
+      html =
+        lv
+        |> form("#delete_account_form", user: %{email: "other@example.com"})
+        |> render_submit()
+
+      assert html =~ "Digite o seu e-mail para confirmar a exclusão da conta."
+      assert Accounts.get_user_by_email(user.email)
+    end
+
+    test "the matching email deletes the account and logs out", %{conn: conn, user: user} do
+      {:ok, lv, _html} = live(conn, ~p"/users/settings")
+
+      form = form(lv, "#delete_account_form", user: %{email: user.email})
+      render_submit(form)
+      conn = follow_trigger_action(form, conn)
+
+      assert redirected_to(conn) == ~p"/users/log-in"
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Sua conta foi excluída."
+      refute Accounts.get_user_by_email(user.email)
+    end
+  end
 end

@@ -94,6 +94,7 @@ defmodule BackendWeb.Router do
     end
 
     post "/users/update-password", UserSessionController, :update_password
+    post "/users/delete-account", UserAccountController, :delete
   end
 
   scope "/", BackendWeb do
