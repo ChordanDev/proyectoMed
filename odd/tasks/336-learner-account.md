@@ -37,7 +37,8 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   documented hook for later contexts (cascading foreign keys, enforced by a test).
 - [x] T4 Production mail provider chosen by environment variables (`MAILER_PROVIDER`,
   `MAILER_API_KEY`, `MAILER_DOMAIN`, `MAILER_FROM_EMAIL`, `MAILER_FROM_NAME`).
-- [ ] T5 README documentation, local CI and screenshots on PORT=4138.
+- [x] T5 README documentation, local CI and screenshots on PORT=4138.
+- [x] T6 Jorge advisory review and confirmed repairs.
 
 ## Acceptance criteria
 
@@ -80,8 +81,35 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
   download hung, no Chrome installed); smoke check on PORT=4138 against the
   isolated `backend_dev_issue336` database returned 200 for the sign-up, legal,
   reset and login pages and 302 for unauthenticated settings. Pending: manual screenshots.
+- T5 (closure): merged `origin/feat/326-production-launch` at b8d0f9a (#358, #359)
+  cleanly as 52a7904; LOCAL CI PASSED. Screenshots captured with headless Firefox
+  on PORT=4138 against `backend_dev_issue336`: the sign-up page with both
+  acceptance checkboxes, and the account settings with the delete section
+  (authenticated HTML rendered from a curl login session). Kept outside the repo.
+- T6: Jorge advisory review (mapper, three specialists, refuter) on b8d0f9a..52a7904.
+  Verified without findings: no public path creates an admin, acceptance stores
+  version and date, deletion erases the Postgres rows and revokes sessions and
+  tokens, no mail secret is committed or echoed. Confirmed and repaired test-first:
+  - Reset token checked only at mount (medium): an open reset page could set the
+    password after the link was used or expired. The submit now re-verifies the
+    token (RED 6/7, GREEN). Commit 63269af.
+  - Sign-up crashed when the confirmation email failed after the account was
+    committed (low): it now keeps the account, logs the error and sends the
+    learner to the login page to request a link (RED MatchError, GREEN). Commit 8454b05.
+  - Admin-only foreign key comment said restrict while the rule is nilify (low,
+    doc drift). Commit f0dd734.
+  - Production booted silently with the never-delivering local adapter when
+    `MAILER_PROVIDER` was unset (medium): `:prod` now refuses to boot without it
+    and warns when `local` is named on purpose; the 7 prod runtime-config tests
+    set `MAILER_PROVIDER=local` in their prod env (RED 11/12, GREEN 214/214). This
+    supersedes the T4 fallback. Commit f973219.
+  Follow-ups, not in this PR: rate limiting of sign-up, reset and magic-link
+  emails; sign-up email enumeration (product/privacy decision); idempotent
+  double-submit of account deletion (theoretical race). LOCAL CI PASSED after the
+  repairs (web 337, backend 2028).
 
 ## Next step
 
-Review of the PR into `feat/326-production-launch`; replace the placeholder legal
-texts and set `MAILER_*` in the deployment.
+Merge the PR into `feat/326-production-launch` after human review; replace the
+placeholder legal texts and set `MAILER_*` in the deployment (production no
+longer boots without `MAILER_PROVIDER`).
