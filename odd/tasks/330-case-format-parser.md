@@ -23,7 +23,7 @@ Cases will come from an n8n pipeline as Markdown and be reviewed by doctors (#32
 - [x] T1 — Format spec, reference case and parser core: the reference case parses into a valid Station Package equal to the hand-tuned package on every hand-tuned field.
 - [x] T2 — Validation rules with located errors: unknown link, duplicate id, missing tag, points not multiples of 0.025, total not 10.0, missing actor, bad thresholds.
 - [x] T3 — Companion actor: a two-actor fixture parses with actors, facts and mandatory questions owned by each actor.
-- [ ] T4 — Grade equivalence on stored transcripts (#228 and #243 regression fixtures): parsed and hand-tuned packages yield the same criterion statuses and points.
+- [x] T4 — Grade equivalence on stored transcripts (#228 and #243 regression fixtures): parsed and hand-tuned packages yield the same criterion statuses and points.
 
 ## Routing
 
@@ -46,8 +46,10 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 - T1 (commit b764042): RED observed — 4/4 tests failed with `Backend.Stations.parse_case/1 is undefined`; GREEN — 4/4 pass. Reference case equals the hand-tuned package on every field; credo strict clean on the new modules.
 - T2 (commit 3d4dfde): 31 validation tests, one failing example per rule with its located error. RED was not observable as test-first: the rule checks were written with the parser core in T1. Instead a mutation probe disabled the unknown-actor and total rules: 3/31 failed, restored: 31/31 pass.
 
-- T3 (this commit): companion fixture `backend/test/backend/stations/fixtures/case_format/companion.md` and 5 tests. RED not observed: actor support was built with the parser core in T1, so the tests passed on first run (5/5).
+- T3 (commit 398edaf): companion fixture `backend/test/backend/stations/fixtures/case_format/companion.md` and 5 tests. RED not observed: actor support was built with the parser core in T1, so the tests passed on first run (5/5).
+
+- T4 (this commit): 5 equivalence tests (#228 transcript; #243 transcript under 4 recorded scenarios) compare criteria and estimates of the parsed and hand-tuned packages; all equal, no difference to explain. RED not observable test-first (the parsed package was already equal); mutation probe: pointing item-06 criterio-1 at the glicemia impresso made 4/5 fail on item-06, restored 5/5 pass. A probe raising item-06's top `mínimo` changed no grade on these transcripts, so transcript equivalence alone does not cover every field; the T1 field-by-field equality does.
 
 ## Next step
 
-T4 (grade equivalence).
+Local CI, push, PR to `feat/326-production-launch`.

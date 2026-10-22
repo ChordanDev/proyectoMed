@@ -205,3 +205,8 @@ The parsed package is finally checked by `Backend.Stations.StationPackage.valida
 ## Package fields that the format does not set
 
 `version` is always the current contract (`2.0.0`), `language` is `pt-BR` and `approved_templates` is `null`. Rubric items set `evidence_questions: []`, `order`, `count_cap`, `first_n`, `modality_requirement` and `rule` to `null`, and `exclusion: false`; the format has no tag for them yet.
+
+## Proof that the reference case is equivalent
+
+- `backend/test/backend/stations/case_format_test.exs`: the package parsed from `case.md` equals `package.json` on every field of `package.json`.
+- `backend/test/backend/stations/case_format_grade_equivalence_test.exs`: on the stored transcripts of the #228 and #243 regression harnesses (five scenarios), both packages yield the same criterion statuses, levels, points, evidence and estimates.
