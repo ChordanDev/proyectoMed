@@ -105,12 +105,14 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 		{
 			return;
 		}
-		const FStationVoiceLiveness::FSignals Signals{ bWorkerPresent, bReconnecting };
-		AsyncTask(ENamedThreads::GameThread, [WeakImpl = Self, Signals]()
+		// Read the signals on the game thread, not here: posts queued from the connect and
+		// SDK threads would otherwise apply a stale snapshot after a newer one.
+		AsyncTask(ENamedThreads::GameThread, [WeakImpl = Self]()
 		{
 			const TSharedPtr<FImpl, ESPMode::ThreadSafe> Impl = WeakImpl.Pin();
 			if (Impl && Impl->bAlive)
 			{
+				const FStationVoiceLiveness::FSignals Signals{ Impl->bWorkerPresent, Impl->bReconnecting };
 				Impl->ShowLiveness(Impl->Liveness.Update(Signals, FPlatformTime::Seconds()));
 			}
 		});
