@@ -174,7 +174,7 @@ void FStationRunUnitSpec::Define()
 		UStationClient* Client = NewObject<UStationClient>();
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
-		Flow->Begin(Client);
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
 
 		TestFalse("cannot send", Flow->CanSendTurn());
 		TestFalse("refused", Flow->SendTypedTurn(TEXT("Bom dia")));
@@ -187,7 +187,7 @@ void FStationRunUnitSpec::Define()
 		UStationClient* Client = NewObject<UStationClient>();
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
-		Flow->Begin(Client);
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
 
 		TestFalse("cannot request", Flow->CanRequestExam());
 		TestFalse("refused", Flow->RequestExam(TEXT("Exame físico")));
@@ -201,7 +201,7 @@ void FStationRunUnitSpec::Define()
 		UStationClient* Client = NewObject<UStationClient>();
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
-		Flow->Begin(Client);
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
 
 		TestFalse("cannot finish", Flow->CanFinish());
 		Flow->Finish();

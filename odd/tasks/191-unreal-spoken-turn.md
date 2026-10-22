@@ -113,3 +113,12 @@ Branch: `feat/191-spoken-turn` from `develop`. Delivery: chained PRs to `develop
   - 05 patient face
   - 06 voice training
   A sonnet writer builds them in their own worktree (the context backstop). The last slice's tree must equal this branch. Push and PRs wait for the human.
+- L26 (2026-10-22) The slicing writer built the chain locally:
+  - the tracker, bdd2d96;
+  - 01, 4052209;
+  - 02, 9d58465;
+  - 03, e834580;
+  - 04, 421cffc;
+  - 05, cb2ac5b;
+  - 06, f7026c9.
+  Every slice builds and passes its checks, and the last tree equals this branch. Slices 04 (about 1,130 lines) and 06 (about 970) stay over 400, because the voice link and the voice training are each cohesive with their tests. The writer also found 3 run-flow unit specs from #355 that called `Begin(Client)` with the real microphone setup. That setup reads a git-ignored ini, so on a fresh checkout the first-launch disclosure step made "neither finishes nor discards before the run is running" fail. RED reproduced by removing the local flag. Fixed by injecting the fake microphone; GREEN 9/9 without the flag.
