@@ -280,7 +280,7 @@ defmodule Backend.Accounts do
   holds a user's data references `users` with `on_delete: :delete_all`, so this
   single `DELETE` erases it in the same transaction (results #338, billing
   #339). `Backend.Accounts.AccountDeletionTest` fails for any foreign key to
-  `users` that does not cascade. Data kept outside Postgres needs its own
+  `users` that does not cascade, unless it lists the reference as admin-only. Data kept outside Postgres needs its own
   cleanup, added with the context that introduces it.
   """
   @spec delete_user(User.t()) :: {:ok, [UserToken.t()]} | {:error, :admin_account}

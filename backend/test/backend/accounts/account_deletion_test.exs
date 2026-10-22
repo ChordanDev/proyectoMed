@@ -53,20 +53,28 @@ defmodule Backend.Accounts.AccountDeletionTest do
   end
 
   describe "deletion hook" do
-    test "every foreign key to users cascades on delete" do
+    # References that may only point at an admin, never at a learner. Admins are
+    # never deleted by `delete_user/1`, so these keep the default restrict rule:
+    # deleting an admin must not erase the content they edited.
+    @admin_only_references MapSet.new(["case_revisions.editor_id"])
+
+    test "every foreign key to users cascades on delete, except admin-only ones" do
       %{rows: rows} =
         Repo.query!("""
-        SELECT conrelid::regclass::text, conname, confdeltype
-        FROM pg_constraint
-        WHERE contype = 'f' AND confrelid = 'users'::regclass
+        SELECT c.conrelid::regclass::text, a.attname, c.confdeltype
+        FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+        WHERE c.contype = 'f' AND c.confrelid = 'users'::regclass
         """)
 
       assert rows != []
 
-      for [table, constraint, on_delete] <- rows do
+      for [table, column, on_delete] <- rows,
+          not MapSet.member?(@admin_only_references, "#{table}.#{column}") do
         assert on_delete == "c",
-               "#{table}.#{constraint} must reference users with on_delete: :delete_all " <>
-                 "so deleting an account erases that data (#336)"
+               "#{table}.#{column} must reference users with on_delete: :delete_all " <>
+                 "so deleting an account erases that data (#336), or be listed as an " <>
+                 "admin-only reference in this test"
       end
     end
   end

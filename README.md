@@ -707,7 +707,9 @@ holds a user's data references `users` with `on_delete: :delete_all`, so
 `Backend.Accounts.delete_user/1` erases it in the same transaction without
 `Backend.Accounts` calling another context.
 `backend/test/backend/accounts/account_deletion_test.exs` fails for any foreign
-key to `users` that does not cascade. Data kept outside Postgres needs its own
+key to `users` that does not cascade, unless the test lists it as an admin-only
+reference (for example the editor of a case revision, #332): admins are never
+deleted there, and their edits must survive them. Data kept outside Postgres needs its own
 cleanup, added with the context that introduces it.
 
 **Admins** are never created by public sign-up: an operator provisions one with
