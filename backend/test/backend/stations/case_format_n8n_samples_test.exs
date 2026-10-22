@@ -128,7 +128,9 @@ defmodule Backend.Stations.CaseFormatN8nInsertTest do
     assert code =~ ~s/tag("(?:ÁREA|AREA)") ?? requested.area/
     assert code =~ ~s/tag("TEMA") ?? requested.tema/
     # A trailing \r (CRLF output) must not end up in area or theme.
-    assert code =~ ~S"\\s*(.+?)\\s*$"
+    assert code =~ ~S"\\][ \\t]*(.+?)\\s*$"
+    # An empty tag value must not capture the next line: no \s right after the bracket.
+    refute code =~ ~S"\\]\\s*"
   end
 
   defp insert_sql(path) do

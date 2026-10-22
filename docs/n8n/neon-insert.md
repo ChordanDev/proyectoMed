@@ -44,7 +44,7 @@ const markdown = $json.markdown;
 const requested = $('Trigger').first().json;
 // Trailing spaces and the \r of CRLF output are not part of the value.
 const tag = (name) =>
-  markdown.match(new RegExp(`^\\[${name}\\]\\s*(.+?)\\s*$`, "mu"))?.[1];
+  markdown.match(new RegExp(`^\\[${name}\\][ \\t]*(.+?)\\s*$`, "mu"))?.[1];
 // The parser accepts [ÁREA] and [AREA]; so does this.
 return [{ json: {
   markdown,
