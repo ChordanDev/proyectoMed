@@ -31,6 +31,12 @@ namespace
 	}
 }
 
+void UStationClient::BeginDestroy()
+{
+	DisconnectVoice();
+	Super::BeginDestroy();
+}
+
 void UStationClient::PostInitProperties()
 {
 	Super::PostInitProperties();
@@ -139,6 +145,10 @@ void UStationClient::RefreshSession(TStationCallback<FStationSession> OnDone)
 			{
 				Refreshed = Self->MergeRefreshed(Refreshed);
 				Self->AcceptSession(Refreshed, ServerNow);
+				if (Refreshed.Status == EStationSessionStatus::Completed)
+				{
+					Self->DisconnectVoice();
+				}
 			}
 			OnDone(MakeValue(MoveTemp(Refreshed)));
 		});
@@ -152,6 +162,8 @@ void UStationClient::DiscardSession(TStationCallback<FStationNone> OnDone)
 		return;
 	}
 
+	// The learner abandons the run here, whatever Phoenix answers.
+	DisconnectVoice();
 	const FString SessionId = Session->SessionId;
 	StationHttp::Send(TEXT("POST"), PhoenixBaseUrl + SessionsPath + TEXT("/") + SessionId + TEXT("/discard"), nullptr,
 		[WeakThis = TWeakObjectPtr<UStationClient>(this), SessionId, OnDone = MoveTemp(OnDone)](const FStationHttpResponse& Response)
@@ -169,6 +181,27 @@ void UStationClient::DiscardSession(TStationCallback<FStationNone> OnDone)
 			}
 			OnDone(MakeValue(FStationNone()));
 		});
+}
+
+TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> UStationClient::ConnectVoice(const FStationVoiceCredential& Credential,
+	FStationVoiceHandlers Handlers)
+{
+	DisconnectVoice();
+	if (!Session.IsSet() || Session->Status == EStationSessionStatus::Completed)
+	{
+		return nullptr;
+	}
+	Voice = MakeShared<FStationVoiceLink, ESPMode::ThreadSafe>(Credential, Session->SessionId, MoveTemp(Handlers));
+	Voice->Connect();
+	return Voice;
+}
+
+void UStationClient::DisconnectVoice()
+{
+	if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Closing = MoveTemp(Voice))
+	{
+		Closing->Disconnect();
+	}
 }
 
 void UStationClient::RequestVoiceCredential(TStationCallback<FStationVoiceCredential> OnDone)
@@ -262,6 +295,8 @@ void UStationClient::FinishSession(EStationFinishReason Reason, TStationCallback
 			{
 				StationJson::ParseFinish(*Response.Json, Self->Session.GetValue());
 				Finished = Self->Session.GetValue();
+				// The run is over; a refused finish (`deadline_not_reached`) keeps the voice.
+				Self->DisconnectVoice();
 			}
 			OnDone(MakeValue(MoveTemp(Finished)));
 		});
