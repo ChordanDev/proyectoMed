@@ -10,6 +10,7 @@
 #include "StationLiveKit.h"
 #include "StationPcm.h"
 #include "StationVoiceLiveness.h"
+#include "StationWorkerPresence.h"
 
 THIRD_PARTY_INCLUDES_START
 #include "livekit/livekit.h"
@@ -319,6 +320,47 @@ void FStationVoiceUnitSpec::Define()
 			TestEqual("lost again", Liveness.Update(WorkerGone, 20.0), EStationVoiceState::Reconnecting);
 			TestEqual("a fresh ten seconds", Liveness.Tick(29.0), EStationVoiceState::Reconnecting);
 			TestEqual("given up", Liveness.Tick(30.0), EStationVoiceState::Failed);
+		});
+	});
+
+	Describe("FStationWorkerPresence", [this]()
+	{
+		It("is absent until something reports the worker", [this]()
+		{
+			FStationWorkerPresence Presence;
+			TestFalse("unknown reads as absent", Presence.IsPresent());
+		});
+
+		It("stays absent when the worker leaves during the connect scan", [this]()
+		{
+			FStationWorkerPresence Presence;
+			Presence.OnLeft();
+			Presence.OnSeenInScan();
+			TestFalse("the leave event wins over the stale scan", Presence.IsPresent());
+		});
+
+		It("is absent when the worker leaves after the scan saw it", [this]()
+		{
+			FStationWorkerPresence Presence;
+			Presence.OnSeenInScan();
+			TestTrue("seen by the scan", Presence.IsPresent());
+			Presence.OnLeft();
+			TestFalse("left", Presence.IsPresent());
+		});
+
+		It("is present when the scan finds the worker from unknown", [this]()
+		{
+			FStationWorkerPresence Presence;
+			Presence.OnSeenInScan();
+			TestTrue("present", Presence.IsPresent());
+		});
+
+		It("is present when the worker joins after it left", [this]()
+		{
+			FStationWorkerPresence Presence;
+			Presence.OnLeft();
+			Presence.OnJoined();
+			TestTrue("present", Presence.IsPresent());
 		});
 	});
 }
