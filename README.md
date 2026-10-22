@@ -727,14 +727,16 @@ a student to the account settings.
 #### Account emails
 
 Login links, account confirmation, password reset and email change are sent by
-`Backend.Accounts.Mailer` (Swoosh). Without `MAILER_PROVIDER` they stay in the
-local in-memory adapter (in `dev` at http://localhost:4000/dev/mailbox) and are
-never delivered, so every real deployment sets a provider. Tests always use the
-Swoosh test adapter.
+`Backend.Accounts.Mailer` (Swoosh). In `dev`, without `MAILER_PROVIDER`, they
+stay in the local in-memory adapter (at http://localhost:4000/dev/mailbox) and
+are never delivered. `prod` refuses to boot without `MAILER_PROVIDER`, so a
+forgotten setting fails clearly instead of silently dropping every email; naming
+`local` on purpose boots with a warning. Tests always use the Swoosh test
+adapter.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `MAILER_PROVIDER` | `resend`, `postmark`, `sendgrid`, `brevo` or `mailgun` sends through that provider's HTTP API; `local` (or unset) keeps the in-memory adapter. Case and surrounding whitespace are ignored; any other value refuses to boot (`dev` and `prod`; ignored in `test`). | unset (`local`) |
+| `MAILER_PROVIDER` | `resend`, `postmark`, `sendgrid`, `brevo` or `mailgun` sends through that provider's HTTP API; `local` keeps the in-memory adapter. Unset means `local` in `dev` and refuses to boot in `prod`; `local` in `prod` boots with a warning. Case and surrounding whitespace are ignored; any other value refuses to boot (`dev` and `prod`; ignored in `test`). | unset (`local` in `dev`; required in `prod`) |
 | `MAILER_API_KEY` | The provider's API key. Required with a provider; never commit it. | unset |
 | `MAILER_DOMAIN` | Sending domain, required with `mailgun` only. | unset |
 | `MAILER_FROM_EMAIL` | Sender address, on a domain verified with the provider. Required with a provider. | unset |

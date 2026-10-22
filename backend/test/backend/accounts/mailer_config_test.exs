@@ -93,9 +93,27 @@ defmodule Backend.Accounts.MailerConfigTest do
              {"proyectoMed", "conta@proyectomed.example"}
   end
 
-  test "unset or local keeps the local adapter, also in production" do
-    assert mailer(read(%{}, :prod)) == nil
-    assert mailer(read(%{"MAILER_PROVIDER" => " Local "}, :prod)) == nil
+  test "production refuses to boot without a provider" do
+    assert_raise ArgumentError, ~r/MAILER_PROVIDER is required in production/, fn ->
+      read(%{}, :prod)
+    end
+
+    assert_raise ArgumentError, ~r/MAILER_PROVIDER is required in production/, fn ->
+      read(%{"MAILER_PROVIDER" => "  "}, :prod)
+    end
+  end
+
+  test "production keeps the local adapter only when it is named explicitly, with a warning" do
+    warning =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        assert mailer(read(%{"MAILER_PROVIDER" => " Local "}, :prod)) == nil
+      end)
+
+    assert warning =~ "account emails are never delivered"
+  end
+
+  test "development keeps the local adapter when the provider is unset" do
+    assert mailer(read(%{}, :dev)) == nil
   end
 
   test "refuses an unknown provider, an API provider without a key or without a sender" do

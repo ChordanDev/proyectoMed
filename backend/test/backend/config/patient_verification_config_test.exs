@@ -84,12 +84,14 @@ defmodule Backend.Config.PatientVerificationConfigTest do
   end
 
   defp runtime_mode(env) do
-    # `:prod` requires a secret and a database URL; give them only for the
-    # duration of the read.
+    # `:prod` requires a secret, a database URL and a mail provider; give them
+    # only for the duration of the read.
     secret = System.get_env("SECRET_KEY_BASE")
     database_url = System.get_env("DATABASE_URL")
+    mailer_provider = System.get_env("MAILER_PROVIDER")
     System.put_env("SECRET_KEY_BASE", String.duplicate("a", 64))
     System.put_env("DATABASE_URL", "ecto://app:example@db.example.test/proyectomed")
+    System.put_env("MAILER_PROVIDER", "local")
 
     try do
       @runtime_config
@@ -104,6 +106,10 @@ defmodule Backend.Config.PatientVerificationConfigTest do
       if database_url,
         do: System.put_env("DATABASE_URL", database_url),
         else: System.delete_env("DATABASE_URL")
+
+      if mailer_provider,
+        do: System.put_env("MAILER_PROVIDER", mailer_provider),
+        else: System.delete_env("MAILER_PROVIDER")
     end
   end
 end
