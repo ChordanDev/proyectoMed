@@ -47,6 +47,9 @@ Forecast ~300–450 authored lines (one doc). Strategy `single-pr` to `feat/326-
     - A12: Anthropic's monthly spend cap is the real limit.
     - A13: Deepgram Pay As You Go allows 150 streams, fewer than 200.
     - A10: LiveKit has no South American region for hosted agents.
+- Review round 1 (Jorge C2): A11 had a free-form verdict outside the legend. Relabelled it `Unverified` in the summary table and the verdict heading in commit `e931d87`.
+  - RED: `rg '^\| A[0-9]+ '` filtered against `Confirmed|Changed|Unverified` returned the A11 row.
+  - GREEN: the same check returns no rows (14 table rows, all legend verdicts).
 
 ## Next step
 The user answers Q1–Q6 in the report. The live checks it lists stay pending until accounts exist.
