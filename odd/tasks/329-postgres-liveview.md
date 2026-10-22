@@ -23,6 +23,7 @@ ADR-014 (#346) moves learner data to Postgres (Neon in production) through Ecto,
 - [x] T1 — Ecto Repo on Postgres: `Backend.Repo`, dev/test/runtime config, `priv/repo/migrations`, `Backend.DataCase` and sandbox in `ConnCase`, `test` mix alias, Postgres service in the workflow, README env vars.
 - [x] T2 — LiveView and assets: `phoenix_live_view`, esbuild and Tailwind as Phoenix 1.8 generates them, session and `/live` socket, root layout, placeholder `/admin` LiveView in pt-BR.
 - [x] T3 — Architecture docs: `AGENTS.md` and the `backend-phoenix-contexts` skill reflect the ADR-007 amendment (Accounts, Billing, Content contexts; `BackendWeb` serves LiveView).
+- [x] T4 — Review fixes: `DATABASE_SSL` parsing fails closed (C1); an `ssl` query parameter in `DATABASE_URL` refuses to boot (CD-1/SP-1); README rows match (CD-2); honest migration tests and a tested release-only migration toggle (CD-6).
 
 ## Routing
 
@@ -49,8 +50,15 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 - T3 done (delegated direct). `AGENTS.md` and `.agents/skills/backend-phoenix-contexts/SKILL.md` describe the four contexts, their dependency direction, Ecto ownership and thin controllers and LiveViews. New guard in `test/backend/architecture_test.exs`: `BackendWeb` never references `Backend.Repo`. It passed on creation (no violation exists, so no RED); a planted `Backend.Repo` reference in `admin_live.ex` made it fail (3/4), then was removed.
 - T3 commit: `de8d991`.
 - Closure: local CI script printed `LOCAL CI PASSED` (web unit 337/337, ExUnit 1805/1805, E2E 4/4, typecheck, lint, format, compile, Credo strict, Dialyzer 0 errors). GitHub Actions is blocked by billing.
-- Pending: a browser screenshot of `/admin` (the headless browser download stalled; the page was checked with curl on port 4134), and a live boot against Neon with `DATABASE_SSL=true` (no remote database was used).
+- PR: #352.
+- T4 done (inline, small config and test edits). C1 (accepted from Jorge round 1): RED 7/9 in `database_config_test.exs`, GREEN 9/9; commit `126acda`.
+- Jorge round 2 on `572663a..126acda` (mapper and three specialists COMPLETE; refuter): no merge blockers. Confirmed: CD-1/SP-1 (medium, a `?ssl=false` URL query overrode the verified TLS options through Ecto's URL merge), CD-2 (stale README `DATABASE_SSL` row), CD-6 (vacuous migration assertion, untested toggle). Theoretical or rejected: CD-3, CD-4, CD-5, TR-1, SP-2, SP-3 (rejected: prod `force_ssl` marks the cookie secure), SP-4.
+- Repairs: RED 14/17 (`skip_migrations?/0` undefined twice, the `ssl` query test), GREEN 17/17. Commits `3890cac` (CD-1, CD-2) and `85ef8e2` (CD-6). Refuter repair verification on `126acda..85ef8e2`: all three SATISFIED, no new candidate.
+- Closure at `85ef8e2`: local CI script printed `LOCAL CI PASSED` (web unit 337/337, ExUnit 1812/1812, E2E 4/4, typecheck, lint, format, compile, Credo strict, Dialyzer).
+- Screenshot: `/admin` captured with headless Firefox (1280x800) from `MIX_ENV=dev PORT=4134 mix phx.server`.
+- Pending: a live boot against Neon with `DATABASE_SSL=true` (no remote database was used). GitHub Actions is blocked by billing.
+- Follow-ups (advisory, not in scope): CSP on the `:browser` pipeline and the `Phoenix.Ecto.SQL.Sandbox` allowance for LiveView tests belong with #344; quieter dev Repo logs in the E2E harness.
 
 ## Next step
 
-Push and open the PR to `feat/326-production-launch`.
+Human review and merge of #352 into `feat/326-production-launch`.
