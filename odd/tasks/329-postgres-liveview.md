@@ -22,7 +22,7 @@ ADR-014 (#346) moves learner data to Postgres (Neon in production) through Ecto,
 
 - [x] T1 — Ecto Repo on Postgres: `Backend.Repo`, dev/test/runtime config, `priv/repo/migrations`, `Backend.DataCase` and sandbox in `ConnCase`, `test` mix alias, Postgres service in the workflow, README env vars.
 - [x] T2 — LiveView and assets: `phoenix_live_view`, esbuild and Tailwind as Phoenix 1.8 generates them, session and `/live` socket, root layout, placeholder `/admin` LiveView in pt-BR.
-- [ ] T3 — Architecture docs: `AGENTS.md` and the `backend-phoenix-contexts` skill reflect the ADR-007 amendment (Accounts, Billing, Content contexts; `BackendWeb` serves LiveView).
+- [x] T3 — Architecture docs: `AGENTS.md` and the `backend-phoenix-contexts` skill reflect the ADR-007 amendment (Accounts, Billing, Content contexts; `BackendWeb` serves LiveView).
 
 ## Routing
 
@@ -45,7 +45,9 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 - T1 done (delegated direct). RED: `test/backend/repo_test.exs` failed to compile (`Backend.DataCase` missing); `test/backend/config/database_config_test.exs` 2/7 against the previous `runtime.exs`. GREEN: 3/3 and 7/7; the two runtime config tests that read `:prod` now supply a `DATABASE_URL`. Full ExUnit and E2E (4/4, dev boot without a `backend_dev` database) green.
 - T1 commit: `6efd2b7`.
 - T2 done (delegated direct). RED: `test/backend_web/live/admin_live_test.exs` failed to compile (no `/admin` route, no `Phoenix.LiveViewTest`). GREEN: 1/1. Assets copied from a Phoenix 1.8.13 generator run (`mix phx.new backend --app backend --module Backend`), including daisyUI and Heroicons so `phx.gen.auth` (#331) finds the components it expects. Build output is ignored by `backend/priv/static/.gitignore`. `mix assets.build` and `PORT=4134 mix phx.server` serve `/admin` (200, CSS 200); `/` still answers `{"status":"ok"}`.
+- T2 commit: `95d0a88`.
+- T3 done (delegated direct). `AGENTS.md` and `.agents/skills/backend-phoenix-contexts/SKILL.md` describe the four contexts, their dependency direction, Ecto ownership and thin controllers and LiveViews. New guard in `test/backend/architecture_test.exs`: `BackendWeb` never references `Backend.Repo`. It passed on creation (no violation exists, so no RED); a planted `Backend.Repo` reference in `admin_live.ex` made it fail (3/4), then was removed.
 
 ## Next step
 
-T3.
+Local CI, then push and open the PR.
