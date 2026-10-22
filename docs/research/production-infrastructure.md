@@ -108,7 +108,11 @@ Method: read-only reading of official documentation and pricing pages. No accoun
   - Verify the signature over the raw body. Phoenix must keep the raw body for this route, for example with a custom `body_reader`.
   - Reject timestamps older than 5 minutes.
   - Insert the event `id` under a unique index for idempotency.
-  - Return 200 quickly, well under 60 s.
+  - Insert the event `id` and apply the entitlement change in **one database transaction**. If the effect fails, the `id` must not stay recorded, or the next retry would be skipped as a duplicate and a paid entitlement would be lost silently.
+  - Return 200 only after that transaction commits, well under 60 s. Return non-200 when no user resolves (A7 lookup order) or processing fails, so that RevenueCat retries.
+  - Ordering: the documentation does not state a delivery order. Each event carries `event_timestamp_ms`, the time the event was generated, and `expiration_at_ms`. Ignore an event whose `event_timestamp_ms` is older than the last one applied for that user, and never move an expiration backwards. Source: <https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields>.
+  - Reconcile, recommended: RevenueCat recommends calling `GET /subscribers` after each webhook and syncing from that response. Our own reconcile job for events lost after retries end (about 80 min) is **open**. Source: <https://www.revenuecat.com/docs/integrations/webhooks>.
+  - `TRANSFER` and `PRODUCT_CHANGE` handling is **open** for #339/#344.
   - Ignore `environment = SANDBOX` in production.
 - **A9 Changed.** Webhooks carry `product_id` and `entitlement_ids`, not plan metadata. Offering metadata belongs to the paywall and is documented only for the SDKs. Alternatives:
   1. **Recommended:** a Phoenix-side plan table keyed by RevenueCat `product_id`, for example `{"revalida_basic_monthly": 3, "revalida_pro_monthly": 10}`, held in runtime config or a database table that admins can edit. Changing a quota then needs no deploy if it lives in the database. This keeps quotas out of RevenueCat, which is a change to user story 55.
@@ -140,10 +144,13 @@ The current voice worker (`voice-worker/worker.py`) is a LiveKit Agents process.
 
 - **A10 Confirmed for media, Changed for hosted agents.** Learner media can stay in Brazil (the `sa` edge). Hosted agents would run in `us-east`, adding a Brazil-to-US hop between the room and the agent. The agent already calls US-hosted STT, TTS and LLM providers, so whether that hop matters is **unverified**: measure the end-to-end turn latency before deciding.
 - **A11 Unverified: the plan depends on where the workers run.** About 200 sessions means about 400 connections (learner plus agent), which fits within Ship's 1,000.
-  - **Option A: self-host the workers** (for example, a Fly process group in `gru`). Ship ($50/month) is enough if the self-hosted exemption holds. It needs about 8 to 20 worker machines of 4 vCPU and 8 GB for 200 jobs.
+  - **Option A: self-host the workers** (for example, a Fly process group in `gru`). Ship ($50/month) is enough if the self-hosted exemption holds. It needs about 8 to 20 worker machines of 4 vCPU and 8 GB for 200 jobs (200 ÷ 25 to 200 ÷ 10).
+  - Option A compute, estimated: performance-4x · 8 GB costs $132.01/month in Ashburn, so about $213/month in `gru` (× 1.615). 8 to 20 machines cost about $1,706 to $4,264/month. Source: <https://fly.io/pricing>.
+  - **Option A total: about $1,756 to $4,314/month** ($50 Ship plus compute), before WebRTC overage.
   - Fly's 300 s `kill_timeout` is shorter than the 10-minute grace LiveKit recommends. The workers would need the same drain gate or app-level blue/green as Phoenix (A3).
   - **Option B: LiveKit Cloud Agents.** Ship allows only 20 concurrent agent sessions. About 200 sessions needs **Scale (from $500/month, up to 600 sessions)**. Agents run in `us-east`, and LiveKit handles drain and scaling.
-  - The spec says "on LiveKit Cloud", which reads like Option B. Option B is the one with no deploy-drain problem and the least operations work for a one-month launch, at a higher fixed price. This is open question Q2.
+  - **Option B total: from $500/month plus $0.01 per agent minute above 50,000.** A 10-minute station uses about 10 agent minutes, so 50,000 minutes cover about 5,000 stations a month. Each station above that adds about $0.10. For example, 20,000 stations a month cost about $500 + $1,500 = $2,000.
+  - The spec says "on LiveKit Cloud", which reads like Option B. Option B is the one with no deploy-drain problem and the least operations work for a one-month launch. Its plan fee is higher, but which total is lower depends on monthly volume. Option B costs less than Option A's low estimate ($1,756) up to about 17,500 stations a month, and less than its high estimate ($4,314) up to about 43,000. Both totals are estimates until usage is measured. This is open question Q2.
 
 ## 5. AI provider limits for ~200 simultaneous sessions
 
@@ -217,7 +224,7 @@ Whether our traffic counts as "North America" depends on the endpoint region, wh
   - If not, keep RevenueCat Billing (cards, Apple Pay and Google Pay in BRL).
   - If yes, switch to the Stripe Billing integration. A Brazil-domiciled business still only gets one-time Pix, not Pix Automático subscriptions.
   - Which country is the company domiciled in?
-- **Q2 Voice worker hosting.** Self-host the workers on Fly `gru` (LiveKit Ship at about $50/month plus about 8 to 20 four-vCPU machines, and our own drain), or use LiveKit Cloud Agents on Scale (from $500/month, `us-east`, managed drain)?
+- **Q2 Voice worker hosting.** Self-host the workers on Fly `gru` (LiveKit Ship at $50/month plus 8 to 20 performance-4x machines at about $213/month each, a total of about $1,756 to $4,314/month, and our own drain), or use LiveKit Cloud Agents on Scale (a total from $500/month plus $0.01 per agent minute above 50,000, `us-east`, managed drain)? The totals are estimates from A11.
 - **Q3 Deploy drain.** Accept the recommended drain gate (no new sessions for up to about 12 minutes per deploy), or invest in app-level blue/green with `fly-replay`?
 - **Q4 Quota source.** Accept that daily quotas live in Phoenix, keyed by RevenueCat `product_id`, instead of in RevenueCat?
 - **Q5 Provider plans before launch.** Approve:
