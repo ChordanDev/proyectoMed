@@ -54,8 +54,9 @@ defmodule Backend.Accounts.AccountDeletionTest do
 
   describe "deletion hook" do
     # References that may only point at an admin, never at a learner. Admins are
-    # never deleted by `delete_user/1`, so these keep the default restrict rule:
-    # deleting an admin must not erase the content they edited.
+    # never deleted by `delete_user/1`, so these need not cascade: they nilify
+    # (`case_revisions.editor_id` keeps the author in `editor_email`) or
+    # restrict, so deleting an admin never erases the content they edited.
     @admin_only_references MapSet.new(["case_revisions.editor_id"])
 
     test "every foreign key to users cascades on delete, except admin-only ones" do
