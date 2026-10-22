@@ -154,6 +154,8 @@ def build_tts(session_id: str, context):
             model=os.environ.get("CARTESIA_MODEL", "").strip() or DEFAULT_TTS_MODEL,
             encoding=TTS_ENCODING,
             sample_rate=TTS_SAMPLE_RATE,
+            # Unused (speech plays whole sentences) and unsupported for Portuguese.
+            word_timestamps=False,
             language=context["language"],
         )
     except (KeyError, ValueError):

@@ -633,6 +633,7 @@ class BuildTTSTest(unittest.TestCase):
             model="sonic-3",
             encoding="pcm_s16le",
             sample_rate=24000,
+            word_timestamps=False,
             language="pt-BR",
         )
 
@@ -715,6 +716,14 @@ class BuildTTSTest(unittest.TestCase):
         self.assertEqual((tts.sample_rate, tts.num_channels), (24000, 1))
         self.assertEqual(tts._opts.language.language, "pt")
         self.assertEqual(tts._opts.encoding, "pcm_s16le")
+
+    def test_real_provider_builds_without_a_word_timestamps_warning(self):
+        env = {"CARTESIA_API_KEY": PROVIDER_SECRET, "CARTESIA_VOICE_ID": "voice-1"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            self.assertNoLogs(level="WARNING"),
+        ):
+            self.assertIsNotNone(build_tts("s1", self.CONTEXT))
 
 
 if __name__ == "__main__":
