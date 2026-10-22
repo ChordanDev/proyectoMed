@@ -50,6 +50,11 @@ Forecast ~300–450 authored lines (one doc). Strategy `single-pr` to `feat/326-
 - Review round 1 (Jorge C2): A11 had a free-form verdict outside the legend. Relabelled it `Unverified` in the summary table and the verdict heading in commit `e931d87`.
   - RED: `rg '^\| A[0-9]+ '` filtered against `Confirmed|Changed|Unverified` returned the A11 row.
   - GREEN: the same check returns no rows (14 table rows, all legend verdicts).
+- Review round 2 (Jorge C1, TR-1): commit `87f6603`.
+  - C1: A11 and Q2 now give a total for both options. Option A: performance-4x · 8 GB at $132.01 (Ashburn) × 1.615 ≈ $213/month in `gru`; 8 to 20 machines plus Ship ≈ $1,756 to $4,314/month. Option B: from $500/month plus $0.01 per agent minute above 50,000, with the break-even volume against Option A stated. The "higher fixed price" wording is gone.
+  - TR-1: A8 now states the rules for atomicity (dedup insert and entitlement in one transaction), unresolved users (non-200), ordering (`event_timestamp_ms`, no backward expiration) and reconcile (`GET /subscribers`, as RevenueCat recommends; our own job stays open). `TRANSFER`/`PRODUCT_CHANGE` are marked open for #339/#344.
+  - RED: `rg 'Option A total|Option B total'` returned 0, Q2 had no total, and A8 matched none of the five rule keywords.
+  - GREEN: 2 option totals, 1 Q2 total, and all five A8 keywords match once each.
 
 ## Next step
 The user answers Q1–Q6 in the report. The live checks it lists stay pending until accounts exist.
