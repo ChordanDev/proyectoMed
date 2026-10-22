@@ -91,21 +91,22 @@ defmodule Backend.Content do
   def update_case_markdown(%Case{} = kase, markdown, %{id: editor_id, email: editor_email}) do
     changeset = Case.markdown_changeset(kase, markdown)
 
-    Ecto.Multi.new()
-    |> Ecto.Multi.update(:case, changeset, stale_error_field: :lock_version)
-    |> Ecto.Multi.insert(:revision, fn _changes ->
-      %CaseRevision{
-        case_id: kase.id,
-        markdown: kase.markdown,
-        lock_version: kase.lock_version,
-        editor_id: editor_id,
-        editor_email: editor_email
-      }
+    Repo.transact(fn ->
+      with {:ok, saved} <- Repo.update(changeset, stale_error_field: :lock_version),
+           {:ok, _revision} <-
+             Repo.insert(%CaseRevision{
+               case_id: kase.id,
+               markdown: kase.markdown,
+               lock_version: kase.lock_version,
+               editor_id: editor_id,
+               editor_email: editor_email
+             }) do
+        {:ok, saved}
+      end
     end)
-    |> Repo.transaction()
     |> case do
-      {:ok, %{case: saved}} -> {:ok, saved}
-      {:error, :case, changeset, _changes} -> update_error(changeset)
+      {:ok, saved} -> {:ok, saved}
+      {:error, changeset} -> update_error(changeset)
     end
   end
 

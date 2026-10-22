@@ -22,7 +22,7 @@ Doctors fix small clinical errors without regenerating a case (#326 story 11), a
 
 ## Checklist
 
-- [x] T1 — Content: migration (`cases.lock_version`, `case_revisions`), `Backend.Content.CaseRevision`, `Content.update_case_markdown/4` (optimistic lock, previous Markdown kept as a revision in one transaction), `Content.list_case_revisions/1`; docs in `docs/case-format/README.md`.
+- [x] T1 — Content: migration (`cases.lock_version`, `case_revisions`), `Backend.Content.CaseRevision`, `Content.update_case_markdown/3` (optimistic lock, previous Markdown kept as a revision in one transaction), `Content.list_case_revisions/1`; docs in `docs/case-format/README.md`.
 - [x] T2 — Admin panel: edit form on the case page, save re-validates and shows located errors, stale save shows the reload warning, revisions listed with editor and timestamp.
 - [ ] T3 — Checks and evidence: local CI script, screenshots (edit view with errors after a bad save, revisions list), PR.
 
@@ -44,7 +44,7 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 
 ## Progress
 
-- T1 (Content, commit 2c8db5b): migration `create_case_revisions` (`cases.lock_version` default 1, `case_revisions` with `case_id` on delete cascade, `markdown`, `lock_version`, `editor_id` on delete nilify, `editor_email` snapshot, unique `(case_id, lock_version)`), `Backend.Content.CaseRevision`, `Case.markdown_changeset/2` (`optimistic_lock(:lock_version)`), `Content.update_case_markdown/3` (Ecto.Multi update + revision insert; `{:error, :stale}` on a newer version; unchanged Markdown is a no-op) and `Content.list_case_revisions/1` (newest first). Docs: "Editing a case" in `docs/case-format/README.md`. RED — 8/8 new Content tests failed (undefined functions, no `lock_version`); GREEN — 20/20 Content tests.
+- T1 (Content, commit 2c8db5b): migration `create_case_revisions` (`cases.lock_version` default 1, `case_revisions` with `case_id` on delete cascade, `markdown`, `lock_version`, `editor_id` on delete nilify, `editor_email` snapshot, unique `(case_id, lock_version)`), `Backend.Content.CaseRevision`, `Case.markdown_changeset/2` (`optimistic_lock(:lock_version)`), `Content.update_case_markdown/3` (`Repo.transact/1`: update + revision insert, replacing an `Ecto.Multi` that dialyzer flagged as an opaque-type mismatch; `{:error, :stale}` on a newer version; unchanged Markdown is a no-op) and `Content.list_case_revisions/1` (newest first). Docs: "Editing a case" in `docs/case-format/README.md`. RED — 8/8 new Content tests failed (undefined functions, no `lock_version`); GREEN — 20/20 Content tests.
 - T2 (panel): `AdminCaseLive.Show` gains the "Editar caso" form (textarea, `save` event through `Content.update_case_markdown/3` with `current_scope.user` as editor), re-parses the saved Markdown so the located errors and numbered lines refresh, shows `#case-stale` ("Este caso mudou desde que você o abriu: recarregue a página antes de salvar.", reload link, draft kept in the editor) on a stale save, refuses a blank save with a flash, and lists "Versões anteriores" with version, editor email, UTC time and the replaced Markdown. RED — 6/6 new LiveView tests failed (no `#case-edit` form); GREEN — 17/17; focused run (Content, LiveView, architecture) 70/70; credo strict clean.
 
 ## Next step
