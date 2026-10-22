@@ -1,0 +1,90 @@
+defmodule Backend.Accounts.UserNotifier do
+  @moduledoc """
+  Account emails in pt-BR (`mix phx.gen.auth`): email change, login link and
+  account confirmation. The sender address is a placeholder until an email
+  provider is chosen (#336).
+  """
+
+  import Swoosh.Email
+
+  alias Backend.Accounts.Mailer
+  alias Backend.Accounts.User
+
+  # Delivers the email using the application mailer.
+  defp deliver(recipient, subject, body) do
+    email =
+      new()
+      |> to(recipient)
+      |> from({"proyectoMed", "contact@example.com"})
+      |> subject(subject)
+      |> text_body(body)
+
+    with {:ok, _metadata} <- Mailer.deliver(email) do
+      {:ok, email}
+    end
+  end
+
+  @doc """
+  Deliver instructions to update a user email.
+  """
+  def deliver_update_email_instructions(user, url) do
+    deliver(user.email, "Confirme a alteração do seu e-mail", """
+
+    ==============================
+
+    Olá, #{user.email}.
+
+    Para alterar o seu e-mail, acesse o link abaixo:
+
+    #{url}
+
+    Se você não pediu esta alteração, ignore esta mensagem.
+
+    ==============================
+    """)
+  end
+
+  @doc """
+  Deliver instructions to log in with a magic link.
+  """
+  def deliver_login_instructions(user, url) do
+    case user do
+      %User{confirmed_at: nil} -> deliver_confirmation_instructions(user, url)
+      _ -> deliver_magic_link_instructions(user, url)
+    end
+  end
+
+  defp deliver_magic_link_instructions(user, url) do
+    deliver(user.email, "Seu link para entrar", """
+
+    ==============================
+
+    Olá, #{user.email}.
+
+    Para entrar na sua conta, acesse o link abaixo:
+
+    #{url}
+
+    Se você não pediu este e-mail, ignore esta mensagem.
+
+    ==============================
+    """)
+  end
+
+  defp deliver_confirmation_instructions(user, url) do
+    deliver(user.email, "Confirme a sua conta", """
+
+    ==============================
+
+    Olá, #{user.email}.
+
+    Para confirmar a sua conta, acesse o link abaixo:
+
+    #{url}
+
+    Se você não criou uma conta, ignore esta mensagem.
+
+    ==============================
+    """)
+  end
+end

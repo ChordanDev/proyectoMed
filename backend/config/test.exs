@@ -1,5 +1,11 @@
 import Config
 
+# Only in tests, remove the complexity from the password hashing algorithm
+config :bcrypt_elixir, :log_rounds, 1
+
+# Account emails are captured by the test adapter.
+config :backend, Backend.Accounts.Mailer, adapter: Swoosh.Adapters.Test
+
 # Local Postgres for tests (ADR-014 #346), checked out per test through the
 # SQL sandbox. Without a host, username or password, Postgrex uses `PGHOST`,
 # `PGUSER` and `PGPASSWORD` when set (the GitHub workflow sets them), otherwise

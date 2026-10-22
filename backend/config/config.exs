@@ -7,6 +7,19 @@
 # General application configuration
 import Config
 
+config :backend, :scopes,
+  user: [
+    default: true,
+    module: Backend.Accounts.Scope,
+    assign_key: :current_scope,
+    access_path: [:user, :id],
+    schema_key: :user_id,
+    schema_type: :id,
+    schema_table: :users,
+    test_data_fixture: Backend.AccountsFixtures,
+    test_setup_helper: :register_and_log_in_user
+  ]
+
 config :backend,
   ecto_repos: [Backend.Repo],
   generators: [timestamp_type: :utc_datetime],
@@ -80,6 +93,11 @@ config :tailwind,
     cd: Path.expand("..", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
+
+# Account emails (login links, email change). The local adapter keeps them in
+# memory (`/dev/mailbox` in development) until an email provider is chosen (#336).
+config :backend, Backend.Accounts.Mailer, adapter: Swoosh.Adapters.Local
+config :swoosh, :api_client, false
 
 # Configure Elixir's Logger
 config :logger, :default_formatter,
