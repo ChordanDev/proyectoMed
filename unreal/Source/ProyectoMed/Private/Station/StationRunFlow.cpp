@@ -63,6 +63,8 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 	VoiceCredential.Reset();
 	PendingTurn.Reset();
 	Transcript.Reset();
+	UnsentTurn.Reset();
+	bReloadingTranscript = false;
 	OnChanged.Broadcast();
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
@@ -116,7 +118,18 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 
 bool UStationRunFlow::CanSendTurn() const
 {
-	return Step == EStationRunStep::Running && !PendingTurn.IsSet();
+	return Step == EStationRunStep::Running && !PendingTurn.IsSet() && !bReloadingTranscript;
+}
+
+FString UStationRunFlow::TakeUnsentTurn()
+{
+	if (bReloadingTranscript)
+	{
+		return FString();
+	}
+	FString Turn = MoveTemp(UnsentTurn);
+	UnsentTurn.Reset();
+	return Turn;
 }
 
 bool UStationRunFlow::SendTypedTurn(const FString& Text)
@@ -128,6 +141,7 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 	}
 
 	PendingTurn = Turn;
+	UnsentTurn.Reset();
 	ErrorText = FText::GetEmpty();
 	OnChanged.Broadcast();
 
@@ -142,10 +156,11 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 		Self->PendingTurn.Reset();
 		if (Reply.HasError())
 		{
+			Self->UnsentTurn = Turn;
 			// Phoenix may have taken the turn without this client hearing back.
 			if (Reply.GetError().Code == TEXT("network_error"))
 			{
-				Self->ReloadTranscript();
+				Self->ReloadTranscript(Turn);
 			}
 			Self->SetError(Reply.GetError(),
 				LOCTEXT("TurnFailed", "Não foi possível enviar sua mensagem. Tente novamente."));
@@ -171,17 +186,32 @@ void UStationRunFlow::AddLine(EStationSpeaker Speaker, const FString& Text)
 	Line.Text = Text;
 }
 
-void UStationRunFlow::ReloadTranscript()
+void UStationRunFlow::ReloadTranscript(const FString& Turn)
 {
+	// No new turn until the record is read, so a late answer cannot replace it.
+	bReloadingTranscript = true;
+
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->RefreshSession([WeakThis](const TStationResult<FStationSession>& Refreshed)
+	Client->RefreshSession([WeakThis, Turn](const TStationResult<FStationSession>& Refreshed)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
-		if (!Self || Refreshed.HasError())
+		if (!Self)
 		{
 			return;
 		}
-		Self->Transcript = Refreshed.GetValue().Messages;
+		Self->bReloadingTranscript = false;
+		if (!Refreshed.HasError())
+		{
+			Self->Transcript = Refreshed.GetValue().Messages;
+			const int32 LastLearner = Self->Transcript.FindLastByPredicate(
+				[](const FStationMessage& Line) { return Line.Speaker == EStationSpeaker::Learner; });
+			if (LastLearner != INDEX_NONE && Self->Transcript[LastLearner].Text == Turn)
+			{
+				// Phoenix took it: giving it back would send it twice.
+				Self->UnsentTurn.Reset();
+				Self->ErrorText = FText::GetEmpty();
+			}
+		}
 		Self->OnChanged.Broadcast();
 	});
 }

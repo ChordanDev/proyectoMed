@@ -256,6 +256,17 @@ void UStationHudWidget::RefreshConversation()
 	StationUi::SetShown(TurnErrorText, !Flow->GetErrorText().IsEmpty());
 	TurnErrorText->SetText(Flow->GetErrorText());
 	SendButton->SetIsEnabled(Flow->CanSendTurn());
+
+	// A turn Phoenix did not take goes back into the box, unless the learner
+	// already started typing another one.
+	if (TurnInput->GetText().IsEmpty())
+	{
+		const FString Unsent = Flow->TakeUnsentTurn();
+		if (!Unsent.IsEmpty())
+		{
+			TurnInput->SetText(FText::FromString(Unsent));
+		}
+	}
 }
 
 void UStationHudWidget::AddTranscriptLine(const FText& Text, const FLinearColor& Color)
