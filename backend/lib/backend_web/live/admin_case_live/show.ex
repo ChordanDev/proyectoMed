@@ -47,7 +47,8 @@ defmodule BackendWeb.AdminCaseLive.Show do
       draft: kase.markdown,
       errors: format_errors(kase.markdown),
       lines: Enum.with_index(lines, 1),
-      revisions: Content.list_case_revisions(kase)
+      revisions: Content.list_case_revisions(kase),
+      station_versions: Content.list_station_versions(kase)
     )
   end
 
@@ -66,6 +67,49 @@ defmodule BackendWeb.AdminCaseLive.Show do
     case Stations.parse_case(markdown) do
       {:ok, _package} -> []
       {:error, errors} -> errors
+    end
+  end
+
+  @impl true
+  def handle_event("approve", _params, socket) do
+    case Stations.parse_case(socket.assigns.case.markdown) do
+      {:ok, package} ->
+        approver = socket.assigns.current_scope.user
+
+        case Content.approve_case(socket.assigns.case, package, approver) do
+          {:ok, saved} ->
+            {:noreply,
+             socket
+             |> assign(stale: false)
+             |> assign_case(saved)
+             |> put_flash(:info, "Caso aprovado e publicado.")}
+
+          {:error, :stale} ->
+            {:noreply, assign(socket, stale: true)}
+
+          {:error, :invalid_case} ->
+            {:noreply,
+             put_flash(socket, :error, "Este caso tem erros de formato e não pode ser aprovado.")}
+        end
+
+      {:error, _errors} ->
+        {:noreply,
+         put_flash(socket, :error, "Este caso tem erros de formato e não pode ser aprovado.")}
+    end
+  end
+
+  @impl true
+  def handle_event("disapprove", _params, socket) do
+    case Content.disapprove_case(socket.assigns.case) do
+      {:ok, saved} ->
+        {:noreply,
+         socket
+         |> assign(stale: false)
+         |> assign_case(saved)
+         |> put_flash(:info, "Caso reprovado.")}
+
+      {:error, :stale} ->
+        {:noreply, assign(socket, stale: true)}
     end
   end
 
@@ -111,10 +155,39 @@ defmodule BackendWeb.AdminCaseLive.Show do
             <span>{@case.theme}</span>
             <.status_badge status={@case.status} />
           </span>
+          <span
+            :if={@case.status == :approved && @case.approved_by_email && @case.approved_at}
+            id="case-approval"
+            class="mt-1 block text-sm text-base-content/70"
+          >
+            Aprovado por {@case.approved_by_email} em {format_time(@case.approved_at)}
+          </span>
         </:subtitle>
       </.header>
 
-      <section :if={@errors != []} id="case-errors" class="alert alert-error block" role="alert">
+      <section id="case-review-actions" class="mt-4 flex flex-wrap gap-2">
+        <button
+          id="case-approve"
+          type="button"
+          phx-click="approve"
+          phx-disable-with="Aprovando..."
+          disabled={@errors != []}
+          class="btn btn-success btn-sm"
+        >
+          <.icon name="hero-check" class="size-4" /> Aprovar e publicar
+        </button>
+        <button
+          :if={@case.status != :disapproved}
+          id="case-disapprove"
+          type="button"
+          phx-click="disapprove"
+          class="btn btn-outline btn-error btn-sm"
+        >
+          <.icon name="hero-x-mark" class="size-4" /> Reprovar
+        </button>
+      </section>
+
+      <section :if={@errors != []} id="case-errors" class="alert alert-error mt-4 block" role="alert">
         <h2 class="font-semibold">Erros de formato ({length(@errors)})</h2>
         <p class="text-sm">Este caso não pode ser publicado enquanto houver erros.</p>
         <ul class="mt-2 list-disc pl-5">
@@ -180,6 +253,27 @@ defmodule BackendWeb.AdminCaseLive.Show do
               </summary>
               <pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm">{revision.markdown}</pre>
             </details>
+          </li>
+        </ul>
+      </section>
+
+      <section id="case-station-versions" class="mt-8">
+        <h2 class="text-lg font-semibold">Versões publicadas ({length(@station_versions)})</h2>
+        <p
+          :if={@station_versions == []}
+          id="case-station-versions-empty"
+          class="text-sm text-base-content/70"
+        >
+          Nenhuma versão publicada.
+        </p>
+        <ul :if={@station_versions != []} class="mt-2 space-y-2">
+          <li
+            :for={version <- @station_versions}
+            id={"station-version-#{version.version_number}"}
+            class="rounded-box bg-base-200 p-3 text-sm"
+          >
+            <span class="font-semibold">Versão publicada {version.version_number}</span>
+            — aprovada por {version.approved_by_email} em {format_time(version.approved_at)}
           </li>
         </ul>
       </section>

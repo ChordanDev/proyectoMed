@@ -33,11 +33,13 @@ defmodule BackendWeb.Router do
     pipe_through :api
 
     get "/", HealthController, :index
+    get "/stations", StationController, :index
   end
 
   scope "/api/stations", BackendWeb do
     pipe_through :api
 
+    get "/", StationController, :index
     get "/active", StationController, :active
     post "/active/sessions", StationController, :create_session
     get "/active/sessions/:id", StationController, :show_session
