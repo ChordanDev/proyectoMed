@@ -8,7 +8,7 @@ defmodule Backend.Config.DatabaseConfigTest do
   use ExUnit.Case, async: false
 
   @runtime_config Path.expand("../../../config/runtime.exs", __DIR__)
-  @variables ~w(DATABASE_URL DATABASE_SSL POOL_SIZE ECTO_IPV6 SECRET_KEY_BASE)
+  @variables ~w(DATABASE_URL DATABASE_SSL POOL_SIZE ECTO_IPV6 SECRET_KEY_BASE MAILER_PROVIDER)
   @url "ecto://app:example@db.example.test/proyectomed"
 
   setup do
@@ -128,8 +128,9 @@ defmodule Backend.Config.DatabaseConfigTest do
   end
 
   defp repo_config(env) do
-    # `:prod` also requires a secret key base.
+    # `:prod` also requires a secret key base and a mail provider.
     System.put_env("SECRET_KEY_BASE", String.duplicate("a", 64))
+    System.put_env("MAILER_PROVIDER", "local")
 
     @runtime_config
     |> Config.Reader.read!(env: env, target: :host)

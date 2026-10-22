@@ -80,9 +80,9 @@ defmodule BackendWeb.Router do
     get "/active/sessions/:id/result", StationController, :show_educational_result
   end
 
-  ## Authentication routes (`mix phx.gen.auth`). There is no public sign-up
-  ## route: admins are provisioned by `priv/repo/seeds.exs`, and learner
-  ## sign-up is #336.
+  ## Authentication routes (`mix phx.gen.auth`). Public sign-up creates only
+  ## learner (`student`) accounts (#336); admins are provisioned by
+  ## `priv/repo/seeds.exs`.
 
   scope "/", BackendWeb do
     pipe_through [:browser, :require_authenticated_user]
@@ -94,6 +94,7 @@ defmodule BackendWeb.Router do
     end
 
     post "/users/update-password", UserSessionController, :update_password
+    post "/users/delete-account", UserAccountController, :delete
   end
 
   scope "/", BackendWeb do
@@ -101,8 +102,13 @@ defmodule BackendWeb.Router do
 
     live_session :current_user,
       on_mount: [{BackendWeb.UserAuth, :mount_current_scope}] do
+      live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/log-in/:token", UserLive.Confirmation, :new
+      live "/users/reset-password", UserLive.ForgotPassword, :new
+      live "/users/reset-password/:token", UserLive.ResetPassword, :edit
+      live "/termos", UserLive.Legal, :terms
+      live "/privacidade", UserLive.Legal, :privacy
     end
 
     post "/users/log-in", UserSessionController, :create

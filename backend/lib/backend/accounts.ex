@@ -8,7 +8,7 @@ defmodule Backend.Accounts do
   import Ecto.Query, warn: false
   alias Backend.Repo
 
-  alias Backend.Accounts.{Scope, User, UserNotifier, UserToken}
+  alias Backend.Accounts.{LegalDocuments, Scope, User, UserNotifier, UserToken}
 
   ## Database getters
 
@@ -65,21 +65,49 @@ defmodule Backend.Accounts do
   ## User registration
 
   @doc """
-  Registers a user.
+  Registers a learner (#336): an unconfirmed `student` that accepted the
+  current terms of use and privacy policy. The accepted versions and the
+  acceptance time are stored; a role in `attrs` is ignored, so public sign-up
+  never creates an admin.
 
   ## Examples
 
-      iex> register_user(%{field: value})
+      iex> register_user(%{email: "a@b.c", terms_accepted: true, privacy_accepted: true})
       {:ok, %User{}}
 
-      iex> register_user(%{field: bad_value})
+      iex> register_user(%{email: "a@b.c"})
       {:error, %Ecto.Changeset{}}
 
   """
+  @spec register_user(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def register_user(attrs) do
     %User{}
-    |> User.email_changeset(attrs)
+    |> User.registration_changeset(attrs, legal_versions())
     |> Repo.insert()
+  end
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for the sign-up form. Takes the
+  `:validate_unique` option of `Backend.Accounts.User.email_changeset/3`.
+  """
+  @spec change_user_registration(map(), keyword()) :: Ecto.Changeset.t()
+  def change_user_registration(attrs \\ %{}, opts \\ []) do
+    User.registration_changeset(%User{}, attrs, Keyword.merge(opts, legal_versions()))
+  end
+
+  @doc """
+  Returns the current terms of use (`:terms`) or privacy policy (`:privacy`):
+  title, version and paragraphs. The texts are placeholders (see
+  `Backend.Accounts.LegalDocuments`).
+  """
+  @spec legal_document(LegalDocuments.kind()) :: LegalDocuments.t()
+  def legal_document(kind), do: LegalDocuments.get(kind)
+
+  defp legal_versions do
+    [
+      terms_version: LegalDocuments.get(:terms).version,
+      privacy_version: LegalDocuments.get(:privacy).version
+    ]
   end
 
   ## Settings
@@ -188,6 +216,94 @@ defmodule Backend.Accounts do
     |> User.password_changeset(attrs)
     |> update_user_and_delete_all_tokens()
   end
+
+  ## Password reset (#336)
+
+  @doc ~S"""
+  Emails a password reset link to the user. The link is valid for 24 hours and
+  only while the user's email is unchanged.
+
+  ## Examples
+
+      iex> deliver_user_reset_password_instructions(user, &url(~p"/users/reset-password/#{&1}"))
+      {:ok, %Swoosh.Email{}}
+
+  """
+  def deliver_user_reset_password_instructions(%User{} = user, reset_password_url_fun)
+      when is_function(reset_password_url_fun, 1) do
+    {encoded_token, user_token} = UserToken.build_email_token(user, "reset_password")
+    Repo.insert!(user_token)
+    UserNotifier.deliver_reset_password_instructions(user, reset_password_url_fun.(encoded_token))
+  end
+
+  @doc """
+  Gets the user of a valid password reset token, or `nil`.
+  """
+  @spec get_user_by_reset_password_token(String.t()) :: User.t() | nil
+  def get_user_by_reset_password_token(token) when is_binary(token) do
+    with {:ok, query} <- UserToken.verify_reset_password_token_query(token),
+         %User{} = user <- Repo.one(query) do
+      user
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Sets a new password from a reset link and expires all the user's tokens.
+
+  The link proved the user owns the email, so an unconfirmed account is
+  confirmed too. Returns the user and the expired tokens, so the caller can
+  disconnect their sessions.
+  """
+  @spec reset_user_password(User.t(), map()) ::
+          {:ok, {User.t(), [UserToken.t()]}} | {:error, Ecto.Changeset.t()}
+  def reset_user_password(%User{} = user, attrs) do
+    user
+    |> User.password_changeset(attrs)
+    |> confirm_if_unconfirmed()
+    |> update_user_and_delete_all_tokens()
+  end
+
+  defp confirm_if_unconfirmed(%Ecto.Changeset{data: %User{confirmed_at: nil}} = changeset),
+    do: Ecto.Changeset.put_change(changeset, :confirmed_at, DateTime.utc_now(:second))
+
+  defp confirm_if_unconfirmed(changeset), do: changeset
+
+  ## Account deletion (#336)
+
+  @doc """
+  Deletes a learner account and all its data, returning the tokens whose
+  sessions the caller disconnects. Admin accounts are never deleted here.
+
+  The deletion hook for the other contexts is the database: every table that
+  holds a user's data references `users` with `on_delete: :delete_all`, so this
+  single `DELETE` erases it in the same transaction (results #338, billing
+  #339). `Backend.Accounts.AccountDeletionTest` fails for any foreign key to
+  `users` that does not cascade, unless it lists the reference as admin-only. Data kept outside Postgres needs its own
+  cleanup, added with the context that introduces it.
+  """
+  @spec delete_user(User.t()) :: {:ok, [UserToken.t()]} | {:error, :admin_account}
+  def delete_user(%User{role: :admin}), do: {:error, :admin_account}
+
+  def delete_user(%User{} = user) do
+    Repo.transact(fn ->
+      tokens = Repo.all_by(UserToken, user_id: user.id)
+      Repo.delete!(user)
+      {:ok, tokens}
+    end)
+  end
+
+  @doc """
+  Returns true when the typed email confirms deleting the user's account
+  (case and surrounding whitespace are ignored).
+  """
+  @spec account_deletion_confirmed?(User.t(), term()) :: boolean()
+  def account_deletion_confirmed?(%User{email: email}, typed_email) when is_binary(typed_email) do
+    String.downcase(String.trim(typed_email)) == String.downcase(email)
+  end
+
+  def account_deletion_confirmed?(_user, _typed_email), do: false
 
   ## Session
 

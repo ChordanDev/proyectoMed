@@ -19,7 +19,7 @@ defmodule Backend.Accounts.AdminRoleTest do
     end
 
     test "registration ignores a role in the attributes" do
-      {:ok, user} = Accounts.register_user(%{email: unique_user_email(), role: "admin"})
+      {:ok, user} = Accounts.register_user(valid_user_attributes(%{role: "admin"}))
 
       assert user.role == :student
     end

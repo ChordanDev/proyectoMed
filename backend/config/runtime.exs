@@ -426,6 +426,83 @@ if config_env() != :test do
   end
 end
 
+# Account emails (#336): login links, confirmation, password reset and email
+# change. `MAILER_PROVIDER` picks the provider: `resend`, `postmark`,
+# `sendgrid`, `brevo` or `mailgun` send through the provider's HTTP API with
+# `MAILER_API_KEY` (mailgun also needs `MAILER_DOMAIN`) from `MAILER_FROM_EMAIL`
+# (required) and `MAILER_FROM_NAME` (default `proyectoMed`). `local` keeps the
+# in-memory adapter of config.exs, which never delivers an email; it is the
+# default in `:dev`, while `:prod` refuses to boot without MAILER_PROVIDER and
+# only warns when `local` is named on purpose. Case and surrounding whitespace
+# are ignored. An unknown provider or a missing key, domain or sender refuses to
+# boot, never echoing the key. `:test` reads none of it and keeps the test
+# adapter.
+if config_env() != :test do
+  mailer_env = fn name -> System.get_env(name, "") |> String.trim() end
+
+  mailer_adapters = %{
+    "resend" => Swoosh.Adapters.Resend,
+    "postmark" => Swoosh.Adapters.Postmark,
+    "sendgrid" => Swoosh.Adapters.Sendgrid,
+    "brevo" => Swoosh.Adapters.Brevo,
+    "mailgun" => Swoosh.Adapters.Mailgun
+  }
+
+  require_mailer_env! = fn name, provider ->
+    case mailer_env.(name) do
+      "" ->
+        raise ArgumentError,
+              "environment variable #{name} is required when MAILER_PROVIDER is #{provider}"
+
+      value ->
+        value
+    end
+  end
+
+  mailer_prod? = config_env() == :prod
+
+  case String.downcase(mailer_env.("MAILER_PROVIDER")) do
+    "" when mailer_prod? ->
+      raise ArgumentError,
+            "environment variable MAILER_PROVIDER is required in production: set resend, " <>
+              "postmark, sendgrid, brevo or mailgun, or local to deliberately keep the " <>
+              "in-memory adapter that never delivers an email"
+
+    "local" when mailer_prod? ->
+      IO.warn("MAILER_PROVIDER is local in production: account emails are never delivered")
+
+    provider when provider in ["", "local"] ->
+      :ok
+
+    provider when is_map_key(mailer_adapters, provider) ->
+      api_key = require_mailer_env!.("MAILER_API_KEY", provider)
+      from_email = require_mailer_env!.("MAILER_FROM_EMAIL", provider)
+
+      domain =
+        if provider == "mailgun",
+          do: [domain: require_mailer_env!.("MAILER_DOMAIN", provider)],
+          else: []
+
+      config :backend,
+             Backend.Accounts.Mailer,
+             [adapter: Map.fetch!(mailer_adapters, provider), api_key: api_key] ++ domain
+
+      from_name =
+        case mailer_env.("MAILER_FROM_NAME") do
+          "" -> "proyectoMed"
+          name -> name
+        end
+
+      config :backend, :mailer_from, {from_name, from_email}
+      config :swoosh, api_client: Swoosh.ApiClient.Req, local: false
+
+    _unknown ->
+      raise ArgumentError,
+            "MAILER_PROVIDER must be resend, postmark, sendgrid, brevo, mailgun or local, got: " <>
+              inspect(System.get_env("MAILER_PROVIDER"))
+  end
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

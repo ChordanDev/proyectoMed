@@ -14,7 +14,9 @@ defmodule Backend.AccountsFixtures do
 
   def valid_user_attributes(attrs \\ %{}) do
     Enum.into(attrs, %{
-      email: unique_user_email()
+      email: unique_user_email(),
+      terms_accepted: true,
+      privacy_accepted: true
     })
   end
 
