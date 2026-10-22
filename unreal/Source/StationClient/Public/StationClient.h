@@ -97,7 +97,10 @@ public:
 	/** Leaves the room at once (see `FStationVoiceLink::Disconnect`). */
 	void DisconnectVoice();
 
-	/** The open voice link, or null. */
+	/**
+	 * The open voice link, or null. Game thread only: the pointer dies when the link is
+	 * replaced or dropped. Other threads keep `AsShared()` in a `TWeakPtr` and `Pin()` it.
+	 */
 	FStationVoiceLink* GetVoice() const { return Voice.Get(); }
 
 	/** `GET /api/v2/.../sessions/:id/result`: the educational result of a finished run. */

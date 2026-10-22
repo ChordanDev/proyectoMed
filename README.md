@@ -207,6 +207,8 @@ openssl rand -hex 32   # paste as VOICE_WORKER_SECRET
 | `CARTESIA_API_KEY` / `CARTESIA_VOICE_ID` | Patient voice. Without them the reply is still shown as text. |
 | `CARTESIA_MODEL` | Optional, default `sonic-3`. |
 | `PHOENIX_TURN_TIMEOUT_S` / `PHOENIX_TURN_RETRIES` | Optional, defaults `35` and `1`. |
+| `VOICE_WORKER_FAKE_PROVIDERS` | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on; the worker refuses it unless `LIVEKIT_URL` is on loopback. |
+| `VOICE_WORKER_FAKE_TRANSCRIPT` | Optional. The fixed phrase the fake speech-to-text returns. Default `Qual é o seu nome?`. |
 
 Never commit `.env`. No secret reaches the browser: it only receives a short-lived
 LiveKit token.
@@ -475,6 +477,8 @@ through the subscribed audio track.
 | `CARTESIA_MODEL`      | no       | TTS model. Default `sonic-3` (low latency, supports Portuguese).        |
 | `PHOENIX_TURN_TIMEOUT_S` | no    | Seconds each transcript POST waits for Phoenix. Default `35` (see below). |
 | `PHOENIX_TURN_RETRIES`   | no    | Retries of a transcript POST after a timeout or disconnect. Default `1`.  |
+| `VOICE_WORKER_FAKE_PROVIDERS` | no | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on, and LiveKit must be on loopback or the job fails with `fake_providers_refused`. |
+| `VOICE_WORKER_FAKE_TRANSCRIPT` | no | The fixed phrase the fake speech-to-text returns. Default `Qual é o seu nome?`. |
 
 Without the sentence stream Phoenix answers a transcript only after the patient reply
 is generated and verified; with it, the timeout applies to each wait for the next line.

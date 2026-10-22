@@ -135,6 +135,14 @@ void FStationVoiceUnitSpec::Define()
 			TestFalse("unknown status", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"other"})")).IsSet());
 		});
 
+		It("compares the session, role and status exactly, as the web parser does", [this]()
+		{
+			TestFalse("session in another case", Parse(TEXT(R"({"session_id":"S1","turn_id":3,"final":true,"text":"Oi"})")).IsSet());
+			TestFalse("role in another case", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"Patient","text":"Oi"})")).IsSet());
+			TestFalse("patient status in another case", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"patient","status":"COMPLETE"})")).IsSet());
+			TestFalse("examiner status in another case", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"Acknowledged"})")).IsSet());
+		});
+
 		It("reads turn failures and the worker stopping", [this]()
 		{
 			const TOptional<FStationVoiceEvent> Failure = Parse(TEXT(R"({"session_id":"s1","turn_id":5,"generation_id":2,"failure":"synthesis_failed"})"));
@@ -283,6 +291,23 @@ void FStationVoiceUnitSpec::Define()
 			FStationVoiceLiveness Liveness;
 			TestEqual("retrying", Liveness.Update(Retrying, 0.0), EStationVoiceState::Reconnecting);
 			TestEqual("lost", Liveness.Tick(10.0), EStationVoiceState::Failed);
+		});
+
+		It("names the rule that lost the voice, not the state shown before it", [this, Answering, WorkerGone, Retrying]()
+		{
+			using EFailure = FStationVoiceLiveness::EFailure;
+			FStationVoiceLiveness Joining;
+			Joining.Update(WorkerGone, 0.0);
+			TestEqual("nothing lost yet", Joining.GetFailure(), EFailure::None);
+			Joining.Update(Retrying, 15.0);
+			TestEqual("lost on the first-join limit", Joining.Update(WorkerGone, 22.0), EStationVoiceState::Failed);
+			TestEqual("the worker never joined", Joining.GetFailure(), EFailure::WorkerNeverJoined);
+
+			FStationVoiceLiveness Answered;
+			Answered.Update(Answering, 0.0);
+			Answered.Update(WorkerGone, 1.0);
+			TestEqual("lost after ten seconds", Answered.Tick(11.0), EStationVoiceState::Failed);
+			TestEqual("the voice did not come back", Answered.GetFailure(), EFailure::VoiceNotBack);
 		});
 
 		It("is ready again when the voice comes back in time, and counts a new loss from zero", [this, Answering, WorkerGone, Retrying]()
