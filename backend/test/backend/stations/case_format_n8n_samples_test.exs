@@ -13,6 +13,7 @@ defmodule Backend.Stations.CaseFormatN8nSamplesTest do
   @repo_root Path.expand("../../../..", __DIR__)
   @format_spec Path.join(@repo_root, "docs/case-format/README.md")
   @generator_prompt Path.join(@repo_root, "docs/n8n/generator-prompt.md")
+  @reviewer_prompt Path.join(@repo_root, "docs/n8n/reviewer-prompt.md")
 
   describe "generator prompt" do
     setup do
@@ -33,6 +34,18 @@ defmodule Backend.Stations.CaseFormatN8nSamplesTest do
       assert [_, example] = Regex.run(~r/```case\n(.*?)```/s, prompt)
       assert {:ok, package} = Stations.parse_case(example)
       assert Enum.any?(package["actors"], &(&1["role"] == "companion"))
+    end
+  end
+
+  describe "level rules in the prompts" do
+    # The parser refuses a level with pontos above zero and mínimo=0
+    # (Backend.Stations.CaseFormat.Rules); both prompts must state it.
+    test "the reviewer and the generator require mínimo of at least 1 when pontos is above zero" do
+      for path <- [@reviewer_prompt, @generator_prompt] do
+        assert system_prompt(path) =~
+                 "Todo nível com pontos maiores que 0 tem mínimo de pelo menos 1.",
+               "#{Path.basename(path)} does not state the pontos>0 ⇒ mínimo>=1 rule"
+      end
     end
   end
 
@@ -106,6 +119,16 @@ defmodule Backend.Stations.CaseFormatN8nInsertTest do
 
     assert %{rows: [["pending", "Cirurgia Geral", ^markdown]]} =
              Repo.query!("SELECT status, area, markdown FROM cases WHERE number = $1", [first])
+  end
+
+  test "the area/theme Code node falls back to the requested área and tema, never null" do
+    assert [_, code] = Regex.run(~r/```js\n(.*?)```/s, File.read!(@neon_insert))
+    refute code =~ "null"
+    assert code =~ "$('Trigger').first().json"
+    assert code =~ ~s/tag("(?:ÁREA|AREA)") ?? requested.area/
+    assert code =~ ~s/tag("TEMA") ?? requested.tema/
+    # A trailing \r (CRLF output) must not end up in area or theme.
+    assert code =~ ~S"\\s*(.+?)\\s*$"
   end
 
   defp insert_sql(path) do

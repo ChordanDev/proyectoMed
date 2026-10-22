@@ -47,6 +47,7 @@ All tasks: delegated direct (this worker is the single bounded writer for #335).
 
 - T3 (three generated samples): generated with the generator prompt through the Anthropic API (`claude-opus-5-5`, effort medium, no RAG context): Clínica Médica (cetoacidose diabética), Pediatria (bronquiolite, patient + mother as companion), Ginecologia e Obstetrícia (pré-eclâmpsia grave). RED — 4/5 (no fixtures; the coverage test failed). First run: 2/3 parsed; the pré-eclâmpsia case had a Cyrillic `е` inside an id (`iеca-sublingual`). Fixed the prompts (ASCII-only ids: generator rule 9, reviewer rule A4) and regenerated all three; GREEN — 8/8 (all three samples parse with zero errors, one has a companion). Samples saved unedited. Commit a541447.
 - Full local CI: LOCAL CI PASSED (backend 1956 tests, web 337 + 4 tests, dialyzer 0 errors). PR #358.
+- Review round 1 (Jorge C1, TR-1): reviewer rule E3 and generator rule 6 now state that every level with pontos above zero has mínimo of at least 1 (parser rule in `CaseFormat.Rules`); the Neon Code node falls back to the requested `area`/`tema` from the trigger node instead of returning null (`cases.area`/`theme` are NOT NULL) and trims a trailing `\r`. RED — 8/10; GREEN — 10/10. Local CI: see the PR comment.
 
 ## Next step
 

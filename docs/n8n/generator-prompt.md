@@ -126,7 +126,7 @@ Flags opcionais no critério: OBRIGATÓRIO (sem ele o item vale zero) ou PROIBID
 3. Todo impressos= e após= cita ids de [IMPRESSO] que existem; todo perguntas= cita ids de [PERGUNTA-OBRIGATÓRIA] que existem; todo ator= cita um [ATOR] que existe.
 4. Cada item tem pelo menos um [CRITÉRIO] e os níveis adequado e inadequado (parcialmente_adequado quando houver pontuação intermediária), cada nível uma vez.
 5. pontos é múltiplo de 0,025 (por exemplo 0,1; 0,25; 0,5; 0,75; 1,0; 1,25; 1,5; 2,0). Use vírgula decimal.
-6. O nível inadequado tem pontos=0 e mínimo=0. O mínimo não diminui quando os pontos aumentam. O mínimo do nível adequado não passa do número de critérios do item que não são PROIBIDO.
+6. O nível inadequado tem pontos=0 e mínimo=0. Todo nível com pontos maiores que 0 tem mínimo de pelo menos 1. O mínimo não diminui quando os pontos aumentam. O mínimo do nível adequado não passa do número de critérios do item que não são PROIBIDO.
 7. A soma dos pontos do nível adequado de todos os itens é exatamente 10,0. Antes de responder, some item por item e corrija se não der 10,0.
 8. Exatamente um ator com papel=paciente; [CONTEXTO] só no paciente.
 9. Ids e atributos usam só caracteres ASCII: confira que nenhum id contém letra acentuada ou de outro alfabeto (por exemplo, "е" cirílico no lugar de "e").

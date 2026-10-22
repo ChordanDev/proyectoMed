@@ -37,16 +37,20 @@ The insert does not validate the format. A case that still has format errors aft
 
 ## Taking `area` and `theme` from the case
 
-Read them from the case text, so the row always matches what the parser and the admin panel see. In a *Code* node before the insert:
+Read them from the case text, so the row always matches what the parser and the admin panel see. When a tag is missing, fall back to the área and tema the flow asked for: `cases.area` and `cases.theme` are `NOT NULL`, so a null would make the insert fail instead of storing the case as pending with its parser errors. In a *Code* node before the insert (rename `Trigger` to the name of your trigger node; it carries the requested `area` and `tema`, the same fields the generator's user message uses):
 
 ```js
 const markdown = $json.markdown;
-const tag = (name) => {
-  const match = markdown.match(new RegExp(`^\\[${name}\\]\\s*(.+)$`, "mu"));
-  return match ? match[1].trim() : null;
-};
+const requested = $('Trigger').first().json;
+// Trailing spaces and the \r of CRLF output are not part of the value.
+const tag = (name) =>
+  markdown.match(new RegExp(`^\\[${name}\\]\\s*(.+?)\\s*$`, "mu"))?.[1];
 // The parser accepts [ÁREA] and [AREA]; so does this.
-return [{ json: { markdown, area: tag("(?:ÁREA|AREA)"), theme: tag("TEMA") } }];
+return [{ json: {
+  markdown,
+  area: tag("(?:ÁREA|AREA)") ?? requested.area,
+  theme: tag("TEMA") ?? requested.tema,
+} }];
 ```
 
-If either is missing, the case is broken beyond what the reviewer fixed: fall back to the área and tema the flow asked for, so the row is still stored and the admin panel shows the parser errors.
+A case without `[ÁREA]` or `[TEMA]` is broken beyond what the reviewer fixed; with the fallback the row is still stored and the admin panel shows the parser errors.

@@ -46,7 +46,7 @@ D3. Resultados laboratoriais trazem unidade e valor de referência.
 E. PEP e aritmética
 E1. Todo [ITEM] tem pelo menos um [CRITÉRIO], um [NÍVEL adequado] e um [NÍVEL inadequado].
 E2. Todo pontos= é múltiplo de 0,025 (multiplique por 40: o resultado tem de ser inteiro).
-E3. [NÍVEL inadequado] tem pontos=0 e mínimo=0. Em cada item, o nível com mais pontos não tem mínimo menor que um nível com menos pontos.
+E3. [NÍVEL inadequado] tem pontos=0 e mínimo=0. Todo nível com pontos maiores que 0 tem mínimo de pelo menos 1. Em cada item, o nível com mais pontos não tem mínimo menor que um nível com menos pontos.
 E4. O mínimo de [NÍVEL adequado] não passa do número de critérios do item que não são PROIBIDO.
 E5. A soma dos pontos de [NÍVEL adequado] de todos os itens é exatamente 10,0. Mostre a conta na correção quando não for.
 
