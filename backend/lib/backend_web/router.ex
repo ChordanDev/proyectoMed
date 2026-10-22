@@ -1,8 +1,26 @@
 defmodule BackendWeb.Router do
   use BackendWeb, :router
 
+  # LiveView pages (ADR-015 #347): cookie session, CSRF and browser headers.
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {BackendWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
+  end
+
+  # Placeholder admin page (#329); the admin case panel (#344) replaces it and
+  # adds the `admin` role check.
+  scope "/admin", BackendWeb do
+    pipe_through :browser
+
+    live "/", AdminLive, :index
   end
 
   scope "/", BackendWeb do

@@ -115,9 +115,12 @@ defmodule Backend.ActiveStationConfigTest do
   end
 
   defp runtime_station_id(env) do
-    # `:prod` requires a secret; give it one only for the duration of the read.
+    # `:prod` requires a secret and a database URL; give them only for the
+    # duration of the read.
     secret = System.get_env("SECRET_KEY_BASE")
+    database_url = System.get_env("DATABASE_URL")
     System.put_env("SECRET_KEY_BASE", String.duplicate("a", 64))
+    System.put_env("DATABASE_URL", "ecto://app:example@db.example.test/proyectomed")
 
     try do
       @runtime_config
@@ -128,6 +131,10 @@ defmodule Backend.ActiveStationConfigTest do
       if secret,
         do: System.put_env("SECRET_KEY_BASE", secret),
         else: System.delete_env("SECRET_KEY_BASE")
+
+      if database_url,
+        do: System.put_env("DATABASE_URL", database_url),
+        else: System.delete_env("DATABASE_URL")
     end
   end
 

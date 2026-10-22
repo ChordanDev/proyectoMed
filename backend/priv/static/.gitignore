@@ -1,0 +1,3 @@
+# Build output of `mix assets.build` and `mix assets.deploy` (issue #329).
+/assets/
+/cache_manifest.json

@@ -28,6 +28,7 @@ It adds no clinical, product, or `#12` behavior.
 | Elixir     | `1.20.2-otp-29`  | `backend/.tool-versions`                    |
 | OTP        | `29.0.5`         | `backend/.tool-versions`                    |
 | Phoenix    | `~> 1.8.13`      | `backend/mix.exs`                           |
+| PostgreSQL | `17`             | `.github/workflows/pr-validation.yml` service |
 
 The web SPA is managed under `web/` with `npm --prefix web`. The backend was
 generated with:
@@ -42,16 +43,23 @@ version pin, and partial-output policy are testable and reproducible.
 
 ## Prerequisites and install
 
-Install the pinned Node/npm and Elixir/OTP versions listed above, then install
-both runtime dependency sets:
+Install the pinned Node/npm and Elixir/OTP versions listed above and a local
+PostgreSQL 17 (for example `brew install postgresql@17` and
+`brew services start postgresql@17`), then install both runtime dependency sets:
 
 ```sh
 # Web SPA (Vite + React + TypeScript).
 npm --prefix web install
 
-# Backend (Phoenix / Elixir).
-( cd backend && mix deps.get )
+# Backend (Phoenix / Elixir): fetches dependencies and creates and migrates the
+# local `backend_dev` database.
+( cd backend && mix setup )
 ```
+
+The backend reaches the local Postgres on `localhost:5432` as the operating
+system user with no password, which is what a Homebrew install provides. Set
+`PGHOST`, `PGUSER` or `PGPASSWORD` when your local server differs. See
+["Database"](#database) for `DATABASE_URL` and the other database variables.
 
 The process-level E2E suite also requires `mix` on `PATH` and permission to
 bind ephemeral localhost ports. It starts a real Phoenix server and a local,
@@ -70,12 +78,18 @@ The repository commits both lockfiles (`web/package-lock.json` and
 # Web SPA — boots Vite dev server on http://localhost:5173.
 npm --prefix web run dev
 
-# Backend — boots the JSON API on http://localhost:4000.
+# Backend — boots the JSON API and the LiveView pages on http://localhost:4000.
 ( cd backend && mix phx.server )
 
 # Backend with another active station (see "Active station" below).
 ( cd backend && ACTIVE_STATION_ID=acute-appendicitis mix phx.server )
 ```
+
+In `dev`, `mix phx.server` also runs the esbuild and Tailwind watchers that build
+the LiveView assets from `backend/assets` (`mix setup` installs both binaries;
+`mix assets.build` builds once). http://localhost:4000/admin is a placeholder
+LiveView page (pt-BR) that proves LiveView, the root layout and the assets
+render (ADR-015 #347); the admin case panel (#344) replaces it.
 
 The backend exposes health and Station HTTP routes. Representative responses:
 
@@ -642,6 +656,26 @@ prove the result contract, not the quality of any assessment.
   in place.
 - Do not set the variable outside the E2E suite.
 
+### Database
+
+The backend stores data in Postgres through Ecto (`Backend.Repo`, ADR-014 #346).
+`dev` and `test` use a local database by default (`backend_dev` and
+`backend_test`); `mix test`, and so `scripts/test.sh`, creates and migrates the
+test database before running, and every test runs inside the Ecto SQL sandbox.
+Migrations live in `backend/priv/repo/migrations`: run `mix ecto.migrate` in
+`dev`; a release runs pending migrations on boot.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `DATABASE_URL` | `ecto://USER:PASS@HOST/DATABASE`. Required in `prod`; in `dev` it replaces the local `backend_dev`, for example with a Neon branch. Ignored in `test`. Never commit it. An `ssl` query parameter refuses to boot (use `DATABASE_SSL`); Neon's `sslmode` and `channel_binding` parameters are allowed. | unset (local `backend_dev`) |
+| `DATABASE_SSL` | `true`, `1`, `yes` or `on` turns on TLS with peer and hostname verification against the system CA store (Neon requires it); `false`, `0`, `no` or `off` turns it off. Case-insensitive; any other value, including an empty one, refuses to boot. Read only with `DATABASE_URL`. | `true` in `prod`, `false` in `dev` |
+| `POOL_SIZE` | Connection pool size. Read only with `DATABASE_URL`. | `10` |
+| `ECTO_IPV6` | `true` or `1` connects over IPv6. Read only with `DATABASE_URL`. | unset |
+| `PGHOST`, `PGUSER`, `PGPASSWORD` | Local server, user and password for `dev` and `test` when `DATABASE_URL` is unset (read by Postgrex). | `localhost`, the operating system user, no password |
+
+`backend/config/runtime.exs` reads the `DATABASE_*`, `POOL_SIZE` and `ECTO_IPV6`
+variables once, at boot.
+
 ### Active station
 
 The backend serves one active station, chosen at boot. No code edit is needed to
@@ -818,8 +852,9 @@ only after the web unit and backend phases have passed.
 ## Pull-request CI
 
 Every pull request runs the `Pull Request Validation` GitHub Actions workflow.
-It installs the web dependencies with `npm ci`, fetches the Phoenix
-dependencies with `mix deps.get`, and then runs the single root command:
+It starts a PostgreSQL 17 service for the backend test database, installs the
+web dependencies with `npm ci`, fetches the Phoenix dependencies with
+`mix deps.get`, and then runs the single root command:
 
 ```sh
 bash scripts/test.sh
@@ -874,10 +909,12 @@ above for how to exercise it locally.
 
 ### Other known limitations
 
-- **No persistence layer.** `--no-ecto` was chosen so the database adapter
-  is a deliberate downstream decision (see `#13` evaluation). The router
-  currently exposes health, active station, transcription, and synthesis endpoints.
-- **No view layer.** The backend serves only JSON responses.
+- **No stored data yet.** Postgres and Ecto are wired (see
+  ["Database"](#database)), but no context stores data yet; accounts, billing
+  and content arrive with the #326 slices.
+- **One placeholder LiveView page.** Besides the JSON API, the backend serves
+  only the placeholder `/admin` LiveView page; the account, billing and admin
+  screens arrive with the #326 slices.
 
 - **No strict TDD.** `openspec/config.yaml` keeps `strict_tdd: false`. The
   harness is available, but test-first discipline is left to the change that

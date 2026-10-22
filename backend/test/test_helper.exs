@@ -3,3 +3,4 @@
 Application.put_env(:backend, :patient_verification, :blocking)
 
 ExUnit.start()
+Ecto.Adapters.SQL.Sandbox.mode(Backend.Repo, :manual)

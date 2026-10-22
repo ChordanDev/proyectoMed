@@ -8,6 +8,7 @@
 import Config
 
 config :backend,
+  ecto_repos: [Backend.Repo],
   generators: [timestamp_type: :utc_datetime],
   openai_transcription_model: "whisper-1",
   openai_tts_model: "tts-1",
@@ -51,7 +52,34 @@ config :backend, BackendWeb.Endpoint,
     formats: [json: BackendWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Backend.PubSub
+  pubsub_server: Backend.PubSub,
+  live_view: [signing_salt: "Q4Y/CBmw"]
+
+# LiveView (ADR-015 #347): the attribute set on all root tags, used by
+# Phoenix.LiveView.ColocatedCSS.
+config :phoenix_live_view, root_tag_attribute: "phx-r"
+
+# esbuild bundles assets/js for the LiveView pages (the version is required).
+config :esbuild,
+  version: "0.25.4",
+  backend: [
+    args:
+      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
+    cd: Path.expand("../assets", __DIR__),
+    env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
+  ]
+
+# Tailwind builds assets/css for the LiveView pages (the version is required).
+config :tailwind,
+  version: "4.3.0",
+  backend: [
+    args: ~w(
+      --input=assets/css/app.css
+      --output=priv/static/assets/css/app.css
+    ),
+    cd: Path.expand("..", __DIR__),
+    env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
+  ]
 
 # Configure Elixir's Logger
 config :logger, :default_formatter,
