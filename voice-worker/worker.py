@@ -19,6 +19,7 @@ import sys
 
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, cli
+from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
 from livekit.plugins import cartesia, deepgram
 from speech import SpeechPlayer
 from transcripts import (
@@ -139,14 +140,44 @@ def _required_setting(name: str) -> str:
     return value
 
 
+def _fake_transcript() -> str | None:
+    """The fixed fake transcript, None when the fake providers are off.
+
+    A switch that is on without a loopback `LIVEKIT_URL` fails the job like any other
+    voice failure: the error event reaches the room and no fake provider is built.
+    `--url` can point the worker elsewhere than the variable the startup check read.
+    """
+    try:
+        return fake_providers_from_env(os.environ)
+    except ValueError:
+        raise VoiceFailure("fake_providers_refused") from None
+
+
+def build_stt(context):
+    """Deepgram, or the fake transcription when `VOICE_WORKER_FAKE_PROVIDERS` is on."""
+    fake_transcript = _fake_transcript()
+    if fake_transcript is not None:
+        return FakeSTT(fake_transcript, context["language"])
+    return deepgram.STT(
+        model="nova-3",
+        language=context["language"],
+        interim_results=True,
+        endpointing_ms=ENDPOINTING_MS,
+        keyterm=context["keyterms"],
+    )
+
+
 def build_tts(session_id: str, context):
     """Build the Cartesia provider from the worker environment, or None when unset.
 
     Missing configuration disables patient audio only: replies still reach the room as
     text, each followed by a `synthesis_failed` event. A blank value counts as missing:
     the provider would accept it and then fail every reply at request time. The
-    session language (`pt-BR`) is sent to Cartesia as its base code (`pt`).
+    session language (`pt-BR`) is sent to Cartesia as its base code (`pt`). With
+    `VOICE_WORKER_FAKE_PROVIDERS` on, the patient speaks a tone instead.
     """
+    if _fake_transcript() is not None:
+        return FakeTTS()
     try:
         return cartesia.TTS(
             api_key=_required_setting("CARTESIA_API_KEY"),
@@ -376,13 +407,7 @@ async def transcribe(
         on_reply = voice.on_reply
     on_turn_end = voice.on_turn_end if voice is not None else None
     if stt is None:
-        stt = deepgram.STT(
-            model="nova-3",
-            language=context["language"],
-            interim_results=True,
-            endpointing_ms=ENDPOINTING_MS,
-            keyterm=context["keyterms"],
-        )
+        stt = build_stt(context)
     if audio is None:
         audio = rtc.AudioStream.from_participant(
             participant=learner,
@@ -463,4 +488,10 @@ async def publish(room: rtc.Room, payload: dict) -> None:
 
 
 if __name__ == "__main__":
+    # Refuse to start at all rather than fail each job on a misused test switch.
+    try:
+        if fake_providers_from_env(os.environ) is not None:
+            logger.warning("fake speech providers on: local testing only")
+    except ValueError as error:
+        sys.exit(str(error))
     cli.run_app(server)
