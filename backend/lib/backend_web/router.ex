@@ -24,7 +24,8 @@ defmodule BackendWeb.Router do
     pipe_through [:browser, :require_authenticated_user, :require_admin_user]
 
     live_session :require_admin, on_mount: [{BackendWeb.UserAuth, :require_admin}] do
-      live "/", AdminLive, :index
+      live "/", AdminCaseLive.Index, :index
+      live "/cases/:number", AdminCaseLive.Show, :show
     end
   end
 

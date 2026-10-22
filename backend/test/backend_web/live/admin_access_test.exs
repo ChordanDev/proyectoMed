@@ -33,7 +33,7 @@ defmodule BackendWeb.AdminAccessTest do
     conn = log_in_user(conn, admin_fixture())
 
     assert {:ok, _view, html} = live(conn, ~p"/admin")
-    assert html =~ "Painel administrativo"
+    assert html =~ "Casos"
   end
 
   test "an admin lands on the panel after logging in with a password", %{conn: conn} do
