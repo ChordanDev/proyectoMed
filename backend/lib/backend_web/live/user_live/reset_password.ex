@@ -54,18 +54,31 @@ defmodule BackendWeb.UserLive.ResetPassword do
   def mount(%{"token" => token}, _session, socket) do
     if user = Accounts.get_user_by_reset_password_token(token) do
       changeset = Accounts.change_user_password(user, %{}, hash_password: false)
-      {:ok, assign(socket, user: user, form: to_form(changeset))}
+      {:ok, assign(socket, token: token, user: user, form: to_form(changeset))}
     else
-      {:ok,
-       socket
-       |> put_flash(:error, "O link para redefinir a senha é inválido ou expirou.")
-       |> redirect(to: ~p"/users/log-in")}
+      {:ok, invalid_link(socket)}
     end
   end
 
+  # The token is checked again on submit: a page left open must not reset the
+  # password after the link was used, expired or stopped matching the email.
   @impl true
   def handle_event("reset_password", %{"user" => user_params}, socket) do
-    case Accounts.reset_user_password(socket.assigns.user, user_params) do
+    case Accounts.get_user_by_reset_password_token(socket.assigns.token) do
+      nil -> {:noreply, invalid_link(socket)}
+      user -> reset_password(socket, user, user_params)
+    end
+  end
+
+  def handle_event("validate", %{"user" => user_params}, socket) do
+    changeset =
+      Accounts.change_user_password(socket.assigns.user, user_params, hash_password: false)
+
+    {:noreply, assign(socket, form: to_form(changeset, action: :validate))}
+  end
+
+  defp reset_password(socket, user, user_params) do
+    case Accounts.reset_user_password(user, user_params) do
       {:ok, {_user, expired_tokens}} ->
         UserAuth.disconnect_sessions(expired_tokens)
 
@@ -79,10 +92,9 @@ defmodule BackendWeb.UserLive.ResetPassword do
     end
   end
 
-  def handle_event("validate", %{"user" => user_params}, socket) do
-    changeset =
-      Accounts.change_user_password(socket.assigns.user, user_params, hash_password: false)
-
-    {:noreply, assign(socket, form: to_form(changeset, action: :validate))}
+  defp invalid_link(socket) do
+    socket
+    |> put_flash(:error, "O link para redefinir a senha é inválido ou expirou.")
+    |> redirect(to: ~p"/users/log-in")
   end
 end

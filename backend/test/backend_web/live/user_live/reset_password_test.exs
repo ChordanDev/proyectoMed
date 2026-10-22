@@ -83,6 +83,31 @@ defmodule BackendWeb.UserLive.ResetPasswordTest do
       refute Accounts.get_user_by_reset_password_token(token)
     end
 
+    test "refuses a submit once the link stopped being valid", %{
+      conn: conn,
+      user: user,
+      token: token
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/users/reset-password/#{token}")
+
+      # The owner recovers the account elsewhere while this page stays open.
+      {:ok, _} = Accounts.reset_user_password(user, %{password: "the owner's new password"})
+
+      {:ok, conn} =
+        lv
+        |> form("#new_password_form",
+          user: %{password: "an attacker password", password_confirmation: "an attacker password"}
+        )
+        |> render_submit()
+        |> follow_redirect(conn, ~p"/users/log-in")
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) ==
+               "O link para redefinir a senha é inválido ou expirou."
+
+      refute Accounts.get_user_by_email_and_password(user.email, "an attacker password")
+      assert Accounts.get_user_by_email_and_password(user.email, "the owner's new password")
+    end
+
     test "shows the password errors", %{conn: conn, token: token} do
       {:ok, lv, _html} = live(conn, ~p"/users/reset-password/#{token}")
 
