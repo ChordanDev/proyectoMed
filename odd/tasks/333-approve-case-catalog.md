@@ -25,6 +25,7 @@ Issue: #333 (parent spec #326). Branch: `feat/333-approve-case-catalog` → PR b
 - [x] T1 — S1, S2, S4, S5, S6 — delegated (`gentle-ai-worker`, context backstop) — Content context & DB migration: `cases` approval metadata (`approved_by_id`, `approved_by_email`, `approved_at`), `station_versions` table and `Backend.Content.StationVersion` schema, `Content.approve_case/3`, `Content.disapprove_case/1`, `Content.get_station_version!/1`, `Content.get_station_version/1`, `Content.list_station_versions/1`, `Content.list_published_stations/0`, `Stations.list_catalog_stations/0`, `AccountDeletionTest` admin-only FK update, `docs/case-format/README.md`, and `test/backend/content_test.exs`. Commit `b3eb60f` (RED 9/9 fail -> GREEN 39/39 pass).
 - [x] T2 — S1, S2, S3, S4, S5, S6 — delegated (`gentle-ai-worker`, context backstop) — Web layer (Admin LiveView + Catalog HTTP API): approve/disapprove actions and approver display in `BackendWeb.AdminCaseLive.Show` and `BackendWeb.AdminCaseLive.Index`, `GET /stations` and `GET /api/stations` catalog route in `BackendWeb.Router` and `BackendWeb.StationController`, LiveView tests in `test/backend_web/live/admin_case_live_test.exs`, and controller tests in `test/backend_web/controllers/station_controller_test.exs`. Commit `439c069` (RED 9/9 fail -> GREEN 127/127 pass).
 - [x] T3 — S1, S2, S3, S4, S5, S6 — inline — Full verification, differential check, and closure. Full backend suite 2048/2048 passed, dialyzer 0 errors, credo strict 0 issues.
+- [x] R1 — DATA-001, tx-resilience-02 — inline — Jorge advisory review fixes (`gemini-3.8-flash`): approval idempotency and disapproval metadata cleanup. Commit `de908ab`. ExUnit 2049/2049 passed, dialyzer 0 errors, credo clean. PR comment posted.
 
 ## Log
 
@@ -48,3 +49,10 @@ Issue: #333 (parent spec #326). Branch: `feat/333-approve-case-catalog` → PR b
   - Full backend suite (`MIX_TEST_PARTITION=_issue333 mix test`): 2048 passed, 0 failures.
   - `mix dialyzer`: 0 errors.
   - `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict`: all clean.
+- **L6** (2026-10-22, Jorge review fixes R1):
+  - Jorge review run with `antigravity/gemini-3.8-flash`.
+  - Addressed `DATA-001` (cleared approval fields on disapproval in `Case.disapprove_changeset/1` and guarded UI display with `status == :approved`).
+  - Addressed `tx-resilience-02` (idempotent no-op for already-approved cases with unchanged markdown in `Content.approve_case/3`, added `phx-disable-with` to `#case-approve`).
+  - RED observed: 4 test failures across `content_test.exs` and `admin_case_live_test.exs`.
+  - GREEN: Commit `de908ab`. Full backend suite 2049/2049 passed, dialyzer 0 errors, credo strict 0 issues.
+  - Pushed to `origin feat/333-approve-case-catalog` and posted resolution comment on PR #372.
