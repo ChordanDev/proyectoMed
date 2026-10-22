@@ -351,6 +351,8 @@ void UStationRunFlow::AddLine(EStationSpeaker Speaker, const FString& Text)
 	FStationMessage& Line = Transcript.AddDefaulted_GetRef();
 	Line.Speaker = Speaker;
 	Line.Text = Text;
+	// The examiner's note belongs right after its own spoken turn; any later line ends it.
+	Voice.bExaminerNoted = false;
 }
 
 void UStationRunFlow::ReloadTranscript(const FString& Turn)

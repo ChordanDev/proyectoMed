@@ -285,6 +285,9 @@ public:
 	FSimpleMulticastDelegate OnChanged;
 
 private:
+	// Test access to the voice event handling (StationRunFlowSpec.cpp).
+	friend class FStationRunUnitSpec;
+
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
 	void StartSession();

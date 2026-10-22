@@ -196,6 +196,25 @@ void FStationRunUnitSpec::Define()
 		TestEqual("nothing released", Flow->GetReleasedImpressos().Num(), 0);
 	});
 
+	It("shows the examiner's note only until another line joins the conversation", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		FStationVoiceEvent Spoken;
+		Spoken.Kind = EStationVoiceEventKind::Learner;
+		Spoken.TurnId = 1;
+		Spoken.bFinal = true;
+		Spoken.Text = TEXT("Vou examinar o abdome.");
+		Flow->HandleVoiceEvent(Spoken);
+		FStationVoiceEvent Noted;
+		Noted.Kind = EStationVoiceEventKind::ExaminerAcknowledged;
+		Noted.TurnId = 1;
+		Flow->HandleVoiceEvent(Noted);
+		TestTrue("shown right after its own spoken turn", Flow->GetVoice().bExaminerNoted);
+
+		Flow->AddLine(EStationSpeaker::Learner, TEXT("Sente alguma dor?"));
+		TestFalse("gone once a later line joins", Flow->GetVoice().bExaminerNoted);
+	});
+
 	It("neither finishes nor discards before the run is running", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
