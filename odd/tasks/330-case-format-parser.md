@@ -20,8 +20,8 @@ Cases will come from an n8n pipeline as Markdown and be reviewed by doctors (#32
 
 ## Checklist
 
-- [ ] T1 — Format spec, reference case and parser core: the reference case parses into a valid Station Package equal to the hand-tuned package on every hand-tuned field.
-- [ ] T2 — Validation rules with located errors: unknown link, duplicate id, missing tag, points not multiples of 0.025, total not 10.0, missing actor, bad thresholds.
+- [x] T1 — Format spec, reference case and parser core: the reference case parses into a valid Station Package equal to the hand-tuned package on every hand-tuned field.
+- [x] T2 — Validation rules with located errors: unknown link, duplicate id, missing tag, points not multiples of 0.025, total not 10.0, missing actor, bad thresholds.
 - [ ] T3 — Companion actor: a two-actor fixture parses with actors, facts and mandatory questions owned by each actor.
 - [ ] T4 — Grade equivalence on stored transcripts (#228 and #243 regression fixtures): parsed and hand-tuned packages yield the same criterion statuses and points.
 
@@ -43,8 +43,9 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 
 ## Progress
 
-(updated per task)
+- T1 (commit b764042): RED observed — 4/4 tests failed with `Backend.Stations.parse_case/1 is undefined`; GREEN — 4/4 pass. Reference case equals the hand-tuned package on every field; credo strict clean on the new modules.
+- T2 (this commit): 31 validation tests, one failing example per rule with its located error. RED was not observable as test-first: the rule checks were written with the parser core in T1. Instead a mutation probe disabled the unknown-actor and total rules: 3/31 failed, restored: 31/31 pass.
 
 ## Next step
 
-T1.
+T3 (companion actor).
