@@ -196,3 +196,10 @@ E2E approving Jev adapter:
 
 Both variables are honored only under `MIX_ENV=dev`. Never set them for a
 clinician or a learner session: the patient then says nothing from the case.
+
+The same spec covers exam and impresso requests (#194) through
+`UStationRunFlow::RequestExam`, which needs no adapter: Phoenix's impresso route
+matches keywords without a model. Those tests expect the default station
+(`chest-pain-initial-assessment`), so leave `ACTIVE_STATION_ID` unset: it authors
+the physical exam and an ECG, and no tomography, which the tests ask for to see
+a declined request.

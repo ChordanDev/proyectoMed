@@ -1,7 +1,8 @@
 // The learner's way into a station run: Pre-Station Notice, then the brief
 // Phoenix serves with the choice of a text or a voice training, then the run,
-// where typed turns are always available. Interface code renders it; only the
-// station client talks to the network.
+// where typed turns are always available and exam and impresso requests have
+// their own channel. Interface code renders it; only the station client talks
+// to the network.
 
 #pragma once
 
@@ -31,6 +32,20 @@ enum class EStationTrainingMode : uint8
 {
 	Text,
 	Voice,
+};
+
+/** One exam or impresso request of this run and Phoenix's decision on it. */
+USTRUCT()
+struct PROYECTOMED_API FStationExamRequest
+{
+	GENERATED_BODY()
+
+	/** What the learner asked for, trimmed. */
+	UPROPERTY()
+	FString Text;
+
+	UPROPERTY()
+	FStationImpressoReply Reply;
 };
 
 /** A voice training needs Phoenix to serve realtime voice. */
@@ -114,6 +129,39 @@ public:
 	/** The last failure, in Brazilian Portuguese; empty when there is none. */
 	const FText& GetErrorText() const { return ErrorText; }
 
+	/**
+	 * True while the run is running and no exam request is waiting for Phoenix.
+	 * Exam requests have their own channel (ADR-008): they never wait for, or
+	 * join, the patient dialogue.
+	 */
+	bool CanRequestExam() const;
+
+	/**
+	 * Asks Phoenix, with the text trimmed, for physical exam findings or an impresso. Returns
+	 * false, and sends nothing, when the text is blank or `CanRequestExam` is
+	 * false. Phoenix decides what is released; the flow only keeps its answer.
+	 * Resending the text of a request Phoenix did not answer reuses its request
+	 * id, so Phoenix records it once.
+	 */
+	bool RequestExam(const FString& Text);
+
+	bool IsExamRequestInFlight() const { return PendingExamRequest.IsSet(); }
+
+	/** The exam request waiting for Phoenix; empty when there is none. */
+	FString GetPendingExamRequestText() const { return PendingExamRequest.IsSet() ? PendingExamRequest->Text : FString(); }
+
+	/** The exam requests Phoenix answered in this run, in order, declined ones included. */
+	const TArray<FStationExamRequest>& GetExamRequests() const { return ExamRequests; }
+
+	/** Every document Phoenix released in this run, as of its last answer. */
+	const TArray<FStationImpresso>& GetReleasedImpressos() const { return ReleasedImpressos; }
+
+	/** The last exam request Phoenix did not answer, returned once. */
+	FString TakeUnsentExamRequest();
+
+	/** The last exam request failure, in Brazilian Portuguese; empty when there is none. */
+	const FText& GetExamErrorText() const { return ExamErrorText; }
+
 	UStationClient* GetClient() const { return Client; }
 
 	/** Broadcast after every change the interface should render. */
@@ -122,6 +170,7 @@ public:
 private:
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
+	void SetExamError(const FStationClientError& Error);
 
 	void AddLine(EStationSpeaker Speaker, const FString& Text);
 
@@ -142,6 +191,18 @@ private:
 	TArray<FStationMessage> Transcript;
 	FString UnsentTurn;
 	FText ErrorText;
+
+	struct FPendingExamRequest
+	{
+		FString Text;
+		FString RequestId;
+	};
+	TOptional<FPendingExamRequest> PendingExamRequest;
+	TOptional<FPendingExamRequest> UnansweredExamRequest;
+	TArray<FStationExamRequest> ExamRequests;
+	TArray<FStationImpresso> ReleasedImpressos;
+	FString UnsentExamRequest;
+	FText ExamErrorText;
 	bool bLoadingStation = false;
 	bool bReloadingTranscript = false;
 	bool bVoiceFallback = false;
