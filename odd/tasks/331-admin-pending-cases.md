@@ -24,7 +24,7 @@ Doctor review is the critical path of the launch (#326, ADR-015 #347). n8n gener
 - [x] T1 — Accounts: `phx.gen.auth` LiveView variant with an `admin`/`student` role, registration removed, admin provisioning through `priv/repo/seeds.exs` (the allowed edit surfaces exclude `lib/mix/tasks`), admin-only `/admin` (anonymous → login, student → redirected).
 - [x] T2 — Content: `cases` migration (identity `number`, area, theme, markdown, status pending/approved/disapproved, DB-defaulted timestamps), `Backend.Content` list/filter/get, n8n insert contract in `docs/case-format`.
 - [x] T3 — Admin case panel: list with number, area, theme, status and status/area filters; case page with the located parser errors at the top; decision on computing errors on read documented.
-- [ ] T4 — Screenshots of the list and of an invalid case (seeded admin, `PORT=4135`, `MIX_ENV=dev`), PR.
+- [x] T4 — Screenshots of the list and of an invalid case (seeded admin, `PORT=4135`, `MIX_ENV=dev`), PR.
 
 ## Routing
 
@@ -52,6 +52,9 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 - T2 commit: 2f3174f.
 - T3 (panel, commit 0e4b27c + this docs commit): `BackendWeb.AdminCaseLive.Index` (`/admin`, filters as URL params through `push_patch`) and `BackendWeb.AdminCaseLive.Show` (`/admin/cases/:number`: errors from `Backend.Stations.parse_case/1` at the top, each linked to its numbered line, then the Markdown with numbered lines); the #329 placeholder `AdminLive` is removed. Compute-on-read rationale is in `docs/case-format/README.md` and the Show moduledoc. RED — 10/10 new panel tests failed (no route/module); GREEN — 10/10, all LiveView tests 39/39. Parser messages stay in English (they come from #330); the surrounding copy is pt-BR.
 
+- T3 commits: 0e4b27c, b6ef296.
+- T4 (checks and evidence): local CI script — LOCAL CI PASSED: web unit 337/337, backend ExUnit 1947/1947, E2E 4/4, typecheck, lint, format, compile warnings-as-errors, credo strict, dialyzer 0 errors. Two earlier CI runs failed only web vitest timeouts with ~1 050 000 ms durations (the machine was suspended mid-run; no web files changed); the third run passed. Screenshots (seeded admin `medica@example.com`, isolated dev database `backend_dev_issue331`, `PORT=4135`, `MIX_ENV=dev`, Firefox headless `-no-remote` with a throwaway profile): case list with four statuses, invalid case 2 with four located errors at the top. The flash toast overlaps the generated top menu (cosmetic, follow-up).
+
 ## Next step
 
-T4: local CI, screenshots, push and PR.
+Push and open the PR against `feat/326-production-launch`; review follow-ups.
