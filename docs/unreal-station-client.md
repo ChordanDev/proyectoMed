@@ -168,15 +168,15 @@ Client->RequestVoiceCredential([WeakClient](const TStationResult<FStationVoiceCr
 
 	// The link exists only from here, and ConnectVoice returns nullptr without a session.
 	// Keep the shared reference it returns as a weak one: GetVoice() is a raw pointer the
-	// game thread may free when it replaces or drops the link, so the capture source
-	// (the game's microphone component arrives with the voice training slice) must not use it.
+	// game thread may free when it replaces or drops the link, so the capture thread must
+	// not use it (the game's UStationMicrophone::Start takes this weak reference).
 	if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakClient->ConnectVoice(Credential.GetValue(), MoveTemp(Handlers)))
 	{
-		WeakVoice = Voice;  // pin WeakVoice, a TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe>, in the capture source
+		Microphone->Start(Voice);  // takes a TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe>; pins it on the capture thread
 	}
 });
 
-// Then, from the capture thread:
+// Then, from the capture thread (WeakVoice is the weak reference the microphone holds):
 if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.Pin())
 {
 	Voice->PushMicrophonePcm(Samples, Rate, Channels);
