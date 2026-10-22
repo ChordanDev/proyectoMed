@@ -651,6 +651,47 @@ prove the result contract, not the quality of any assessment.
   in place.
 - Do not set the variable outside the E2E suite.
 
+### Voice worker fake speech providers
+
+The Unreal spoken-turn test (#191) runs the real voice worker without Deepgram
+or ElevenLabs. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
+
+- Every learner utterance becomes one final transcript,
+  `VOICE_WORKER_FAKE_TRANSCRIPT` (default `Qual é o seu nome?`). An utterance
+  starts when the microphone is loud and ends after 500 ms of quiet, like the
+  Deepgram endpointing.
+- Every approved reply is spoken as a 220 Hz tone, 80 ms per character, from
+  0.4 s to 3 s.
+- Rooms, Phoenix calls, turn tracking and the `transcript` events are the real
+  worker's.
+
+**The switch is test-only.** The worker refuses to start with it unless
+`LIVEKIT_URL` points at a loopback address (`127.0.0.1`, `localhost` or
+`::1`). The worker's unit tests (`cd voice-worker && uv run python -m unittest`)
+cover the fakes in `test_fake_providers.py`.
+
+`scripts/run-voice-stack.sh` starts the whole stack with no paid provider and
+never reads `.env`:
+
+- `livekit-server --dev` on `ws://127.0.0.1:7880`;
+- a mock OpenAI (`scripts/voice-stack/mock_openai.py`) that answers every
+  patient turn with `VOICE_STACK_PATIENT_REPLY` (default `Meu nome é Carlos.`);
+- Phoenix in `dev` with `VOICE_MODE=realtime` and the E2E-only approving Jev
+  adapter, on port `VOICE_STACK_PHOENIX_PORT` (default `4000`);
+- the voice worker with its fake speech providers, hearing
+  `VOICE_STACK_TRANSCRIPT` (default `Qual é o seu nome?`). It runs in `dev`
+  mode without reload, which has no CPU-load cap, so it still takes rooms
+  while the Unreal editor starts.
+
+It runs until Ctrl-C, or runs one command once the stack is up and exits with
+that command's status. The probe joins as the learner, speaks a tone burst and
+checks the transcript events and the patient's audio:
+
+```sh
+scripts/run-voice-stack.sh -- \
+  uv run --project voice-worker python scripts/voice-stack/probe_spoken_turn.py
+```
+
 ### Active station
 
 The backend serves one active station, chosen at boot. No code edit is needed to
