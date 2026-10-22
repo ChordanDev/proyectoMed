@@ -52,6 +52,8 @@ All tasks: delegated direct (this worker is the single bounded writer for the is
 
 - Review round 1 (Jorge C1, deduped TR-1; inline route, one-file fix): invalid UTF-8 made `Tags.scan/1` raise `ArgumentError` from the Unicode regexes. `CaseFormat.parse/1` now checks `String.valid?/1` first and returns `{:error, [%{line: n, message: "case is not valid UTF-8"}]}` located at the first invalid line. RED — 2 new encoding tests failed with `ArgumentError`; GREEN — case_format tests 47/47.
 
+- Review round 2 (Jorge CD-1/TR-1, CD-2, CD-3; inline route, three small edits in one module family): `Values.points/1` rejects more than 6 integer digits as `:invalid` instead of raising in `String.to_float/1`; `Rules` reports a present but empty `impressos=`, `após=` or `perguntas=` at the criterion line; `Tags` reports a repeated attribute key as `duplicate attribute key=` and keeps the first value. RED — 3 new validation tests failed (ArgumentError raise, fallback line 1, silent overwrite); GREEN — station tests 1146/1146.
+
 ## Next step
 
-Local CI, push, PR to `feat/326-production-launch`.
+Local CI, push, comment the round-2 resolution on PR #350.

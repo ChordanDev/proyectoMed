@@ -106,7 +106,10 @@ defmodule Backend.Stations.CaseFormat.Tags do
       String.contains?(token, "=") ->
         [key, value] = String.split(token, "=", parts: 2)
         key = key |> normalize() |> String.downcase()
-        {put_in(fields, [:attrs, key], value), errors}
+
+        if Map.has_key?(fields.attrs, key),
+          do: {fields, [%{line: number, message: "duplicate attribute #{key}="} | errors]},
+          else: {put_in(fields, [:attrs, key], value), errors}
 
       Regex.match?(@flag, token) ->
         {Map.update!(fields, :flags, &[normalize(token) | &1]), errors}

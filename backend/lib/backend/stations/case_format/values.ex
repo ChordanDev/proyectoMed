@@ -27,6 +27,8 @@ defmodule Backend.Stations.CaseFormat.Values do
   @roles %{"PACIENTE" => "patient", "ACOMPANHANTE" => "companion"}
   @booleans %{"SIM" => true, "NAO" => false}
 
+  @max_integer_digits 6
+
   @doc """
   Reads authored points (`0,2`, `0.2` or `1`) as `{:ok, number, fortieths}`.
   The number is an integer when it has no fraction, as a JSON package holds it.
@@ -40,6 +42,11 @@ defmodule Backend.Stations.CaseFormat.Values do
       nil -> {:error, :invalid}
     end
   end
+
+  # No station awards a million points; capping the integer digits keeps the
+  # float built for a JSON package finite instead of raising on overflow.
+  defp fortieths(integer, _fraction) when byte_size(integer) > @max_integer_digits,
+    do: {:error, :invalid}
 
   defp fortieths(integer, fraction) when byte_size(fraction) <= 3 do
     thousandths = String.to_integer(integer) * 1000 + fraction_thousandths(fraction)

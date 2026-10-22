@@ -327,6 +327,11 @@ defmodule Backend.Stations.CaseFormat.Rules do
 
   defp links(tag, index) do
     [
+      for key <- ["impressos", "apos", "perguntas"],
+          Map.has_key?(tag.attrs, key),
+          Values.ids(tag.attrs[key]) == [] do
+        error(tag.line, "#{key}= must list at least one id")
+      end,
       for key <- ["impressos", "apos"],
           id <- Values.ids(Map.get(tag.attrs, key, "")),
           not MapSet.member?(index.impressos, id) do

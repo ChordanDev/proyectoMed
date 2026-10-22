@@ -91,6 +91,14 @@ defmodule Backend.Stations.CaseFormatValidationTest do
       assert_error(text, line_of(text, "impressos=impresso-9"), "unknown impresso impresso-9")
     end
 
+    test "a criterion lists no impresso in a present impressos= attribute" do
+      text = with_defect("impressos=impresso-2-pcr]", "impressos=]")
+      line = line_of(text, "impressos=]")
+
+      assert line != 1
+      assert_error(text, line, "impressos= must list at least one id")
+    end
+
     test "a communication criterion checks a mandatory question that does not exist" do
       text =
         with_defect(
@@ -245,6 +253,24 @@ defmodule Backend.Stations.CaseFormatValidationTest do
       assert_error(text, line_of(text, "pontos=0,11"), "pontos=0,11 is not a multiple of 0,025")
     end
 
+    test "points with an unbounded integer part are a located error, not a crash" do
+      nines = String.duplicate("9", 400)
+
+      text =
+        with_defect(
+          "pontos=0,1 mínimo=1] Realiza uma ação.",
+          "pontos=#{nines},5 mínimo=1] Realiza uma ação."
+        )
+
+      assert [%{line: _line} | _others] = errors(text)
+
+      assert_error(
+        text,
+        line_of(text, "pontos=#{nines},5"),
+        "pontos must be a non-negative number, found #{nines},5"
+      )
+    end
+
     test "the item maximums do not total 10,0" do
       text =
         with_defect(
@@ -367,6 +393,16 @@ defmodule Backend.Stations.CaseFormatValidationTest do
 
       assert_error(text, line, "unknown attribute cor= on [FATO]")
       assert_error(text, line, "unknown flag URGENTE on [FATO]")
+    end
+
+    test "an attribute repeated on one tag is reported and the first value is kept" do
+      text =
+        with_defect(
+          "pontos=0,1 mínimo=1] Realiza uma ação.",
+          "pontos=0,1 pontos=0,2 mínimo=1] Realiza uma ação."
+        )
+
+      assert_error(text, line_of(text, "pontos=0,1 pontos=0,2"), "duplicate attribute pontos=")
     end
 
     test "errors are sorted by line" do
