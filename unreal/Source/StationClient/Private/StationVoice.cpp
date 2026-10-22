@@ -133,7 +133,7 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 		FString Reason;
 		if (NewState == EStationVoiceState::Failed)
 		{
-			Reason = Link->GetState() == EStationVoiceState::WaitingForWorker
+			Reason = Liveness.GetFailure() == FStationVoiceLiveness::EFailure::WorkerNeverJoined
 				? TEXT("The voice worker did not join within 20 seconds.")
 				: TEXT("The voice did not come back within 10 seconds.");
 		}

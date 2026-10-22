@@ -293,6 +293,23 @@ void FStationVoiceUnitSpec::Define()
 			TestEqual("lost", Liveness.Tick(10.0), EStationVoiceState::Failed);
 		});
 
+		It("names the rule that lost the voice, not the state shown before it", [this, Answering, WorkerGone, Retrying]()
+		{
+			using EFailure = FStationVoiceLiveness::EFailure;
+			FStationVoiceLiveness Joining;
+			Joining.Update(WorkerGone, 0.0);
+			TestEqual("nothing lost yet", Joining.GetFailure(), EFailure::None);
+			Joining.Update(Retrying, 15.0);
+			TestEqual("lost on the first-join limit", Joining.Update(WorkerGone, 22.0), EStationVoiceState::Failed);
+			TestEqual("the worker never joined", Joining.GetFailure(), EFailure::WorkerNeverJoined);
+
+			FStationVoiceLiveness Answered;
+			Answered.Update(Answering, 0.0);
+			Answered.Update(WorkerGone, 1.0);
+			TestEqual("lost after ten seconds", Answered.Tick(11.0), EStationVoiceState::Failed);
+			TestEqual("the voice did not come back", Answered.GetFailure(), EFailure::VoiceNotBack);
+		});
+
 		It("is ready again when the voice comes back in time, and counts a new loss from zero", [this, Answering, WorkerGone, Retrying]()
 		{
 			FStationVoiceLiveness Liveness;
