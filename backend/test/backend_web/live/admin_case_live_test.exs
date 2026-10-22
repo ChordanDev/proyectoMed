@@ -10,6 +10,7 @@ defmodule BackendWeb.AdminCaseLiveTest do
   import Phoenix.LiveViewTest
   import Backend.AccountsFixtures
 
+  alias Backend.Content
   alias Backend.Repo
 
   @reference_case File.read!(
@@ -30,7 +31,8 @@ defmodule BackendWeb.AdminCaseLiveTest do
   end
 
   setup %{conn: conn} do
-    %{conn: log_in_user(conn, admin_fixture())}
+    admin = admin_fixture()
+    %{conn: log_in_user(conn, admin), admin: admin}
   end
 
   describe "case list" do
@@ -161,6 +163,116 @@ defmodule BackendWeb.AdminCaseLiveTest do
                live(conn, ~p"/admin/cases/99999999999999999999")
 
       assert message =~ "não encontrado"
+    end
+  end
+
+  describe "editing a case (issue #332)" do
+    defp save(view, markdown) do
+      view |> form("#case-edit", %{"markdown" => markdown}) |> render_submit()
+    end
+
+    test "the editor holds the current Markdown", %{conn: conn} do
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
+
+      {:ok, view, html} = live(conn, ~p"/admin/cases/#{number}")
+
+      # The editor and the revisions come before the long numbered text.
+      {editor_at, _} = :binary.match(html, "case-edit")
+      {revisions_at, _} = :binary.match(html, "case-revisions")
+      {text_at, _} = :binary.match(html, "case-markdown")
+      assert editor_at < revisions_at
+      assert revisions_at < text_at
+
+      assert has_element?(
+               view,
+               "#case-edit textarea[name='markdown']",
+               "[ESTAÇÃO acute-appendicitis]"
+             )
+    end
+
+    test "saving a bad edit stores it and shows its located errors", %{conn: conn} do
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
+      bad = String.replace(@reference_case, "[TEMA] ", "[TEMAX] ", global: false)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+      assert has_element?(view, "#case-valid")
+
+      save(view, bad)
+
+      assert has_element?(view, "#flash-info", "Caso salvo")
+      assert has_element?(view, "#case-errors li", "missing [TEMA] tag")
+      assert has_element?(view, "#case-errors a[href='#line-5']", "Linha 5")
+      assert has_element?(view, "#line-5", "[TEMAX]")
+      refute has_element?(view, "#case-valid")
+      assert Content.get_case_by_number(number).markdown == bad
+    end
+
+    test "saving a fix clears the errors", %{conn: conn} do
+      bad = String.replace(@reference_case, "[TEMA] ", "[TEMAX] ", global: false)
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", bad)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+      assert has_element?(view, "#case-errors")
+
+      save(view, @reference_case)
+
+      assert has_element?(view, "#case-valid", "Sem erros de formato")
+      refute has_element?(view, "#case-errors")
+    end
+
+    test "a stale save warns to reload and overwrites nothing", %{conn: conn} do
+      number = insert_case!("Pediatria", "Asma", "v1")
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+
+      # Another admin saves the case after this page was opened.
+      {:ok, _newer} =
+        Content.update_case_markdown(
+          Content.get_case_by_number(number),
+          "v2 de outra",
+          admin_fixture()
+        )
+
+      save(view, "v2 atrasada")
+
+      assert has_element?(view, "#case-stale", "Este caso mudou")
+      assert has_element?(view, "#case-stale", "recarregue")
+      assert has_element?(view, "#case-stale a[href='/admin/cases/#{number}']")
+      assert has_element?(view, "#case-edit textarea", "v2 atrasada")
+      assert Content.get_case_by_number(number).markdown == "v2 de outra"
+    end
+
+    test "a blank save is refused", %{conn: conn} do
+      number = insert_case!("Pediatria", "Asma", "v1")
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+
+      save(view, "  ")
+
+      assert has_element?(view, "#flash-error", "não pode ficar vazio")
+      assert Content.get_case_by_number(number).markdown == "v1"
+    end
+
+    test "previous versions are listed with editor and time", %{conn: conn, admin: admin} do
+      number = insert_case!("Pediatria", "Asma", "primeira versão")
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+      assert has_element?(view, "#case-revisions-empty", "Nenhuma versão anterior")
+
+      save(view, "segunda versão")
+      save(view, "terceira versão")
+
+      assert has_element?(view, "#revision-2", "Versão 2")
+      assert has_element?(view, "#revision-2", admin.email)
+      assert has_element?(view, "#revision-2 pre", "segunda versão")
+      assert has_element?(view, "#revision-1 pre", "primeira versão")
+      refute has_element?(view, "#case-revisions-empty")
+
+      html = render(view)
+      {newest, _} = :binary.match(html, "revision-2")
+      {oldest, _} = :binary.match(html, "revision-1")
+      assert newest < oldest
+      assert html =~ ~r/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2} UTC/
     end
   end
 

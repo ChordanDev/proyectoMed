@@ -2,13 +2,15 @@ defmodule Backend.Content do
   @moduledoc """
   The Content context (ADR-007 #92 amendment): generated cases and their review
   status. n8n inserts cases as pending rows (ADR-014 #346); this module reads
-  them for the admin case panel (#331). It calls no other context: format
+  them for the admin case panel (#331), where admins edit their Markdown with
+  optimistic locking and a kept revision per save (#332). It calls no other context: format
   errors come from `Backend.Stations.parse_case/1`, which the caller composes.
   """
 
   import Ecto.Query, warn: false
 
   alias Backend.Content.Case
+  alias Backend.Content.CaseRevision
   alias Backend.Repo
 
   @type filter :: {:status, String.t() | atom() | nil} | {:area, String.t() | nil}
@@ -61,4 +63,66 @@ defmodule Backend.Content do
   @doc "Gets a case by its human number, or nil."
   @spec get_case_by_number(integer()) :: Case.t() | nil
   def get_case_by_number(number), do: Repo.get_by(Case, number: number)
+
+  @typedoc "The admin saving an edit: only its `id` and `email` are read."
+  @type editor :: %{
+          required(:id) => integer(),
+          required(:email) => String.t(),
+          optional(atom()) => any()
+        }
+
+  @doc """
+  Replaces a case's Markdown with an admin's edit (issue #332).
+
+  `kase` is the case as the admin loaded it: the save applies only if nobody
+  saved the case since (its `lock_version` is unchanged), otherwise it returns
+  `{:error, :stale}` and changes nothing. A successful save increments
+  `lock_version` and keeps the replaced Markdown as a `CaseRevision` with the
+  editor, in one transaction. Saving the same Markdown changes nothing.
+
+  It never validates the case format: the caller shows the parser errors of
+  the saved Markdown, and the status, area and theme stay as they are. Only
+  `cases` and `case_revisions` are written.
+  """
+  @spec update_case_markdown(Case.t(), String.t(), editor()) ::
+          {:ok, Case.t()} | {:error, :stale} | {:error, Ecto.Changeset.t()}
+  def update_case_markdown(%Case{markdown: markdown} = kase, markdown, _editor), do: {:ok, kase}
+
+  def update_case_markdown(%Case{} = kase, markdown, %{id: editor_id, email: editor_email}) do
+    changeset = Case.markdown_changeset(kase, markdown)
+
+    Repo.transact(fn ->
+      with {:ok, saved} <- Repo.update(changeset, stale_error_field: :lock_version),
+           {:ok, _revision} <-
+             Repo.insert(%CaseRevision{
+               case_id: kase.id,
+               markdown: kase.markdown,
+               lock_version: kase.lock_version,
+               editor_id: editor_id,
+               editor_email: editor_email
+             }) do
+        {:ok, saved}
+      end
+    end)
+    |> case do
+      {:ok, saved} -> {:ok, saved}
+      {:error, changeset} -> update_error(changeset)
+    end
+  end
+
+  defp update_error(changeset) do
+    if Keyword.has_key?(changeset.errors, :lock_version),
+      do: {:error, :stale},
+      else: {:error, changeset}
+  end
+
+  @doc "Lists the kept revisions of a case, newest first (issue #332)."
+  @spec list_case_revisions(Case.t()) :: [CaseRevision.t()]
+  def list_case_revisions(%Case{id: case_id}) do
+    Repo.all(
+      from r in CaseRevision,
+        where: r.case_id == ^case_id,
+        order_by: [desc: r.lock_version]
+    )
+  end
 end
