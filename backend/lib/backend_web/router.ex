@@ -104,6 +104,8 @@ defmodule BackendWeb.Router do
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/log-in/:token", UserLive.Confirmation, :new
+      live "/users/reset-password", UserLive.ForgotPassword, :new
+      live "/users/reset-password/:token", UserLive.ResetPassword, :edit
       live "/termos", UserLive.Legal, :terms
       live "/privacidade", UserLive.Legal, :privacy
     end

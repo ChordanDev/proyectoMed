@@ -217,6 +217,59 @@ defmodule Backend.Accounts do
     |> update_user_and_delete_all_tokens()
   end
 
+  ## Password reset (#336)
+
+  @doc ~S"""
+  Emails a password reset link to the user. The link is valid for 24 hours and
+  only while the user's email is unchanged.
+
+  ## Examples
+
+      iex> deliver_user_reset_password_instructions(user, &url(~p"/users/reset-password/#{&1}"))
+      {:ok, %Swoosh.Email{}}
+
+  """
+  def deliver_user_reset_password_instructions(%User{} = user, reset_password_url_fun)
+      when is_function(reset_password_url_fun, 1) do
+    {encoded_token, user_token} = UserToken.build_email_token(user, "reset_password")
+    Repo.insert!(user_token)
+    UserNotifier.deliver_reset_password_instructions(user, reset_password_url_fun.(encoded_token))
+  end
+
+  @doc """
+  Gets the user of a valid password reset token, or `nil`.
+  """
+  @spec get_user_by_reset_password_token(String.t()) :: User.t() | nil
+  def get_user_by_reset_password_token(token) when is_binary(token) do
+    with {:ok, query} <- UserToken.verify_reset_password_token_query(token),
+         %User{} = user <- Repo.one(query) do
+      user
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Sets a new password from a reset link and expires all the user's tokens.
+
+  The link proved the user owns the email, so an unconfirmed account is
+  confirmed too. Returns the user and the expired tokens, so the caller can
+  disconnect their sessions.
+  """
+  @spec reset_user_password(User.t(), map()) ::
+          {:ok, {User.t(), [UserToken.t()]}} | {:error, Ecto.Changeset.t()}
+  def reset_user_password(%User{} = user, attrs) do
+    user
+    |> User.password_changeset(attrs)
+    |> confirm_if_unconfirmed()
+    |> update_user_and_delete_all_tokens()
+  end
+
+  defp confirm_if_unconfirmed(%Ecto.Changeset{data: %User{confirmed_at: nil}} = changeset),
+    do: Ecto.Changeset.put_change(changeset, :confirmed_at, DateTime.utc_now(:second))
+
+  defp confirm_if_unconfirmed(changeset), do: changeset
+
   ## Session
 
   @doc """

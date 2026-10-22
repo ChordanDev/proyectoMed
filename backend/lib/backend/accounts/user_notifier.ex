@@ -1,7 +1,7 @@
 defmodule Backend.Accounts.UserNotifier do
   @moduledoc """
-  Account emails in pt-BR (`mix phx.gen.auth`): email change, login link and
-  account confirmation. The sender address is a placeholder until an email
+  Account emails in pt-BR (`mix phx.gen.auth`): email change, login link,
+  account confirmation and password reset (#336). The sender address is a placeholder until an email
   provider is chosen (#336).
   """
 
@@ -39,6 +39,26 @@ defmodule Backend.Accounts.UserNotifier do
     #{url}
 
     Se você não pediu esta alteração, ignore esta mensagem.
+
+    ==============================
+    """)
+  end
+
+  @doc """
+  Deliver instructions to reset the password (#336).
+  """
+  def deliver_reset_password_instructions(user, url) do
+    deliver(user.email, "Redefina a sua senha", """
+
+    ==============================
+
+    Olá, #{user.email}.
+
+    Para redefinir a sua senha, acesse o link abaixo:
+
+    #{url}
+
+    O link vale por 24 horas. Se você não pediu esta alteração, ignore esta mensagem.
 
     ==============================
     """)

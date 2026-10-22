@@ -1,7 +1,7 @@
 defmodule BackendWeb.UserLive.Login do
   @moduledoc """
   Login by email link or by password (`mix phx.gen.auth`, copy in pt-BR), with
-  a link to learner sign-up (#336).
+  links to learner sign-up and password recovery (#336).
   """
 
   use BackendWeb, :live_view
@@ -86,6 +86,9 @@ defmodule BackendWeb.UserLive.Login do
             autocomplete="current-password"
             spellcheck="false"
           />
+          <p class="mb-2 text-right text-sm">
+            <.link navigate={~p"/users/reset-password"} class="link">Esqueceu a senha?</.link>
+          </p>
           <.button class="btn btn-primary w-full" name={@form[:remember_me].name} value="true">
             Entrar e manter conectado <span aria-hidden="true">→</span>
           </.button>

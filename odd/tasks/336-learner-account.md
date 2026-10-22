@@ -31,7 +31,7 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
 
 - [x] T1 Sign-up with terms and privacy acceptance (migration, registration
   changeset, legal document versions, `/users/register`, `/termos`, `/privacidade`).
-- [ ] T2 Password recovery by email (`/users/reset-password`, token context
+- [x] T2 Password recovery by email (`/users/reset-password`, token context
   `reset_password`, confirms an unconfirmed account on reset).
 - [ ] T3 Account deletion that erases the learner and all their data, with the
   documented hook for later contexts (cascading foreign keys, enforced by a test).
@@ -56,7 +56,10 @@ Route for every task: delegated direct (this bounded writer); inline inside the 
 
 - T1: RED 13/14 failing (no `/users/register` route, no `Accounts.legal_document/1`);
   GREEN full backend suite 1962 passed; format, compile --warnings-as-errors, credo --strict clean.
+  Commit a38ea73.
+- T2: RED 14/14 failing (no reset functions or routes); GREEN 14/14, full suite 1976
+  passed; compile and credo clean.
 
 ## Next step
 
-T2.
+T3.
