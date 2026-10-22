@@ -934,6 +934,39 @@ void FStationRunVoiceSpec::Define()
 				});
 		});
 	});
+
+	LatentIt("stops capturing for the run once the microphone would not open, and tries again after a restart", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			Flow->Enter(EStationTrainingMode::Voice);
+			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
+				[this, Done]()
+				{
+					if (!TestEqual("voice ready (is scripts/run-voice-stack.sh running?)", Flow->GetVoice().State, EStationVoiceState::Ready))
+					{
+						Done.Execute();
+						return;
+					}
+					TestTrue("listening while the microphone is fine", Flow->IsListening());
+					TestFalse("not unavailable", Flow->GetVoice().bMicrophoneUnavailable);
+					Flow->ReportMicrophoneUnavailable();
+					TestFalse("no retry while the voice is in the room", Flow->IsListening());
+					TestTrue("the HUD is told", Flow->GetVoice().bMicrophoneUnavailable);
+					Flow->Finish();
+					WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+					{
+						Flow->Discard();
+						WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Brief; }, [this, Done]()
+						{
+							TestFalse("a new run starts without the failure", Flow->GetVoice().bMicrophoneUnavailable);
+							Done.Execute();
+						});
+					});
+				});
+		});
+	});
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

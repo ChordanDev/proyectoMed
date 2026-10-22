@@ -516,6 +516,10 @@ void UStationHudWidget::Refresh()
 	{
 		Status = LOCTEXT("VoiceLost", "A voz caiu. O tempo da estação continua.");
 	}
+	else if (Voice.bMicrophoneUnavailable)
+	{
+		Status = LOCTEXT("MicrophoneUnavailable", "Microfone indisponível. Continue por escrito.");
+	}
 	else if (Voice.State == EStationVoiceState::Ready)
 	{
 		Status = LOCTEXT("MicrophoneOn", "Microfone ativo");

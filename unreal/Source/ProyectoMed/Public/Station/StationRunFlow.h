@@ -100,6 +100,8 @@ struct FStationVoiceView
 	bool bExaminerNoted = false;
 	/** The voice stopped for good (`Fatal`, or the link failed). */
 	bool bLost = false;
+	/** The system microphone would not open for this run; the learner continues in writing. */
+	bool bMicrophoneUnavailable = false;
 };
 
 UCLASS()
@@ -146,8 +148,17 @@ public:
 	/** What the voice of a voice training shows; empty otherwise. */
 	const FStationVoiceView& GetVoice() const { return Voice; }
 
-	/** The microphone should capture: the run is going on and its voice link is in the room. */
+	/**
+	 * The microphone should capture: the run is going on, its voice link is in the room
+	 * and the microphone did not fail to open for this run.
+	 */
 	bool IsListening() const;
+
+	/**
+	 * The microphone would not open. Remembered until the run restarts, so the
+	 * capture is not retried on every change and the HUD says so.
+	 */
+	void ReportMicrophoneUnavailable();
 
 	/** Receives the patient's voice on a LiveKit thread; set it before entering. */
 	void SetPatientAudio(TFunction<void(TConstArrayView<int16>, int32, int32)> InPatientAudio)

@@ -175,7 +175,10 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   within 10, it reads "A voz caiu. O tempo da estação continua." for the rest of
   the run; the station timer keeps running. Stopping the local stack with Ctrl-C
   shows this. The microphone also stops as soon as the run ends, with
-  "Finalizar estação" or the timer, before the feedback loads.
+  "Finalizar estação" or the timer, before the feedback loads. If the system
+  microphone will not open, it reads "Microfone indisponível. Continue por
+  escrito." for the rest of the run, without trying the device again; the
+  next run tries again. The voice loss message wins when both apply.
 - Packaged macOS builds (#197) must declare `NSMicrophoneUsageDescription` in
   their Info.plist, or macOS refuses the microphone without asking. The editor
   asks as UnrealEditor and needs nothing.

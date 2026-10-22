@@ -685,8 +685,18 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 bool UStationRunFlow::IsListening() const
 {
 	const FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr;
-	return Step == EStationRunStep::Running && Link
+	return Step == EStationRunStep::Running && Link && !Voice.bMicrophoneUnavailable
 		&& (Link->GetState() == EStationVoiceState::WaitingForWorker || Link->GetState() == EStationVoiceState::Ready);
+}
+
+void UStationRunFlow::ReportMicrophoneUnavailable()
+{
+	if (Voice.bMicrophoneUnavailable)
+	{
+		return;
+	}
+	Voice.bMicrophoneUnavailable = true;
+	OnChanged.Broadcast();
 }
 
 void UStationRunFlow::CommitVoiceReply()

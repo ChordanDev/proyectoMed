@@ -155,7 +155,11 @@ void AStationPlayerController::UpdateMicrophone()
 	const bool bInRoom = Voice && Flow->IsListening();
 	if (bInRoom && !Microphone->IsCapturing())
 	{
-		Microphone->Start(Voice->AsShared());
+		if (!Microphone->Start(Voice->AsShared()))
+		{
+			// Remembered for the run, so the next change does not try the device again.
+			Flow->ReportMicrophoneUnavailable();
+		}
 	}
 	else if (!bInRoom && Microphone->IsCapturing())
 	{
