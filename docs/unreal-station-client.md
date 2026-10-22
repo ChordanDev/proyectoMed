@@ -213,7 +213,7 @@ local voice stack, which brings its own Phoenix (see README, "Voice worker fake
 speech providers"):
 
 ```bash
-scripts/run-voice-stack.sh -- scripts/run-unreal-tests.sh "ProyectoMed.StationVoice"
+scripts/run-voice-stack.sh -- scripts/run-unreal-tests.sh "ProyectoMed.StationVoice+ProyectoMed.StationRun.Voice+ProyectoMed.PatientVoice"
 ```
 
 The stack's Phoenix answers with the mock patient ("Meu nome é Carlos."), not the
@@ -222,7 +222,7 @@ specs above inside the stack, and the rest against the scripted Phoenix of the
 previous section:
 
 ```bash
-scripts/run-unreal-tests.sh "ProyectoMed.StationClient"
+scripts/run-unreal-tests.sh "ProyectoMed.StationClient+ProyectoMed.StationRun.Phoenix+ProyectoMed.StationRun.Unit"
 ```
 
 The stack test checks four things:

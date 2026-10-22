@@ -1,10 +1,14 @@
 // Run flow tests. `ProyectoMed.StationRun.Unit` needs nothing else;
 // `ProyectoMed.StationRun.Phoenix` needs a local Phoenix with realtime voice, the
-// scripted patient and the default station (see docs/unreal-station-client.md).
+// scripted patient and the default station, and `ProyectoMed.StationRun.Voice`
+// the local voice stack (see docs/unreal-station-client.md).
 
+#include "Containers/Ticker.h"
 #include "Misc/AutomationTest.h"
 #include "Station/StationRunFlow.h"
 #include "StationClient.h"
+
+#include <atomic>
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -14,6 +18,30 @@ namespace StationRunTests
 	{
 		const FString FromEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("STATION_PHOENIX_URL"));
 		return FromEnv.IsEmpty() ? TEXT("http://127.0.0.1:4000") : FromEnv;
+	}
+
+	/** A microphone setup that never touches the system or the user's settings. */
+	struct FFakeMicrophone
+	{
+		bool bDisclosureShown = true;
+		EStationMicPermission Permission = EStationMicPermission::Granted;
+		EStationMicPermission Answer = EStationMicPermission::Granted;
+		int32 Requests = 0;
+	};
+
+	FStationMicrophoneSetup MicrophoneSetup(const TSharedRef<FFakeMicrophone>& Fake)
+	{
+		FStationMicrophoneSetup Setup;
+		Setup.GetPermission = [Fake]() { return Fake->Permission; };
+		Setup.RequestPermission = [Fake](TFunction<void(EStationMicPermission)> OnDone)
+		{
+			++Fake->Requests;
+			Fake->Permission = Fake->Answer;
+			OnDone(Fake->Answer);
+		};
+		Setup.WasDisclosureShown = [Fake]() { return Fake->bDisclosureShown; };
+		Setup.RememberDisclosureShown = [Fake]() { Fake->bDisclosureShown = true; };
+		return Setup;
 	}
 
 	/** Calls `Then` once, the first time `Condition` holds after a flow change (or right away). */
@@ -45,6 +73,8 @@ END_DEFINE_SPEC(FStationRunUnitSpec)
 
 void FStationRunUnitSpec::Define()
 {
+	using namespace StationRunTests;
+
 	It("formats the Station Timer as minutes and seconds", [this]()
 	{
 		TestEqual("start", FormatStationTimer(FTimespan::FromMinutes(10)).ToString(), TEXT("10:00"));
@@ -81,12 +111,56 @@ void FStationRunUnitSpec::Define()
 		TestFalse("off", IsVoiceTrainingAvailable(Station));
 	});
 
+	It("asks for the microphone once, on first launch, before the notice", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		const TSharedRef<FFakeMicrophone> Fake = MakeShared<FFakeMicrophone>();
+		Fake->bDisclosureShown = false;
+		Fake->Permission = EStationMicPermission::NotDetermined;
+
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(Fake));
+		TestEqual("disclosure first", Flow->GetStep(), EStationRunStep::Microphone);
+		TestEqual("not asked before the learner answers", Fake->Requests, 0);
+		Flow->AcknowledgeNotice();
+		TestEqual("notice waits for the disclosure", Flow->GetStep(), EStationRunStep::Microphone);
+
+		Flow->AnswerMicrophone(true);
+		TestEqual("system asked", Fake->Requests, 1);
+		TestEqual("then the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestTrue("remembered", Fake->bDisclosureShown);
+		TestEqual("granted", Flow->GetMicrophonePermission(), EStationMicPermission::Granted);
+
+		UStationRunFlow* NextLaunch = NewObject<UStationRunFlow>();
+		NextLaunch->Begin(Client, MicrophoneSetup(Fake));
+		TestEqual("next launch starts on the notice", NextLaunch->GetStep(), EStationRunStep::Notice);
+		TestEqual("not asked again", Fake->Requests, 1);
+	});
+
+	It("lets the learner skip the microphone", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		const TSharedRef<FFakeMicrophone> Fake = MakeShared<FFakeMicrophone>();
+		Fake->bDisclosureShown = false;
+		Fake->Permission = EStationMicPermission::NotDetermined;
+
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(Fake));
+		Flow->AnswerMicrophone(false);
+		TestEqual("notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("system not asked", Fake->Requests, 0);
+		TestTrue("disclosure shown, not shown again", Fake->bDisclosureShown);
+		TestEqual("still undecided", Flow->GetMicrophonePermission(), EStationMicPermission::NotDetermined);
+	});
+
 	It("does not start a run before the notice is acknowledged", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
-		Flow->Begin(Client);
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
 
 		TestEqual("starts on the notice", Flow->GetStep(), EStationRunStep::Notice);
 		TestFalse("cannot enter", Flow->CanEnter(EStationTrainingMode::Text));
@@ -145,6 +219,7 @@ BEGIN_DEFINE_SPEC(FStationRunPhoenixSpec, "ProyectoMed.StationRun.Phoenix",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	UStationClient* Client = nullptr;
 	UStationRunFlow* Flow = nullptr;
+	TSharedPtr<StationRunTests::FFakeMicrophone> Microphone;
 END_DEFINE_SPEC(FStationRunPhoenixSpec)
 
 void FStationRunPhoenixSpec::Define()
@@ -160,7 +235,8 @@ void FStationRunPhoenixSpec::Define()
 		Client->SetPhoenixBaseUrl(PhoenixUrl());
 		Flow = NewObject<UStationRunFlow>();
 		Flow->AddToRoot();
-		Flow->Begin(Client);
+		Microphone = MakeShared<FFakeMicrophone>();
+		Flow->Begin(Client, MicrophoneSetup(Microphone.ToSharedRef()));
 	});
 
 	LatentAfterEach(Timeout, [this](const FDoneDelegate& Done)
@@ -212,8 +288,24 @@ void FStationRunPhoenixSpec::Define()
 					}
 					TestTrue("timer counting", Client->GetRemainingTime() > FTimespan::FromMinutes(9.5));
 					TestNull("no credential", Flow->GetVoiceCredential());
+					TestNull("no microphone in a text training", Client->GetVoice());
 					Done.Execute();
 				});
+		});
+	});
+
+	LatentIt("offers no voice training when the system blocks the microphone", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Microphone->Permission = EStationMicPermission::Denied;
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			TestTrue("text still offered", Flow->CanEnter(EStationTrainingMode::Text));
+			TestFalse("voice blocked", Flow->CanEnter(EStationTrainingMode::Voice));
+			Flow->Enter(EStationTrainingMode::Voice);
+			TestEqual("stays on the brief", Flow->GetStep(), EStationRunStep::Brief);
+			TestNull("no session", Client->GetSession());
+			Done.Execute();
 		});
 	});
 
@@ -713,6 +805,133 @@ void FStationRunPhoenixSpec::Define()
 					Done.Execute();
 				});
 			});
+		});
+	});
+}
+
+BEGIN_DEFINE_SPEC(FStationRunVoiceSpec, "ProyectoMed.StationRun.Voice",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+	UStationClient* Client = nullptr;
+	UStationRunFlow* Flow = nullptr;
+	TSharedPtr<std::atomic<int32>> PatientFrames;
+	FTSTicker::FDelegateHandle Speaker;
+END_DEFINE_SPEC(FStationRunVoiceSpec)
+
+void FStationRunVoiceSpec::Define()
+{
+	using namespace StationRunTests;
+
+	const FTimespan Timeout = FTimespan::FromSeconds(90);
+
+	BeforeEach([this]()
+	{
+		Client = NewObject<UStationClient>();
+		Client->AddToRoot();
+		Client->SetPhoenixBaseUrl(PhoenixUrl());
+		Flow = NewObject<UStationRunFlow>();
+		Flow->AddToRoot();
+		PatientFrames = MakeShared<std::atomic<int32>>(0);
+		Flow->SetPatientAudio([Frames = PatientFrames](TConstArrayView<int16> Samples, int32, int32)
+		{
+			for (const int16 Sample : Samples)
+			{
+				if (FMath::Abs(Sample) > 1000)
+				{
+					++*Frames;
+					return;
+				}
+			}
+		});
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+	});
+
+	LatentAfterEach(Timeout, [this](const FDoneDelegate& Done)
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(Speaker);
+		auto Release = [this, Done]()
+		{
+			Flow->RemoveFromRoot();
+			Client->RemoveFromRoot();
+			Done.Execute();
+		};
+		if (!Client->GetSession())
+		{
+			Release();
+			return;
+		}
+		Client->DiscardSession([Release](const TStationResult<FStationNone>&) { Release(); });
+	});
+
+	LatentIt("shows what the learner said and the patient's reply in a voice training", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			TestNull("no microphone before the learner chooses voice", Client->GetVoice());
+			Flow->Enter(EStationTrainingMode::Voice);
+			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
+				[this, Done]()
+				{
+					if (!TestEqual("voice ready (is scripts/run-voice-stack.sh running?)", Flow->GetVoice().State, EStationVoiceState::Ready))
+					{
+						Done.Execute();
+						return;
+					}
+					// One second of speech-like sound, then a second of silence, in real time.
+					const double Start = FPlatformTime::Seconds();
+					TSharedRef<int32> Sent = MakeShared<int32>(0);
+					Speaker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Start, Sent](float)
+					{
+						const int32 Due = FMath::Min(200, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
+						FStationVoiceLink* Voice = Client->GetVoice();
+						for (; *Sent < Due && Voice; ++*Sent)
+						{
+							TArray<float> Chunk;
+							Chunk.SetNumZeroed(480);
+							for (int32 i = 0; *Sent < 100 && i < Chunk.Num(); ++i)
+							{
+								const double T = (*Sent * 480 + i) / 48000.0;
+								Chunk[i] = static_cast<float>(0.3 * (0.6 + 0.4 * FMath::Sin(2.0 * PI * 4.0 * T))
+									* (FMath::Sin(2.0 * PI * 150.0 * T) + 0.5 * FMath::Sin(2.0 * PI * 300.0 * T)));
+							}
+							Voice->PushMicrophonePcm(Chunk, 48000, 1);
+						}
+						return *Sent < 200 && Voice != nullptr;
+					}));
+					// The spoken turn joins the same conversation as typed turns.
+					WhenFlow(Flow, [this]() { return Flow->GetTranscript().Num() >= 2 || Flow->GetVoice().bLost; },
+						[this, Done]()
+						{
+							TestFalse("voice kept", Flow->GetVoice().bLost);
+							const TArray<FStationMessage>& Lines = Flow->GetTranscript();
+							if (TestEqual("one turn and its reply", Lines.Num(), 2))
+							{
+								TestEqual("learner first", Lines[0].Speaker, EStationSpeaker::Learner);
+								TestEqual("learner's words", Lines[0].Text, TEXT("Qual é o seu nome?"));
+								TestEqual("then the patient", Lines[1].Speaker, EStationSpeaker::Patient);
+								TestEqual("patient's reply", Lines[1].Text, TEXT("Meu nome é Carlos."));
+							}
+							TestTrue("no live caption left", Flow->GetVoice().LearnerText.IsEmpty());
+							TestTrue("no reply in progress left", Flow->GetVoice().PatientText.IsEmpty());
+							TestFalse("not an examiner turn", Flow->GetVoice().bExaminerNoted);
+							TestTrue("listening during the run", Flow->IsListening());
+							Flow->Finish();
+							TestFalse("the microphone stops as soon as the run ends", Flow->IsListening());
+							// Nothing said in the run outlives it once the learner restarts.
+							WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+							{
+								Flow->Discard();
+								WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Brief; }, [this, Done]()
+								{
+									TestEqual("conversation gone", Flow->GetTranscript().Num(), 0);
+									TestTrue("no spoken text left", Flow->GetVoice().LearnerText.IsEmpty()
+										&& Flow->GetVoice().PatientText.IsEmpty() && !Flow->GetVoice().bExaminerNoted);
+									TestEqual("no voice link", Flow->GetVoice().State, EStationVoiceState::Disconnected);
+									Done.Execute();
+								});
+							});
+						});
+				});
 		});
 	});
 }

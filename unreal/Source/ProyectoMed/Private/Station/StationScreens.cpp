@@ -47,6 +47,38 @@ namespace
 // The learner-facing copy is Brazilian Portuguese, matching the web station
 // (web/src/features/station/i18n/pt-BR.json) where both say the same thing.
 
+TSharedRef<SWidget> UStationMicrophoneWidget::RebuildWidget()
+{
+	if (WidgetTree && !WidgetTree->RootWidget)
+	{
+		UVerticalBox* Column = StationUi::MakeCenteredCard(*WidgetTree, 760.f, 900.f, false);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("MicrophoneTitle", "Microfone"), 32, true, StationUi::Ink, 0.f);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("MicrophoneBody",
+			"No treino por voz você conversa com o paciente pelo microfone. Durante a estação, o seu áudio é enviado à Deepgram, que o transcreve, e a resposta do paciente é gerada em voz pela Cartesia."),
+			18);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("MicrophoneRetention",
+			"O microfone só fica ligado durante uma estação por voz. O ProyectoMed não guarda o seu áudio nem a transcrição depois da estação."),
+			16, false, StationUi::Muted);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("MicrophoneTextOption",
+			"Você também pode treinar por texto, sem microfone."), 16, false, StationUi::Muted);
+		UButton* Allow = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("MicrophoneAllow", "Permitir microfone"));
+		Allow->OnClicked.AddDynamic(this, &UStationMicrophoneWidget::HandleAllow);
+		UButton* NotNow = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("MicrophoneNotNow", "Agora não"), 12.f);
+		NotNow->OnClicked.AddDynamic(this, &UStationMicrophoneWidget::HandleNotNow);
+	}
+	return Super::RebuildWidget();
+}
+
+void UStationMicrophoneWidget::HandleAllow()
+{
+	OnAnswered.ExecuteIfBound(true);
+}
+
+void UStationMicrophoneWidget::HandleNotNow()
+{
+	OnAnswered.ExecuteIfBound(false);
+}
+
 TSharedRef<SWidget> UStationNoticeWidget::RebuildWidget()
 {
 	if (WidgetTree && !WidgetTree->RootWidget)
@@ -103,7 +135,7 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 		VoiceButton = StationUi::AddButton(*WidgetTree, *BriefBox, LOCTEXT("VoiceTraining", "Treino por voz"), 12.f);
 		VoiceButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleVoiceTraining);
 		VoiceNote = StationUi::AddText(*WidgetTree, *BriefBox, LOCTEXT("VoiceNote",
-			"No treino por voz, seu áudio é transcrito e a resposta do paciente é sintetizada por serviços externos."),
+			"No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."),
 			14, false, StationUi::Muted, 8.f);
 	}
 	return Super::RebuildWidget();
@@ -147,6 +179,9 @@ void UStationBriefWidget::Refresh()
 	StationUi::SetShown(VoiceButton, bVoiceOffered);
 	StationUi::SetShown(VoiceNote, bVoiceOffered);
 	VoiceButton->SetIsEnabled(Flow->CanEnter(EStationTrainingMode::Voice));
+	VoiceNote->SetText(Flow->GetMicrophonePermission() == EStationMicPermission::Denied
+		? LOCTEXT("VoiceBlocked", "O microfone está bloqueado. Para treinar por voz, libere o acesso nos ajustes de privacidade do sistema e abra o app de novo.")
+		: LOCTEXT("VoiceNote", "No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."));
 }
 
 void UStationBriefWidget::HandleTextTraining()
@@ -197,9 +232,12 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 			StationUi::Ink, 2.f);
 		FallbackText = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("VoiceFallback", "Voz indisponível — usando texto."),
 			14, false, StationUi::Caution, 4.f);
+		VoiceStatusText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 14, false, StationUi::Muted, 4.f);
 		ModeText->SetJustification(ETextJustify::Center);
 		TimerText->SetJustification(ETextJustify::Center);
 		FallbackText->SetJustification(ETextJustify::Center);
+		VoiceStatusText->SetJustification(ETextJustify::Center);
+
 		FinishButton = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("FinishStation", "Finalizar estação"), 8.f);
 		FinishButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleFinish);
 
@@ -278,6 +316,23 @@ void UStationHudWidget::RefreshConversation()
 	{
 		AddTranscriptLine(FText::Format(LOCTEXT("PendingLine", "Você: {0} (enviando...)"),
 			FText::FromString(Flow->GetPendingTurnText())), StationUi::Muted);
+	}
+	// The spoken turn in progress: the learner's live caption, the examiner's note
+	// and the patient's reply while it is spoken.
+	const FStationVoiceView& Voice = Flow->GetVoice();
+	if (!Voice.LearnerText.IsEmpty())
+	{
+		AddTranscriptLine(FText::Format(LOCTEXT("LearnerLine", "Você: {0}"), FText::FromString(Voice.LearnerText)),
+			StationUi::Muted);
+	}
+	if (Voice.bExaminerNoted)
+	{
+		AddTranscriptLine(LOCTEXT("ExaminerNoted", "Examinador: Anotado."), StationUi::Muted);
+	}
+	if (!Voice.PatientText.IsEmpty())
+	{
+		AddTranscriptLine(FText::Format(LOCTEXT("PatientLine", "Paciente: {0}"), FText::FromString(Voice.PatientText)),
+			StationUi::Ink);
 	}
 	TranscriptScroll->ScrollToEnd();
 
@@ -453,6 +508,30 @@ void UStationHudWidget::Refresh()
 		? LOCTEXT("VoiceTrainingLabel", "Treino por voz · Tempo restante")
 		: LOCTEXT("TextTrainingLabel", "Treino por texto · Tempo restante"));
 	StationUi::SetShown(FallbackText, Flow->IsVoiceFallback());
+
+	const FStationVoiceView& Voice = Flow->GetVoice();
+	const bool bVoiceRun = Flow->GetMode() == EStationTrainingMode::Voice && !Flow->IsVoiceFallback();
+	FText Status;
+	if (Voice.bLost)
+	{
+		Status = LOCTEXT("VoiceLost", "A voz caiu. O tempo da estação continua.");
+	}
+	else if (Voice.State == EStationVoiceState::Ready)
+	{
+		Status = LOCTEXT("MicrophoneOn", "Microfone ativo");
+	}
+	else if (Voice.State == EStationVoiceState::Reconnecting)
+	{
+		Status = LOCTEXT("VoiceReconnecting", "Reconectando a voz...");
+	}
+	else if (Voice.State != EStationVoiceState::Disconnected)
+	{
+		Status = LOCTEXT("VoiceConnecting", "Conectando a voz...");
+	}
+	StationUi::SetShown(VoiceStatusText, bVoiceRun && !Status.IsEmpty());
+	VoiceStatusText->SetText(Status);
+	VoiceStatusText->SetColorAndOpacity(Voice.bLost ? StationUi::Caution : StationUi::Muted);
+
 	RefreshConversation();
 	RefreshExams();
 }

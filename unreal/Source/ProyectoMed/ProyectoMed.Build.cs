@@ -13,14 +13,21 @@ public class ProyectoMed : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore" });
 
-		// The patient's voice and its lip sync in a voice run (#191).
+		// The patient's voice and the learner's microphone in a voice run (#191).
 		PrivateDependencyModuleNames.AddRange(new string[] {
+			"AudioCapture",
 			"AudioMixer",
 			"AudioPlatformConfiguration",
 			"MetaHumanCoreTech",
 			"NNE",
 			"SpeechAnimationSolver",
 		});
+
+		// The system microphone prompt on macOS.
+		if (Target.Platform == UnrealTargetPlatform.Mac)
+		{
+			PublicFrameworks.Add("AVFoundation");
+		}
 
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

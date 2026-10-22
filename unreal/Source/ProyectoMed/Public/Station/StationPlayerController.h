@@ -11,7 +11,10 @@
 class UStationBriefWidget;
 class UStationFeedbackWidget;
 class UStationHudWidget;
+class UStationMicrophone;
+class UStationMicrophoneWidget;
 class UStationNoticeWidget;
+class UStationPatientVoice;
 class UStationRunFlow;
 
 UCLASS()
@@ -32,6 +35,10 @@ protected:
 private:
 	void Render();
 	void UseStationCamera();
+	/** Gives the patient a voice and a speaking mouth for a voice training. */
+	void PreparePatientVoice();
+	/** Keeps the microphone on exactly while the voice link is in the room. */
+	void UpdateMicrophone();
 
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
@@ -47,4 +54,13 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStationFeedbackWidget> Feedback;
+
+	UPROPERTY()
+	TObjectPtr<UStationMicrophoneWidget> MicrophoneScreen;
+
+	UPROPERTY()
+	TObjectPtr<UStationMicrophone> Microphone;
+
+	UPROPERTY()
+	TObjectPtr<UStationPatientVoice> PatientVoice;
 };

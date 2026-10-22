@@ -116,7 +116,9 @@ only code that talks to it, and its interface is documented in
    (Enter or "Enviar") and shows each turn with the reply Phoenix approved. It
    does not depend on the microphone, so a learner who declined audio completes
    the station by typing. Replies to typed turns are shown as text only; speaking
-   them is a later slice.
+   them is a later slice. In a voice training, spoken turns join the same panel:
+   the learner's words show in grey while they speak, then each turn and the
+   patient's spoken reply stay in the conversation like typed ones.
 5. The "Exames" button at the top right opens the exam panel. A request typed
    there ("exame físico", "eletrocardiograma") goes to Phoenix's impresso route,
    never to the patient, and never joins the conversation. Phoenix decides what
@@ -142,8 +144,41 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 - The patient plays copies of the MetaHuman Creator template idle loops
   (`/Game/Station/Patient/Animations`) in single-node mode, with `useLiveLink`
   off. The project's `MetaHumans/Common` body and face skeletons list the
-  plugin's skeletons as compatible so those loops can play. Lip sync (#191) has
-  to blend the face idle with Live Link.
+  plugin's skeletons as compatible so those loops can play.
+- In a voice training (#191) the game swaps the face to
+  `UStationPatientFaceAnim` at runtime: it keeps the same idle loop and, while
+  the patient speaks, lays the jaw, mouth, lips, tongue and teeth controls
+  solved from the voice (StreamingADA, as in the #189 spike) over it. The
+  patient is found as the actor with a skeletal mesh component named `Face`, so
+  the level needs no extra setup, and no Live Link source is involved.
+
+### Voice trainings
+
+- First launch shows the microphone disclosure. **Permitir microfone** asks
+  macOS for the microphone; **Agora não** skips it, and choosing **Treino por
+  voz** asks then. The answer is remembered in `GameUserSettings.ini`
+  (`[StationVoice] bMicrophoneDisclosureShown`); delete that line to see the
+  disclosure again. On macOS the editor asks for the microphone as
+  UnrealEditor, and **System Settings › Privacy & Security › Microphone**
+  resets it.
+- To try a voice training without paid providers, start the local stack in a
+  terminal with `scripts/run-voice-stack.sh` and open the editor; the stack's
+  Phoenix is on the default `http://127.0.0.1:4000`. The fake transcription
+  hears every utterance as "Qual é o seu nome?" and the patient answers "Meu
+  nome é Carlos." with a tone instead of a voice, so the mouth moves with
+  the loudness of the tone. Real speech needs the real-time voice runbook in
+  the README.
+- The voice status under the timer reads "Conectando a voz..." until the
+  worker joins, then "Microfone ativo". While LiveKit retries the connection or
+  the worker is gone it reads "Reconectando a voz..." and the microphone stops.
+  If the worker has not joined within 20 seconds, or the voice has not come back
+  within 10, it reads "A voz caiu. O tempo da estação continua." for the rest of
+  the run; the station timer keeps running. Stopping the local stack with Ctrl-C
+  shows this. The microphone also stops as soon as the run ends, with
+  "Finalizar estação" or the timer, before the feedback loads.
+- Packaged macOS builds (#197) must declare `NSMicrophoneUsageDescription` in
+  their Info.plist, or macOS refuses the microphone without asking. The editor
+  asks as UnrealEditor and needs nothing.
 - The learner sees the scene through the `CameraActor` tagged `StationView`,
   standing 1.40 m from the patient at 1.62 m with a 70° field of view. Both
   stand because MetaHuman Creator ships no seated animation.
