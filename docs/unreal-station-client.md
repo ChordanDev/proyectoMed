@@ -157,16 +157,25 @@ takes a credential from `RequestVoiceCredential` and returns an `FStationVoiceLi
 ```cpp
 Client->RequestVoiceCredential([WeakClient](const TStationResult<FStationVoiceCredential>& Credential)
 {
+	if (!WeakClient.IsValid() || !Credential.HasValue())
+	{
+		return;
+	}
 	FStationVoiceHandlers Handlers;
 	Handlers.OnEvent = [](const FStationVoiceEvent& Event) { /* show captions and replies */ };
 	Handlers.OnStateChanged = [](EStationVoiceState State) { /* mic indicator */ };
 	Handlers.OnPatientPcm = [](TConstArrayView<int16> Pcm, int32 Rate, int32 Channels) { /* play, lip sync */ };
-	WeakClient->ConnectVoice(Credential.GetValue(), MoveTemp(Handlers));
+
+	// The link exists only from here, and ConnectVoice returns nullptr without a session.
+	// Keep the shared reference it returns as a weak one: GetVoice() is a raw pointer the
+	// game thread may free when it replaces or drops the link, so the capture source
+	// (the game's microphone component arrives with the voice training slice) must not use it.
+	if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakClient->ConnectVoice(Credential.GetValue(), MoveTemp(Handlers)))
+	{
+		WeakVoice = Voice;  // pin WeakVoice, a TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe>, in the capture source
+	}
 });
 
-// Game thread only: take a shared reference, because GetVoice() is a raw pointer the
-// game thread may free when it replaces or drops the link (UStationMicrophone does this).
-TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe> WeakVoice = Client->GetVoice()->AsShared();
 // Then, from the capture thread:
 if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.Pin())
 {
@@ -182,7 +191,7 @@ if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.P
 | Patient voice | `OnPatientPcm` runs on a LiveKit thread every 10 ms of the worker's `patient-voice` track. It must not block. |
 | Same reply | The worker sends a reply's text before its audio, and both are the text Phoenix approved and stored for the run. |
 | Run end | The link leaves the room when `FinishSession` succeeds, when `DiscardSession` is called, when `RefreshSession` sees the run completed, on `DisconnectVoice`, and when the client is destroyed. Leaving returns at once and finishes in the background, even while a join still hangs on an unreachable server (about 30 s). No game-thread handler runs after that; an `OnPatientPcm` call already under way may finish, so its target must outlive it or cut itself off. A refused finish (`deadline_not_reached`) keeps the link. The link does not notice a run that ended on Phoenix's side until `RefreshSession` or `FinishSession` reports it. |
-| LiveKit SDK | The module initialises the SDK on first use, or reuses it when another module (the #189 spike) did. On quit it waits up to 2 s for rooms still being left. |
+| LiveKit SDK | The module initialises the SDK on first use, or reuses it when another module (the #189 spike) did. On quit it waits up to 2 s for each room still being left. |
 | Privacy | The module logs no transcript or reply text and keeps none: events go straight to the handlers. |
 | Threading | `ConnectVoice`, `DisconnectVoice` and the state run on the game thread, as do `OnEvent` and `OnStateChanged`. |
 

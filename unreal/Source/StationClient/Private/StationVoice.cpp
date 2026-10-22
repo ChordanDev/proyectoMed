@@ -6,6 +6,7 @@
 #include "StationLiveKit.h"
 #include "StationPcm.h"
 #include "StationVoiceLiveness.h"
+#include "StationWorkerPresence.h"
 
 THIRD_PARTY_INCLUDES_START
 #include "livekit/livekit.h"
@@ -46,7 +47,7 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 
 	std::atomic<bool> bAlive{true};
 	std::atomic<bool> bPublished{false};
-	std::atomic<bool> bWorkerPresent{false};
+	FStationWorkerPresence WorkerPresence;
 	std::atomic<bool> bReconnecting{false};
 	/** The state is `WaitingForWorker` or `Ready`: microphone audio is sent. */
 	std::atomic<bool> bListening{false};
@@ -112,7 +113,7 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 			const TSharedPtr<FImpl, ESPMode::ThreadSafe> Impl = WeakImpl.Pin();
 			if (Impl && Impl->bAlive)
 			{
-				const FStationVoiceLiveness::FSignals Signals{ Impl->bWorkerPresent, Impl->bReconnecting };
+				const FStationVoiceLiveness::FSignals Signals{ Impl->WorkerPresence.IsPresent(), Impl->bReconnecting };
 				Impl->ShowLiveness(Impl->Liveness.Update(Signals, FPlatformTime::Seconds()));
 			}
 		});
@@ -223,7 +224,7 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 				const std::shared_ptr<livekit::RemoteParticipant> Participant = Weak.lock();
 				if (Participant && Participant->identity() == ToStd(WorkerIdentity))
 				{
-					bWorkerPresent = true;
+					WorkerPresence.OnSeenInScan();
 				}
 			}
 			bPublished = true;
@@ -334,7 +335,7 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 	{
 		if (Event.participant && Event.participant->identity() == ToStd(WorkerIdentity))
 		{
-			bWorkerPresent = true;
+			WorkerPresence.OnJoined();
 			PostReadiness();
 		}
 	}
@@ -343,7 +344,7 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 	{
 		if (Event.participant && Event.participant->identity() == ToStd(WorkerIdentity))
 		{
-			bWorkerPresent = false;
+			WorkerPresence.OnLeft();
 			PostReadiness();
 		}
 	}
