@@ -13,6 +13,15 @@ public class ProyectoMed : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore" });
 
+		// The patient's voice and its lip sync in a voice run (#191).
+		PrivateDependencyModuleNames.AddRange(new string[] {
+			"AudioMixer",
+			"AudioPlatformConfiguration",
+			"MetaHumanCoreTech",
+			"NNE",
+			"SpeechAnimationSolver",
+		});
+
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");
 
