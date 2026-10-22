@@ -91,6 +91,7 @@ defmodule BackendWeb.AdminCaseLive.Index do
             <th>Área</th>
             <th>Tema</th>
             <th>Situação</th>
+            <th>Aprovado por</th>
           </tr>
         </thead>
         <tbody>
@@ -103,6 +104,12 @@ defmodule BackendWeb.AdminCaseLive.Index do
             <td>{kase.area}</td>
             <td>{kase.theme}</td>
             <td><.status_badge status={kase.status} /></td>
+            <td class="text-sm text-base-content/70">
+              <span :if={kase.approved_by_email}>
+                {kase.approved_by_email}
+              </span>
+              <span :if={!kase.approved_by_email}>—</span>
+            </td>
           </tr>
         </tbody>
       </table>

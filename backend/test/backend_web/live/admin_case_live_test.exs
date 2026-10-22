@@ -274,6 +274,139 @@ defmodule BackendWeb.AdminCaseLiveTest do
       assert newest < oldest
       assert html =~ ~r/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2} UTC/
     end
+
+    test "approve button is disabled when case has format errors (Story 15 / AC1)", %{conn: conn} do
+      bad = String.replace(@reference_case, "[TEMA] ", "[TEMAX] ", global: false)
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", bad)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+
+      assert has_element?(view, "#case-approve[disabled]")
+    end
+
+    test "approving a valid case publishes it and records approver (Story 14, 19 / AC1, AC4)", %{
+      conn: conn,
+      admin: admin
+    } do
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+
+      refute has_element?(view, "#case-approve[disabled]")
+      assert has_element?(view, "#case-approve", "Aprovar")
+
+      view |> element("#case-approve") |> render_click()
+
+      assert has_element?(view, "#flash-info", "Caso aprovado e publicado")
+      assert has_element?(view, "#case-meta", "Aprovado")
+      assert has_element?(view, "#case-approval", admin.email)
+      assert has_element?(view, "#station-version-1", "Versão publicada 1")
+      assert has_element?(view, "#station-version-1", admin.email)
+
+      # Persisted state
+      kase = Content.get_case_by_number(number)
+      assert kase.status == :approved
+      assert kase.approved_by_id == admin.id
+      assert kase.approved_by_email == admin.email
+      assert kase.approved_at != nil
+
+      [version] = Content.list_station_versions(kase)
+      assert version.version_number == 1
+      assert version.approved_by_id == admin.id
+      assert version.approved_by_email == admin.email
+    end
+
+    test "disapproving hides case with one click without reason (Story 16 / AC2)", %{
+      conn: conn,
+      admin: admin
+    } do
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
+      kase = Content.get_case_by_number(number)
+      {:ok, package} = Backend.Stations.parse_case(@reference_case)
+      {:ok, _} = Content.approve_case(kase, package, admin)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+      assert has_element?(view, "#case-meta", "Aprovado")
+
+      view |> element("#case-disapprove") |> render_click()
+
+      assert has_element?(view, "#flash-info", "Caso reprovado")
+      assert has_element?(view, "#case-meta", "Reprovado")
+
+      reloaded = Content.get_case_by_number(number)
+      assert reloaded.status == :disapproved
+      refute has_element?(view, "#case-disapprove")
+    end
+
+    test "disapproving a pending case works with one click", %{conn: conn} do
+      number = insert_case!("Pediatria", "Asma", "sem tags")
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+      assert has_element?(view, "#case-meta", "Pendente")
+
+      view |> element("#case-disapprove") |> render_click()
+
+      assert has_element?(view, "#flash-info", "Caso reprovado")
+      assert has_element?(view, "#case-meta", "Reprovado")
+      assert Content.get_case_by_number(number).status == :disapproved
+    end
+
+    test "re-approving after an edit creates a new immutable version (Story 18 / AC3)", %{
+      conn: conn
+    } do
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+      view |> element("#case-approve") |> render_click()
+
+      # Edit the case
+      edited =
+        String.replace(
+          @reference_case,
+          "Dor abdominal há 24 horas",
+          "Dor forte na fossa ilíaca direita"
+        )
+
+      save(view, edited)
+
+      # Re-approve
+      view |> element("#case-approve") |> render_click()
+
+      assert has_element?(view, "#flash-info", "Caso aprovado e publicado")
+      assert has_element?(view, "#station-version-2", "Versão publicada 2")
+      assert has_element?(view, "#station-version-1", "Versão publicada 1")
+
+      kase = Content.get_case_by_number(number)
+      versions = Content.list_station_versions(kase)
+      assert length(versions) == 2
+      assert Enum.map(versions, & &1.version_number) == [2, 1]
+    end
+
+    test "attempting to approve with errors flashes error", %{conn: conn} do
+      bad = String.replace(@reference_case, "[TEMA] ", "[TEMAX] ", global: false)
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", bad)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/cases/#{number}")
+
+      # Directly trigger approve event bypassing disabled button
+      render_click(view, "approve")
+
+      assert has_element?(view, "#flash-error", "erros de formato")
+      assert Content.get_case_by_number(number).status == :pending
+    end
+  end
+
+  describe "case index approver display (Story 19)" do
+    test "shows who approved the case when approved", %{conn: conn, admin: admin} do
+      number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
+      kase = Content.get_case_by_number(number)
+      {:ok, package} = Backend.Stations.parse_case(@reference_case)
+      {:ok, _} = Content.approve_case(kase, package, admin)
+
+      {:ok, view, _html} = live(conn, ~p"/admin")
+
+      assert has_element?(view, "#case-#{number}", admin.email)
+    end
   end
 
   test "a student cannot open a case page" do
