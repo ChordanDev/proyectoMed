@@ -118,4 +118,102 @@ defmodule Backend.ContentTest do
   test "statuses/0 lists the review statuses in order" do
     assert Content.statuses() == [:pending, :approved, :disapproved]
   end
+
+  describe "editing a case (issue #332)" do
+    setup do
+      %{editor: Backend.AccountsFixtures.admin_fixture()}
+    end
+
+    test "a row inserted by n8n starts at lock version 1" do
+      assert insert_case!("Pediatria", "Asma").lock_version == 1
+    end
+
+    test "saving replaces the Markdown and keeps the previous one as a revision", %{
+      editor: editor
+    } do
+      kase = insert_case!("Pediatria", "Asma", "versão 1")
+
+      assert {:ok, saved} = Content.update_case_markdown(kase, "versão 2", editor)
+
+      assert saved.markdown == "versão 2"
+      assert saved.lock_version == 2
+      assert Content.get_case!(kase.id).markdown == "versão 2"
+
+      assert [revision] = Content.list_case_revisions(saved)
+      assert revision.markdown == "versão 1"
+      assert revision.lock_version == 1
+      assert revision.editor_id == editor.id
+      assert revision.editor_email == editor.email
+      assert %DateTime{} = revision.inserted_at
+    end
+
+    test "every save keeps its previous Markdown, newest first", %{editor: editor} do
+      other = Backend.AccountsFixtures.admin_fixture()
+      kase = insert_case!("Pediatria", "Asma", "v1")
+
+      {:ok, kase} = Content.update_case_markdown(kase, "v2", editor)
+      {:ok, kase} = Content.update_case_markdown(kase, "v3", other)
+
+      assert kase.lock_version == 3
+
+      assert [%{markdown: "v2", editor_email: second}, %{markdown: "v1", editor_email: first}] =
+               Content.list_case_revisions(kase)
+
+      assert second == other.email
+      assert first == editor.email
+    end
+
+    test "a save over a newer version is rejected and overwrites nothing", %{editor: editor} do
+      kase = insert_case!("Pediatria", "Asma", "v1")
+      {:ok, _newer} = Content.update_case_markdown(kase, "v2 de outra pessoa", editor)
+
+      assert {:error, :stale} = Content.update_case_markdown(kase, "v2 atrasada", editor)
+
+      current = Content.get_case!(kase.id)
+      assert current.markdown == "v2 de outra pessoa"
+      assert current.lock_version == 2
+      assert [%{markdown: "v1"}] = Content.list_case_revisions(current)
+    end
+
+    test "saving the same Markdown changes nothing and keeps no revision", %{editor: editor} do
+      kase = insert_case!("Pediatria", "Asma", "v1")
+
+      assert {:ok, same} = Content.update_case_markdown(kase, "v1", editor)
+
+      assert same.lock_version == 1
+      assert Content.list_case_revisions(same) == []
+    end
+
+    test "blank Markdown is refused", %{editor: editor} do
+      kase = insert_case!("Pediatria", "Asma", "v1")
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Content.update_case_markdown(kase, "   ", editor)
+
+      assert %{markdown: [_message]} = errors_on(changeset)
+      assert Content.get_case!(kase.id).markdown == "v1"
+      assert Content.list_case_revisions(kase) == []
+    end
+
+    test "saving keeps the review status, area and theme", %{editor: editor} do
+      kase = insert_case!("Pediatria", "Asma", "v1")
+      Repo.query!("UPDATE cases SET status = 'approved' WHERE id = $1", [kase.id])
+      kase = Content.get_case!(kase.id)
+
+      {:ok, saved} = Content.update_case_markdown(kase, "v2", editor)
+
+      assert saved.status == :approved
+      assert saved.area == "Pediatria"
+      assert saved.theme == "Asma"
+    end
+
+    test "deleting a case deletes its revisions", %{editor: editor} do
+      kase = insert_case!("Pediatria", "Asma", "v1")
+      {:ok, kase} = Content.update_case_markdown(kase, "v2", editor)
+
+      Repo.query!("DELETE FROM cases WHERE id = $1", [kase.id])
+
+      assert %{rows: [[0]]} = Repo.query!("SELECT count(*) FROM case_revisions")
+    end
+  end
 end
