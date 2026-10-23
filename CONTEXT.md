@@ -44,7 +44,7 @@ The MVP is planned as four coordinated work streams: API contract and case/rubri
 
 ## Station Timer
 
-The MVP station has a visible ten-minute countdown. It provides Revalida-like time pressure for practice but is not an official examination or certification signal.
+The MVP station has a visible ten-minute countdown. It is not an official examination or certification signal. In a real test (#318) it provides Revalida-like time pressure and ends the run at zero. In a training (decided 2026-10-23, built in #323) it marks the expected time and does not end the run: at zero the client shows that the expected time is over and then counts the overtime up, until a hard cap 20 minutes after start. A session without a mode is a training.
 
 ## Technical Failure
 
@@ -76,7 +76,7 @@ The Content Partner supplies the one MVP station as a versioned structured packa
 
 ## Station Completion
 
-The learner may finish a station early, or the ten-minute timer ends it automatically. Both paths end the interaction permanently for that run and transition directly to actionable feedback.
+The learner may finish a station at any time. In a real test, the ten-minute timer also ends it automatically. In a training, the run ends when the learner finishes or, at the latest, at the 20-minute cap, which Phoenix applies with its own completion reason (decided 2026-10-23, built in #323). Every path ends the interaction permanently for that run and transitions directly to actionable feedback.
 
 ## Feedback Evidence Display
 
@@ -136,4 +136,4 @@ Optional rubric fields of the Station Package that code, not Jev, applies after 
 
 ## Educational Point Estimate (implemented)
 
-A numeric, PEP-shaped estimate computed only from authored rubric points on assessed criteria. Points are multiples of 0.025 held as integer fortieths, so sums are exact (widened on 2026-10-07 from multiples of 0.125 to follow PEP 2025/2 tenths, amending ADR-012, #124); no probability multiplies points and no partial total is rescaled. The estimate reports the scored subtotal and scored maximum over assessed criteria (`scored_subtotal`, `scored_max`) and the eligible maximum over every criterion that is not excluded (`eligible_max`). A numeric `total` exists only when at least one such criterion exists and every one is assessed; otherwise it is null, and the unresolved criteria are listed. The v2 result serializes points as exact decimal strings. It is an unofficial AI-generated educational estimate — never an official Revalida grade, pass/fail verdict, or readiness claim. #129 shows it to learners in the web client, with the pt-BR disclaimer on the Pre-Station Notice and on the result screen; this exposure is not clinical validation.
+A numeric, PEP-shaped estimate computed only from authored rubric points on assessed criteria. Points are multiples of 0.025 held as integer fortieths, so sums are exact (widened on 2026-10-07 from multiples of 0.125 to follow PEP 2025/2 tenths, amending ADR-012, #124); no probability multiplies points and no partial total is rescaled. The estimate reports the scored subtotal and scored maximum over assessed criteria (`scored_subtotal`, `scored_max`) and the eligible maximum over every criterion that is not excluded (`eligible_max`). A numeric `total` exists only when at least one such criterion exists and every one is assessed; otherwise it is null, and the unresolved criteria are listed. The v2 result serializes points as exact decimal strings. It is an unofficial AI-generated educational estimate — never an official Revalida grade, pass/fail verdict, or readiness claim. #129 shows it to learners in the web client, with the pt-BR disclaimer on the Pre-Station Notice and on the result screen; this exposure is not clinical validation. Overtime never changes this estimate. A training result adds a separate training score (decided 2026-10-23, built in #323): the `total` minus 0.25 points per started minute of overtime, at most 2.5, floored at zero, and null when `total` is null. Real tests have no overtime penalty.
