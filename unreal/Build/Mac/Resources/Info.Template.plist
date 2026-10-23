@@ -11,5 +11,7 @@
 	<false/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>No treino por voz você conversa com o paciente pelo microfone.</string>
 </dict>
 </plist>
