@@ -28,6 +28,14 @@ builds the `.app` from it. Regenerate IDE files from the `.uproject` (right-clic
   becomes `Programaci  n`), and clang fails with "no such file or directory".
   Keep the repository under a path without accents or other non-ASCII
   characters.
+- **Checkout outside iCloud Drive on macOS.** When "Desktop & Documents
+  Folders" syncs to iCloud, the File Provider adds `com.apple.FinderInfo` and
+  `com.apple.fileprovider.*` extended attributes to the built `.app`, and
+  `codesign` fails with "resource fork, Finder information, or similar detritus
+  not allowed" (UBT reports "Failed to finalize the .app with Xcode").
+  `xattr -cr` does not help: iCloud adds them back during the build. Keep the
+  repository (or a `git worktree` of it) under a folder iCloud does not sync,
+  for example `~/code`.
 - **Metal Toolchain on macOS.** Xcode 26 and later ship the Metal shader
   compiler as a separate component. Without it the editor reports "cannot
   execute tool 'metal' due to missing Metal Toolchain". Install it with
@@ -179,9 +187,10 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   microphone will not open, it reads "Microfone indisponível. Continue por
   escrito." for the rest of the run, without trying the device again; the
   next run tries again. The voice loss message wins when both apply.
-- Packaged macOS builds (#197) must declare `NSMicrophoneUsageDescription` in
-  their Info.plist, or macOS refuses the microphone without asking. The editor
-  asks as UnrealEditor and needs nothing.
+- Packaged macOS builds ask for the microphone through
+  `NSMicrophoneUsageDescription` in `unreal/Build/Mac/Resources/Info.Template.plist`;
+  without it macOS refuses the microphone without asking. The editor asks as
+  UnrealEditor and needs nothing.
 - The learner sees the scene through the `CameraActor` tagged `StationView`,
   standing 1.40 m from the patient at 1.62 m with a 70° field of view. Both
   stand because MetaHuman Creator ships no seated animation.
@@ -297,13 +306,88 @@ Run on a real machine after setup; these are the acceptance criteria of #188.
    never `*` or `0.0.0.0`.
 5. **Absent from packaged builds:** package a Development build
    (**Platforms > <platform> > Package Project**, or `RunUAT.sh BuildCookRun
-   -platform=Mac -clientconfig=Development -build -cook -stage -pak -archive`),
+   -platform=Mac -clientconfig=Development -build -cook -stage -pak -package -archive`,
+   see "Packaging a client build"),
    run it, and confirm that nothing listens on port 8000 and that the game
-   binary contains no `ModelContextProtocol`, `ToolsetRegistry`, or
-   `HttpListener` strings. Search both ASCII and UTF-16LE, because Unreal
+   binary contains no `ModelContextProtocol` or `ToolsetRegistry` strings.
+   (`HttpListener` is expected in Development builds: `StationClient` links
+   `HTTPServer` outside Shipping for its fake-Phoenix automation tests.)
+   Search both ASCII and UTF-16LE, because Unreal
    stores `TEXT()` literals as UTF-16; `LogInit` is a good positive control.
 
-## Known toolchain issue: Xcode 27 and macOS packaging
+## Packaging a client build
+
+Installable builds for testers (#197) are Development builds. Code signing,
+store distribution, and auto-update are out of scope. Share the archived build
+outside the repository (see "What goes in Git and what can go elsewhere").
+
+### macOS
+
+From the repository root, with the LiveKit SDK fetched and the editor closed:
+
+```sh
+"/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
+  -project="$PWD/unreal/ProyectoMed.uproject" -platform=Mac \
+  -clientconfig=Development -build -cook -stage -pak -package -archive \
+  -archivedirectory="$PWD/unreal/Packaged" -unattended -utf8output
+```
+
+The result is `unreal/Packaged/Mac/ProyectoMed.app` (about 1.7 GB).
+
+- **`-package` is required on macOS.** `-archive` copies
+  `unreal/Binaries/Mac/ProyectoMed.app`. Without `-package`, that `.app` holds
+  only the executable (about 425 MB): no paks, no engine dylibs, no
+  `liblivekit.dylib`, and macOS refuses to open it with "ProyectoMed cannot be
+  opened because of a problem" (`Library not loaded: @rpath/liblivekit.dylib`
+  in the crash report). `-package` folds the staged content into that `.app`.
+- **Runs without Unreal Engine.** Every non-system dylib the packaged app
+  loads comes from inside the bundle (`Contents/UE/...`); check with
+  `lsof -p <pid> | grep dylib` while it runs.
+- **The app is ad-hoc signed** ("Sign to Run Locally"). On another Mac,
+  Gatekeeper blocks a downloaded copy: right-click the app > **Open**, or run
+  `xattr -dr com.apple.quarantine ProyectoMed.app`.
+- **Sandbox.** Development builds use
+  `unreal/Build/Mac/Resources/Sandbox.Server.entitlements`, which allows the
+  network and the microphone (`com.apple.security.device.audio-input`);
+  `Info.Template.plist` declares `NSMicrophoneUsageDescription`. Logs go to
+  `~/Library/Containers/com.YourCompany.ProyectoMed/Data/Library/Logs/ProyectoMed/`.
+  Shipping builds would use `Sandbox.NoNet.entitlements`, which has no network
+  access and could not reach Phoenix.
+
+### Windows
+
+Not yet verified on a Windows machine. The expected command, from a Developer
+Command Prompt with the LiveKit SDK fetched:
+
+```bat
+"C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\RunUAT.bat" BuildCookRun ^
+  -project="%CD%\unreal\ProyectoMed.uproject" -platform=Win64 ^
+  -clientconfig=Development -build -cook -stage -pak -archive ^
+  -archivedirectory="%CD%\unreal\Packaged" -unattended -utf8output
+```
+
+`LiveKitSDK.Build.cs` stages the LiveKit DLLs next to `ProyectoMed.exe`
+through `RuntimeDependencies`.
+
+### Choosing the environment
+
+Point a packaged build at Phoenix with `-PhoenixUrl=<origin>`, for example
+`open ProyectoMed.app --args -PhoenixUrl=https://phoenix.example.org` or
+`ProyectoMed.exe -PhoenixUrl=https://phoenix.example.org`. The LiveKit URL
+comes from Phoenix in each voice credential, so neither needs a rebuild.
+
+### What a packaged build listens on
+
+Nothing listens on port 8000 (the editor-only Unreal MCP server). Development
+builds open the Unreal Insights trace control port, `TCP *:1985`, on every
+interface; it is engine tooling, not part of the client, and Shipping builds
+do not include it.
+
+### Known toolchain issue: Xcode 27 and macOS packaging
+
+On a checkout under iCloud Drive, "Failed to finalize the .app with Xcode" is
+the extended-attributes problem in "Machine prerequisites", on Xcode 26.6 too.
+Search the UBT log for "detritus" first.
 
 With UE 5.8.3 and Xcode 27, building the game target through UnrealBuildTool
 fails at the final `.app` step: the generated stub Xcode project's pre-action
