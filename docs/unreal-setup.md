@@ -383,24 +383,43 @@ builds open the Unreal Insights trace control port, `TCP *:1985`, on every
 interface; it is engine tooling, not part of the client, and Shipping builds
 do not include it.
 
-### Known toolchain issue: Xcode 27 and macOS packaging
+### Known toolchain issue: "Failed to finalize the .app with Xcode"
 
-On a checkout under iCloud Drive, "Failed to finalize the .app with Xcode" is
-the extended-attributes problem in "Machine prerequisites", on Xcode 26.6 too.
-Search the UBT log for "detritus" first.
+**Symptom.** Building the game target through UnrealBuildTool compiles and
+links the game binary, then fails at the final `.app` step: UBT reports
+"Failed to finalize the .app with Xcode" (UAT exit 6). Because the finalize
+step fails, UBT never writes `unreal/Binaries/Mac/ProyectoMed.target`, so a
+later `BuildCookRun -skipbuild -cook -stage` cooks with no errors and then
+stops with "Missing receipt .../Binaries/Mac/ProyectoMed.target" (UAT
+exit 103).
 
-With UE 5.8.3 and Xcode 27, building the game target through UnrealBuildTool
-fails at the final `.app` step: the generated stub Xcode project's pre-action
-"Touch UBT generated tiles" fails and UBT reports "Failed to finalize the .app
-with Xcode". The game binary itself compiles and links. Running the same
-`xcodebuild build -workspace
+**Root cause (verified).** The checkout was under `~/Documents`, which iCloud
+Drive syncs. The File Provider adds `com.apple.FinderInfo` and
+`com.apple.fileprovider.fpfs#P` extended attributes to the `.app`, and
+`codesign` refuses it with "resource fork, Finder information, or similar
+detritus not allowed". `xattr -cr` does not help because iCloud adds them back
+during the build. The Xcode version is not the cause: the failure reproduces on
+Xcode 26.6.
+
+**Fix.** Build from a checkout, or a `git worktree`, under a folder iCloud does
+not sync (see "Machine prerequisites"), for example
+`~/code/proyectoMed-worktrees/<name>`. Copy `unreal/Source/ThirdParty/LiveKitSDK/Mac`
+into it from an existing checkout or fetch it again. From there, the
+`BuildCookRun ... -build -cook -stage -pak -package -archive` command in
+"Packaging a client build" produces a runnable `ProyectoMed.app`, and nothing
+listens on port 8000 while it runs. Verified on UE 5.8.4 with Xcode 26.6 on
+Apple silicon (#262).
+
+**Diagnosing.** Search the UBT log for "detritus" first. If it is there, move
+the checkout. The original report (UE 5.8.3, Xcode 27) showed the Xcode scheme
+pre-action "Touch UBT generated tiles" failing during `ApplePostBuildSync`
+(exit 65), while running the same `xcodebuild build -workspace
 unreal/Intermediate/ProjectFiles/ProyectoMed_Mac_ProyectoMed.xcworkspace
 -scheme ProyectoMed -configuration Development -destination
-generic/platform=macOS UE_XCODE_BUILD_MODE=PostBuildSync` by hand finalizes the
-`.app`, and `BuildCookRun -skipbuild -cook` then cooks with no errors, but
-staging still fails with "Missing receipt .../Binaries/Mac/ProyectoMed.target"
-because UBT never writes the receipt after the failed finalize step. Packaging
-and distribution are out of scope for #188; the fix is tracked in #262.
+generic/platform=macOS UE_XCODE_BUILD_MODE=PostBuildSync` by hand succeeded.
+Whether that Xcode 27 failure has the same cause is not yet confirmed. If the
+log has no "detritus" and the checkout is outside iCloud, record the Xcode
+version and the full `ApplePostBuildSync` output in #262.
 
 All Toolsets enables the GameFeatures plugin in the editor, so the cook (an
 editor process) requires a `GameFeatureData` rule in the Asset Manager. The
