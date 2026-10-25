@@ -919,6 +919,19 @@ input_tokens=... cache_read_input_tokens=... cache_creation_input_tokens=...
 latency_ms=...`, never the prompt, the output or the key. From the second
 patient turn of a station, `cache_read_input_tokens` should be above 0.
 
+### Session usage and cost
+
+Each finished session gets one content-free row in `session_usages` (issue
+#342): Claude tokens per model, Jev calls, and the Deepgram seconds, ElevenLabs
+characters and LiveKit participant minutes the voice worker reports to
+`POST /api/internal/voice/sessions/:id/usage`, with an estimated USD cost.
+`Backend.Stations.session_cost_report/2` gives the median cost per station over
+a period. See `docs/operations/session-usage-cost.md`.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `USAGE_PRICES_JSON` | JSON object overriding entries of the price table in `config/runtime.exs` (`claude` per model, `jev_call`, `deepgram_minute`, `elevenlabs_1k_characters`, `livekit_participant_minute`). Invalid JSON stops the boot; ignored in `test`. | unset (public list prices of 2026-10-25) |
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.

@@ -247,6 +247,46 @@ if config_env() != :test do
   end
 end
 
+# Provider price table (issue #342), in USD: it turns each finished session's
+# usage into an estimated cost (`Backend.Stations.Usage.Prices`). Defaults are
+# public list prices read on 2026-10-25:
+#   * Claude, per million tokens (input, output, cache read, 5-minute cache
+#     write): https://platform.claude.com/docs/en/about-claude/pricing. Claude
+#     Haiku 5.5 is priced for prompts up to 100,000 tokens (a station prompt
+#     is far below that).
+#   * Deepgram Nova-3 monolingual streaming, Pay As You Go, per audio minute:
+#     https://deepgram.com/pricing.
+#   * ElevenLabs Flash, per 1,000 characters: https://elevenlabs.io/pricing/api
+#     (the page does not say whether it is the overage rate).
+#   * LiveKit Cloud WebRTC participant minute (Ship overage):
+#     https://docs.livekit.io/home/cloud/quotas-and-limits/.
+#   * Jev (TypeSafe System One), per request: no public price page was found,
+#     so it is 0 until the contract price is set.
+# `USAGE_PRICES_JSON` overrides entries with a JSON object of the same shape,
+# for example `{"jev_call": 0.001, "claude": {"claude-haiku-5-5": {"input":
+# 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125}}}`; a model
+# entry replaces that model's four prices. Invalid JSON stops the boot; an
+# invalid entry raises when a cost is estimated. `:test` reads none of it.
+config :backend, Backend.Stations.Usage.Prices,
+  table: %{
+    claude: %{
+      "claude-haiku-5-5" => %{input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125},
+      "claude-sonnet-5-5" => %{input: 2.0, output: 10.0, cache_read: 0.10, cache_write: 2.50},
+      "claude-opus-5-5" => %{input: 4.0, output: 20.0, cache_read: 0.20, cache_write: 5.0}
+    },
+    jev_call: 0.0,
+    deepgram_minute: 0.0048,
+    elevenlabs_1k_characters: 0.04,
+    livekit_participant_minute: 0.0005
+  }
+
+if config_env() != :test do
+  with raw when is_binary(raw) <- System.get_env("USAGE_PRICES_JSON"),
+       trimmed when trimmed != "" <- String.trim(raw) do
+    config :backend, Backend.Stations.Usage.Prices, override: JSON.decode!(trimmed)
+  end
+end
+
 # Rubric resolver (issue #214): an LLM that decides only the rubric actions Jev
 # left undecided. Off unless `RUBRIC_RESOLVER` turns it on (`openai`, kept for
 # compatibility, or `on`): without the variable the default `DisabledAdapter`

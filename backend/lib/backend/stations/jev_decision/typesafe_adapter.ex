@@ -634,7 +634,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
         finch: [pool_timeout: budget_ms, request_timeout: budget_ms]
       )
 
-    case Req.post(url, req_opts) do
+    response = Req.post(url, req_opts)
+    # Every request that got an HTTP response is one Jev call (issue #342).
+    if match?({:ok, %Req.Response{}}, response), do: Backend.Stations.Usage.record_jev_call()
+
+    case response do
       # Only 200 is a decision. Another 2xx (a partial or queued response, for
       # example) is not one, whatever its body says.
       {:ok, %Req.Response{status: 200, body: body}} ->
