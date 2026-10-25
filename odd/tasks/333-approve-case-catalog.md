@@ -26,6 +26,7 @@ Issue: #333 (parent spec #326). Branch: `feat/333-approve-case-catalog` → PR b
 - [x] T2 — S1, S2, S3, S4, S5, S6 — delegated (`gentle-ai-worker`, context backstop) — Web layer (Admin LiveView + Catalog HTTP API): approve/disapprove actions and approver display in `BackendWeb.AdminCaseLive.Show` and `BackendWeb.AdminCaseLive.Index`, `GET /stations` and `GET /api/stations` catalog route in `BackendWeb.Router` and `BackendWeb.StationController`, LiveView tests in `test/backend_web/live/admin_case_live_test.exs`, and controller tests in `test/backend_web/controllers/station_controller_test.exs`. Commit `439c069` (RED 9/9 fail -> GREEN 127/127 pass).
 - [x] T3 — S1, S2, S3, S4, S5, S6 — inline — Full verification, differential check, and closure. Full backend suite 2048/2048 passed, dialyzer 0 errors, credo strict 0 issues.
 - [x] R1 — DATA-001, tx-resilience-02 — inline — Jorge advisory review fixes (`gemini-3.8-flash`): approval idempotency and disapproval metadata cleanup. Commit `de908ab`. ExUnit 2049/2049 passed, dialyzer 0 errors, credo clean. PR comment posted.
+- [x] R2 — S5, S6 — delegated (bounded writer) — Independent verification fixes: catalog identity is the case number (`id`, plus `version` and display-only `slug`), `GET /stations` documented in `docs/unreal-station-client.md`, `case_revision_id` semantics documented. Commit `687cda3`. ExUnit 2051/2051 passed, dialyzer 0 errors, credo clean.
 
 ## Log
 
@@ -56,3 +57,9 @@ Issue: #333 (parent spec #326). Branch: `feat/333-approve-case-catalog` → PR b
   - RED observed: 4 test failures across `content_test.exs` and `admin_case_live_test.exs`.
   - GREEN: Commit `de908ab`. Full backend suite 2049/2049 passed, dialyzer 0 errors, credo strict 0 issues.
   - Pushed to `origin feat/333-approve-case-catalog` and posted resolution comment on PR #372.
+- **L7** (2026-10-25, independent verification fixes R2):
+  - Finding 1 (catalog identity): `Stations.to_catalog_station` exposed `"id" => version.station_id` (the `[ESTAÇÃO]` slug, which can repeat across cases) while `Content.list_published_stations/0` dedups on `c.number`. Now `"id"` is the case number (integer), `"version"` is `version_number`, and `"slug"` keeps the `[ESTAÇÃO]` id for display only; `list_published_stations/0` preloads `case`.
+  - Finding 2 (docs): new section "Station catalog (`GET /stations`)" in `docs/unreal-station-client.md` (routes, public `:api` auth until #337, response shape and example, fields, ordering, latest approved version per case); `docs/case-format/README.md` links to it.
+  - Finding 3 (naming): documented in the `StationVersion` moduledoc and the case-format README that `case_revision_id` references the revision holding the replaced Markdown; the approved text is `StationVersion.markdown`. No rename.
+  - RED observed: 4 failures (`content_test.exs` x2, `station_controller_test.exs` x2) on the new id/slug/version assertions, including two approved cases sharing one slug. GREEN: commit `687cda3`.
+  - Gates (`MIX_TEST_PARTITION=_fix372`): `mix format --check-formatted` clean, `mix compile --force --warnings-as-errors` clean, `mix credo --strict` no issues, `mix test` 2051 passed, `mix dialyzer` 0 errors.
