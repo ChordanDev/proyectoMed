@@ -136,17 +136,15 @@ defmodule Backend.Stations.Usage.Prices do
   defp claude_cost(models, prices) do
     Enum.reduce(models, {0.0, []}, fn {model, tokens}, {cost, unpriced} ->
       case Map.fetch(prices, model) do
-        {:ok, model_prices} ->
-          model_cost =
-            Enum.reduce(@token_prices, 0.0, fn {field, price}, acc ->
-              acc + Map.get(tokens, field, 0) * Map.fetch!(model_prices, price) / 1_000_000
-            end)
-
-          {cost + model_cost, unpriced}
-
-        :error ->
-          {cost, [model | unpriced]}
+        {:ok, model_prices} -> {cost + model_cost(tokens, model_prices), unpriced}
+        :error -> {cost, [model | unpriced]}
       end
+    end)
+  end
+
+  defp model_cost(tokens, model_prices) do
+    Enum.reduce(@token_prices, 0.0, fn {field, price}, acc ->
+      acc + Map.get(tokens, field, 0) * Map.fetch!(model_prices, price) / 1_000_000
     end)
   end
 end

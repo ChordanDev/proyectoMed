@@ -34,6 +34,7 @@ defmodule Backend.Stations.PatientVerification do
   alias Backend.Stations.Conversation
   alias Backend.Stations.JevDecision
   alias Backend.Stations.StationAI.BoundedReply
+  alias Backend.Stations.Usage
 
   @modes [:blocking, :audit, :off]
   @default_mode :audit
@@ -117,16 +118,15 @@ defmodule Backend.Stations.PatientVerification do
   def start_audit(request, opts \\ []) do
     if mode() == :audit do
       # The audit may outlive its caller, so it carries the session itself (#342).
-      session_id = Backend.Stations.Usage.current_session()
-
-      {:ok, _pid} =
-        Task.start(fn ->
-          Backend.Stations.Usage.track(session_id, fn -> audit(request, opts) end)
-        end)
+      session_id = Usage.current_session()
+      {:ok, _pid} = Task.start(fn -> tracked_audit(session_id, request, opts) end)
     end
 
     :ok
   end
+
+  defp tracked_audit(session_id, request, opts),
+    do: Usage.track(session_id, fn -> audit(request, opts) end)
 
   @doc """
   Audits a delivered reply with Jev now and records the result on the session.

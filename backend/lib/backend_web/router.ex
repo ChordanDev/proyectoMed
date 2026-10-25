@@ -94,6 +94,7 @@ defmodule BackendWeb.Router do
     get "/sessions/:id", VoiceWorkerController, :show
     post "/sessions/:id/transcripts", VoiceWorkerController, :create_transcript
     post "/sessions/:id/cancel", VoiceWorkerController, :cancel
+    post "/sessions/:id/usage", VoiceWorkerController, :report_usage
   end
 
   scope "/api/v2/stations", BackendWeb do

@@ -109,23 +109,75 @@ defmodule Backend.Stations.Usage do
   def record_claude(model, usage) when is_binary(model) and is_map(usage) do
     with_session(fn session_id ->
       for field <- @claude_fields do
-        case Map.get(usage, Atom.to_string(field)) do
-          count when is_integer(count) and count > 0 ->
-            increment({session_id, :claude, model, field}, count)
-
-          _missing ->
-            increment({session_id, :claude, model, field}, 0)
-        end
+        increment({session_id, :claude, model, field}, token_count(usage, field))
       end
     end)
   end
 
   def record_claude(_model, _usage), do: :ok
 
+  defp token_count(usage, field) do
+    case Map.get(usage, Atom.to_string(field)) do
+      count when is_integer(count) and count > 0 -> count
+      _missing -> 0
+    end
+  end
+
   @doc "Counts one Jev (TypeSafe System One) request of the current session."
   @spec record_jev_call() :: :ok
   def record_jev_call do
     with_session(&increment({&1, :jev}, 1))
+  end
+
+  @report_id ~r/\A[A-Za-z0-9_.:-]{1,128}\z/
+  @max_audio_seconds 86_400
+  @max_characters 10_000_000
+  @max_participant_minutes 14_400
+
+  @doc """
+  Validates one voice worker report (string keys): `report_id` (1 to 128 of
+  `A-Z a-z 0-9 _ . : -`, the worker job), `deepgram_audio_seconds` and
+  `livekit_participant_minutes` (non-negative numbers) and
+  `elevenlabs_characters` (a non-negative integer), each bounded. Other keys
+  are ignored.
+  """
+  @spec voice_report(map()) :: {:ok, String.t(), voice()} | {:error, :invalid_usage}
+  def voice_report(%{
+        "report_id" => report_id,
+        "deepgram_audio_seconds" => seconds,
+        "elevenlabs_characters" => characters,
+        "livekit_participant_minutes" => minutes
+      })
+      when is_binary(report_id) and is_number(seconds) and seconds >= 0 and
+             seconds <= @max_audio_seconds and is_integer(characters) and characters >= 0 and
+             characters <= @max_characters and is_number(minutes) and minutes >= 0 and
+             minutes <= @max_participant_minutes do
+    if Regex.match?(@report_id, report_id) do
+      {:ok, report_id,
+       %{
+         deepgram_audio_seconds: seconds * 1.0,
+         elevenlabs_characters: characters,
+         livekit_participant_minutes: minutes * 1.0
+       }}
+    else
+      {:error, :invalid_usage}
+    end
+  end
+
+  def voice_report(_params), do: {:error, :invalid_usage}
+
+  @doc """
+  Keeps a voice worker report for `session_id`. Reports are cumulative per
+  `report_id` (one worker job): a retried report replaces the earlier one with
+  the same id, and the session's voice usage is the sum over its jobs.
+  """
+  @spec record_voice(String.t(), String.t(), voice()) :: :ok
+  def record_voice(session_id, report_id, voice) when is_binary(session_id) do
+    if :ets.whereis(@table) != :undefined do
+      :ets.insert(@table, {{session_id, :voice, report_id}, voice})
+    end
+
+    :ok
   end
 
   @doc "The usage recorded for `session_id` so far (zeros when nothing was)."
@@ -134,18 +186,33 @@ defmodule Backend.Stations.Usage do
     if :ets.whereis(@table) == :undefined do
       empty()
     else
-      claude =
-        @table
-        |> :ets.match_object({{session_id, :claude, :_, :_}, :_})
-        |> Enum.reduce(%{}, fn {{_id, :claude, model, field}, count}, acc ->
-          acc
-          |> Map.put_new(model, Map.new(@claude_fields, &{&1, 0}))
-          |> put_in([model, field], count)
-        end)
-
-      %{empty() | claude: claude, jev_calls: lookup({session_id, :jev}, 0)}
+      %{
+        empty()
+        | claude: claude_totals(session_id),
+          jev_calls: lookup({session_id, :jev}, 0),
+          voice: voice_totals(session_id)
+      }
     end
   end
+
+  defp claude_totals(session_id) do
+    @table
+    |> :ets.match_object({{session_id, :claude, :_, :_}, :_})
+    |> Enum.reduce(%{}, fn {{_id, :claude, model, field}, count}, acc ->
+      acc
+      |> Map.put_new(model, Map.new(@claude_fields, &{&1, 0}))
+      |> put_in([model, field], count)
+    end)
+  end
+
+  defp voice_totals(session_id) do
+    @table
+    |> :ets.match_object({{session_id, :voice, :_}, :_})
+    |> Enum.reduce(empty().voice, &add_report/2)
+  end
+
+  defp add_report({_key, report}, totals),
+    do: Map.merge(totals, report, fn _field, total, count -> total + count end)
 
   @doc "Drops every counter of `session_id`."
   @spec forget(String.t()) :: :ok
