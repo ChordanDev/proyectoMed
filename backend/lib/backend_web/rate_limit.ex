@@ -50,6 +50,9 @@ defmodule BackendWeb.RateLimit do
           | :reset_password_email
           | :sign_up
 
+  @doc "The pt-BR flash of a throttled browser page."
+  def flash_message, do: "Muitas tentativas. Aguarde alguns minutos e tente novamente."
+
   @doc "The default limits, `[action: [kind: {count, window_ms}]]`."
   def default_limits, do: @default_limits
 

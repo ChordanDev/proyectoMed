@@ -7,15 +7,33 @@ defmodule BackendWeb.UserSessionController do
   use BackendWeb, :controller
 
   alias Backend.Accounts
+  alias BackendWeb.RateLimit
   alias BackendWeb.UserAuth
 
   def create(conn, %{"_action" => "confirmed"} = params) do
-    create(conn, params, "Conta confirmada.")
+    throttled_create(conn, params, "Conta confirmada.")
   end
 
   def create(conn, params) do
-    create(conn, params, "Boas-vindas de volta!")
+    throttled_create(conn, params, "Boas-vindas de volta!")
   end
+
+  # Password and link logins are throttled per client IP and per email (#380).
+  defp throttled_create(conn, params, info) do
+    case RateLimit.check(:login, ip: conn.remote_ip, email: login_email(params)) do
+      :ok ->
+        create(conn, params, info)
+
+      {:error, :rate_limited, _retry_after} ->
+        conn
+        |> put_flash(:error, RateLimit.flash_message())
+        |> redirect(to: ~p"/users/log-in")
+    end
+  end
+
+  defp login_email(%{"user" => %{"token" => _token}}), do: nil
+  defp login_email(%{"user" => %{"email" => email}}) when is_binary(email), do: email
+  defp login_email(_params), do: nil
 
   # magic link login
   defp create(conn, %{"user" => %{"token" => token} = user_params}, info) do

@@ -158,7 +158,8 @@ defmodule BackendWeb.Router do
     pipe_through [:browser, :require_authenticated_user]
 
     live_session :require_authenticated_user,
-      on_mount: [{BackendWeb.UserAuth, :require_authenticated}] do
+      on_mount: [{BackendWeb.UserAuth, :require_authenticated}],
+      session: {BackendWeb.RateLimit, :live_session, []} do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
       live "/device", DeviceLive, :confirm
@@ -172,7 +173,8 @@ defmodule BackendWeb.Router do
     pipe_through [:browser]
 
     live_session :current_user,
-      on_mount: [{BackendWeb.UserAuth, :mount_current_scope}] do
+      on_mount: [{BackendWeb.UserAuth, :mount_current_scope}],
+      session: {BackendWeb.RateLimit, :live_session, []} do
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/log-in/:token", UserLive.Confirmation, :new
