@@ -21,8 +21,8 @@ Issue: #342 (parent spec #326). Branch: `feat/342-session-usage-cost` → PR bas
 | T3 | S2, S4, S5 | inline | done | `25e4f9d` — `session_usages` migration and schema, `Usage.Store` upsert on finish and after the educational result, `Stations.session_cost_report/2`. RED: compile error (schema undefined) → GREEN 8/8 `usage_store_test.exs`; suite 2137/2137 |
 | T4 | S3, S6 | inline | done | `5a97b7c` — `POST /api/internal/voice/sessions/:id/usage` behind the worker bearer secret, `Stations.record_voice_usage/2`, cumulative per `report_id`. RED 5/5 failing → GREEN 38/38 `voice_worker_controller_test.exs`; suite 2142/2142; credo strict clean |
 | T5 | S3 | inline | done | `058411a` — `voice-worker/usage.py` (`UsageMeter`, `report_usage`), `PhoenixClient.report_usage`, metering in `transcribe` and `SpeechPlayer`, report at job end. RED: `test_usage` import error → GREEN 168/168 Python tests (9 new; two entrypoint tests now also assert the single usage report) |
-| T6 | S1, S5 | inline | done | this commit — `docs/operations/session-usage-cost.md`, README variable; live 10-turn Haiku run (see L4) |
-| T7 | S2, S7 | inline | done | next commit — rows are computed at the call and written in a separate process (`async: false` for tests), and an older computation never replaces a newer row (`insert_all` upsert guarded by `updated_at`). RED: the process-level E2E timed out (finish waited on an unreachable `backend_dev`), and the new ordering test raised `Ecto.StaleEntryError` → GREEN 10/10 `usage_store_test.exs`; suite 2144/2144; local CI passed |
+| T6 | S1, S5 | inline | done | `03aec26` — `docs/operations/session-usage-cost.md`, README variable; live 10-turn Haiku run (see L4) |
+| T7 | S2, S7 | inline | done | `bc05ec4` — rows are computed at the call and written in a separate process (`async: false` for tests), and an older computation never replaces a newer row (`insert_all` upsert guarded by `updated_at`). RED: the process-level E2E timed out (finish waited on an unreachable `backend_dev`), and the new ordering test raised `Ecto.StaleEntryError` → GREEN 10/10 `usage_store_test.exs`; suite 2144/2144; local CI passed |
 
 ## Log
 
