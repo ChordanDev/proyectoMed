@@ -8,7 +8,7 @@ defmodule Backend.Accounts do
   import Ecto.Query, warn: false
   alias Backend.Repo
 
-  alias Backend.Accounts.{LegalDocuments, Scope, User, UserNotifier, UserToken}
+  alias Backend.Accounts.{DeviceLogin, LegalDocuments, Scope, User, UserNotifier, UserToken}
 
   ## Database getters
 
@@ -419,14 +419,89 @@ defmodule Backend.Accounts do
     :ok
   end
 
+  ## Device login (#337)
+
+  @doc """
+  Starts a device login for the Unreal client (RFC 8628 shape). Returns the
+  secret `device_code` the client polls with, the `user_code` (`XXXX-XXXX`)
+  the learner confirms in the browser, the polling `interval` and the
+  lifetime `expires_in`, both in seconds. Only hashes are stored.
+  """
+  @spec start_device_authorization() :: {:ok, DeviceLogin.start()}
+  defdelegate start_device_authorization, to: DeviceLogin, as: :start
+
+  @doc """
+  Returns true when the user code (any case, dash optional) names a pending,
+  unexpired device login.
+  """
+  @spec pending_device_authorization?(term()) :: boolean()
+  defdelegate pending_device_authorization?(user_code), to: DeviceLogin, as: :pending?
+
+  @doc """
+  The learner approves the device login of `user_code`; the client's next
+  poll receives the tokens. Admin accounts may not use the device flow.
+  """
+  @spec approve_device_authorization(User.t(), term()) ::
+          :ok | {:error, :invalid_code | :admin_account}
+  def approve_device_authorization(%User{} = user, user_code),
+    do: DeviceLogin.decide(user, user_code, :approved)
+
+  @doc """
+  The learner denies the device login of `user_code`; the client's next poll
+  receives `access_denied`.
+  """
+  @spec deny_device_authorization(User.t(), term()) :: :ok | {:error, :invalid_code}
+  def deny_device_authorization(%User{} = user, user_code),
+    do: DeviceLogin.decide(user, user_code, :denied)
+
+  @doc """
+  Polls a device login with its `device_code`. Returns the tokens once after
+  approval, or one of the RFC 8628 errors `:authorization_pending`,
+  `:slow_down` (the interval grows by 5 seconds), `:expired_token`,
+  `:access_denied`, or `:invalid_grant` for an unknown or consumed code.
+  """
+  @spec poll_device_authorization(term()) ::
+          {:ok, DeviceLogin.tokens()} | {:error, DeviceLogin.poll_error()}
+  defdelegate poll_device_authorization(device_code), to: DeviceLogin, as: :poll
+
+  @doc """
+  Exchanges a refresh token for a new access and refresh token pair. The old
+  pair stops working; presenting the old refresh token again revokes the
+  whole device login.
+  """
+  @spec refresh_device_token(term()) :: {:ok, DeviceLogin.tokens()} | {:error, :invalid_grant}
+  defdelegate refresh_device_token(refresh_token), to: DeviceLogin, as: :refresh
+
+  @doc """
+  Gets the user of a valid, unexpired device access token, or `nil`.
+  """
+  @spec get_user_by_device_access_token(term()) :: User.t() | nil
+  defdelegate get_user_by_device_access_token(token), to: DeviceLogin, as: :user_by_access_token
+
+  @doc """
+  Logs out the device login of this access token (its refresh token too).
+  """
+  @spec revoke_device_token(term()) :: :ok
+  defdelegate revoke_device_token(access_token), to: DeviceLogin, as: :revoke
+
+  @doc """
+  Logs the user out of every device. Changing or resetting the password does
+  the same, and deleting the account erases the tokens with it.
+  """
+  @spec revoke_all_device_tokens(User.t()) :: :ok
+  def revoke_all_device_tokens(%User{} = user), do: DeviceLogin.revoke_all(user)
+
   ## Token helper
 
+  # Also revokes every device login (#337): a password change logs the
+  # learner out of the Unreal client too.
   defp update_user_and_delete_all_tokens(changeset) do
     Repo.transact(fn ->
       with {:ok, user} <- Repo.update(changeset) do
         tokens_to_expire = Repo.all_by(UserToken, user_id: user.id)
 
         Repo.delete_all(from(t in UserToken, where: t.id in ^Enum.map(tokens_to_expire, & &1.id)))
+        :ok = DeviceLogin.revoke_all(user)
 
         {:ok, {user, tokens_to_expire}}
       end
