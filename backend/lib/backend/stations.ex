@@ -12,6 +12,7 @@ defmodule Backend.Stations do
 
   require Logger
 
+  alias Backend.Stations.Actors
   alias Backend.Stations.CandidateGate
   alias Backend.Stations.CaseFormat
   alias Backend.Stations.Conversation
@@ -25,7 +26,6 @@ defmodule Backend.Stations do
   alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
-  alias Backend.Stations.Actors
   alias Backend.Stations.StationAI.Addressee
   alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
