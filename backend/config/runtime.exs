@@ -189,8 +189,9 @@ end
 # seams (simulated patient, rubric resolver, learner feedback) from Claude's
 # Messages API. Unset, or any other value, keeps OpenAI exactly as before. Jev
 # (TypeSafe) and voice are not affected. `ANTHROPIC_API_KEY`,
-# `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (resolver and feedback, default
-# `claude-opus-5-5`) and `ANTHROPIC_PATIENT_MODEL` (patient, default
+# `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (learner feedback, default
+# `claude-opus-5-5`), `ANTHROPIC_RESOLVER_MODEL` (rubric resolver, default
+# `claude-haiku-5-5`, issue #343) and `ANTHROPIC_PATIENT_MODEL` (patient, default
 # `claude-haiku-5-5`, issues #256 and #308) and `ANTHROPIC_ADJUDICATOR_MODEL`
 # (undecided-verdict adjudicator, default `claude-haiku-5-5`, issue #290) are
 # written to `Backend.Stations.StationAI.AnthropicClient`; the adapters never
@@ -204,6 +205,7 @@ if config_env() != :test do
         {"ANTHROPIC_API_KEY", :api_key},
         {"ANTHROPIC_BASE_URL", :base_url},
         {"ANTHROPIC_MODEL", :model},
+        {"ANTHROPIC_RESOLVER_MODEL", :resolver_model},
         {"ANTHROPIC_PATIENT_MODEL", :patient_model},
         {"ANTHROPIC_ADJUDICATOR_MODEL", :adjudicator_model}
       ],
@@ -294,7 +296,7 @@ end
 # with `LLM_PROVIDER=anthropic` (configured above), OpenAI otherwise. On OpenAI
 # it reuses the OpenAI key and base URL configured above, and
 # `RUBRIC_RESOLVER_MODEL` picks its model, which otherwise falls back to
-# `OPENAI_MODEL`; on Claude `ANTHROPIC_MODEL` applies. `:test` reads none of it.
+# `OPENAI_MODEL`; on Claude `ANTHROPIC_RESOLVER_MODEL` applies. `:test` reads none of it.
 if config_env() != :test do
   resolver_adapter = Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter
 
