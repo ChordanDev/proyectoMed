@@ -508,6 +508,8 @@ defmodule Backend.Stations.Conversation do
   @impl true
   def init(_options) do
     :ets.new(__MODULE__, [:named_table, :set, :public, read_concurrency: true])
+    # Per-session provider usage counters (issue #342) live as long as sessions.
+    :ok = Backend.Stations.Usage.create_table()
     schedule_purge()
     {:ok, %{turns: %{}, voice_graces: %{}, feedback_flights: %{}}}
   end
@@ -950,6 +952,7 @@ defmodule Backend.Stations.Conversation do
 
   def handle_call({:discard, session_id}, _from, state) do
     :ets.delete(__MODULE__, session_id)
+    Backend.Stations.Usage.forget(session_id)
 
     state =
       case Map.pop(state.turns, session_id) do
@@ -973,6 +976,7 @@ defmodule Backend.Stations.Conversation do
 
     for {session_id, session} <- :ets.tab2list(__MODULE__), expired?(session, now) do
       :ets.delete(__MODULE__, session_id)
+      Backend.Stations.Usage.forget(session_id)
     end
 
     schedule_purge()
@@ -1150,6 +1154,7 @@ defmodule Backend.Stations.Conversation do
       [{^session_id, session}] ->
         if expired?(session, DateTime.utc_now()) do
           :ets.delete(__MODULE__, session_id)
+          Backend.Stations.Usage.forget(session_id)
           {:error, :expired}
         else
           {:ok, session}

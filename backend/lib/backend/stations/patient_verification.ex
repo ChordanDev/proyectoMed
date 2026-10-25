@@ -116,7 +116,13 @@ defmodule Backend.Stations.PatientVerification do
   @spec start_audit(audit_request(), keyword()) :: :ok
   def start_audit(request, opts \\ []) do
     if mode() == :audit do
-      {:ok, _pid} = Task.start(fn -> audit(request, opts) end)
+      # The audit may outlive its caller, so it carries the session itself (#342).
+      session_id = Backend.Stations.Usage.current_session()
+
+      {:ok, _pid} =
+        Task.start(fn ->
+          Backend.Stations.Usage.track(session_id, fn -> audit(request, opts) end)
+        end)
     end
 
     :ok
