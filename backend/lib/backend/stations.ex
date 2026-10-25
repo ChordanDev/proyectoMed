@@ -24,6 +24,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.MediaSession
   alias Backend.Stations.PatientVerification
   alias Backend.Stations.Qualification
+  alias Backend.Stations.Results.History, as: ResultHistory
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.Addressee
@@ -843,15 +844,39 @@ defmodule Backend.Stations do
   (issue #215), cached with the session and bound to the graded outcome. Any
   feedback failure keeps the authored `practice_recommendation`; grading is
   never changed.
+
+  The first result served for a learner's session is stored in the learner's
+  results history (#338, `Backend.Stations.Results.History`); a technical
+  failure stores nothing.
   """
   @spec get_educational_result(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_educational_result(session_id, opts \\ []) do
     with {:ok, assessment} <- graded_assessment(session_id, opts),
-         {:ok, package} <- fetch_package(session_id) do
+         {:ok, session} <- Conversation.fetch(session_id) do
+      package = session_package(session)
       assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
-      {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
+      result = Backend.Stations.EducationalResult.serialize(session_id, assessment, package)
+      :ok = ResultHistory.record(session, result)
+      {:ok, result}
     end
   end
+
+  @doc """
+  The learner's results history, newest first (#338): `results` summaries
+  (`id`, `session_id`, `finished_at`, `station`), `page`, `page_size`,
+  `has_more` and the pt-BR `educational_disclaimer`. Options `:area`, `:page`
+  and `:page_size`. No aggregate across sessions is computed.
+  """
+  @spec list_results(pos_integer(), keyword()) :: map()
+  defdelegate list_results(user_id, opts \\ []), to: ResultHistory, as: :list
+
+  @doc """
+  One stored result of the learner (#338): the summary fields plus `result`,
+  the Educational Result served at the end of the session. Another learner's
+  result is `{:error, :not_found}`.
+  """
+  @spec get_result(pos_integer(), term()) :: {:ok, map()} | {:error, :not_found}
+  defdelegate get_result(user_id, id), to: ResultHistory, as: :get
 
   defp graded_assessment(session_id, opts) do
     with {:ok, _session} <- fetch_completed_session(session_id) do
