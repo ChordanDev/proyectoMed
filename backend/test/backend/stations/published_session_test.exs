@@ -187,5 +187,29 @@ defmodule Backend.Stations.PublishedSessionTest do
 
       assert %{status: "met"} = Enum.find(result.criteria, &(&1.id == imaging_criterion["id"]))
     end
+
+    test "a released impresso of a pinned session is verified rubric evidence",
+         %{admin: admin, package: package} do
+      kase = publish!(package, admin)
+      {:ok, session} = Stations.start_station_session({:station, kase.number}, %{})
+
+      assert {:ok, %{newly_released: [%{id: @imaging_impresso}]}} =
+               Stations.request_impresso(session.session_id, %{"text" => @imaging_request})
+
+      {:ok, played} = Stations.get_session(session.session_id)
+
+      assert [%{provenance: :impressos, released_ids: [@imaging_impresso]}] =
+               played
+               |> Backend.Stations.RubricAssessment.Evidence.build(played.package)
+               |> Enum.filter(&(&1.kind == :impresso_event))
+
+      # Graded against another package, the pinned version number proves nothing.
+      assert [%{provenance: :unverified}] =
+               played
+               |> Backend.Stations.RubricAssessment.Evidence.build(
+                 Map.put(package, "id", "other")
+               )
+               |> Enum.filter(&(&1.kind == :impresso_event))
+    end
   end
 end
