@@ -1,0 +1,32 @@
+# 334 — Start sessions on published stations from the database
+
+Issue: #334 (parent spec #326). Branch: `feat/334-sessions-from-db` → PR base `feat/326-production-launch`. Delivery strategy: `single-pr`. Test runner: `(cd backend && MIX_TEST_PARTITION=_issue334 mix test)`; full gate: `local_ci.sh <worktree>`.
+
+## Specs
+
+- **S1** (Issue #334 verbatim): "POST /sessions creates a session for a station id or a random published station (optionally within an area). The session pins its Station version, and all station routes are addressed by session instead of an active station. The pre-station notice with every active provider is exposed through the API (ADR-003). The file-based loader remains only for tests and local development. The reference acute-appendicitis case plays end to end through this path."
+- **S2** (AC verbatim): "Creating by id and by random-within-area works; unknown ids and empty areas return explicit errors"
+- **S3** (AC verbatim): "A session keeps its version after the station is re-published"
+- **S4** (AC verbatim): "Turns, impressos, finish and the educational result work per session"
+- **S5** (AC verbatim): "The provider notice lists every active provider"
+- **S6** (AC verbatim): "Production config cannot boot from priv/stations"
+- **S7** (task constraints from the parent orchestrator): keep the existing `/api/stations/active/...` routes working as deprecated aliases (frozen web SPA and E2E harness keep passing); the voice worker receives the session's package context through `voice_worker_context`; the reference acute-appendicitis case plays end to end through the new path in a test (text turns, impresso, finish, educational result) using a version published with `Content.approve_case/3`; `docs/unreal-station-client.md` documents the new session contract.
+- **S8** (invariants, AGENTS.md): `Stations` may call `Content`; `Content` calls no other context; `BackendWeb` stays thin and calls only public context modules.
+
+## Tasks
+
+| ID | Specs | Route | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| T1 | S1, S2, S8 | inline | done | `37cb8ea` — `Content.get_published_station/1`, `Content.random_published_station/1`. RED 5/5 failing (undefined) → GREEN 37/37 `content_test.exs` |
+| T2 | S1–S4, S7 | inline | done | `409f0c3` — `Stations.start_station_session/2` pins the version (validated package copied into the session); turns, voice, impressos, results and `voice_worker_context` read the session's package. RED 7/7 failing (undefined) → GREEN 7/7 `published_session_test.exs`; full suite 2063/2063 |
+| T3 | S1, S2, S4, S7 | inline | done | `28daa8d` — `POST /sessions` (`BackendWeb.SessionController`), `/sessions/:id/...` routes, deprecated aliases kept, reference appendicitis E2E test, Unreal doc. RED 11/11 failing → GREEN 11/11 `session_controller_test.exs` |
+| T4 | S5 | inline | done | `8e72adf` — `GET /pre-station-notice` (`Backend.Stations.PreStationNotice`). RED 6/6 failing → GREEN 6/6 `pre_station_notice_test.exs`; the route test was written with the route (not observed RED separately) |
+| T5 | S6 | inline | done | `2b16f45` — prod sets `file_station_loader: false` and refuses `ACTIVE_STATION_ID`; loader returns `:ignore` when off; active routes answer `404 no_active_station`. RED 4/5 config tests + 1/2 no-loader controller tests failing (the dev baseline and the `POST /sessions`-without-loader tests passed before the change, as differential pins) → GREEN |
+
+## Log
+
+- **L1** (2026-10-25, parent orchestrator task, verbatim excerpt): "Build POST /sessions taking a station id (case number) or {"random": true, "area": optional}; the session pins its station_versions row (version stays fixed after re-publish); all station routes are addressed per session (keep the existing /api/stations/active/... routes working as deprecated aliases until the Unreal client and the frozen web harness move — the frozen web/ SPA and the E2E harness must keep passing; minimal API-client changes in web/src/features/station/api only if strictly required); expose the pre-station provider notice (every active provider, ADR-003) through the API; the voice worker must receive the session's package context the same way (it currently reads voice_worker_context); production config must refuse to boot from priv/stations (file loader stays for tests/dev). Explicit errors: unknown id, no published station in area. The reference acute-appendicitis case must play end to end through the new path in a test (text turns, impresso, finish, educational result) using a published version created via Content.approve_case/3 in the test. Update docs/unreal-station-client.md with the new session contract."
+- **L2** (2026-10-25, exploration): sessions live in the `Conversation` ETS table and are already addressed by id; every session operation read the boot-time package through `get_active_package/0`. Decision: a database session copies its validated package into the session (≈40 KB, the same copy a `StationLoader` call already makes), so a re-publish never changes it; a legacy session (no package) keeps reading the file loader, so the deprecated aliases and existing tests stay unchanged. Routed inline: no writer trigger (one behavior chain, dependent tasks).
+- **L3** (2026-10-25, implementation): one commit per task (T1–T5), all inline (no writer trigger). Existing test `active_station_config_test.exs` "sets the active station id outside test" asserted that prod accepts `ACTIVE_STATION_ID`; S6 changes that on purpose, so it now covers dev only and prod is pinned by `station_source_config_test.exs`. The voice worker needed no change: it reads `GET /api/internal/voice/sessions/:id`, now built from the session's pinned package (keyterms test in `published_session_test.exs`).
+- **L4** (2026-10-25, verification): `local_ci.sh` → LOCAL CI PASSED: web typecheck and lint clean; `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict` (no issues); web unit 337/337; ExUnit 2088/2088; process-level E2E 4/4 (frozen web harness on the deprecated routes); dialyzer 0 errors. GitHub Actions is blocked by billing.
+- **L5** (next step): PR to `feat/326-production-launch`. Follow-ups: the Unreal `StationClient` still calls the deprecated active-station routes (owned by the Unreal tracks); entitlement/quota at session creation (#338-ish) and device-token auth (#337) are not part of #334.
