@@ -3,6 +3,13 @@ defmodule BackendWeb.StationController do
 
   alias Backend.Stations
 
+  @doc """
+  Lists published stations for the catalog API (`GET /stations` and `GET /api/stations`).
+  """
+  def index(conn, _params) do
+    json(conn, Stations.list_catalog_stations())
+  end
+
   # `voice_mode` (#270) tells the web which single voice experience to offer:
   # "realtime", "turn" or "off" (config/runtime.exs resolves VOICE_MODE).
   def active(conn, _params) do

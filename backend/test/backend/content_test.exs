@@ -8,6 +8,11 @@ defmodule Backend.ContentTest do
   use Backend.DataCase, async: true
 
   alias Backend.Content
+  alias Backend.Stations
+
+  @reference_case File.read!(
+                    Path.expand("../../priv/stations/acute-appendicitis/case.md", __DIR__)
+                  )
 
   defp insert_case!(area, theme, markdown \\ "# caso") do
     %{rows: [[id]]} =
@@ -214,6 +219,273 @@ defmodule Backend.ContentTest do
       Repo.query!("DELETE FROM cases WHERE id = $1", [kase.id])
 
       assert %{rows: [[0]]} = Repo.query!("SELECT count(*) FROM case_revisions")
+    end
+  end
+
+  describe "approving and publishing a case (issue #333)" do
+    setup do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      {:ok, valid_package} = Stations.parse_case(@reference_case)
+      %{admin: admin, package: valid_package}
+    end
+
+    test "approving publishes an immutable StationVersion, sets approval metadata, and updates status",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
+
+      assert {:ok, approved} = Content.approve_case(kase, package, admin)
+
+      assert approved.status == :approved
+      assert approved.approved_by_id == admin.id
+      assert approved.approved_by_email == admin.email
+      assert %DateTime{} = approved.approved_at
+      assert approved.lock_version == 2
+
+      # Re-fetch from DB
+      reloaded = Content.get_case!(kase.id)
+      assert reloaded.status == :approved
+      assert reloaded.approved_by_id == admin.id
+      assert reloaded.approved_by_email == admin.email
+      assert reloaded.approved_at == approved.approved_at
+
+      # Immutable station_versions record created
+      assert [version] = Content.list_station_versions(approved)
+      assert version.case_id == kase.id
+      assert version.case_revision_id == nil
+      assert version.version_number == 1
+      assert version.station_id == "acute-appendicitis"
+      assert version.area == package["area"]
+      assert version.theme == package["theme"]
+      assert version.markdown == @reference_case
+      assert version.package == package
+      assert version.approved_by_id == admin.id
+      assert version.approved_by_email == admin.email
+      assert version.approved_at == approved.approved_at
+      assert %DateTime{} = version.inserted_at
+
+      assert Content.get_station_version!(version.id).id == version.id
+      assert Content.get_station_version(version.id).id == version.id
+      assert Content.get_station_version(-1) == nil
+    end
+
+    test "approve accepts either {:ok, package} or a valid package map",
+         %{admin: admin, package: package} do
+      kase1 = insert_case!("Cirurgia Geral", "Apendicite 1", @reference_case)
+      assert {:ok, _} = Content.approve_case(kase1, {:ok, package}, admin)
+
+      kase2 = insert_case!("Cirurgia Geral", "Apendicite 2", @reference_case)
+      assert {:ok, _} = Content.approve_case(kase2, package, admin)
+    end
+
+    test "approve refuses a case with parser errors or invalid package without modifying the case",
+         %{admin: admin} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", "markdown invalido")
+
+      # With {:error, _} tuple from Stations.parse_case/1
+      parse_result = Stations.parse_case("markdown invalido")
+      assert {:error, _errors} = parse_result
+      assert {:error, :invalid_case} = Content.approve_case(kase, parse_result, admin)
+
+      # With an invalid map or nil
+      assert {:error, :invalid_case} = Content.approve_case(kase, %{"station_id" => "x"}, admin)
+      assert {:error, :invalid_case} = Content.approve_case(kase, nil, admin)
+
+      unchanged = Content.get_case!(kase.id)
+      assert unchanged.status == :pending
+      assert unchanged.approved_by_id == nil
+      assert unchanged.approved_at == nil
+      assert Content.list_station_versions(unchanged) == []
+    end
+
+    test "approve on a stale case returns {:error, :stale}",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, _updated} = Content.update_case_markdown(kase, @reference_case <> "\n", admin)
+
+      # Attempting to approve using the original kase with older lock_version
+      assert {:error, :stale} = Content.approve_case(kase, package, admin)
+
+      current = Content.get_case!(kase.id)
+      assert current.status == :pending
+      assert Content.list_station_versions(current) == []
+    end
+
+    test "re-approving after an edit creates a new immutable version referencing its revision and leaves the previous version untouched",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, v1_case} = Content.approve_case(kase, package, admin)
+      assert [v1_version] = Content.list_station_versions(v1_case)
+
+      # Admin edits the case
+      other_admin = Backend.AccountsFixtures.admin_fixture()
+      edited_markdown = @reference_case <> "\n# Just a comment"
+      {:ok, edited_case} = Content.update_case_markdown(v1_case, edited_markdown, other_admin)
+      assert [revision] = Content.list_case_revisions(edited_case)
+
+      # Admin approves edited case
+      {:ok, edited_package} = Stations.parse_case(edited_markdown)
+      {:ok, v2_case} = Content.approve_case(edited_case, edited_package, other_admin)
+
+      assert v2_case.status == :approved
+      assert v2_case.approved_by_id == other_admin.id
+      assert v2_case.approved_by_email == other_admin.email
+
+      # Both versions are preserved; newest first
+      assert [v2_version, v1_version_reloaded] = Content.list_station_versions(v2_case)
+      assert v2_version.version_number == 2
+      assert v2_version.case_revision_id == revision.id
+      assert v2_version.markdown == edited_markdown
+      assert v2_version.approved_by_email == other_admin.email
+
+      # Previous version is completely unchanged
+      assert v1_version_reloaded.id == v1_version.id
+      assert v1_version_reloaded.version_number == 1
+      assert v1_version_reloaded.markdown == @reference_case
+      assert v1_version_reloaded.approved_by_email == admin.email
+    end
+
+    test "approving an already approved case with unchanged markdown is an idempotent no-op",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, approved} = Content.approve_case(kase, package, admin)
+      assert approved.lock_version == 2
+      assert length(Content.list_station_versions(approved)) == 1
+
+      # Re-approving without any markdown changes
+      assert {:ok, same} = Content.approve_case(approved, package, admin)
+      assert same.lock_version == 2
+      assert length(Content.list_station_versions(same)) == 1
+    end
+
+    test "disapproving transitions case to :disapproved, clears approval metadata, and respects optimistic locking",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, approved} = Content.approve_case(kase, package, admin)
+
+      assert {:ok, disapproved} = Content.disapprove_case(approved)
+      assert disapproved.status == :disapproved
+      assert disapproved.approved_by_id == nil
+      assert disapproved.approved_by_email == nil
+      assert disapproved.approved_at == nil
+
+      reloaded = Content.get_case!(kase.id)
+      assert reloaded.status == :disapproved
+      assert reloaded.approved_by_id == nil
+      assert reloaded.approved_by_email == nil
+      assert reloaded.approved_at == nil
+
+      # Attempting to disapprove with stale struct
+      assert {:error, :stale} = Content.disapprove_case(approved)
+    end
+
+    test "deleting a case cascades to its station versions",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, approved} = Content.approve_case(kase, package, admin)
+
+      assert length(Content.list_station_versions(approved)) == 1
+
+      Repo.query!("DELETE FROM cases WHERE id = $1", [kase.id])
+      assert Repo.all(Backend.Content.StationVersion) == []
+    end
+
+    test "deleting an admin user nilifies approved_by_id while keeping approved_by_email",
+         %{admin: admin, package: package} do
+      kase = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, approved} = Content.approve_case(kase, package, admin)
+      [version] = Content.list_station_versions(approved)
+
+      # Delete the admin user via plain SQL (simulate admin deletion)
+      Repo.query!("DELETE FROM users WHERE id = $1", [admin.id])
+
+      reloaded_case = Content.get_case!(kase.id)
+      assert reloaded_case.approved_by_id == nil
+      assert reloaded_case.approved_by_email == admin.email
+
+      reloaded_version = Content.get_station_version!(version.id)
+      assert reloaded_version.approved_by_id == nil
+      assert reloaded_version.approved_by_email == admin.email
+    end
+  end
+
+  describe "catalog of published stations (issue #333)" do
+    setup do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      {:ok, package} = Stations.parse_case(@reference_case)
+      %{admin: admin, package: package}
+    end
+
+    test "Content.list_published_stations/0 lists latest versions of approved cases in number order, hiding pending and disapproved",
+         %{admin: admin, package: package} do
+      # Case 1: approved
+      case1 = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, _approved1} = Content.approve_case(case1, package, admin)
+
+      # Case 2: pending (should NOT appear)
+      _pending = insert_case!("Pediatria", "Bronquiolite", @reference_case)
+
+      # Case 3: approved, then disapproved (should NOT appear)
+      case3 = insert_case!("Ginecologia", "Sangramento", @reference_case)
+      {:ok, approved3} = Content.approve_case(case3, package, admin)
+      {:ok, _disapproved3} = Content.disapprove_case(approved3)
+
+      # Case 4: approved, edited, and approved again (v2 should appear, not v1)
+      case4 = insert_case!("Clínica Médica", "Cefaleia", @reference_case)
+      {:ok, approved4_v1} = Content.approve_case(case4, package, admin)
+      {:ok, edited4} = Content.update_case_markdown(approved4_v1, @reference_case <> "\n", admin)
+      {:ok, package4_v2} = Stations.parse_case(edited4.markdown)
+      {:ok, _approved4_v2} = Content.approve_case(edited4, package4_v2, admin)
+
+      published = Content.list_published_stations()
+      assert Enum.map(published, & &1.case_id) == [case1.id, case4.id]
+      assert Enum.map(published, & &1.version_number) == [1, 2]
+    end
+
+    test "Content.list_published_stations/0 keeps two approved cases that share one [ESTAÇÃO] slug",
+         %{admin: admin, package: package} do
+      case1 = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      case2 = insert_case!("Cirurgia Geral", "Apendicite (variante)", @reference_case)
+      {:ok, _} = Content.approve_case(case1, package, admin)
+      {:ok, _} = Content.approve_case(case2, package, admin)
+
+      published = Content.list_published_stations()
+
+      assert Enum.map(published, & &1.case_id) == [case1.id, case2.id]
+      assert Enum.map(published, & &1.station_id) == ["acute-appendicitis", "acute-appendicitis"]
+
+      catalog = Stations.list_catalog_stations()
+
+      assert Enum.map(catalog, & &1["id"]) == [case1.number, case2.number]
+      assert Enum.map(catalog, & &1["slug"]) == ["acute-appendicitis", "acute-appendicitis"]
+      assert Enum.map(catalog, & &1["version"]) == [1, 1]
+    end
+
+    test "Stations.list_catalog_stations/0 projects catalog items without examiner secrets",
+         %{admin: admin, package: package} do
+      case1 = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      {:ok, _} = Content.approve_case(case1, package, admin)
+
+      [catalog_item] = Stations.list_catalog_stations()
+
+      assert catalog_item["id"] == case1.number
+      assert catalog_item["version"] == 1
+      assert catalog_item["slug"] == "acute-appendicitis"
+      assert catalog_item["area"] == package["area"]
+      assert catalog_item["theme"] == package["theme"]
+      assert is_list(catalog_item["actors"])
+      assert length(catalog_item["actors"]) == length(package["actors"])
+
+      for actor <- catalog_item["actors"] do
+        # Only public actor fields are exposed
+        assert Map.keys(actor) |> Enum.sort() == ["age", "id", "name", "role", "voice"]
+        # Secrets / examiner-only details are stripped
+        refute Map.has_key?(actor, "fact_ids")
+        refute Map.has_key?(actor, "explicit_fact_ids")
+        refute Map.has_key?(actor, "mandatory_question_ids")
+        refute Map.has_key?(actor, "persona")
+        refute Map.has_key?(actor, "tone")
+        refute Map.has_key?(actor, "presenting_context")
+      end
     end
   end
 end

@@ -1687,6 +1687,123 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  describe "GET /stations and GET /api/stations catalog (issue #333)" do
+    test "returns empty list when no approved cases exist", %{conn: conn} do
+      for path <- ["/stations", "/api/stations"] do
+        conn = get(conn, path)
+        assert json_response(conn, 200) == []
+      end
+    end
+
+    test "returns approved cases with id, area, theme, actors (without examiner secrets)", %{
+      conn: conn
+    } do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      case_markdown = File.read!("priv/stations/acute-appendicitis/case.md")
+      {:ok, package} = Backend.Stations.parse_case(case_markdown)
+
+      # Insert case and approve it
+      kase =
+        Backend.Content.get_case_by_number(1) ||
+          (
+            %{rows: [[num]]} =
+              Backend.Repo.query!(
+                "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING number",
+                ["Cirurgia Geral", "Apendicite aguda", case_markdown]
+              )
+
+            Backend.Content.get_case_by_number(num)
+          )
+
+      {:ok, _approved} = Backend.Content.approve_case(kase, package, admin)
+
+      for path <- ["/stations", "/api/stations"] do
+        conn = get(conn, path)
+        [station] = json_response(conn, 200)
+
+        assert station["id"] == kase.number
+        assert station["version"] == 1
+        assert station["slug"] == "acute-appendicitis"
+
+        assert Map.keys(station) |> Enum.sort() == [
+                 "actors",
+                 "area",
+                 "id",
+                 "slug",
+                 "theme",
+                 "version"
+               ]
+
+        assert station["area"] == package["area"]
+        assert station["theme"] == package["theme"]
+        assert is_list(station["actors"])
+        assert length(station["actors"]) == length(package["actors"])
+
+        for actor <- station["actors"] do
+          assert Map.keys(actor) |> Enum.sort() == ["age", "id", "name", "role", "voice"]
+          refute Map.has_key?(actor, "fact_ids")
+          refute Map.has_key?(actor, "explicit_fact_ids")
+          refute Map.has_key?(actor, "mandatory_question_ids")
+          refute Map.has_key?(actor, "persona")
+          refute Map.has_key?(actor, "tone")
+          refute Map.has_key?(actor, "presenting_context")
+        end
+      end
+    end
+
+    test "two approved cases sharing one [ESTAÇÃO] slug are two entries with distinct ids", %{
+      conn: conn
+    } do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      case_markdown = File.read!("priv/stations/acute-appendicitis/case.md")
+      {:ok, package} = Backend.Stations.parse_case(case_markdown)
+
+      [num1, num2] =
+        for theme <- ["Apendicite aguda", "Apendicite aguda (variante)"] do
+          %{rows: [[num]]} =
+            Backend.Repo.query!(
+              "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING number",
+              ["Cirurgia Geral", theme, case_markdown]
+            )
+
+          {:ok, _} =
+            Backend.Content.approve_case(Backend.Content.get_case_by_number(num), package, admin)
+
+          num
+        end
+
+      for path <- ["/stations", "/api/stations"] do
+        stations = json_response(get(conn, path), 200)
+
+        assert Enum.map(stations, & &1["id"]) == [num1, num2]
+        assert Enum.map(stations, & &1["slug"]) == ["acute-appendicitis", "acute-appendicitis"]
+        assert Enum.map(stations, & &1["version"]) == [1, 1]
+      end
+    end
+
+    test "disapproving hides the case from the catalog", %{conn: conn} do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      case_markdown = File.read!("priv/stations/acute-appendicitis/case.md")
+      {:ok, package} = Backend.Stations.parse_case(case_markdown)
+
+      %{rows: [[num]]} =
+        Backend.Repo.query!(
+          "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING number",
+          ["Cirurgia Geral", "Apendicite aguda", case_markdown]
+        )
+
+      kase = Backend.Content.get_case_by_number(num)
+      {:ok, approved} = Backend.Content.approve_case(kase, package, admin)
+
+      assert length(json_response(get(conn, "/stations"), 200)) == 1
+
+      {:ok, _disapproved} = Backend.Content.disapprove_case(approved)
+
+      assert json_response(get(conn, "/stations"), 200) == []
+      assert json_response(get(conn, "/api/stations"), 200) == []
+    end
+  end
+
   defp use_configurable_jev(patient_result) do
     Application.put_env(:backend, :controller_test_jev_patient_result, patient_result)
     Application.put_env(:backend, :jev_decision_adapter, ConfigurableJevAdapter)

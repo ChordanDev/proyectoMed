@@ -11,6 +11,7 @@ defmodule Backend.Content do
 
   alias Backend.Content.Case
   alias Backend.Content.CaseRevision
+  alias Backend.Content.StationVersion
   alias Backend.Repo
 
   @type filter :: {:status, String.t() | atom() | nil} | {:area, String.t() | nil}
@@ -123,6 +124,200 @@ defmodule Backend.Content do
       from r in CaseRevision,
         where: r.case_id == ^case_id,
         order_by: [desc: r.lock_version]
+    )
+  end
+
+  @typedoc "The admin approving a case: its `id` and `email` are recorded."
+  @type approver :: %{
+          required(:id) => integer(),
+          required(:email) => String.t(),
+          optional(atom()) => any()
+        }
+
+  @doc """
+  Approves a case and publishes it as an immutable Station version (issue #333).
+
+  Only a case with a valid parsed package (no parser errors) can be approved;
+  if the package is invalid or an `{:error, _}` tuple is passed, it returns
+  `{:error, :invalid_case}` without touching the database.
+
+  Approval records the approver's `id` and `email` snapshot and timestamp on
+  the case, updates its status to `:approved` (and syncs `area` and `theme`),
+  increments `lock_version` with optimistic locking, and inserts a new immutable
+  `StationVersion` referencing its case and revision (if edited).
+  """
+  @spec approve_case(Case.t(), {:ok, map()} | {:error, term()} | map() | term(), approver()) ::
+          {:ok, Case.t()}
+          | {:error, :invalid_case}
+          | {:error, :stale}
+          | {:error, Ecto.Changeset.t()}
+  def approve_case(%Case{} = kase, package_or_result, approver) do
+    case extract_package(package_or_result) do
+      {:ok, package} ->
+        do_approve_case(kase, package, approver)
+
+      :error ->
+        {:error, :invalid_case}
+    end
+  end
+
+  defp extract_package({:ok, package}) when is_map(package), do: validate_package(package)
+  defp extract_package(package) when is_map(package), do: validate_package(package)
+  defp extract_package(_other), do: :error
+
+  defp validate_package(package) do
+    if is_binary(package["station_id"]) and
+         is_binary(package["area"]) and
+         is_binary(package["theme"]) and
+         is_list(package["actors"]) do
+      {:ok, package}
+    else
+      :error
+    end
+  end
+
+  defp do_approve_case(%Case{} = kase, package, approver) do
+    if already_approved_with_same_markdown?(kase) do
+      {:ok, kase}
+    else
+      execute_approval(kase, package, approver)
+    end
+  end
+
+  defp execute_approval(%Case{} = kase, package, %{id: approver_id, email: approver_email}) do
+    now = DateTime.utc_now(:second)
+
+    attrs = %{
+      status: :approved,
+      area: package["area"],
+      theme: package["theme"],
+      approved_by_id: approver_id,
+      approved_by_email: approver_email,
+      approved_at: now
+    }
+
+    changeset = Case.approve_changeset(kase, attrs)
+
+    Repo.transact(fn ->
+      with {:ok, saved_case} <- Repo.update(changeset, stale_error_field: :lock_version),
+           {:ok, _version} <-
+             insert_station_version(kase, package, approver_id, approver_email, now) do
+        {:ok, saved_case}
+      end
+    end)
+    |> case do
+      {:ok, saved_case} -> {:ok, saved_case}
+      {:error, changeset} -> update_error(changeset)
+    end
+  end
+
+  defp already_approved_with_same_markdown?(%Case{
+         status: :approved,
+         id: case_id,
+         markdown: markdown
+       }) do
+    case Repo.one(
+           from sv in StationVersion,
+             where: sv.case_id == ^case_id,
+             order_by: [desc: sv.version_number],
+             limit: 1,
+             select: sv.markdown
+         ) do
+      ^markdown -> true
+      _other -> false
+    end
+  end
+
+  defp already_approved_with_same_markdown?(_kase), do: false
+
+  defp insert_station_version(kase, package, approver_id, approver_email, now) do
+    latest_revision =
+      Repo.one(
+        from r in CaseRevision,
+          where: r.case_id == ^kase.id,
+          order_by: [desc: r.lock_version],
+          limit: 1
+      )
+
+    revision_id = if latest_revision, do: latest_revision.id, else: nil
+
+    max_version =
+      Repo.one(
+        from sv in StationVersion,
+          where: sv.case_id == ^kase.id,
+          select: max(sv.version_number)
+      ) || 0
+
+    version = %StationVersion{
+      case_id: kase.id,
+      case_revision_id: revision_id,
+      version_number: max_version + 1,
+      station_id: package["station_id"],
+      area: package["area"],
+      theme: package["theme"],
+      markdown: kase.markdown,
+      package: package,
+      approved_by_id: approver_id,
+      approved_by_email: approver_email,
+      approved_at: now
+    }
+
+    Repo.insert(version)
+  end
+
+  @doc """
+  Disapproves a case with one click (issue #333).
+
+  Sets status to `:disapproved` with optimistic locking over the case's
+  `lock_version`.
+  """
+  @spec disapprove_case(Case.t()) ::
+          {:ok, Case.t()} | {:error, :stale} | {:error, Ecto.Changeset.t()}
+  def disapprove_case(%Case{} = kase) do
+    changeset = Case.disapprove_changeset(kase)
+
+    case Repo.update(changeset, stale_error_field: :lock_version) do
+      {:ok, saved} -> {:ok, saved}
+      {:error, changeset} -> update_error(changeset)
+    end
+  end
+
+  @doc "Gets a published station version by id. Raises `Ecto.NoResultsError` if missing."
+  @spec get_station_version!(integer()) :: StationVersion.t()
+  def get_station_version!(id), do: Repo.get!(StationVersion, id)
+
+  @doc "Gets a published station version by id, or nil."
+  @spec get_station_version(integer()) :: StationVersion.t() | nil
+  def get_station_version(id), do: Repo.get(StationVersion, id)
+
+  @doc "Lists all published versions of a case, newest first."
+  @spec list_station_versions(Case.t() | integer()) :: [StationVersion.t()]
+  def list_station_versions(%Case{id: case_id}), do: list_station_versions(case_id)
+
+  def list_station_versions(case_id) when is_integer(case_id) do
+    Repo.all(
+      from sv in StationVersion,
+        where: sv.case_id == ^case_id,
+        order_by: [desc: sv.version_number]
+    )
+  end
+
+  @doc """
+  Lists the latest published `StationVersion` for each approved case, ordered by
+  the case's human number ascending. Cases that are pending or disapproved are
+  omitted. Each version has its `case` preloaded: the case number is the
+  catalog identity, because several cases may share one `[ESTAÇÃO]` slug
+  (`station_id`).
+  """
+  @spec list_published_stations() :: [StationVersion.t()]
+  def list_published_stations do
+    Repo.all(
+      from sv in StationVersion,
+        join: c in assoc(sv, :case),
+        where: c.status == :approved,
+        distinct: c.number,
+        order_by: [asc: c.number, desc: sv.version_number],
+        preload: [case: c]
     )
   end
 end
