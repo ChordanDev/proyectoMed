@@ -177,15 +177,21 @@ defmodule Backend.Stations do
 
   Returns `{:error, :station_not_found}` when no published station has that
   number, and `{:error, :no_published_station}` when nothing is published in
-  the area (or at all).
+  the area (or at all). A learner (`:user_id`) without an active simulator
+  entitlement gets `{:error, :subscription_required}` (#339).
   """
   @spec start_station_session({:station, integer()} | {:random, String.t() | nil}, map()) ::
           {:ok, Conversation.session()}
-          | {:error, :station_not_found | :no_published_station | :invalid_station_package}
+          | {:error,
+             :subscription_required
+             | :station_not_found
+             | :no_published_station
+             | :invalid_station_package}
   def start_station_session(selection, attrs \\ %{}) do
     attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
 
-    with {:ok, version} <- published_version(selection),
+    with :ok <- require_entitlement(attrs[:user_id]),
+         {:ok, version} <- published_version(selection),
          {:ok, package} <- pinned_package(version) do
       {:ok,
        attrs
@@ -201,6 +207,12 @@ defmodule Backend.Stations do
        })
        |> Conversation.start()}
     end
+  end
+
+  defp require_entitlement(nil), do: :ok
+
+  defp require_entitlement(user_id) do
+    if Backend.Billing.entitled?(user_id), do: :ok, else: {:error, :subscription_required}
   end
 
   defp published_version({:station, number}) when is_integer(number) do

@@ -145,6 +145,15 @@ defmodule BackendWeb.Router do
     post "/sessions/:id/usage", VoiceWorkerController, :report_usage
   end
 
+  # RevenueCat webhook (#339): authenticated by its `Authorization` header and
+  # HMAC signature in the controller. `log: false` keeps the payload out of
+  # the logs.
+  scope "/webhooks", BackendWeb do
+    pipe_through :api
+
+    post "/revenuecat", RevenueCatWebhookController, :create, log: false
+  end
+
   scope "/api/v2/stations", BackendWeb do
     pipe_through [:api, :legacy_station_api]
     get "/active/sessions/:id/result", StationController, :show_educational_result
@@ -163,6 +172,10 @@ defmodule BackendWeb.Router do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
       live "/device", DeviceLive, :confirm
+      # Plans and subscription status (#339); `/conta` is also the success
+      # page of the RevenueCat Web Purchase Link.
+      live "/planos", BillingLive.Plans, :index
+      live "/conta", BillingLive.Account, :show
     end
 
     post "/users/update-password", UserSessionController, :update_password

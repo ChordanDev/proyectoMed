@@ -967,6 +967,20 @@ a period. See `docs/operations/session-usage-cost.md`.
 |---|---|---|
 | `USAGE_PRICES_JSON` | JSON object overriding entries of the price table in `config/runtime.exs` (`claude` per model, `jev_call`, `deepgram_minute`, `elevenlabs_1k_characters`, `livekit_participant_minute`). Invalid JSON stops the boot; ignored in `test`. | unset (public list prices of 2026-10-25) |
 
+### Subscription (RevenueCat)
+
+Starting a session needs an active subscription (issue #339): without one,
+`POST /sessions` answers `402` with `error: "subscription_required"`. Learners
+buy a plan on `/planos` (a RevenueCat Web Purchase Link carrying a random
+`app_user_id`, never the email) and see it on `/conta`. RevenueCat reports
+purchases, renewals, cancellations and expirations to
+`POST /webhooks/revenuecat`, which verifies the `Authorization` header and the
+`X-RevenueCat-Webhook-Signature` HMAC over the raw body before applying the
+event. Configure `REVENUECAT_WEBHOOK_AUTHORIZATION`,
+`REVENUECAT_WEBHOOK_SECRET`, `REVENUECAT_CARD_PURCHASE_LINK` and
+`REVENUECAT_PIX_PURCHASE_LINK`; without both webhook secrets the webhook answers
+`503`. See `docs/operations/revenuecat.md`.
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.

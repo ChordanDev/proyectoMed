@@ -134,6 +134,25 @@ config :backend, BackendWeb.RateLimit, enabled: true, limits: []
 # (`TRUSTED_CLIENT_IP_HEADER`, for example `fly-client-ip` behind Fly).
 config :backend, BackendWeb.Plugs.ClientIP, header: nil
 
+# RevenueCat billing (#339, see docs/operations/revenuecat.md). Plans are keyed
+# by RevenueCat `product_id` (research A9): the webhook carries no plan metadata
+# or payment method. Card plans renew automatically; Pix plans are paid
+# manually each period. The webhook secrets and the Web Purchase Links come from
+# the environment in runtime.exs; unset, the webhook answers 503 and the plan
+# page shows no purchase button.
+config :backend, Backend.Billing,
+  entitlement_id: "simulador",
+  plans: [
+    %{product_id: "revalida_mensal_cartao", name: "Mensal no cartão", payment: :card},
+    %{product_id: "revalida_mensal_pix", name: "Mensal no Pix", payment: :pix}
+  ],
+  purchase_links: %{},
+  webhook_authorization: nil,
+  webhook_secret: nil,
+  signature_tolerance_s: 300,
+  accept_sandbox: true,
+  pix_reminder_days: 3
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

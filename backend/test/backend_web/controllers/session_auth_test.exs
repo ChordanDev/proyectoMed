@@ -12,6 +12,7 @@ defmodule BackendWeb.SessionAuthTest do
   use BackendWeb.ConnCase, async: false
 
   import Backend.AccountsFixtures
+  import Backend.BillingFixtures
 
   alias Backend.Accounts
   alias Backend.Content
@@ -46,6 +47,9 @@ defmodule BackendWeb.SessionAuthTest do
     %{kase: kase}
   end
 
+  # Starting a session requires an active entitlement (#339).
+  defp subscriber_fixture, do: user_fixture() |> subscribe_user()
+
   defp start_session!(conn, kase) do
     conn
     |> recycle()
@@ -64,7 +68,7 @@ defmodule BackendWeb.SessionAuthTest do
 
   describe "without a valid access token" do
     setup %{conn: conn, kase: kase} do
-      owner = log_in_device(conn, user_fixture())
+      owner = log_in_device(conn, subscriber_fixture())
       %{session_id: start_session!(owner, kase)}
     end
 
@@ -117,6 +121,7 @@ defmodule BackendWeb.SessionAuthTest do
 
   describe "with a learner's access token" do
     setup :register_and_log_in_device
+    setup %{device_user: user} = ctx, do: Map.put(ctx, :device_user, subscribe_user(user))
 
     test "the catalog and the notice are served", %{conn: conn} do
       assert [_station] = conn |> request(:get, "/stations") |> json_response(200)
@@ -137,7 +142,7 @@ defmodule BackendWeb.SessionAuthTest do
 
     test "another learner's session is session_not_found on every session route",
          %{conn: conn, kase: kase} do
-      other_session = start_session!(log_in_device(build_conn(), user_fixture()), kase)
+      other_session = start_session!(log_in_device(build_conn(), subscriber_fixture()), kase)
 
       for {method, suffix} <- @session_routes do
         path = "/sessions/#{other_session}#{suffix}"
@@ -151,7 +156,7 @@ defmodule BackendWeb.SessionAuthTest do
 
   describe "deprecated active-station routes" do
     test "stay unauthenticated in dev and test", %{conn: conn, kase: kase} do
-      session_id = start_session!(log_in_device(build_conn(), user_fixture()), kase)
+      session_id = start_session!(log_in_device(build_conn(), subscriber_fixture()), kase)
 
       assert conn |> request(:get, "/api/stations") |> json_response(200)
 
@@ -171,7 +176,7 @@ defmodule BackendWeb.SessionAuthTest do
         Application.put_env(:backend, :legacy_station_api_unauthenticated, previous)
       end)
 
-      owner = log_in_device(build_conn(), user_fixture())
+      owner = log_in_device(build_conn(), subscriber_fixture())
       session_id = start_session!(owner, kase)
       stranger = log_in_device(conn, user_fixture())
 
