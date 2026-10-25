@@ -987,4 +987,101 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       end
     end
   end
+
+  describe "POST usage (#342)" do
+    defp usage_path(id), do: ~p"/api/internal/voice/sessions/#{id}/usage"
+
+    @report %{
+      "report_id" => "AJ_job-1",
+      "deepgram_audio_seconds" => 312.5,
+      "elevenlabs_characters" => 1830,
+      "livekit_participant_minutes" => 21.25
+    }
+
+    setup do
+      previous = Application.get_env(:backend, Backend.Stations.Usage.Store)
+      Application.put_env(:backend, Backend.Stations.Usage.Store, enabled: true, async: false)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:backend, Backend.Stations.Usage.Store, previous),
+          else: Application.delete_env(:backend, Backend.Stations.Usage.Store)
+      end)
+    end
+
+    test "accepts the worker's audio usage and writes it into the finished session's row", %{
+      conn: conn
+    } do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+      {:ok, _} = Stations.complete_session(id, :user)
+
+      assert %{"status" => "recorded"} = json_response(post(conn, usage_path(id), @report), 202)
+
+      row = Backend.Repo.get!(Backend.Stations.Usage.SessionUsage, id)
+      assert row.deepgram_audio_seconds == 312.5
+      assert row.elevenlabs_characters == 1830
+      assert row.livekit_participant_minutes == 21.25
+      assert row.cost_by_provider["deepgram"] > 0
+      assert row.cost_by_provider["elevenlabs"] > 0
+      assert row.cost_by_provider["livekit"] > 0
+    end
+
+    test "a retried report replaces itself; reports of different jobs add up", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      assert json_response(post(conn, usage_path(id), @report), 202)
+      assert json_response(post(conn, usage_path(id), @report), 202)
+
+      second_job = %{@report | "report_id" => "AJ_job-2", "elevenlabs_characters" => 170}
+      assert json_response(post(conn, usage_path(id), second_job), 202)
+
+      voice = Backend.Stations.Usage.snapshot(id).voice
+      assert voice.deepgram_audio_seconds == 625.0
+      assert voice.elevenlabs_characters == 2000
+      assert voice.livekit_participant_minutes == 42.5
+    end
+
+    test "an active session keeps the report until it is finished", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      assert json_response(post(conn, usage_path(id), @report), 202)
+      assert Backend.Repo.get(Backend.Stations.Usage.SessionUsage, id) == nil
+
+      {:ok, _} = Stations.complete_session(id, :user)
+
+      assert Backend.Repo.get!(Backend.Stations.Usage.SessionUsage, id).elevenlabs_characters ==
+               1830
+    end
+
+    test "rejects a malformed report without recording it", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      for bad <- [
+            %{},
+            Map.delete(@report, "report_id"),
+            %{@report | "report_id" => ""},
+            %{@report | "report_id" => String.duplicate("a", 129)},
+            %{@report | "deepgram_audio_seconds" => -1},
+            %{@report | "elevenlabs_characters" => 1.5},
+            %{@report | "livekit_participant_minutes" => "many"},
+            Map.delete(@report, "elevenlabs_characters")
+          ] do
+        assert %{"error" => "invalid_usage"} = json_response(post(conn, usage_path(id), bad), 400)
+      end
+
+      assert Backend.Stations.Usage.snapshot(id).voice.elevenlabs_characters == 0
+    end
+
+    test "answers 404 for an unknown session and 401 without the worker secret", %{conn: conn} do
+      assert %{"error" => "session_not_found"} =
+               json_response(post(conn, usage_path("missing"), @report), 404)
+
+      assert %{"error" => "unauthorized"} =
+               json_response(post(build_conn(), usage_path("missing"), @report), 401)
+    end
+  end
 end

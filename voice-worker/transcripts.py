@@ -341,6 +341,10 @@ class PhoenixClient:
     async def context(self) -> dict:
         return await self._request("GET", self._path)
 
+    async def report_usage(self, report: dict) -> dict:
+        """POSTs the job's provider usage (#342): counts only, never content."""
+        return await self._request("POST", self._path + "/usage", json=report)
+
     async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
         """Commits a final transcript; returns typed VoiceTurnReply.
 

@@ -25,6 +25,11 @@ defmodule BackendWeb.VoiceWorkerController do
       drops one superseded turn, this ends the voice session and must not be retried.
     * `POST /api/internal/voice/sessions/:id/cancel` — cancels a pending voice
       generation via `Backend.Stations.cancel_voice_turn/2`.
+    * `POST /api/internal/voice/sessions/:id/usage` — the worker's audio usage
+      for the session (#342): `report_id`, `deepgram_audio_seconds`,
+      `elevenlabs_characters`, `livekit_participant_minutes`, cumulative per
+      job, via `Backend.Stations.record_voice_usage/2`. `202` with
+      `status: "recorded"`; `400 invalid_usage` for a malformed report.
 
   Authenticated with a shared bearer secret (`VOICE_WORKER_SECRET`). With no
   secret configured every request is refused. Transcript and reply text are never logged.
@@ -160,6 +165,13 @@ defmodule BackendWeb.VoiceWorkerController do
   defp kept_addressee(%{addressee: :examiner}), do: "examiner"
   defp kept_addressee(_kept), do: "patient"
 
+  def report_usage(conn, %{"id" => session_id} = params) do
+    case Stations.record_voice_usage(session_id, Map.delete(params, "id")) do
+      :ok -> conn |> put_status(:accepted) |> json(%{status: "recorded"})
+      {:error, reason} -> send_error(conn, reason)
+    end
+  end
+
   def cancel(conn, %{"id" => session_id} = params) do
     with {:ok, cancel_target} <- validate_cancel_params(params),
          {:ok, :cancelled} <- Stations.cancel_voice_turn(session_id, cancel_target) do
@@ -232,6 +244,7 @@ defmodule BackendWeb.VoiceWorkerController do
   defp error_details(:invalid_transcript), do: {400, "invalid_transcript"}
   defp error_details(:invalid_generation_id), do: {400, "invalid_generation_id"}
   defp error_details(:invalid_turn_id), do: {400, "invalid_turn_id"}
+  defp error_details(:invalid_usage), do: {400, "invalid_usage"}
   defp error_details(:not_found), do: {404, "session_not_found"}
   defp error_details(:no_consent), do: {403, "no_consent"}
   defp error_details(:stale_generation), do: {409, "stale_generation"}
