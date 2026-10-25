@@ -115,7 +115,9 @@ config :logger, :default_formatter,
 config :phoenix, :json_library, Jason
 
 # Never leak a LiveKit token (or other secrets) into request logs.
-config :phoenix, :filter_parameters, ["password", "secret", "token", "text"]
+# "code" hides the device and user codes of the device login (#337); "token"
+# hides its access and refresh tokens.
+config :phoenix, :filter_parameters, ["password", "secret", "token", "text", "code"]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

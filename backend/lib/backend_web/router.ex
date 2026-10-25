@@ -18,6 +18,11 @@ defmodule BackendWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Bearer access token of the Unreal client's device login (#337).
+  pipeline :device_auth do
+    plug BackendWeb.Plugs.DeviceAuth
+  end
+
   # Admin case panel (#331): only the `admin` role (ADR-015 #347). The plugs
   # guard the first HTTP request; the on_mount hook guards live navigation.
   scope "/admin", BackendWeb do
@@ -49,6 +54,22 @@ defmodule BackendWeb.Router do
     post "/sessions/:id/transcribe", TranscriptionController, :create
     post "/sessions/:id/synthesize", TTSController, :create
     post "/sessions/:id/voice", VoiceSessionController, :create
+  end
+
+  # Device login of the Unreal client (#337, RFC 8628 shape); the learner
+  # confirms the user code at `/device` (`BackendWeb.DeviceLive`).
+  scope "/device", BackendWeb do
+    pipe_through :api
+
+    post "/start", DeviceController, :start
+    post "/token", DeviceController, :token
+    post "/refresh", DeviceController, :refresh
+  end
+
+  scope "/device", BackendWeb do
+    pipe_through [:api, :device_auth]
+
+    post "/logout", DeviceController, :logout
   end
 
   # Deprecated aliases (issue #334): the frozen web harness and the current
@@ -112,6 +133,7 @@ defmodule BackendWeb.Router do
       on_mount: [{BackendWeb.UserAuth, :require_authenticated}] do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
+      live "/device", DeviceLive, :confirm
     end
 
     post "/users/update-password", UserSessionController, :update_password
