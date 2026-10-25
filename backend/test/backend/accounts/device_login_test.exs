@@ -119,6 +119,16 @@ defmodule Backend.Accounts.DeviceLoginTest do
                Accounts.approve_device_authorization(user, start.user_code)
     end
 
+    test "answers expired_token for an approved code polled after it expired" do
+      user = user_fixture()
+      {:ok, start} = Accounts.start_device_authorization()
+      :ok = Accounts.approve_device_authorization(user, start.user_code)
+      age_authorization!(start, 3600)
+
+      assert {:error, :expired_token} = Accounts.poll_device_authorization(start.device_code)
+      assert Repo.all(DeviceToken) == []
+    end
+
     test "answers invalid_grant for an unknown device code" do
       assert {:error, :invalid_grant} = Accounts.poll_device_authorization("unknown")
       assert {:error, :invalid_grant} = Accounts.poll_device_authorization(nil)
@@ -196,6 +206,28 @@ defmodule Backend.Accounts.DeviceLoginTest do
       assert {:error, :invalid_grant} = Accounts.refresh_device_token(refreshed.refresh_token)
     end
 
+    test "reusing a refresh token rotated more than once still revokes the whole login" do
+      user = user_fixture()
+      tokens = approved_tokens(user)
+      {:ok, second} = Accounts.refresh_device_token(tokens.refresh_token)
+      {:ok, third} = Accounts.refresh_device_token(second.refresh_token)
+
+      assert {:error, :invalid_grant} = Accounts.refresh_device_token(tokens.refresh_token)
+      refute Accounts.get_user_by_device_access_token(third.access_token)
+      assert {:error, :invalid_grant} = Accounts.refresh_device_token(third.refresh_token)
+    end
+
+    test "reusing a rotated refresh token leaves the learner's other logins alone" do
+      user = user_fixture()
+      tokens = approved_tokens(user)
+      other = approved_tokens(user)
+      {:ok, _} = Accounts.refresh_device_token(tokens.refresh_token)
+      {:ok, _} = Accounts.refresh_device_token(other.refresh_token)
+
+      assert {:error, :invalid_grant} = Accounts.refresh_device_token(tokens.refresh_token)
+      assert [%DeviceToken{}] = Repo.all(DeviceToken)
+    end
+
     test "an expired refresh token is refused" do
       user = user_fixture()
       tokens = approved_tokens(user)
@@ -243,6 +275,37 @@ defmodule Backend.Accounts.DeviceLoginTest do
 
       refute Accounts.get_user_by_device_access_token(tokens.access_token)
       assert {:error, :invalid_grant} = Accounts.refresh_device_token(tokens.refresh_token)
+    end
+
+    test "changing the password revokes an approved login the device has not polled yet" do
+      user = user_fixture()
+      {:ok, start} = Accounts.start_device_authorization()
+      :ok = Accounts.approve_device_authorization(user, start.user_code)
+
+      {:ok, _} = Accounts.update_user_password(user, %{password: "a brand new password"})
+
+      assert {:error, :invalid_grant} = Accounts.poll_device_authorization(start.device_code)
+      assert Repo.all(DeviceToken) == []
+    end
+
+    test "resetting the password revokes an approved login the device has not polled yet" do
+      user = user_fixture()
+      {:ok, start} = Accounts.start_device_authorization()
+      :ok = Accounts.approve_device_authorization(user, start.user_code)
+
+      {:ok, _} = Accounts.reset_user_password(user, %{password: "a brand new password"})
+
+      assert {:error, :invalid_grant} = Accounts.poll_device_authorization(start.device_code)
+    end
+
+    test "logout everywhere revokes an approved login the device has not polled yet" do
+      user = user_fixture()
+      {:ok, start} = Accounts.start_device_authorization()
+      :ok = Accounts.approve_device_authorization(user, start.user_code)
+
+      assert :ok = Accounts.revoke_all_device_tokens(user)
+
+      assert {:error, :invalid_grant} = Accounts.poll_device_authorization(start.device_code)
     end
 
     test "resetting the password revokes every device token" do

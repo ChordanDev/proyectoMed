@@ -196,7 +196,7 @@ Device Authorization, RFC 8628). Admin accounts cannot use it.
    | `authorization_pending` | Not confirmed yet. | Poll again after `interval`. |
    | `slow_down` | Polled faster than `interval`. | Add 5 s to the interval for every later poll. |
    | `access_denied` | The learner chose **Negar**. | Stop; offer to start again. |
-   | `expired_token` | The 10 minutes ran out. | Stop; start again. |
+   | `expired_token` | The 10 minutes ran out, even if the learner approved in time. | Stop; start again. |
    | `invalid_grant` | Unknown or already used `device_code`. | Stop; start again. |
 
    Once the learner approves, the next poll answers `200` once:
@@ -227,8 +227,10 @@ Device Authorization, RFC 8628). Admin accounts cannot use it.
 
    The answer has the body of step 3. Both old tokens stop working: store the
    new pair before using it. A refresh token lasts 30 days from its last use.
-   Presenting an already rotated refresh token revokes the whole login. On
-   `400 invalid_grant`, start the login again from step 1.
+   Presenting any refresh token this login already rotated away, however many
+   refreshes ago, revokes the whole login. Send one refresh at a time and do
+   not retry it with the old token: a retry after the first refresh succeeded
+   counts as reuse. On `400 invalid_grant`, start the login again from step 1.
 
 6. **Log out.** `POST /device/logout` with the access token revokes this
    device's tokens; `{"everywhere": true}` revokes every device login of the
@@ -242,7 +244,9 @@ Device Authorization, RFC 8628). Admin accounts cannot use it.
 
 Changing or resetting the password and deleting the account also revoke every
 device login: the next call answers `401 invalid_token`, and the refresh
-`400 invalid_grant`. Phoenix stores only hashes of codes and tokens and never
+`400 invalid_grant`. These account changes and logout everywhere also revoke
+a login the learner approved but the client has not polled yet: its poll
+answers `400 invalid_grant`. Phoenix stores only hashes of codes and tokens and never
 logs them.
 
 ## Station catalog (`GET /stations`)

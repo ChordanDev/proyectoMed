@@ -6,8 +6,10 @@ defmodule Backend.Accounts.DeviceLogin do
   The client starts a login and gets a secret device code plus a short user
   code. The learner types the user code in the browser and approves it; the
   client polls with the device code and receives a 15-minute access token and
-  a 30-day refresh token. A refresh rotates both tokens; presenting a rotated
-  refresh token again revokes that login. Only SHA-256 hashes of codes and
+  a 30-day refresh token. A refresh rotates both tokens; presenting any rotated
+  refresh token again, however many rotations ago, revokes that login. An
+  approved code past its 10 minutes issues nothing, and revoking a learner's
+  logins also drops the approvals no device has redeemed yet. Only SHA-256 hashes of codes and
   tokens are stored, and none of them is ever logged.
 
   Called only through `Backend.Accounts`.
@@ -15,7 +17,7 @@ defmodule Backend.Accounts.DeviceLogin do
 
   import Ecto.Query
 
-  alias Backend.Accounts.{DeviceAuthorization, DeviceToken, User}
+  alias Backend.Accounts.{DeviceAuthorization, DeviceRetiredRefreshToken, DeviceToken, User}
   alias Backend.Repo
 
   @device_code_lifetime_s 600
@@ -136,9 +138,13 @@ defmodule Backend.Accounts.DeviceLogin do
 
   defp poll_authorization(nil, _now), do: {:error, :invalid_grant}
 
+  # Past its lifetime an approved code issues nothing.
   defp poll_authorization(%DeviceAuthorization{status: :approved, user: %User{}} = auth, now) do
     Repo.delete!(auth)
-    {:ok, issue_tokens(auth.user, DateTime.truncate(now, :second))}
+
+    if DateTime.compare(auth.expires_at, now) == :gt,
+      do: {:ok, issue_tokens(auth.user, DateTime.truncate(now, :second))},
+      else: {:error, :expired_token}
   end
 
   defp poll_authorization(%DeviceAuthorization{status: :denied} = auth, _now) do
@@ -240,7 +246,14 @@ defmodule Backend.Accounts.DeviceLogin do
 
   defp rotate(nil, token_hash, _now) do
     # A rotated refresh token presented again: the login may be stolen.
-    Repo.delete_all(from(t in DeviceToken, where: t.previous_refresh_token_hash == ^token_hash))
+    Repo.delete_all(
+      from(t in DeviceToken,
+        join: r in DeviceRetiredRefreshToken,
+        on: r.device_token_id == t.id,
+        where: r.refresh_token_hash == ^token_hash
+      )
+    )
+
     {:error, :invalid_grant}
   end
 
@@ -248,8 +261,13 @@ defmodule Backend.Accounts.DeviceLogin do
     if DateTime.compare(current.refresh_expires_at, now) == :gt do
       {access, refresh, attrs} = token_attrs(now)
 
+      Repo.insert!(%DeviceRetiredRefreshToken{
+        device_token_id: current.id,
+        refresh_token_hash: token_hash
+      })
+
       current
-      |> Ecto.Changeset.change(Map.put(attrs, :previous_refresh_token_hash, token_hash))
+      |> Ecto.Changeset.change(attrs)
       |> Repo.update!()
 
       {:ok, tokens(access, refresh)}
@@ -268,14 +286,16 @@ defmodule Backend.Accounts.DeviceLogin do
   def revoke(_access_token), do: :ok
 
   @doc """
-  Deletes every device token of the user. Callers inside a transaction use it
-  to revoke device logins together with another change.
+  Deletes every device token of the user and every login they approved that no
+  device has redeemed yet. Callers inside a transaction use it to revoke device
+  logins together with another change.
   """
   @spec revoke_all(User.t() | integer()) :: :ok
   def revoke_all(%User{id: user_id}), do: revoke_all(user_id)
 
   def revoke_all(user_id) when is_integer(user_id) do
     Repo.delete_all(from(t in DeviceToken, where: t.user_id == ^user_id))
+    Repo.delete_all(from(d in DeviceAuthorization, where: d.user_id == ^user_id))
     :ok
   end
 
