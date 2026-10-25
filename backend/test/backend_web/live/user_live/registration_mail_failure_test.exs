@@ -6,6 +6,7 @@ defmodule BackendWeb.UserLive.RegistrationMailFailureTest do
   import Backend.AccountsFixtures
 
   alias Backend.Accounts
+  alias Backend.AppEnvHelpers
 
   defmodule FailingAdapter do
     @moduledoc false
@@ -16,9 +17,9 @@ defmodule BackendWeb.UserLive.RegistrationMailFailureTest do
   end
 
   setup do
-    previous = Application.get_env(:backend, Backend.Accounts.Mailer)
+    previous = AppEnvHelpers.snapshot(Backend.Accounts.Mailer)
     Application.put_env(:backend, Backend.Accounts.Mailer, adapter: FailingAdapter)
-    on_exit(fn -> Application.put_env(:backend, Backend.Accounts.Mailer, previous) end)
+    on_exit(fn -> AppEnvHelpers.restore(Backend.Accounts.Mailer, previous) end)
   end
 
   test "a failed confirmation email still keeps the account and leads to the login page", %{

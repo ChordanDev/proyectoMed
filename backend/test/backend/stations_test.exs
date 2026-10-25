@@ -1,6 +1,7 @@
 defmodule Backend.StationsTest do
   use ExUnit.Case, async: false
 
+  alias Backend.AppEnvHelpers
   alias Backend.Stations
   alias Backend.Stations.Conversation
 
@@ -1288,11 +1289,11 @@ defmodule Backend.StationsTest do
     test "a refusal whose regeneration runs out of time keeps the learner voice turn" do
       Application.put_env(:backend, :station_ai_adapter, SlowRegenerationAdapter)
       Application.put_env(:backend, :jev_decision_adapter, RefuseThenVerifyAdapter)
-      prev_deadline = Application.get_env(:backend, :jev_decision_default_deadline_ms)
+      prev_deadline = AppEnvHelpers.snapshot(:jev_decision_default_deadline_ms)
       Application.put_env(:backend, :jev_decision_default_deadline_ms, 100)
 
       on_exit(fn ->
-        Application.put_env(:backend, :jev_decision_default_deadline_ms, prev_deadline)
+        AppEnvHelpers.restore(:jev_decision_default_deadline_ms, prev_deadline)
       end)
 
       session = Stations.create_session(%{audio_consent: true})
@@ -1311,12 +1312,12 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :station_ai_adapter, TestRevealableFactsAdapter)
       Application.put_env(:backend, :jev_decision_adapter, DeadlineProbeJevAdapter)
       Application.put_env(:backend, :jev_probe_pid, self())
-      prev_deadline = Application.get_env(:backend, :jev_decision_default_deadline_ms)
+      prev_deadline = AppEnvHelpers.snapshot(:jev_decision_default_deadline_ms)
       Application.put_env(:backend, :jev_decision_default_deadline_ms, 2_345)
 
       on_exit(fn ->
         Application.delete_env(:backend, :jev_probe_pid)
-        Application.put_env(:backend, :jev_decision_default_deadline_ms, prev_deadline)
+        AppEnvHelpers.restore(:jev_decision_default_deadline_ms, prev_deadline)
       end)
 
       voice = Stations.create_session(%{audio_consent: true})
