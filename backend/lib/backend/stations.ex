@@ -25,6 +25,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.Qualification
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
+  alias Backend.Stations.Actors
   alias Backend.Stations.StationAI.Addressee
   alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
@@ -357,6 +358,12 @@ defmodule Backend.Stations do
   otherwise. A missing or unknown marker is patient-addressed (and logged), and
   the turn continues as below; its result carries `outcome: :patient_reply`.
 
+  In a station with a companion (#341) the reply may start with
+  `[ACOMPANHANTE]`: the companion answers, checked against its own profile and
+  facts (`Backend.Stations.Actors.speaker_package/2`). The result and the stored
+  patient message then carry `speaker: :patient | :companion`; a single-actor
+  station's carry none.
+
   Encapsulates:
     1. Appending the learner's message to the session conversation.
     2. Preparing the conversation context with active package rules.
@@ -486,12 +493,17 @@ defmodule Backend.Stations do
   defp impresso_request?(_package, _text), do: false
 
   # Splits the addressee decided by the generation's marker (#309) from the
-  # reply, logging it.
-  defp take_addressee(ai_reply, channel, started_at) do
+  # reply, logging it. In a station with a companion (#341) the reply keeps
+  # its `speaker` (`:patient` or `:companion`), which follows it to storage,
+  # verification and speech; a single-actor reply carries none.
+  defp take_addressee(package, ai_reply, channel, started_at) do
     {addressee, ai_reply} = Map.pop(ai_reply, :addressee, :patient)
     {source, ai_reply} = Map.pop(ai_reply, :addressee_source, :missing_marker)
     log_turn_addressee(addressee, source, channel, started_at)
-    {addressee, ai_reply}
+
+    if addressee != :examiner and Actors.companion?(package),
+      do: {addressee, Map.put(ai_reply, :speaker, addressee)},
+      else: {addressee, ai_reply}
   end
 
   # One line per learner turn: the addressee, what decided it (`marker`,
@@ -509,11 +521,11 @@ defmodule Backend.Stations do
          package = session_package(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
-      case take_addressee(ai_reply, :text, started_at) do
+      case take_addressee(package, ai_reply, :text, started_at) do
         {:examiner, _ai_reply} ->
           acknowledge_examiner_turn(session_id, token)
 
-        {:patient, ai_reply} ->
+        {_speaker, ai_reply} ->
           verify_and_resolve_turn(
             session_id,
             token,
@@ -578,9 +590,14 @@ defmodule Backend.Stations do
     case PatientVerification.check_delivery(candidate_text, package, fn ->
            bounded_regeneration(package, context)
          end) do
-      {:ok, ^candidate_text} -> {:ok, ai_reply}
-      {:ok, text} -> {:ok, %{text: text, used_facts: []}}
-      {:error, reason} -> {:error, reason}
+      {:ok, ^candidate_text} ->
+        {:ok, ai_reply}
+
+      {:ok, text} ->
+        {:ok, ai_reply |> Map.take([:speaker]) |> Map.merge(%{text: text, used_facts: []})}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -597,12 +614,12 @@ defmodule Backend.Stations do
   # last one of `session`, against the conversation it answered.
   defp audit_delivered_reply(session_id, session, package, answered_session) do
     case List.last(session.messages) do
-      %{role: :patient, at: at, text: text} ->
+      %{role: :patient, at: at, text: text} = message ->
         PatientVerification.start_audit(%{
           session_id: session_id,
           message_at: at,
           text: text,
-          package: package,
+          package: speaker_package(package, Map.get(message, :speaker)),
           conversation: answered_session.messages,
           disclosed_fact_ids: Conversation.disclosed_fact_ids(answered_session)
         })
@@ -661,25 +678,33 @@ defmodule Backend.Stations do
        ) do
     verified_text = extract_reply_text(verified_reply)
     used_facts = extract_used_facts(verified_reply)
+    speaker = reply_speaker(verified_reply)
 
-    patient_message = %{
-      role: :patient,
-      modality: :text,
-      text: verified_text,
-      verified_fact_ids: verified_fact_ids
-    }
+    patient_message =
+      put_speaker(
+        %{
+          role: :patient,
+          modality: :text,
+          text: verified_text,
+          verified_fact_ids: verified_fact_ids
+        },
+        speaker
+      )
 
     case Conversation.resolve_turn(session_id, token, {:ok, patient_message}) do
       {:ok, session} ->
         on_commit.(session)
 
         {:ok,
-         %{
-           outcome: :patient_reply,
-           reply_text: verified_text,
-           reply_audio_url: nil,
-           used_facts: used_facts
-         }}
+         put_speaker(
+           %{
+             outcome: :patient_reply,
+             reply_text: verified_text,
+             reply_audio_url: nil,
+             used_facts: used_facts
+           },
+           speaker
+         )}
 
       {:error, :station_time_elapsed} ->
         {:error, :station_time_elapsed}
@@ -1256,6 +1281,11 @@ defmodule Backend.Stations do
   examiner-addressed turn hands nothing over, stores nothing of the generation
   and is kept as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
 
+  In a station with a companion (#341) every sentence event also carries
+  `speaker` (`"patient"` or `"companion"`) and `voice`, the speaker's voice key
+  (`voz=`), and the stored reply its `speaker`; a single-actor station's
+  events are unchanged.
+
   Returns `{result, acc}`, where `result` has the shape of
   `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
   joined by a space. Each sentence logs its generation and verification
@@ -1358,6 +1388,7 @@ defmodule Backend.Stations do
   # `verify_patient_reply/3` plus the authored ids of the facts the verdict that
   # verified the delivered text found stated (issue #286).
   defp verify_candidate(package, reply, opts) do
+    package = speaker_package(package, reply_speaker(reply))
     candidate_text = extract_reply_text(reply)
     conversation = Keyword.get(opts, :conversation, [])
 
@@ -1469,11 +1500,11 @@ defmodule Backend.Stations do
          package = session_package(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
-      case take_addressee(ai_reply, :voice, started_at) do
+      case take_addressee(package, ai_reply, :voice, started_at) do
         {:examiner, _ai_reply} ->
           keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
 
-        {:patient, ai_reply} ->
+        {_speaker, ai_reply} ->
           deliver_voice_reply(
             package,
             current_session,
@@ -1597,12 +1628,14 @@ defmodule Backend.Stations do
       SentenceStream.run(
         gate: fn -> marker_gate(marker, started_at) end,
         generate: &stream_patient_reply(package, context, &1, on_addressee),
-        verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
+        verify: fn candidate, index ->
+          speaker_view = speaker_package(package, streamed_speaker(package, marker))
+          verify_voice_sentence(mode, speaker_view, session, context, candidate, index)
+        end,
         deliver: fn sentence, index, acc ->
           deliver_voice_sentence(
             session_id,
-            turn_id,
-            generation_id,
+            {turn_id, generation_id, sentence_label(package, marker)},
             {sentence, index},
             acc,
             sink
@@ -1611,6 +1644,7 @@ defmodule Backend.Stations do
         acc: acc
       )
 
+    speaker = streamed_speaker(package, marker)
     flush_marker(marker)
 
     case outcome do
@@ -1620,8 +1654,7 @@ defmodule Backend.Stations do
       outcome ->
         {resolve_streamed_reply(
            session_id,
-           turn_id,
-           generation_id,
+           {turn_id, generation_id, speaker},
            outcome,
            {delivered, fact_ids},
            fn stored -> audit_delivered_reply(session_id, stored, package, session) end
@@ -1641,15 +1674,38 @@ defmodule Backend.Stations do
       end
 
     log_turn_addressee(addressee, source, :voice, started_at)
+    Process.put({marker, :speaker}, addressee)
     if addressee == :examiner, do: {:closed, :examiner_addressed}, else: :open
   end
 
   # A decision sent after the gate (a generation that timed out) is dropped.
   defp flush_marker(marker) do
+    Process.delete({marker, :speaker})
+
     receive do
       {^marker, _addressee, _source} -> :ok
     after
       0 -> :ok
+    end
+  end
+
+  # The speaker the gate decided (#341), kept in this process until
+  # `flush_marker/1`; `nil` in a single-actor station.
+  defp streamed_speaker(package, marker) do
+    if Actors.companion?(package) do
+      case Process.get({marker, :speaker}, :patient) do
+        :companion -> :companion
+        _patient -> :patient
+      end
+    end
+  end
+
+  # What a streamed sentence of a station with a companion adds to its event:
+  # the `speaker` and its `voice` key (#341). Nothing in a single-actor station.
+  defp sentence_label(package, marker) do
+    case streamed_speaker(package, marker) do
+      nil -> %{}
+      speaker -> %{speaker: Atom.to_string(speaker), voice: Actors.voice(package, speaker)}
     end
   end
 
@@ -1693,7 +1749,13 @@ defmodule Backend.Stations do
   end
 
   # A cancelled or superseded turn hands nothing more over.
-  defp deliver_voice_sentence(session_id, turn_id, generation_id, {sentence, index}, acc, sink) do
+  defp deliver_voice_sentence(
+         session_id,
+         {turn_id, generation_id, label},
+         {sentence, index},
+         acc,
+         sink
+       ) do
     case Conversation.active_generation(session_id) do
       {:ok, ^generation_id} ->
         case StageDirections.strip(sentence) do
@@ -1701,7 +1763,14 @@ defmodule Backend.Stations do
             {:cont, acc}
 
           spoken ->
-            event = %{turn_id: turn_id, generation_id: generation_id, index: index, text: spoken}
+            event =
+              Map.merge(label, %{
+                turn_id: turn_id,
+                generation_id: generation_id,
+                index: index,
+                text: spoken
+              })
+
             sink.({:sentence, event}, acc)
         end
 
@@ -1712,8 +1781,7 @@ defmodule Backend.Stations do
 
   defp resolve_streamed_reply(
          session_id,
-         turn_id,
-         generation_id,
+         {turn_id, generation_id, speaker},
          outcome,
          {delivered, fact_ids},
          on_commit
@@ -1732,7 +1800,8 @@ defmodule Backend.Stations do
                  session_id,
                  generation_id,
                  stored_text,
-                 fact_ids
+                 fact_ids,
+                 speaker
                ) do
           on_commit.(stored_session)
 
@@ -1783,6 +1852,7 @@ defmodule Backend.Stations do
          on_commit
        ) do
     verified_text = extract_reply_text(verified_reply)
+    speaker = reply_speaker(verified_reply)
 
     case speakable_text(verified_text) do
       "" ->
@@ -1794,7 +1864,8 @@ defmodule Backend.Stations do
                  session_id,
                  generation_id,
                  verified_text,
-                 verified_fact_ids
+                 verified_fact_ids,
+                 speaker
                ) do
           on_commit.(session)
 
@@ -1804,7 +1875,9 @@ defmodule Backend.Stations do
              turn_id: turn_id,
              generation_id: generation_id,
              used_facts: extract_used_facts(verified_reply)
-           }}
+           }
+           |> put_speaker(speaker)
+           |> put_voice(session_package(session), speaker)}
         end
     end
   end
@@ -1944,6 +2017,20 @@ defmodule Backend.Stations do
     end
   end
 
+  # The speaker of a reply of a station with a companion (#341), else `nil`.
+  defp reply_speaker(%{speaker: speaker}) when speaker in [:patient, :companion], do: speaker
+  defp reply_speaker(_reply), do: nil
+
+  defp put_speaker(map, nil), do: map
+  defp put_speaker(map, speaker), do: Map.put(map, :speaker, speaker)
+
+  defp put_voice(map, _package, nil), do: map
+  defp put_voice(map, package, speaker), do: Map.put(map, :voice, Actors.voice(package, speaker))
+
+  # The package as `speaker` sees it, for verifying or auditing its reply.
+  defp speaker_package(package, nil), do: package
+  defp speaker_package(package, speaker), do: Actors.speaker_package(package, speaker)
+
   defp resolve_station_ai_adapter do
     case Application.get_env(
            :backend,
@@ -1989,7 +2076,7 @@ defmodule Backend.Stations do
   defp stream_patient_reply(package, context, on_text, on_addressee) do
     started_at = JevDecision.monotonic_now_ms()
     adapter = resolve_station_ai_adapter()
-    {filter, finish} = Addressee.stream(on_text, on_addressee)
+    {filter, finish} = Addressee.stream(on_text, on_addressee, Actors.addressee_opts(package))
 
     result =
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :stream_reply, 3) do
@@ -2025,13 +2112,13 @@ defmodule Backend.Stations do
 
     case adapter.next_reply(package, context) do
       {:ok, %{text: text, used_facts: used_facts}} when is_binary(text) and is_list(used_facts) ->
-        {:ok, marked_reply(text, used_facts)}
+        {:ok, marked_reply(package, text, used_facts)}
 
       {:ok, %{text: text}} when is_binary(text) ->
-        {:ok, marked_reply(text, [])}
+        {:ok, marked_reply(package, text, [])}
 
       {:ok, text} when is_binary(text) ->
-        {:ok, marked_reply(text, [])}
+        {:ok, marked_reply(package, text, [])}
 
       {:error, reason} ->
         {:error, reason}
@@ -2052,8 +2139,8 @@ defmodule Backend.Stations do
     end
   end
 
-  defp marked_reply(marked_text, used_facts) do
-    {addressee, source, text} = Addressee.split(marked_text)
+  defp marked_reply(package, marked_text, used_facts) do
+    {addressee, source, text} = Addressee.split(marked_text, Actors.addressee_opts(package))
     %{text: text, used_facts: used_facts, addressee: addressee, addressee_source: source}
   end
 
@@ -2077,7 +2164,7 @@ defmodule Backend.Stations do
             _ -> :student
           end
 
-        %{role: role, text: generator_text(role, msg.text)}
+        %{role: role, text: generator_text(role, Map.get(msg, :speaker), msg.text)}
       end)
       |> drop_unanswered_learner_turns()
 
@@ -2090,8 +2177,11 @@ defmodule Backend.Stations do
   # The generator sees its earlier replies with the addressee marker it wrote
   # (#309): stored replies have it stripped, and a history without it led the
   # live model to stop marking its replies after the second turn.
-  defp generator_text(:patient, text) when is_binary(text), do: "[PACIENTE] " <> text
-  defp generator_text(_role, text), do: text
+  defp generator_text(:patient, :companion, text) when is_binary(text),
+    do: "[ACOMPANHANTE] " <> text
+
+  defp generator_text(:patient, _speaker, text) when is_binary(text), do: "[PACIENTE] " <> text
+  defp generator_text(_role, _speaker, text), do: text
 
   defp drop_unanswered_learner_turns(turns) do
     turns

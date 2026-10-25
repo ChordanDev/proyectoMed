@@ -63,7 +63,7 @@ Examiner-only description of what the learner should do, added to `expected_acti
 
 ### `[ATOR id papel=… idade=… voz=…] name`
 
-At least one actor, exactly one with `papel=paciente` and at most one with `papel=acompanhante` (issue #341: the generator's `[ACOMPANHANTE]` marker names one companion). `papel` is `paciente` or `acompanhante`; `idade` is a non-negative integer; `voz` is the voice key the voice worker maps to a TTS voice. The child tags below must follow their `[ATOR]`.
+At least one actor, exactly one with `papel=paciente` and at most one with `papel=acompanhante` (issue #341: the patient generator's companion marker names one companion). `papel` is `paciente` or `acompanhante`; `idade` is a non-negative integer; `voz` is the voice key the voice worker maps to a TTS voice. The child tags below must follow their `[ATOR]`.
 
 | Child tag | Required | Becomes |
 |---|---|---|
