@@ -488,4 +488,77 @@ defmodule Backend.ContentTest do
       end
     end
   end
+
+  describe "picking a published station for a session (issue #334)" do
+    setup do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      {:ok, package} = Stations.parse_case(@reference_case)
+      %{admin: admin, package: package}
+    end
+
+    defp publish!(package, admin, area) do
+      kase = insert_case!(area, "Tema", @reference_case)
+      {:ok, approved} = Content.approve_case(kase, Map.put(package, "area", area), admin)
+      approved
+    end
+
+    test "get_published_station/1 returns the latest approved version of a case number",
+         %{admin: admin, package: package} do
+      approved = publish!(package, admin, "Cirurgia Geral")
+      {:ok, edited} = Content.update_case_markdown(approved, @reference_case <> "\n", admin)
+      {:ok, _v2} = Content.approve_case(edited, package, admin)
+
+      version = Content.get_published_station(approved.number)
+
+      assert version.case.number == approved.number
+      assert version.version_number == 2
+      assert version.package["station_id"] == "acute-appendicitis"
+    end
+
+    test "get_published_station/1 returns nil for an unknown, pending or disapproved case",
+         %{admin: admin, package: package} do
+      pending = insert_case!("Pediatria", "Bronquiolite", @reference_case)
+      disapproved = publish!(package, admin, "Ginecologia")
+      {:ok, _} = Content.disapprove_case(disapproved)
+
+      assert Content.get_published_station(pending.number) == nil
+      assert Content.get_published_station(disapproved.number) == nil
+      assert Content.get_published_station(999_999) == nil
+    end
+
+    test "random_published_station/1 draws only published versions within the area",
+         %{admin: admin, package: package} do
+      surgery = publish!(package, admin, "Cirurgia Geral")
+      pediatrics = publish!(package, admin, "Pediatria")
+      _pending = insert_case!("Pediatria", "Pendente", @reference_case)
+
+      for _ <- 1..10 do
+        assert Content.random_published_station("Pediatria").case_id == pediatrics.id
+        assert Content.random_published_station("Cirurgia Geral").case_id == surgery.id
+      end
+
+      drawn = MapSet.new(1..40, fn _ -> Content.random_published_station(nil).case_id end)
+      assert MapSet.subset?(drawn, MapSet.new([surgery.id, pediatrics.id]))
+      assert MapSet.size(drawn) == 2
+    end
+
+    test "random_published_station/1 returns nil when the area has no published station",
+         %{admin: admin, package: package} do
+      disapproved = publish!(package, admin, "Ginecologia")
+      {:ok, _} = Content.disapprove_case(disapproved)
+
+      assert Content.random_published_station("Ginecologia") == nil
+      assert Content.random_published_station("Área inexistente") == nil
+      assert Content.random_published_station(nil) == nil
+    end
+
+    test "random_published_station/1 draws the latest version of a re-published case",
+         %{admin: admin, package: package} do
+      approved = publish!(package, admin, "Cirurgia Geral")
+      {:ok, edited} = Content.update_case_markdown(approved, @reference_case <> "\n", admin)
+      {:ok, _v2} = Content.approve_case(edited, package, admin)
+
+      assert Content.random_published_station("Cirurgia Geral").version_number == 2
+    end
+  end
 end
