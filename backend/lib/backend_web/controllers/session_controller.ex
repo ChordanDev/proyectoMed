@@ -10,6 +10,9 @@ defmodule BackendWeb.SessionController do
 
   alias Backend.Stations
 
+  # The largest value of the bigint `cases.number` column.
+  @max_case_number 9_223_372_036_854_775_807
+
   @doc """
   The Pre-Station Notice with every active provider (ADR-003 #36), shown
   before the learner gives or declines audio consent.
@@ -59,11 +62,11 @@ defmodule BackendWeb.SessionController do
 
   defp selection(%{"station_id" => _id, "random" => _random}), do: {:error, :invalid_parameters}
 
-  defp selection(%{"station_id" => id}) when is_integer(id) and id > 0, do: {:ok, {:station, id}}
+  defp selection(%{"station_id" => id}) when is_integer(id) and id > 0, do: station(id)
 
   defp selection(%{"station_id" => id}) when is_binary(id) do
     case Integer.parse(id) do
-      {number, ""} when number > 0 -> {:ok, {:station, number}}
+      {number, ""} when number > 0 -> station(number)
       _other -> {:error, :invalid_parameters}
     end
   end
@@ -77,6 +80,11 @@ defmodule BackendWeb.SessionController do
   end
 
   defp selection(_params), do: {:error, :invalid_parameters}
+
+  # Case numbers are a bigint column: a number beyond its range names no case,
+  # so it is station_not_found rather than a query the database cannot encode.
+  defp station(number) when number <= @max_case_number, do: {:ok, {:station, number}}
+  defp station(_number), do: {:error, :station_not_found}
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(area), do: area

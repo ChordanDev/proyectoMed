@@ -154,5 +154,38 @@ defmodule Backend.Stations.PublishedSessionTest do
 
       assert Enum.map(result.criteria, & &1.id) == Enum.map(package["rubric"], & &1["id"])
     end
+
+    test "a released impresso grades the impresso-only criterion of the pinned package",
+         %{admin: admin, package: package} do
+      # A criterion graded only by the released imaging impresso: no transcript
+      # message mentions it, so impresso evidence alone can make it met.
+      imaging_criterion =
+        package["rubric"]
+        |> List.last()
+        |> Map.merge(%{
+          "id" => "item-imaging-impresso",
+          "order" => length(package["rubric"]) + 1,
+          "impresso_ids" => [@imaging_impresso]
+        })
+
+      kase = publish!(Map.update!(package, "rubric", &(&1 ++ [imaging_criterion])), admin)
+      {:ok, session} = Stations.start_station_session({:station, kase.number}, %{})
+
+      assert {:ok, %{newly_released: [%{id: @imaging_impresso}]}} =
+               Stations.request_impresso(session.session_id, %{"text" => @imaging_request})
+
+      {:ok, played} = Stations.get_session(session.session_id)
+
+      %{criteria: criteria} = Backend.Stations.Evaluator.evaluate(played.package, played)
+      graded = Enum.find(criteria, &(&1.id == imaging_criterion["id"]))
+
+      assert graded.status == :met
+      assert Enum.any?(graded.evidence, &(&1.role == :impresso))
+
+      {:ok, _} = Stations.complete_session(session.session_id, :user)
+      {:ok, result} = Stations.get_session_result(session.session_id)
+
+      assert %{status: "met"} = Enum.find(result.criteria, &(&1.id == imaging_criterion["id"]))
+    end
   end
 end

@@ -169,6 +169,18 @@ defmodule BackendWeb.SessionControllerTest do
       assert body == %{"error" => "station_not_found", "message" => "Estação não encontrada."}
     end
 
+    test "a station id beyond the bigint range is station_not_found, not a server error",
+         %{conn: conn} do
+      for station_id <- [99_999_999_999_999_999_999, "99999999999999999999"] do
+        body =
+          conn
+          |> post(~p"/sessions", %{"station_id" => station_id, "audio_consent" => true})
+          |> json_response(404)
+
+        assert body == %{"error" => "station_not_found", "message" => "Estação não encontrada."}
+      end
+    end
+
     test "an area without a published station is no_published_station",
          %{conn: conn, admin: admin, package: package} do
       _surgery = publish!(package, admin, "Cirurgia Geral")
