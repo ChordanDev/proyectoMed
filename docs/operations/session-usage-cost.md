@@ -120,3 +120,9 @@ A live 10-turn text station (acute appendicitis, 2026-10-25) with every Claude
 seam on `claude-haiku-5-5`, Jev live, finished and graded with feedback:
 8,298 input, 2,258 output, 36,450 cache-read and 6,061 cache-write tokens, 13
 Jev calls, estimated Claude cost USD 0.003081 (no audio: text only).
+
+## Resolver model
+
+The rubric resolver runs on `claude-opus-5-5` by default. The measured comparison of Opus, Sonnet and
+Haiku on the same transcripts, with agreement, latency and cost per session, is
+in `docs/research/resolver-model-comparison.md` (issue #343).
