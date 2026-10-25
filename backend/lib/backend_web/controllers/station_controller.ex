@@ -256,7 +256,7 @@ defmodule BackendWeb.StationController do
   def show_session(conn, %{"id" => session_id}) do
     case Stations.get_session(session_id) do
       {:ok, session} ->
-        json(conn, %{
+        %{
           session_id: session.session_id,
           station_id: session.station_id,
           station_version: session.station_version,
@@ -269,7 +269,9 @@ defmodule BackendWeb.StationController do
             session |> Map.get(:completion_reason) |> completion_reason_to_string(),
           messages: Enum.map(session.messages, &message_to_json/1),
           server_now: DateTime.to_iso8601(DateTime.utc_now())
-        })
+        }
+        |> put_station(Stations.session_station(session))
+        |> then(&json(conn, &1))
 
       {:error, :not_found} ->
         conn
@@ -430,6 +432,10 @@ defmodule BackendWeb.StationController do
         })
     end
   end
+
+  # A session started on a published station (issue #334) also shows it.
+  defp put_station(body, nil), do: body
+  defp put_station(body, station), do: Map.put(body, :station, station)
 
   defp parse_finish_reason("user"), do: {:ok, :user}
   defp parse_finish_reason("timer"), do: {:ok, :timer}

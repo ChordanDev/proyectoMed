@@ -208,6 +208,30 @@ defmodule Backend.Stations do
     end
   end
 
+  @doc """
+  The learner-facing station of a session started on a published version
+  (issue #334): the catalog fields (`id`, `version`, `slug`, `area`, `theme`,
+  public `actors`) plus `display_title`, `language` and the `candidate_brief`
+  projected to its `scenario` and `tasks`. `nil` for a session started on the
+  deprecated active station. Nothing examiner-only is included.
+  """
+  @spec session_station(Conversation.session()) :: map() | nil
+  def session_station(%{package: package} = session) when is_map(package) do
+    %{
+      "id" => session.station_id,
+      "version" => session.station_version,
+      "slug" => session.station_slug,
+      "area" => session.station_area,
+      "theme" => session.station_theme,
+      "display_title" => package["display_title"],
+      "language" => package["language"],
+      "candidate_brief" => Map.take(package["candidate_brief"] || %{}, ["scenario", "tasks"]),
+      "actors" => catalog_actors(package["actors"] || [])
+    }
+  end
+
+  def session_station(_legacy_session), do: nil
+
   # The package a session plays: the version it pinned (issue #334), or, for
   # a session started on the deprecated active station, the file loader's.
   defp session_package(%{package: package}) when is_map(package), do: package

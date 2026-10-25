@@ -34,7 +34,25 @@ defmodule BackendWeb.Router do
 
     get "/", HealthController, :index
     get "/stations", StationController, :index
+
+    # Multi-station session API (issue #334, ADR-013 amendment on #209): a
+    # session starts on a published station and every route is addressed by it.
+    post "/sessions", SessionController, :create
+    get "/sessions/:id", StationController, :show_session
+    post "/sessions/:id/messages", StationController, :create_message
+    post "/sessions/:id/finish", StationController, :finish_session
+    post "/sessions/:id/discard", StationController, :discard
+    get "/sessions/:id/result", StationController, :show_educational_result
+    post "/sessions/:id/impressos/request", StationController, :request_impresso
+    get "/sessions/:id/impressos", StationController, :list_impressos
+    post "/sessions/:id/transcribe", TranscriptionController, :create
+    post "/sessions/:id/synthesize", TTSController, :create
+    post "/sessions/:id/voice", VoiceSessionController, :create
   end
+
+  # Deprecated aliases (issue #334): the frozen web harness and the current
+  # Unreal client still start on the boot-time active station. The per-session
+  # routes below serve any session, including one started by `POST /sessions`.
 
   scope "/api/stations", BackendWeb do
     pipe_through :api

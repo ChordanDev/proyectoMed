@@ -199,6 +199,96 @@ no `UStationClient` method for it yet; a client calls the route directly.
 Examiner-only data (facts, persona, tone, mandatory questions, presenting
 context, rubric, impressos) is never in the catalog.
 
+## Sessions on a published station (`POST /sessions`)
+
+Phoenix starts a session on a station of the catalog (issue #334, ADR-013
+amendment on #209). There is no `UStationClient` method for it yet; until the
+client moves, `StartSession` keeps using the deprecated active-station routes
+below.
+
+- **Auth:** none today, like the catalog; the device token arrives with #337.
+- **Request:** a JSON body with exactly one station choice and the audio consent.
+
+| Body | Starts |
+| --- | --- |
+| `{"station_id": 12, "audio_consent": true}` | The latest published version of catalog entry `12` (the case number; a numeric string such as `"12"` is accepted too). |
+| `{"random": true, "area": "Pediatria", "audio_consent": false}` | A random published station of that `area` (the catalog's `area`). |
+| `{"random": true, "audio_consent": false}` | A random published station of any area. A blank `area` means any area. |
+
+- **Response:** `201` with the session. `station_id` is the catalog id and
+  `station_version` the published version (both integers, as in the catalog);
+  `station` carries what the learner sees before the first turn.
+
+```json
+{
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "station_id": 12,
+  "station_version": 2,
+  "station": {
+    "id": 12,
+    "version": 2,
+    "slug": "acute-appendicitis",
+    "area": "Cirurgia Geral",
+    "theme": "Abdome agudo inflamatório — apendicite aguda",
+    "display_title": "Abdome agudo inflamatório — apendicite aguda",
+    "language": "pt-BR",
+    "candidate_brief": { "scenario": "…", "tasks": ["…"] },
+    "actors": [
+      { "id": "paciente", "role": "patient", "name": "Rafael Nogueira", "age": 27, "voice": "masculina-adulta" }
+    ]
+  },
+  "audio_consent": true,
+  "status": "active",
+  "voice_mode": "realtime",
+  "started_at": "2026-10-25T15:00:00Z",
+  "expires_at": "2026-10-25T15:30:00Z",
+  "deadline_at": "2026-10-25T15:10:00Z",
+  "server_now": "2026-10-25T15:00:00Z"
+}
+```
+
+- **Pinned version:** the session plays the version published when it
+  started. Approving an edited case later publishes a new version for new
+  sessions only; a running session, its turns, impressos and result never
+  change.
+- **Errors:**
+
+| Code | Status | When |
+| --- | --- | --- |
+| `invalid_parameters` | 400 | No station choice, both `station_id` and `random`, a `station_id` that is not a positive integer, a non-string `area`, or a missing or non-boolean `audio_consent`. |
+| `station_not_found` | 404 | No published station has that `station_id` (unknown, pending or disapproved case). |
+| `no_published_station` | 404 | Nothing is published in that `area` (or at all, without one). |
+| `station_unavailable` | 503 | The published package could not be loaded; the run cannot start. |
+
+### Session routes
+
+Every operation is addressed by the session id; request and response bodies are
+the ones of the operations table above.
+
+| Route | Operation |
+| --- | --- |
+| `GET /sessions/:id` | Refresh: status, transcript, timer (`RefreshSession`); a session started here also returns `station`. |
+| `POST /sessions/:id/messages` | A learner turn (`SendTurn`). |
+| `POST /sessions/:id/impressos/request` | An impresso request (`RequestImpresso`). |
+| `GET /sessions/:id/impressos` | Released impressos (`ListImpressos`). |
+| `POST /sessions/:id/voice` | LiveKit credential (`RequestVoiceCredential`). |
+| `POST /sessions/:id/transcribe`, `POST /sessions/:id/synthesize` | Turn-based voice (legacy HTTP audio). |
+| `POST /sessions/:id/finish` | Finish (`FinishSession`). |
+| `GET /sessions/:id/result` | The v2 educational result (`FetchResult`). |
+| `POST /sessions/:id/discard` | Discard (`DiscardSession`). |
+
+### Deprecated active-station routes
+
+`GET /api/stations/active`, `POST /api/stations/active/sessions` and the
+`/api/stations/active/sessions/:id/...` and `/api/v2/stations/active/sessions/:id/result`
+routes keep working until this client and the frozen web harness move to the
+routes above. The per-session aliases serve any session, including one started
+by `POST /sessions`.
+
+The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
+which serves the language and speech-to-text keyterms of the session's own
+pinned station.
+
 ## Not in the interface yet
 
 Joining the LiveKit room (publishing the microphone, receiving the patient voice
