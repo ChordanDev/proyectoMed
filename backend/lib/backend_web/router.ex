@@ -151,6 +151,10 @@ defmodule BackendWeb.Router do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
       live "/device", DeviceLive, :confirm
+      # Plans and subscription status (#339); `/conta` is also the success
+      # page of the RevenueCat Web Purchase Link.
+      live "/planos", BillingLive.Plans, :index
+      live "/conta", BillingLive.Account, :show
     end
 
     post "/users/update-password", UserSessionController, :update_password
