@@ -18,8 +18,8 @@ Constraints: keep the `stations.ex` change to a small hook (siblings #339, #342 
 
 ## Tasks
 
-- [x] T1 (S1, S2, S6, S7) inline: migration `educational_results`, schema and `Results.History.record/2`, hook in `Stations.get_educational_result/2`, context tests. RED 5/5 failing (StoredResult undefined), GREEN 5/5; backend suite 2182 passed. Commit: see L3.
-- [ ] T2 (S3, S4, S5, S6, S8) inline: `MeResultController`, routes under the device-auth pipeline, controller tests, docs. Commit: see Log.
+- [x] T1 (S1, S2, S6, S7) inline: migration `educational_results`, schema and `Results.History.record/2`, hook in `Stations.get_educational_result/2`, context tests. RED 5/5 failing (StoredResult undefined), GREEN 5/5; backend suite 2182 passed. Commit: `5fdf453`.
+- [x] T2 (S3, S4, S5, S6, S8) inline: `MeResultController`, routes under the device-auth pipeline, controller tests, docs. RED 7/12 failing (routes missing; the 5 context tests already green), GREEN 7/7. Commit: see L4.
 
 Route evidence: both units are one dependent behaviour of about 300-400 lines; no Writer trigger reason, so inline.
 
@@ -27,3 +27,5 @@ Route evidence: both units are one dependent behaviour of about 300-400 lines; n
 
 - L1 (2026-10-25) Request: implement GitHub issue #338 "Store results and expose the learner's history" as a bounded writer (task text from the workflow: persist one Educational Result per finished session; GET /me/results list by date desc, optional area filter, paginated; GET /me/results/:id identical to the end-of-session result; another learner's result 404; no cross-session aggregate; technical failure stores nothing; account deletion cascades; document both endpoints).
 - L2 Decisions: the stored `result` is the exact serialized v2 Educational Result the learner saw first (insert once, `ON CONFLICT (session_id) DO NOTHING`), so the detail's `result` equals the end-of-session body. The station identity (case number, version number, slug, area, theme, display title) is denormalized on the row; `station_version_id` is nilified if the case is deleted, so history survives content deletion. Legacy sessions without a learner store nothing.
+- L3 T1 committed as `5fdf453` feat(stations): store the learner's educational results. RED 5 failing, GREEN 5 passed; backend suite 2182 passed.
+- L4 T2: `GET /me/results` and `GET /me/results/:id` on the `:api, :device_auth` pipeline (not `SessionOwner`: `:id` is a result id). Pagination `page` 1..100000, `page_size` 1..100 (default 20), invalid values `400 invalid_parameters`; another learner's or an unknown id `404 result_not_found`. Responses carry the pt-BR `educational_disclaimer`; no cross-session field exists. Docs: "Results history" section in `docs/unreal-station-client.md`.

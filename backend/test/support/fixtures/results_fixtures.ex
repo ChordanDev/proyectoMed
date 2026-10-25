@@ -45,15 +45,16 @@ defmodule Backend.ResultsFixtures do
     def decide_rubric_batch(_), do: {:error, {:transport_error, "private-provider-detail"}}
   end
 
-  @doc "Approves the reference case (`area` defaults to Cirurgia Geral) and returns it."
+  @doc "Approves the reference case with `[ÁREA] area` and returns the case."
   def published_case_fixture(area \\ "Cirurgia Geral") do
     admin = Backend.AccountsFixtures.admin_fixture()
-    {:ok, package} = Stations.parse_case(@reference_case)
+    markdown = String.replace(@reference_case, "[ÁREA] Cirurgia Geral", "[ÁREA] #{area}")
+    {:ok, package} = Stations.parse_case(markdown)
 
     %{rows: [[id]]} =
       Backend.Repo.query!(
         "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING id",
-        [area, "Tema", @reference_case]
+        [area, package["theme"], markdown]
       )
 
     {:ok, kase} = Content.approve_case(Content.get_case!(id), package, admin)
