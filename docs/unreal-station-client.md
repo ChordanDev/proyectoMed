@@ -466,8 +466,17 @@ MetaHuman's lip sync and to name the speaker on screen.
   (`voice-key=voice-id,...`); an unmapped key uses `ELEVENLABS_VOICE_ID`.
 - The `status: "complete"` end event of a streamed reply carries no `speaker`.
 - A worker built before #341 sends no `speaker`: read it as `patient`.
-- The session transcript (`RefreshSession`) does not carry the speaker yet: a
-  companion's reply is a `patient` message there.
+- The HTTP responses name the speaker too, as `"patient"` or `"companion"`; a
+  reply with no stored speaker (any single-actor station) reads as `"patient"`:
+  - the text reply of `POST /sessions/:id/messages` (`outcome: "patient_reply"`)
+    carries `speaker`;
+  - each `role: "patient"` message of the session transcript
+    (`GET /sessions/:id`, `RefreshSession`) carries `speaker`; learner messages
+    carry none;
+  - the voice worker's non-streamed receipt (`status: "committed"` from
+    `POST /api/internal/voice/sessions/:id/transcripts`) carries `speaker`. The
+    streamed (`application/x-ndjson`) result line does not: its sentences
+    already carry the speaker.
 
 ## Not in the interface yet
 

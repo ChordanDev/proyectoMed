@@ -211,6 +211,7 @@ defmodule BackendWeb.StationController do
       outcome: "patient_reply",
       reply_text: reply.reply_text,
       reply_audio_url: reply.reply_audio_url,
+      speaker: speaker_json(reply),
       server_now: DateTime.to_iso8601(DateTime.utc_now())
     }
   end
@@ -477,11 +478,17 @@ defmodule BackendWeb.StationController do
   defp completion_reason_to_string(reason), do: to_string(reason)
 
   defp message_to_json(msg) do
-    %{
+    json = %{
       role: to_string(msg.role),
       modality: to_string(msg.modality),
       text: msg.text,
       at: DateTime.to_iso8601(msg.at)
     }
+
+    if msg.role == :patient, do: Map.put(json, :speaker, speaker_json(msg)), else: json
   end
+
+  # The actor who replied (#341): `"patient"` or `"companion"`; a reply with no
+  # stored speaker (a single-actor station) is the patient's.
+  defp speaker_json(reply), do: reply |> Map.get(:speaker, :patient) |> to_string()
 end
