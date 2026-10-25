@@ -73,6 +73,14 @@ defmodule BackendWeb.Router do
     post "/sessions/:id/voice", VoiceSessionController, :create
   end
 
+  # The learner's results history (#338): only the learner's own results.
+  scope "/me", BackendWeb do
+    pipe_through [:api, :device_auth]
+
+    get "/results", MeResultController, :index
+    get "/results/:id", MeResultController, :show
+  end
+
   # Device login of the Unreal client (#337, RFC 8628 shape); the learner
   # confirms the user code at `/device` (`BackendWeb.DeviceLive`).
   scope "/device", BackendWeb do

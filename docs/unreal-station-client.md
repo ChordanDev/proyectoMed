@@ -436,6 +436,133 @@ The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id
 which serves the language and speech-to-text keyterms of the session's own
 pinned station.
 
+## Results history (`GET /me/results`, issue #338)
+
+Phoenix keeps the learner's Educational Results (ADR-014 #346, ADR-013
+amendment on #209). There is no `UStationClient` method for it yet; a client
+calls the routes directly.
+
+- **What is stored:** the first time `GET /sessions/:id/result` serves a graded
+  result for a learner's session, Phoenix stores that exact body with the
+  station version and the finish date. Fetching the result again stores
+  nothing new. A technical failure (`502 invalid_attempt`) stores nothing, so
+  the attempt never appears. No audio and no transcript are stored: only the
+  criteria, points, recommendations and the learner phrases cited as evidence.
+- **Auth:** the device access token (`Authorization: Bearer <access_token>`),
+  as on every station route; a missing or invalid token is `401`.
+- **Scope:** only the learner's own results. Another learner's result is
+  `404 result_not_found`, exactly like an unknown id.
+- **No aggregate:** there is no total, average, trend, pass/fail or readiness
+  signal across sessions. Each result keeps its own `estimates.total`, `null`
+  when any active criterion is unresolved (ADR-012 #124). Show
+  `educational_disclaimer` with the history and with every result.
+- **Account deletion** deletes the history.
+
+### List (`GET /me/results`)
+
+Newest first (by `finished_at`). Query parameters, all optional:
+
+| Parameter | Meaning |
+| --- | --- |
+| `area` | Only results of that `[ÁREA]` (the catalog's `area`, exact match). Blank means every area. |
+| `page` | 1-based page, default `1` (at most `100000`). |
+| `page_size` | Results per page, `1` to `100`, default `20`. |
+
+`GET /me/results?area=Cirurgia%20Geral&page=1&page_size=20`
+
+```json
+{
+  "results": [
+    {
+      "id": 41,
+      "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+      "finished_at": "2026-10-25T15:09:12.482113Z",
+      "station": {
+        "id": 12,
+        "version": 2,
+        "slug": "acute-appendicitis",
+        "area": "Cirurgia Geral",
+        "theme": "Abdome agudo inflamatório — apendicite aguda",
+        "display_title": "Abdome agudo inflamatório — apendicite aguda"
+      }
+    }
+  ],
+  "page": 1,
+  "page_size": 20,
+  "has_more": false,
+  "educational_disclaimer": "Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame."
+}
+```
+
+`has_more` is `true` when a next page exists. An invalid `page` or
+`page_size` (not an integer, or out of range) is `400 invalid_parameters`.
+
+### Detail (`GET /me/results/:id`)
+
+The list entry's fields plus `result`, which is byte for byte the body
+`GET /sessions/:id/result` served at the end of that session (see the v2
+result of `FetchResult`), so the client can render it with the same view.
+
+```json
+{
+  "id": 41,
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "finished_at": "2026-10-25T15:09:12.482113Z",
+  "station": {
+    "id": 12,
+    "version": 2,
+    "slug": "acute-appendicitis",
+    "area": "Cirurgia Geral",
+    "theme": "Abdome agudo inflamatório — apendicite aguda",
+    "display_title": "Abdome agudo inflamatório — apendicite aguda"
+  },
+  "result": {
+    "schema_version": "2",
+    "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+    "status": "completed",
+    "placeholder": false,
+    "criteria": [
+      {
+        "id": "item-01",
+        "description": "Apresenta-se ao paciente.",
+        "status": "assessed",
+        "level": "adequado",
+        "level_description": "Apresentou-se e cumprimentou o paciente.",
+        "max_points": "0.5",
+        "points": "0.5",
+        "evidence_ids": ["turn-1"],
+        "evidence": [{ "id": "turn-1", "role": "learner", "text": "Bom dia, sou o doutor Pedro." }],
+        "reason": null,
+        "recommendation": "…"
+      },
+      {
+        "id": "item-02",
+        "description": "Caracteriza a dor abdominal.",
+        "status": "uncertain",
+        "max_points": "1.5",
+        "evidence_ids": [],
+        "evidence": [],
+        "reason": "assessment_unresolved",
+        "recommendation": "…"
+      }
+    ],
+    "coverage": { "assessed": 1, "uncertain": 1, "not_observable": 0, "not_applicable": 0 },
+    "estimates": {
+      "total": null,
+      "scored_subtotal": "0.5",
+      "scored_max": "0.5",
+      "eligible_max": "2",
+      "unresolved": [{ "id": "item-02", "status": "uncertain" }]
+    }
+  },
+  "educational_disclaimer": "Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame."
+}
+```
+
+| Code | Status | When |
+| --- | --- | --- |
+| `result_not_found` | 404 | Unknown id, a non-numeric id, or another learner's result. |
+
 ## Who speaks in the voice room (`speaker`, issue #341)
 
 A station may have a companion besides the patient (the catalog's `actors`,
@@ -487,6 +614,9 @@ MetaHuman's lip sync and to name the speaker on screen.
 The [device login](#learner-login-device-flow) and the bearer header (#337) have
 no `UStationClient` method yet: the module must add them before it can call the
 authenticated routes in production.
+
+The [results history](#results-history-get-meresults-issue-338) (`GET /me/results`,
+`GET /me/results/:id`) has no `UStationClient` method yet either.
 
 Joining the LiveKit room (publishing the microphone, receiving the patient voice
 track and driving lip sync) lands with #191 as an addition owned by the
