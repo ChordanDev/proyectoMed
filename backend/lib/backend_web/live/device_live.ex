@@ -8,6 +8,7 @@ defmodule BackendWeb.DeviceLive do
   use BackendWeb, :live_view
 
   alias Backend.Accounts
+  alias BackendWeb.RateLimit
 
   @impl true
   def render(assigns) do
@@ -76,8 +77,15 @@ defmodule BackendWeb.DeviceLive do
   end
 
   @impl true
-  def mount(_params, _session, socket) do
-    {:ok, assign(socket, step: :enter, user_code: nil, invalid?: false, form: code_form(""))}
+  def mount(_params, session, socket) do
+    {:ok,
+     assign(socket,
+       step: :enter,
+       user_code: nil,
+       invalid?: false,
+       form: code_form(""),
+       client_ip: session["client_ip"]
+     )}
   end
 
   @impl true
@@ -105,7 +113,23 @@ defmodule BackendWeb.DeviceLive do
   defp lookup(%{assigns: %{step: step}} = socket, _user_code) when step not in [:enter],
     do: socket
 
+  # User-code lookups are throttled per client IP and per learner (#380), so
+  # nobody can enumerate the codes of pending logins.
   defp lookup(socket, user_code) do
+    keys = [ip: socket.assigns.client_ip, user: socket.assigns.current_scope.user.id]
+
+    case RateLimit.check(:device_lookup, keys) do
+      :ok ->
+        check_code(socket, user_code)
+
+      {:error, :rate_limited, _retry_after} ->
+        socket
+        |> put_flash(:error, RateLimit.flash_message())
+        |> assign(invalid?: false, form: code_form(user_code))
+    end
+  end
+
+  defp check_code(socket, user_code) do
     if Accounts.pending_device_authorization?(user_code) do
       assign(socket, step: :confirm, user_code: display_code(user_code), invalid?: false)
     else

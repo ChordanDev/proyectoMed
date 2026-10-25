@@ -7,6 +7,7 @@ defmodule BackendWeb.UserLive.Login do
   use BackendWeb, :live_view
 
   alias Backend.Accounts
+  alias BackendWeb.RateLimit
 
   @impl true
   def render(assigns) do
@@ -102,14 +103,14 @@ defmodule BackendWeb.UserLive.Login do
   end
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     email =
       Phoenix.Flash.get(socket.assigns.flash, :email) ||
         get_in(socket.assigns, [:current_scope, Access.key(:user), Access.key(:email)])
 
     form = to_form(%{"email" => email}, as: "user")
 
-    {:ok, assign(socket, form: form, trigger_submit: false)}
+    {:ok, assign(socket, form: form, trigger_submit: false, client_ip: session["client_ip"])}
   end
 
   @impl true
@@ -118,6 +119,17 @@ defmodule BackendWeb.UserLive.Login do
   end
 
   def handle_event("submit_magic", %{"user" => %{"email" => email}}, socket) do
+    # Login-link emails are throttled per client IP and per email (#380).
+    case RateLimit.check(:magic_link_email, ip: socket.assigns.client_ip, email: email) do
+      :ok ->
+        {:noreply, send_login_link(socket, email)}
+
+      {:error, :rate_limited, _retry_after} ->
+        {:noreply, put_flash(socket, :error, RateLimit.flash_message())}
+    end
+  end
+
+  defp send_login_link(socket, email) do
     if user = Accounts.get_user_by_email(email) do
       Accounts.deliver_login_instructions(
         user,
@@ -128,10 +140,9 @@ defmodule BackendWeb.UserLive.Login do
     info =
       "Se o seu e-mail estiver cadastrado, você receberá em instantes um link para entrar."
 
-    {:noreply,
-     socket
-     |> put_flash(:info, info)
-     |> push_navigate(to: ~p"/users/log-in")}
+    socket
+    |> put_flash(:info, info)
+    |> push_navigate(to: ~p"/users/log-in")
   end
 
   defp local_mail_adapter? do

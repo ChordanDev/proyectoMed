@@ -10,6 +10,9 @@ defmodule BackendWeb.DeviceController do
 
   alias Backend.Accounts
 
+  # Unauthenticated: throttled per client IP (#380), `429` `rate_limited`.
+  plug BackendWeb.Plugs.RateLimit, :device_start when action in [:start]
+
   def start(conn, _params) do
     {:ok, start} = Accounts.start_device_authorization()
 

@@ -124,6 +124,16 @@ config :phoenix, :filter_parameters, ["password", "secret", "token", "text", "co
 # harness and the E2E suite).
 config :backend, :legacy_station_api_unauthenticated, false
 
+# Rate limits of the public authentication and device-login endpoints (#380),
+# counted in memory (`BackendWeb.RateLimit`). `:limits` overrides the defaults
+# as `[action: [kind: {count, window_ms}]]`; config/runtime.exs reads the
+# `RATE_LIMIT_*` variables.
+config :backend, BackendWeb.RateLimit, enabled: true, limits: []
+
+# The client IP is the socket peer unless a trusted proxy header is named
+# (`TRUSTED_CLIENT_IP_HEADER`, for example `fly-client-ip` behind Fly).
+config :backend, BackendWeb.Plugs.ClientIP, header: nil
+
 # RevenueCat billing (#339, see docs/operations/revenuecat.md). Plans are keyed
 # by RevenueCat `product_id` (research A9): the webhook carries no plan metadata
 # or payment method. Card plans renew automatically; Pix plans are paid

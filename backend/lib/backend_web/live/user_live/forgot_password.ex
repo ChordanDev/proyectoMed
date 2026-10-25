@@ -7,6 +7,7 @@ defmodule BackendWeb.UserLive.ForgotPassword do
   use BackendWeb, :live_view
 
   alias Backend.Accounts
+  alias BackendWeb.RateLimit
 
   @impl true
   def render(assigns) do
@@ -44,12 +45,23 @@ defmodule BackendWeb.UserLive.ForgotPassword do
   end
 
   @impl true
-  def mount(_params, _session, socket) do
-    {:ok, assign(socket, form: to_form(%{}, as: "user"))}
+  def mount(_params, session, socket) do
+    {:ok, assign(socket, form: to_form(%{}, as: "user"), client_ip: session["client_ip"])}
   end
 
   @impl true
   def handle_event("send_email", %{"user" => %{"email" => email}}, socket) do
+    # Reset emails are throttled per client IP and per email (#380).
+    case RateLimit.check(:reset_password_email, ip: socket.assigns.client_ip, email: email) do
+      :ok ->
+        {:noreply, send_reset_link(socket, email)}
+
+      {:error, :rate_limited, _retry_after} ->
+        {:noreply, put_flash(socket, :error, RateLimit.flash_message())}
+    end
+  end
+
+  defp send_reset_link(socket, email) do
     if user = Accounts.get_user_by_email(email) do
       Accounts.deliver_user_reset_password_instructions(
         user,
@@ -60,9 +72,8 @@ defmodule BackendWeb.UserLive.ForgotPassword do
     info =
       "Se o seu e-mail estiver cadastrado, você receberá em instantes um link para redefinir a senha."
 
-    {:noreply,
-     socket
-     |> put_flash(:info, info)
-     |> push_navigate(to: ~p"/users/log-in")}
+    socket
+    |> put_flash(:info, info)
+    |> push_navigate(to: ~p"/users/log-in")
   end
 end

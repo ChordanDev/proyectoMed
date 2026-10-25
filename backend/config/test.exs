@@ -56,6 +56,10 @@ config :backend, Backend.Stations.Usage.Store, enabled: false
 # `/api/stations/...` routes without a device access token (#337).
 config :backend, :legacy_station_api_unauthenticated, true
 
+# Every test conn comes from 127.0.0.1, so the rate limits (#380) are off;
+# `BackendWeb.RateLimitHelpers.enable_rate_limit/1` turns them on in a test.
+config :backend, BackendWeb.RateLimit, enabled: false, limits: []
+
 # RevenueCat webhook secrets and purchase links for the fixtures (#339); no
 # test calls RevenueCat.
 config :backend, Backend.Billing,

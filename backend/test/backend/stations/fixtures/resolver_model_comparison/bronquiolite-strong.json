@@ -1,0 +1,37 @@
+{
+  "description": "Issue #343: a fictional strong attempt at the bronquiolite companion case (n8n sample). The learner talks to the mother, covers history and risk factors, requests and interprets the exams, classifies severity, admits the infant and answers the mother's doubts. Companion replies use the `patient` role, the only non-learner role of a qualification turn.",
+  "station_id": "bronquiolite-viral-lactente",
+  "package": "case_format:n8n-sample-bronquiolite-companion.md",
+  "quality": "strong",
+  "expected_released_ids": [
+    "impresso-1-exame-geral",
+    "impresso-2-exame-respiratorio",
+    "impresso-3-oximetria"
+  ],
+  "turns": [
+    {"role": "learner", "modality": "text", "text": "Boa noite, sou o Dr. Rafael, médico plantonista. Qual é o seu nome e o nome da bebê? A senhora é a mãe dela?"},
+    {"role": "patient", "modality": "text", "text": "Sou a Juliana, mãe da Helena. Ela tem quatro meses."},
+    {"role": "learner", "modality": "text", "text": "Juliana, quando isso começou e como foi evoluindo?"},
+    {"role": "patient", "modality": "text", "text": "Começou há uns quatro dias com nariz escorrendo, depois veio a tosse e desde ontem ela está cansada."},
+    {"role": "learner", "modality": "text", "text": "Ela teve febre? Você ouviu chiado no peito ou percebeu dificuldade para respirar?"},
+    {"role": "patient", "modality": "text", "text": "Teve febre de 38 e tem um chiado, ela respira rápido."},
+    {"role": "learner", "modality": "text", "text": "Ela está mamando bem? Quantas fraldas molhadas ela fez hoje?"},
+    {"role": "patient", "modality": "text", "text": "Mama pouquinho e cansa, menos da metade. Só duas fraldas molhadas hoje."},
+    {"role": "learner", "modality": "text", "text": "Ela parou de respirar em algum momento ou ficou roxinha?"},
+    {"role": "patient", "modality": "text", "text": "Não, isso não."},
+    {"role": "learner", "modality": "text", "text": "Ela nasceu de quantas semanas, teve algum problema ao nascer? Tem doença do coração ou do pulmão, já chiou antes ou foi internada?"},
+    {"role": "patient", "modality": "text", "text": "Nasceu com 39 semanas, sem problema. Nunca chiou nem foi internada."},
+    {"role": "learner", "modality": "text", "text": "As vacinas estão em dia? Alguém em casa está gripado, ela vai à creche, alguém fuma perto dela?"},
+    {"role": "patient", "modality": "text", "text": "Vacinas em dia. O irmão de três anos está resfriado e vai à creche. O pai fuma, mas fora de casa."},
+    {"role": "learner", "modality": "impressos", "text": "Solicito o exame físico geral com sinais vitais."},
+    {"role": "learner", "modality": "impressos", "text": "Solicito o exame do aparelho respiratório."},
+    {"role": "learner", "modality": "impressos", "text": "Solicito a oximetria de pulso."},
+    {"role": "learner", "modality": "text", "text": "Ela está com desconforto respiratório: taquipneia, tiragem subcostal e intercostal e batimento de asa nasal, com sibilos e crepitações difusos. A saturação é 89% em ar ambiente, então há hipoxemia."},
+    {"role": "learner", "modality": "text", "text": "A hipótese é bronquiolite viral aguda, e o quadro é moderado a grave: tem hipoxemia, desconforto respiratório e está mamando menos da metade, que são critérios de internação."},
+    {"role": "learner", "modality": "text", "text": "Juliana, a Helena precisa ficar internada, porque está com o oxigênio baixo e cansada para mamar. Vamos dar oxigênio por cateter nasal para manter a saturação acima de 92%."},
+    {"role": "learner", "modality": "text", "text": "Vamos lavar o nariz com soro fisiológico e aspirar, principalmente antes das mamadas, oferecer mamadas menores e mais vezes e, se ela respirar muito rápido ou não aceitar, usar sonda ou soro na veia. Para febre, paracetamol 200 mg/mL, 6 gotas a cada 6 horas se a temperatura passar de 37,8."},
+    {"role": "patient", "modality": "text", "text": "Ela não vai tomar antibiótico ou fazer inalação? Isso é asma?"},
+    {"role": "learner", "modality": "text", "text": "Não precisa: é uma doença causada por vírus, e antibiótico, corticoide, xarope ou inalação com broncodilatador não ajudam de rotina; o tratamento é de suporte. Bronquiolite não é asma, mas ela pode voltar a chiar em outros resfriados, e vamos acompanhá-la."},
+    {"role": "learner", "modality": "text", "text": "É um vírus, costuma piorar entre o terceiro e o quinto dia, e a tosse pode durar de duas a três semanas. Lave bem as mãos, afaste pessoas resfriadas dela, peça que ninguém fume perto e continue amamentando no peito."}
+  ]
+}

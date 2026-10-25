@@ -1,0 +1,21 @@
+{
+  "description": "Issue #343: a fictional weak acute-appendicitis attempt. The learner asks little, requests only a urine test, attributes the picture to a urinary infection and discharges the patient without surgical evaluation.",
+  "station_id": "acute-appendicitis",
+  "package": "station:acute-appendicitis",
+  "quality": "weak",
+  "expected_released_ids": [
+    "impresso-2-urina-tipo-1"
+  ],
+  "turns": [
+    {"role": "learner", "modality": "text", "text": "Oi, qual o problema?"},
+    {"role": "patient", "modality": "text", "text": "Estou com dor na barriga desde ontem."},
+    {"role": "learner", "modality": "text", "text": "Dói para urinar?"},
+    {"role": "patient", "modality": "text", "text": "Não, a urina está normal."},
+    {"role": "learner", "modality": "text", "text": "Comeu alguma coisa estragada?"},
+    {"role": "patient", "modality": "text", "text": "Acho que não."},
+    {"role": "learner", "modality": "impressos", "text": "Peço um exame de urina."},
+    {"role": "learner", "modality": "text", "text": "Deve ser uma infecção urinária. Vou passar um antibiótico oral e o senhor vai para casa."},
+    {"role": "patient", "modality": "text", "text": "Vou ter que operar? Quanto tempo vou ficar internado?"},
+    {"role": "learner", "modality": "text", "text": "Não precisa, é só tomar o remédio. Se piorar, volte."}
+  ]
+}
