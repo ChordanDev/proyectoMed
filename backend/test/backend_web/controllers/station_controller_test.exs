@@ -1688,6 +1688,9 @@ defmodule BackendWeb.StationControllerTest do
   end
 
   describe "GET /stations and GET /api/stations catalog (issue #333)" do
+    # `GET /stations` requires a learner's device access token (#337).
+    setup :register_and_log_in_device
+
     test "returns empty list when no approved cases exist", %{conn: conn} do
       for path <- ["/stations", "/api/stations"] do
         conn = get(conn, path)

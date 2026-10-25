@@ -129,14 +129,15 @@ defmodule BackendWeb.VoiceWorkerController do
         |> put_status(:ok)
         |> json(%{turn_id: turn_id, status: "duplicate"})
 
-      %{reply_text: reply_text, turn_id: ^turn_id, generation_id: generation_id} ->
+      %{reply_text: reply_text, turn_id: ^turn_id, generation_id: generation_id} = reply ->
         conn
         |> put_status(:created)
         |> json(%{
           turn_id: turn_id,
           status: "committed",
           generation_id: generation_id,
-          reply_text: reply_text
+          reply_text: reply_text,
+          speaker: reply |> Map.get(:speaker, :patient) |> to_string()
         })
 
       # A refused reply kept the learner turn (#269): no text to speak.

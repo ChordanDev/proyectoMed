@@ -166,7 +166,8 @@ defmodule Backend.Stations do
   number) or `{:random, area}`, where `area` is an `[ÁREA]` or `nil` for any
   area. The session pins the latest published version at this moment: its
   validated package is kept with the session, so a later re-publish never
-  changes a session in progress. `attrs` takes `:audio_consent`.
+  changes a session in progress. `attrs` takes `:audio_consent` and
+  `:user_id`, the learner the session belongs to (#337).
 
   The session's `station_id` is the case number and `station_version` the
   published version number; `station_slug`, `station_area` and
@@ -186,7 +187,7 @@ defmodule Backend.Stations do
          {:ok, package} <- pinned_package(version) do
       {:ok,
        attrs
-       |> Map.take([:audio_consent])
+       |> Map.take([:audio_consent, :user_id])
        |> Map.merge(%{
          station_id: version.case.number,
          station_version: version.version_number,
@@ -259,6 +260,20 @@ defmodule Backend.Stations do
   defp fetch_package(session_id) do
     with {:ok, session} <- Conversation.fetch(session_id) do
       {:ok, session_package(session)}
+    end
+  end
+
+  @doc """
+  Returns false when the session exists and belongs to another learner than
+  `user_id` (#337), including a session started without a learner on the
+  deprecated active station. An unknown or expired session returns true, so
+  the caller answers with its usual not-found or expired error.
+  """
+  @spec session_accessible_by?(String.t(), pos_integer()) :: boolean()
+  def session_accessible_by?(session_id, user_id) when is_binary(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, session} -> Map.get(session, :user_id) == user_id
+      {:error, _reason} -> true
     end
   end
 

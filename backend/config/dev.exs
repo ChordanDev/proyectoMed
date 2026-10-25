@@ -73,3 +73,7 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# The frozen web harness and the E2E suite call the deprecated
+# `/api/stations/...` routes without a device access token (#337).
+config :backend, :legacy_station_api_unauthenticated, true
