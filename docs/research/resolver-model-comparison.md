@@ -4,7 +4,7 @@ Issue #343 (parent #326). Measured on 2026-10-25. This note compares the rubric
 resolver (`Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter`, issue
 #301) on `claude-opus-5-5` (today's default, `ANTHROPIC_MODEL`),
 `claude-sonnet-5-5` and `claude-haiku-5-5`, over the same transcripts, and
-recommends a model. **It changes no default**: that needs the user's decision.
+recommends a model. The owner chose Haiku on 2026-10-25 (see **Decision**).
 
 ## Summary
 
@@ -248,12 +248,23 @@ cheapest by an order of magnitude.
   call adds the cache write of the system prompt (about 4,000 tokens: USD 0.02 on
   Opus, USD 0.0005 on Haiku).
 
-## Changing the model, if agreed
+## Decision
 
-Today `ANTHROPIC_MODEL` picks the model of both the resolver and learner
-feedback (`backend/config/runtime.exs`); `RUBRIC_RESOLVER_MODEL` applies only to
-the OpenAI resolver. Setting `ANTHROPIC_MODEL=claude-haiku-5-5` would also move
-learner feedback, which this comparison did not measure. Moving only the
-resolver needs either a resolver-specific Claude model setting or a separate
-measurement of feedback on Haiku: that is a follow-up for the user to decide,
-not part of this change.
+On 2026-10-25 the project owner switched the rubric resolver to
+`claude-haiku-5-5` (comment on #343). The resolver now has its own Claude model
+setting, `ANTHROPIC_RESOLVER_MODEL` (client key `:resolver_model`), defaulting
+to `claude-haiku-5-5`. `ANTHROPIC_MODEL` (default `claude-opus-5-5`) now picks
+only learner feedback, which this comparison did not measure, so it stays on
+Opus. The patient (`ANTHROPIC_PATIENT_MODEL`) and the undecided-verdict
+adjudicator (`ANTHROPIC_ADJUDICATOR_MODEL`) are unchanged. On the OpenAI
+provider `RUBRIC_RESOLVER_MODEL` still applies.
+
+The production request on Haiku is the shape measured here, because the
+comparison ran the production adapter with only `:model` changed: effort
+`medium`, model-default (adaptive) thinking, so no `thinking` field,
+`max_tokens` 8,192, and no `fallbacks` (Haiku 5.5 has no server-side fallback).
+The 30 s resolver deadline still fits: Haiku's slowest call was 22,415 ms and
+none of its 312 calls exceeded 30 s.
+
+Setting `ANTHROPIC_RESOLVER_MODEL=claude-opus-5-5` restores the previous
+resolver model without touching learner feedback.
