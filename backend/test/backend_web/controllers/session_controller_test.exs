@@ -336,10 +336,13 @@ defmodule BackendWeb.SessionControllerTest do
 
       assert reply =~ "umbigo"
 
-      # An exam request in a turn is examiner-addressed and releases the impresso.
+      # An exam request in a turn is examiner-addressed, flagged and releases
+      # nothing (#351): only the impresso route releases.
       assert %{
                "outcome" => "examiner_acknowledged",
-               "newly_released" => [%{"id" => @imaging_impresso}]
+               "reply_text" => nil,
+               "newly_released" => [],
+               "exam_request" => true
              } =
                conn
                |> recycle()
@@ -350,7 +353,16 @@ defmodule BackendWeb.SessionControllerTest do
                })
                |> json_response(200)
 
-      # The impresso modal releases the laboratory exams.
+      assert %{"released_impressos" => []} =
+               conn |> recycle() |> get(~p"/sessions/#{id}/impressos") |> json_response(200)
+
+      # The impresso route releases the exam the dialogue named, then the labs.
+      assert %{"decision" => "released", "newly_released" => [%{"id" => @imaging_impresso}]} =
+               conn
+               |> recycle()
+               |> post(~p"/sessions/#{id}/impressos/request", %{"text" => @imaging_request})
+               |> json_response(200)
+
       assert %{"decision" => "released", "newly_released" => [_ | _]} =
                conn
                |> recycle()

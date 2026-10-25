@@ -78,7 +78,7 @@ All operations are methods of `UStationClient`. Each one takes a
 | `StartSession(bAudioConsent)` | `POST /api/stations/active/sessions` | `FStationSession`; starts the Station Timer | #190 |
 | `RefreshSession` | `GET .../sessions/:id` | `FStationSession` with status and transcript (`Messages`) | #195, #196 |
 | `RequestVoiceCredential` | `POST .../sessions/:id/voice` | `FStationVoiceCredential` for one LiveKit room | #190, #191 |
-| `SendTurn(Text, Modality)` | `POST .../sessions/:id/messages` | `FStationTurnReply`: the approved patient reply, or an examiner acknowledgement with released impressos | #191, #192, #194 |
+| `SendTurn(Text, Modality)` | `POST .../sessions/:id/messages` | `FStationTurnReply`: the approved patient reply, or an examiner acknowledgement (it releases nothing; see [exam requests in the dialogue](#exam-requests-in-the-dialogue-issue-351)) | #191, #192, #194 |
 | `RequestImpresso(Text, RequestId)` | `POST .../sessions/:id/impressos/request` | `FStationImpressoReply`: the decision and what was released | #194 |
 | `ListImpressos` | `GET .../sessions/:id/impressos` | Every impresso released so far | #194 |
 | `FinishSession(Reason)` | `POST .../sessions/:id/finish` | `FStationSession` marked completed | #195 |
@@ -640,6 +640,43 @@ MetaHuman's lip sync and to name the speaker on screen.
     `POST /api/internal/voice/sessions/:id/transcripts`) carries `speaker`. The
     streamed (`application/x-ndjson`) result line does not: its sentences
     already carry the speaker.
+
+## Exam requests in the dialogue (issue #351)
+
+Exam findings and impressos are released only by the exam button, which calls
+`POST /sessions/:id/impressos/request` (`RequestImpresso`). A dialogue turn
+(`SendTurn`, or a voice turn) never releases an impresso nor records an
+impresso request, even when it names an exam. When the learner asks the
+examiner for an exam in the dialogue, Phoenix says so, so the client can show
+a hint pointing to the button.
+
+An examiner-addressed text reply of `POST /sessions/:id/messages`:
+
+```json
+{
+  "outcome": "examiner_acknowledged",
+  "reply_text": null,
+  "reply_audio_url": null,
+  "learner_turn": {"role": "learner", "modality": "text", "text": "Solicito hemograma e PCR"},
+  "newly_released": [],
+  "exam_request": true,
+  "server_now": "2026-10-25T14:03:11.204Z"
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `exam_request` | boolean | `true` when the learner asked for a physical exam, a maneuver, a complementary exam or a result, authored by the station or not; `false` when the learner only told the examiner what was done, found, concluded or planned. Display-only: show a hint pointing to the exam button. It releases nothing and is not graded; a wrong flag only shows or hides the hint. |
+| `newly_released` | array | Always empty for a dialogue turn; kept for older clients. |
+
+- A `patient_reply` response carries no `exam_request`; read it as `false`.
+- The voice worker's receipt of an examiner-addressed voice turn
+  (`status: "kept"`, `addressee: "examiner"`, from
+  `POST /api/internal/voice/sessions/:id/transcripts`, streamed or not) carries
+  the same `exam_request`. The worker does not forward it yet: its room event
+  stays `{role: "examiner", status: "acknowledged"}` (#191/#194 open question).
+- `FStationTurnReply` (`StationJson.cpp`) does not parse `exam_request` yet;
+  the field is an addition, so the current parser keeps working.
 
 ## Not in the interface yet
 

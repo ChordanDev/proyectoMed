@@ -9,10 +9,10 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     * with the addressee decided by the generation (#309): the same turns start
       with `[EXAMINADOR]` and are acknowledged with no patient reply.
 
-  Both sessions yield the same transcript evidence (apart from timestamps).
-  Since #302 an examiner turn that names an authored impresso also releases it,
-  and since #309 such a turn is examiner-addressed without the model in both
-  sessions, so the sessions differ at most in impresso events.
+  Both sessions yield the same evidence (apart from timestamps). Since #309 a
+  turn that names an authored impresso is examiner-addressed without the model
+  in both sessions, and since #351 no dialogue turn releases an impresso or
+  records an impresso event: only the impresso route does.
   """
   use ExUnit.Case, async: false
 
@@ -133,14 +133,9 @@ defmodule Backend.Stations.TurnAddresseeEvidenceTest do
     assert Enum.count(addressee_outcomes, &(&1 == :examiner_acknowledged)) ==
              length(@examiner_keys)
 
-    {addressee_turns, released_by_examiner} =
-      Enum.split_with(addressee_pool, &(&1.kind == :turn))
-
-    {baseline_turns, baseline_released} = Enum.split_with(baseline_pool, &(&1.kind == :turn))
-
-    assert addressee_turns == baseline_turns
-    assert released_by_examiner != []
-    assert Enum.all?(released_by_examiner ++ baseline_released, &(&1.kind == :impresso_event))
+    assert addressee_pool == baseline_pool
+    assert Enum.all?(addressee_pool, &(&1.kind == :turn))
+    addressee_turns = addressee_pool
 
     learner_items = Enum.filter(addressee_turns, &(&1.role == :learner))
     assert Enum.map(learner_items, & &1.text) == Enum.map(learner_texts(), & &1["text"])

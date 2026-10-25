@@ -10,7 +10,9 @@ defmodule BackendWeb.VoiceWorkerController do
       A refused patient reply keeps the learner turn and answers `201` with
       `status: "kept"`, `addressee: "patient"` and no text (#269). A turn Jev
       decides is addressed to the examiner (#274) is kept before any generation
-      and answers `201` with `status: "kept"` and `addressee: "examiner"`.
+      and answers `201` with `status: "kept"`, `addressee: "examiner"` and the
+      display-only boolean `exam_request` (#351): an exam request to the
+      examiner. A dialogue turn never releases an impresso.
       With `application/x-ndjson` in `Accept` (#271; the worker sends `application/x-ndjson, application/json`, since the API pipeline accepts JSON) the reply is streamed: the
       first verified sentence opens a `200` chunked NDJSON body, one line per
       verified sentence (`{"type":"sentence","turn_id","generation_id","index","text"}`,
@@ -103,13 +105,16 @@ defmodule BackendWeb.VoiceWorkerController do
           }
 
         {:ok, {:kept, %{generation_id: generation_id} = kept}} ->
-          %{
-            type: "result",
-            turn_id: turn_id,
-            status: "kept",
-            generation_id: generation_id,
-            addressee: kept_addressee(kept)
-          }
+          Map.merge(
+            %{
+              type: "result",
+              turn_id: turn_id,
+              status: "kept",
+              generation_id: generation_id,
+              addressee: kept_addressee(kept)
+            },
+            kept_exam_request(kept)
+          )
 
         {:ok, :duplicate} ->
           %{type: "result", turn_id: turn_id, status: "duplicate"}
@@ -149,12 +154,17 @@ defmodule BackendWeb.VoiceWorkerController do
       {:kept, %{turn_id: ^turn_id, generation_id: generation_id} = kept} ->
         conn
         |> put_status(:created)
-        |> json(%{
-          turn_id: turn_id,
-          status: "kept",
-          generation_id: generation_id,
-          addressee: kept_addressee(kept)
-        })
+        |> json(
+          Map.merge(
+            %{
+              turn_id: turn_id,
+              status: "kept",
+              generation_id: generation_id,
+              addressee: kept_addressee(kept)
+            },
+            kept_exam_request(kept)
+          )
+        )
     end
   end
 
@@ -164,6 +174,12 @@ defmodule BackendWeb.VoiceWorkerController do
   # sent to the patient) or `patient` (the patient reply was refused).
   defp kept_addressee(%{addressee: :examiner}), do: "examiner"
   defp kept_addressee(_kept), do: "patient"
+
+  # Only an examiner-addressed receipt carries the display-only flag (#351).
+  defp kept_exam_request(%{addressee: :examiner} = kept),
+    do: %{exam_request: Map.get(kept, :exam_request, false)}
+
+  defp kept_exam_request(_kept), do: %{}
 
   def report_usage(conn, %{"id" => session_id} = params) do
     case Stations.record_voice_usage(session_id, Map.delete(params, "id")) do

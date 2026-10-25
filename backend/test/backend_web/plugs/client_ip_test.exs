@@ -10,11 +10,12 @@ defmodule BackendWeb.Plugs.ClientIPTest do
   import Plug.Test, only: [conn: 2]
   import Plug.Conn, only: [put_req_header: 3]
 
+  alias Backend.AppEnvHelpers
   alias BackendWeb.Plugs.ClientIP
 
   setup do
-    previous = Application.get_env(:backend, ClientIP)
-    on_exit(fn -> Application.put_env(:backend, ClientIP, previous) end)
+    previous = AppEnvHelpers.snapshot(ClientIP)
+    on_exit(fn -> AppEnvHelpers.restore(ClientIP, previous) end)
     :ok
   end
 

@@ -193,8 +193,9 @@ defmodule BackendWeb.StationController do
   end
 
   # An examiner-addressed turn (#274) is acknowledged with the kept learner
-  # turn and no reply, plus any impressos it released (#302); a patient reply
-  # carries `outcome: "patient_reply"`.
+  # turn and no reply. It releases nothing (`newly_released` stays `[]`, #351)
+  # and carries the display-only `exam_request` flag; a patient reply carries
+  # `outcome: "patient_reply"` and no flag.
   defp message_reply_json(%{outcome: :examiner_acknowledged, learner_turn: learner_turn} = reply) do
     %{
       outcome: "examiner_acknowledged",
@@ -202,6 +203,7 @@ defmodule BackendWeb.StationController do
       reply_audio_url: nil,
       learner_turn: message_to_json(learner_turn),
       newly_released: Map.get(reply, :newly_released, []),
+      exam_request: Map.get(reply, :exam_request, false),
       server_now: DateTime.to_iso8601(DateTime.utc_now())
     }
   end

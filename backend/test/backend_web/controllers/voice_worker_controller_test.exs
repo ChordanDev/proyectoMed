@@ -949,6 +949,14 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       def next_reply(_package, _context), do: {:ok, %{text: "[EXAMINADOR]"}}
     end
 
+    # An exam request to the examiner (#351).
+    defmodule ExamMarkerAdapter do
+      @behaviour Backend.Stations.StationAI
+
+      @impl true
+      def next_reply(_package, _context), do: {:ok, %{text: "[EXAMINADOR:EXAME]"}}
+    end
+
     defmodule ExaminerJevAdapter do
       @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -979,11 +987,40 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
                  "turn_id" => 1,
                  "status" => "kept",
                  "generation_id" => 1,
-                 "addressee" => "examiner"
+                 "addressee" => "examiner",
+                 "exam_request" => false
                }
 
         {:ok, stored} = Stations.get_session(id)
         assert [%{role: :learner, text: "Blumberg positivo."}] = stored.messages
+      end
+
+      test "an exam request is kept with exam_request and releases nothing (streamed: #{stream?}, #351)",
+           %{conn: conn} do
+        Application.put_env(:backend, :jev_decision_adapter, ExaminerJevAdapter)
+        id = Stations.create_session(%{audio_consent: true}).session_id
+
+        conn =
+          if unquote(stream?),
+            do: put_req_header(conn, "accept", "application/x-ndjson, application/json"),
+            else: conn
+
+        for {adapter, turn_id, text} <- [
+              {ExamMarkerAdapter, 1, "Quero ver a tomografia."},
+              {ExaminerMarkerAdapter, 2, "Solicito hemograma e PCR"}
+            ] do
+          Application.put_env(:backend, :station_ai_adapter, adapter)
+
+          assert %{"status" => "kept", "addressee" => "examiner", "exam_request" => true} =
+                   conn
+                   |> recycle()
+                   |> post(transcripts_path(id), %{turn_id: turn_id, text: text})
+                   |> json_response(201)
+        end
+
+        {:ok, stored} = Stations.get_session(id)
+        assert stored.released_impressos == []
+        assert stored.impresso_requests == []
       end
     end
   end
