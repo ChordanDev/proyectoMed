@@ -19,9 +19,16 @@ defmodule Backend.Stations.CompanionTurnTest do
     @behaviour Backend.Stations.StationAI
 
     @impl true
-    def next_reply(_package, context) do
-      send(Application.fetch_env!(:backend, :companion_turn_test_pid), {:context, context})
-      {:ok, %{text: Application.fetch_env!(:backend, :companion_turn_reply), used_facts: []}}
+    def next_reply(package, context) do
+      pid = Application.fetch_env!(:backend, :companion_turn_test_pid)
+      send(pid, {:context, context})
+      send(pid, {:generated_from, package})
+
+      text =
+        Application.get_env(:backend, :companion_turn_regenerated) ||
+          Application.fetch_env!(:backend, :companion_turn_reply)
+
+      {:ok, %{text: text, used_facts: []}}
     end
 
     @impl true
@@ -39,7 +46,10 @@ defmodule Backend.Stations.CompanionTurnTest do
     @impl true
     def decide_patient(request) do
       send(Application.fetch_env!(:backend, :companion_turn_test_pid), {:jev, request.package})
-      {:ok, %{status: :verified}}
+
+      if request.candidate_text == Application.get_env(:backend, :companion_turn_refused),
+        do: {:ok, %{status: :semantic_refusal}},
+        else: {:ok, %{status: :verified}}
     end
 
     @impl true
@@ -52,6 +62,8 @@ defmodule Backend.Stations.CompanionTurnTest do
       :jev_decision_adapter,
       :companion_turn_test_pid,
       :companion_turn_reply,
+      :companion_turn_regenerated,
+      :companion_turn_refused,
       :patient_verification,
       :mandatory_questions_window_ms
     ]
@@ -81,6 +93,21 @@ defmodule Backend.Stations.CompanionTurnTest do
 
   defp send_text(session, text) do
     Stations.create_message(session.session_id, %{role: "learner", modality: "text", text: text})
+  end
+
+  defp assert_regenerated_from_full_package(package) do
+    Application.put_env(:backend, :companion_turn_regenerated, @reply)
+    session = session(package)
+
+    assert {{:ok, %{reply_text: @reply}}, [%{text: @reply, speaker: "companion"}]} =
+             Stations.stream_voice_turn(session.session_id, 1, @question, [], collect_sink())
+
+    assert_received {:generated_from, regenerated_from}
+    assert regenerated_from["patient_profile"] == package["patient_profile"]
+    assert regenerated_from["revealable_facts"] == package["revealable_facts"]
+    fact_contents = Enum.map(regenerated_from["revealable_facts"], & &1["content"])
+    assert @reply in fact_contents
+    assert "Chora ao ser examinado." in fact_contents
   end
 
   defp collect_sink, do: fn {:sentence, event}, acc -> {:cont, acc ++ [event]} end
@@ -167,6 +194,21 @@ defmodule Backend.Stations.CompanionTurnTest do
       assert [_learner, %{role: :patient, speaker: :companion}] = stored.messages
     end
 
+    # The first sentence is checked against the companion's view, but its single
+    # regeneration is a whole multi-actor generation and gets the full package.
+    test "regenerates a first sentence BoundedReply rejects from the full package",
+         %{package: package} do
+      reply("[ACOMPANHANTE] Sou uma IA e não sei.")
+      assert_regenerated_from_full_package(package)
+    end
+
+    test "regenerates a first sentence Jev refuses from the full package", %{package: package} do
+      Application.put_env(:backend, :patient_verification, :blocking)
+      Application.put_env(:backend, :companion_turn_refused, "Não lembro bem.")
+      reply("[ACOMPANHANTE] Não lembro bem.")
+      assert_regenerated_from_full_package(package)
+    end
+
     test "streams a patient reply labelled with the patient's voice", %{package: package} do
       reply("[PACIENTE] Chora ao ser examinado.")
       session = session(package)
@@ -210,6 +252,19 @@ defmodule Backend.Stations.CompanionTurnTest do
                Stations.process_voice_turn(voice_session.session_id, 2, "E a sua idade?")
 
       refute Map.has_key?(voice_result, :speaker)
+    end
+
+    test "regenerates a rejected first streamed sentence from its own package" do
+      reply("Sou uma IA e não sei.")
+      Application.put_env(:backend, :companion_turn_regenerated, "Meu nome é Ana.")
+      session = Stations.create_session(%{audio_consent: true})
+      package = Stations.get_active_package()
+
+      assert {{:ok, %{reply_text: "Meu nome é Ana."}}, [event]} =
+               Stations.stream_voice_turn(session.session_id, 1, "Nome?", [], collect_sink())
+
+      assert Map.keys(event) |> Enum.sort() == [:generation_id, :index, :text, :turn_id]
+      assert_received {:generated_from, ^package}
     end
   end
 

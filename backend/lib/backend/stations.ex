@@ -1631,7 +1631,7 @@ defmodule Backend.Stations do
         generate: &stream_patient_reply(package, context, &1, on_addressee),
         verify: fn candidate, index ->
           speaker_view = speaker_package(package, streamed_speaker(package, marker))
-          verify_voice_sentence(mode, speaker_view, session, context, candidate, index)
+          verify_voice_sentence(mode, {speaker_view, package}, session, context, candidate, index)
         end,
         deliver: fn sentence, index, acc ->
           deliver_voice_sentence(
@@ -1713,28 +1713,30 @@ defmodule Backend.Stations do
   # The gate's single regeneration is allowed only for the first sentence,
   # when nothing has been spoken yet. Outside `blocking` (#307) a sentence is
   # checked by BoundedReply only, with the same single regeneration rule.
-  defp verify_voice_sentence(:blocking, package, session, context, candidate, index),
-    do: verify_voice_sentence(package, session, context, candidate, index)
+  # A sentence is checked against its speaker's view, but the regeneration is
+  # a whole generation, so it gets the full package (#341), as on text turns.
+  defp verify_voice_sentence(:blocking, packages, session, context, candidate, index),
+    do: verify_voice_sentence(packages, session, context, candidate, index)
 
-  defp verify_voice_sentence(_audit_or_off, package, _session, context, candidate, index) do
+  defp verify_voice_sentence(_audit_or_off, {view, package}, _session, context, candidate, index) do
     regenerate =
       if index == 0,
         do: fn -> bounded_regeneration(package, context) end,
         else: fn -> {:error, :no_regeneration} end
 
-    case PatientVerification.check_delivery(candidate, package, regenerate) do
+    case PatientVerification.check_delivery(candidate, view, regenerate) do
       {:ok, ^candidate} -> {:verified, []}
       {:ok, regenerated} -> {:regenerated, regenerated, []}
       {:error, {:refused, refusal}} -> {:refused, refusal}
     end
   end
 
-  defp verify_voice_sentence(package, session, context, candidate, index) do
+  defp verify_voice_sentence({view, package}, session, context, candidate, index) do
     params = %{deadline_ms: patient_reply_deadline_ms()}
     params = if index > 0, do: Map.put(params, :verify_opts, can_retry?: false), else: params
     opts = build_verify_opts(package, session, context, params)
 
-    case verify_candidate(package, candidate, opts) do
+    case verify_candidate(view, candidate, opts) do
       {:ok, ^candidate, fact_ids} ->
         {:verified, fact_ids}
 
