@@ -51,3 +51,7 @@ config :backend,
 # Session usage rows (issue #342) are written only by tests that turn the store
 # on: most session tests run without a database sandbox.
 config :backend, Backend.Stations.Usage.Store, enabled: false
+
+# The frozen web harness and the E2E suite call the deprecated
+# `/api/stations/...` routes without a device access token (#337).
+config :backend, :legacy_station_api_unauthenticated, true

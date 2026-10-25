@@ -46,7 +46,8 @@ Build-file dependency: add `"StationClient"` to the consuming module's
 | Timeouts | A request Phoenix does not answer within 15 s fails with `network_error`. `FetchResult` waits 95 s, as the web client does, because the first fetch assesses the run before answering. |
 | One run at a time | The client holds at most one session. `StartSession` fails with `session_in_progress` until `DiscardSession` succeeds. |
 | Content | The client holds no clinical rules and no Station Package content. Everything it returns is what Phoenix served for this run. |
-| Secrets | `FStationVoiceCredential::Token` is a secret: never log or display it. The session id is the run's only credential. |
+| Secrets | `FStationVoiceCredential::Token`, the device login's `device_code` and its `access_token` and `refresh_token` are secrets: never log or display them (the `user_code` is shown to the learner, but not logged). |
+| Authentication | `GET /stations`, `GET /pre-station-notice`, `POST /sessions` and every `/sessions/:id/...` route need `Authorization: Bearer <access_token>` from the [device login](#learner-login-device-flow). A session belongs to the learner that started it. |
 | Configuration | Phoenix's origin comes from `[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config (default `http://127.0.0.1:4000`), or `-PhoenixUrl=<origin>` on the command line. |
 
 ## Station Timer
@@ -136,7 +137,9 @@ can come with different statuses from different routes.
 
 | Code | Status | Raised by |
 | --- | --- | --- |
-| `session_not_found` | 404 | every session route |
+| `missing_token` | 401 | every authenticated route without `Authorization: Bearer` |
+| `invalid_token` | 401 | every authenticated route with an unknown, expired or revoked access token: refresh, or log in again |
+| `session_not_found` | 404 | every session route, also for another learner's session |
 | `session_expired` | 410 | every session route |
 | `session_completed` | 422, 409 | `SendTurn` and `RequestVoiceCredential` (422); `RequestImpresso` (409) |
 | `station_time_elapsed` | 409 | `SendTurn` after the deadline |
@@ -147,6 +150,104 @@ can come with different statuses from different routes.
 | `reply_verification_failed`, `station_ai_unavailable`, `timeout` | 502, 504 | `SendTurn` |
 | `session_not_finished` | 422 | `FetchResult` before `FinishSession` |
 | `invalid_attempt` | 502 | `FetchResult` when the run could not be assessed |
+
+## Learner login (device flow)
+
+The client acts for a learner account (#337). It never asks for a password:
+the learner logs in in a browser, as with a TV app (shaped after OAuth 2.0
+Device Authorization, RFC 8628). Admin accounts cannot use it.
+
+1. **Start.** `POST /device/start` (no body, no token):
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/start"
+   ```
+
+   ```json
+   {
+     "device_code": "Gq8…(43 characters)",
+     "user_code": "BCDF-GHJK",
+     "verification_uri": "https://<phoenix>/device",
+     "verification_uri_complete": "https://<phoenix>/device?user_code=BCDF-GHJK",
+     "interval": 5,
+     "expires_in": 600
+   }
+   ```
+
+   Show the `user_code` and `verification_uri` (or a QR code of
+   `verification_uri_complete`). Keep `device_code` secret.
+
+2. **The learner confirms.** At `/device` the learner logs in (or signs up),
+   checks that the code matches the one in the game, and chooses
+   **Autorizar** or **Negar**.
+
+3. **Poll.** Every `interval` seconds, until `expires_in` runs out:
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/token" \
+     -H 'content-type: application/json' -d '{"device_code": "'"$DEVICE_CODE"'"}'
+   ```
+
+   While waiting, Phoenix answers `400` with an `error` code and a pt-BR
+   `message`:
+
+   | `error` | Meaning | What to do |
+   | --- | --- | --- |
+   | `authorization_pending` | Not confirmed yet. | Poll again after `interval`. |
+   | `slow_down` | Polled faster than `interval`. | Add 5 s to the interval for every later poll. |
+   | `access_denied` | The learner chose **Negar**. | Stop; offer to start again. |
+   | `expired_token` | The 10 minutes ran out, even if the learner approved in time. | Stop; start again. |
+   | `invalid_grant` | Unknown or already used `device_code`. | Stop; start again. |
+
+   Once the learner approves, the next poll answers `200` once:
+
+   ```json
+   {
+     "access_token": "…",
+     "refresh_token": "…",
+     "token_type": "Bearer",
+     "expires_in": 900,
+     "refresh_expires_in": 2592000
+   }
+   ```
+
+4. **Call the API** with `Authorization: Bearer <access_token>`:
+
+   ```sh
+   curl -s "$PHOENIX/stations" -H "authorization: Bearer $ACCESS_TOKEN"
+   ```
+
+5. **Refresh.** The access token lasts 15 minutes. On `401 invalid_token` (or
+   shortly before `expires_in`), exchange the refresh token for a new pair:
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/refresh" \
+     -H 'content-type: application/json' -d '{"refresh_token": "'"$REFRESH_TOKEN"'"}'
+   ```
+
+   The answer has the body of step 3. Both old tokens stop working: store the
+   new pair before using it. A refresh token lasts 30 days from its last use.
+   Presenting any refresh token this login already rotated away, however many
+   refreshes ago, revokes the whole login. Send one refresh at a time and do
+   not retry it with the old token: a retry after the first refresh succeeded
+   counts as reuse. On `400 invalid_grant`, start the login again from step 1.
+
+6. **Log out.** `POST /device/logout` with the access token revokes this
+   device's tokens; `{"everywhere": true}` revokes every device login of the
+   learner. It answers `204`.
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/logout" -H "authorization: Bearer $ACCESS_TOKEN"
+   curl -s -X POST "$PHOENIX/device/logout" -H "authorization: Bearer $ACCESS_TOKEN" \
+     -H 'content-type: application/json' -d '{"everywhere": true}'
+   ```
+
+Changing or resetting the password and deleting the account also revoke every
+device login: the next call answers `401 invalid_token`, and the refresh
+`400 invalid_grant`. These account changes and logout everywhere also revoke
+a login the learner approved but the client has not polled yet: its poll
+answers `400 invalid_grant`. Phoenix stores only hashes of codes and tokens and never
+logs them.
 
 ## Station catalog (`GET /stations`)
 
@@ -325,8 +426,9 @@ the ones of the operations table above.
 `GET /api/stations/active`, `POST /api/stations/active/sessions` and the
 `/api/stations/active/sessions/:id/...` and `/api/v2/stations/active/sessions/:id/result`
 routes keep working until this client and the frozen web harness move to the
-routes above. The per-session aliases serve any session, including one started
-by `POST /sessions`. In production there is no active station (stations come
+routes above. They are unauthenticated only in dev and test (for the frozen web
+harness and the E2E suite); in production they need the access token, and the
+per-session aliases serve only the learner's own sessions. In production there is no active station (stations come
 only from the database), so `GET /api/stations/active` and
 `POST /api/stations/active/sessions` answer `404 no_active_station` there.
 
@@ -368,10 +470,23 @@ MetaHuman's lip sync and to name the speaker on screen.
   (`voice-key=voice-id,...`); an unmapped key uses `ELEVENLABS_VOICE_ID`.
 - The `status: "complete"` end event of a streamed reply carries no `speaker`.
 - A worker built before #341 sends no `speaker`: read it as `patient`.
-- The session transcript (`RefreshSession`) does not carry the speaker yet: a
-  companion's reply is a `patient` message there.
+- The HTTP responses name the speaker too, as `"patient"` or `"companion"`; a
+  reply with no stored speaker (any single-actor station) reads as `"patient"`:
+  - the text reply of `POST /sessions/:id/messages` (`outcome: "patient_reply"`)
+    carries `speaker`;
+  - each `role: "patient"` message of the session transcript
+    (`GET /sessions/:id`, `RefreshSession`) carries `speaker`; learner messages
+    carry none;
+  - the voice worker's non-streamed receipt (`status: "committed"` from
+    `POST /api/internal/voice/sessions/:id/transcripts`) carries `speaker`. The
+    streamed (`application/x-ndjson`) result line does not: its sentences
+    already carry the speaker.
 
 ## Not in the interface yet
+
+The [device login](#learner-login-device-flow) and the bearer header (#337) have
+no `UStationClient` method yet: the module must add them before it can call the
+authenticated routes in production.
 
 Joining the LiveKit room (publishing the microphone, receiving the patient voice
 track and driving lip sync) lands with #191 as an addition owned by the

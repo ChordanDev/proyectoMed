@@ -24,6 +24,9 @@ defmodule BackendWeb.SessionControllerTest do
     end
   end
 
+  # The station API requires a learner's device access token (#337).
+  setup :register_and_log_in_device
+
   setup do
     previous =
       for key <- [:jev_decision_adapter, :station_ai_adapter],

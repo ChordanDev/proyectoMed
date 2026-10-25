@@ -4,6 +4,7 @@ defmodule BackendWeb.SessionController do
   #209): `POST /sessions` with `station_id` (the catalog id, the case number)
   or `random: true` and an optional `area`, plus the boolean `audio_consent`.
   Every later operation is addressed by the session under `/sessions/:id`.
+  The session belongs to the learner of the device access token (#337).
   """
 
   use BackendWeb, :controller
@@ -25,7 +26,10 @@ defmodule BackendWeb.SessionController do
     with {:ok, selection} <- selection(params),
          {:ok, audio_consent} <- audio_consent(params),
          {:ok, session} <-
-           Stations.start_station_session(selection, %{audio_consent: audio_consent}) do
+           Stations.start_station_session(selection, %{
+             audio_consent: audio_consent,
+             user_id: conn.assigns.current_scope.user.id
+           }) do
       conn
       |> put_status(:created)
       |> json(session_json(session))
