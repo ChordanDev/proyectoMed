@@ -4,7 +4,9 @@ defmodule BackendWeb.SessionController do
   #209): `POST /sessions` with `station_id` (the catalog id, the case number)
   or `random: true` and an optional `area`, plus the boolean `audio_consent`.
   Every later operation is addressed by the session under `/sessions/:id`.
-  The session belongs to the learner of the device access token (#337).
+  The session belongs to the learner of the device access token (#337), who
+  needs an active subscription: without one it answers `402
+  subscription_required` (#339).
   """
 
   use BackendWeb, :controller
@@ -41,6 +43,14 @@ defmodule BackendWeb.SessionController do
           "invalid_parameters",
           "Parâmetros inválidos: informe 'station_id' (número da estação) ou 'random': true " <>
             "com 'area' opcional, e 'audio_consent' booleano."
+        )
+
+      {:error, :subscription_required} ->
+        error(
+          conn,
+          :payment_required,
+          "subscription_required",
+          "Assine um plano para usar o simulador."
         )
 
       {:error, :station_not_found} ->

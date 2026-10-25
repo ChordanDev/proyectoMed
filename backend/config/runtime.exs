@@ -370,6 +370,32 @@ if config_env() == :dev do
   end
 end
 
+# RevenueCat billing (#339, docs/operations/revenuecat.md). The webhook needs
+# both `REVENUECAT_WEBHOOK_AUTHORIZATION` (the dashboard's Authorization header
+# value) and `REVENUECAT_WEBHOOK_SECRET` (the HMAC signing secret); without
+# them it answers 503. `REVENUECAT_CARD_PURCHASE_LINK` and
+# `REVENUECAT_PIX_PURCHASE_LINK` are the Web Purchase Links
+# (`https://pay.rev.cat/<token>`) of the card and Pix plans. Production ignores
+# `SANDBOX` events unless `REVENUECAT_ACCEPT_SANDBOX=true`. `:test` reads none
+# of it.
+if config_env() != :test do
+  env = fn name ->
+    System.get_env(name, "") |> String.trim() |> then(&if(&1 == "", do: nil, else: &1))
+  end
+
+  purchase_links =
+    %{card: env.("REVENUECAT_CARD_PURCHASE_LINK"), pix: env.("REVENUECAT_PIX_PURCHASE_LINK")}
+    |> Enum.reject(fn {_payment, url} -> is_nil(url) end)
+    |> Map.new()
+
+  # Keyword configuration deep-merges with the plans of config.exs.
+  config :backend, Backend.Billing,
+    purchase_links: purchase_links,
+    webhook_authorization: env.("REVENUECAT_WEBHOOK_AUTHORIZATION"),
+    webhook_secret: env.("REVENUECAT_WEBHOOK_SECRET"),
+    accept_sandbox: config_env() != :prod or env.("REVENUECAT_ACCEPT_SANDBOX") == "true"
+end
+
 # Turn-based voice providers (issue #253). Off unless
 # `VOICE_PROVIDER=deepgram_elevenlabs` asks for it: without the variable both voice
 # endpoints keep the OpenAI configuration above. Deepgram transcribes the learner
