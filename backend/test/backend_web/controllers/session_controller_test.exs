@@ -24,8 +24,10 @@ defmodule BackendWeb.SessionControllerTest do
     end
   end
 
-  # The station API requires a learner's device access token (#337).
+  # The station API requires a learner's device access token (#337), and
+  # starting a session an active entitlement (#339).
   setup :register_and_log_in_device
+  setup %{device_user: user}, do: %{device_user: Backend.BillingFixtures.subscribe_user(user)}
 
   setup do
     previous =
@@ -69,6 +71,53 @@ defmodule BackendWeb.SessionControllerTest do
       assert body == Jason.decode!(Jason.encode!(Stations.pre_station_notice()))
       assert body["body"] =~ "Não insira dados de pacientes reais"
       assert is_list(body["providers"])
+    end
+  end
+
+  describe "POST /sessions without an active subscription" do
+    test "answers 402 subscription_required", %{
+      admin: admin,
+      package: package
+    } do
+      kase = publish!(package, admin)
+      unsubscribed = Backend.AccountsFixtures.user_fixture()
+
+      body =
+        build_conn()
+        |> log_in_device(unsubscribed)
+        |> post(~p"/sessions", %{"station_id" => kase.number, "audio_consent" => true})
+        |> json_response(402)
+
+      assert body == %{
+               "error" => "subscription_required",
+               "message" => "Assine um plano para usar o simulador."
+             }
+    end
+
+    test "answers 402 once the entitlement has expired", %{admin: admin, package: package} do
+      kase = publish!(package, admin)
+      lapsed = Backend.AccountsFixtures.user_fixture()
+
+      Backend.BillingFixtures.subscribe_user(lapsed,
+        product_id: Backend.BillingFixtures.pix_product_id(),
+        expiration_at_ms: Backend.BillingFixtures.now_ms() - 1_000
+      )
+
+      assert %{"error" => "subscription_required"} =
+               build_conn()
+               |> log_in_device(lapsed)
+               |> post(~p"/sessions", %{"random" => true, "audio_consent" => false})
+               |> json_response(402)
+    end
+
+    test "invalid parameters are still reported first as 400", %{conn: _conn} do
+      unsubscribed = Backend.AccountsFixtures.user_fixture()
+
+      assert %{"error" => "invalid_parameters"} =
+               build_conn()
+               |> log_in_device(unsubscribed)
+               |> post(~p"/sessions", %{"audio_consent" => true})
+               |> json_response(400)
     end
   end
 

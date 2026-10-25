@@ -745,6 +745,41 @@ adapter.
 `backend/config/runtime.exs` reads them once, at boot; a provider without its
 key, domain or sender refuses to boot, naming the missing variable.
 
+#### Rate limits
+
+The public authentication and device-login endpoints are throttled (#380) by
+`BackendWeb.RateLimit`, which counts requests in memory (an ETS table; one
+Phoenix node at launch, ADR-014 #346, so a restart forgets the counters). A
+window opens on a key's first request; beyond the limit every request of that
+key is refused until the window ends.
+
+| Endpoint | Action | Key: default limit |
+|---|---|---|
+| `POST /device/start` | `device_start` | IP: 10 per minute |
+| User-code lookups on `/device` (form and verification link) | `device_lookup` | IP: 30 per minute; learner: 10 per minute |
+| `POST /users/log-in` (password and emailed link) | `login` | IP: 20 per 5 minutes; email: 10 per 5 minutes |
+| Login-link email (`/users/log-in`) | `magic_link_email` | IP: 20 per hour; email: 5 per hour |
+| Password-reset email (`/users/reset-password`) | `reset_password_email` | IP: 20 per hour; email: 5 per hour |
+| Sign-up (`/users/register`) | `sign_up` | IP: 10 per hour |
+
+`POST /device/start` answers `429` with a `retry-after` header (seconds) and
+`{"error": "rate_limited", "message": "Muitas tentativas. Aguarde N s e tente novamente."}`.
+The pages show the flash "Muitas tentativas. Aguarde alguns minutos e tente
+novamente." and send no email, create no account and log nobody in. A throttled
+request logs `rate limited action=<action> keys=<kinds>`: never an IP, email,
+code or token. Device-login polling (`POST /device/token`) is not throttled; it
+already answers `slow_down`.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `RATE_LIMIT_ENABLED` | `false` (or `0`) turns every limit off. Any value other than `true`, `1`, `false` or `0` refuses to boot. | `true` |
+| `RATE_LIMIT_<ACTION>_<KIND>` | One limit as `<count>/<seconds>`, for example `RATE_LIMIT_LOGIN_IP=20/300` or `RATE_LIMIT_DEVICE_LOOKUP_USER=10/60`. `<ACTION>` and `<KIND>` (`IP`, `EMAIL`, `USER`) come from the table above. A malformed value refuses to boot, naming the variable. | the table above |
+| `TRUSTED_CLIENT_IP_HEADER` | The request header that carries the client IP, set by a trusted proxy: `fly-client-ip` on Fly. Unset, the client IP is the socket peer, which behind Fly's proxy is the proxy itself. Set it only when every request goes through that proxy, since a client that reaches the app directly can send the header itself. `X-Forwarded-For` is never read. | unset |
+
+`backend/config/runtime.exs` reads them at boot (not in `test`, where the
+limits are off unless a test turns them on with
+`BackendWeb.RateLimitHelpers.enable_rate_limit/1`).
+
 ### Active station
 
 In local development the backend also serves one active station from
@@ -931,6 +966,20 @@ a period. See `docs/operations/session-usage-cost.md`.
 | Variable | Meaning | Default |
 |---|---|---|
 | `USAGE_PRICES_JSON` | JSON object overriding entries of the price table in `config/runtime.exs` (`claude` per model, `jev_call`, `deepgram_minute`, `elevenlabs_1k_characters`, `livekit_participant_minute`). Invalid JSON stops the boot; ignored in `test`. | unset (public list prices of 2026-10-25) |
+
+### Subscription (RevenueCat)
+
+Starting a session needs an active subscription (issue #339): without one,
+`POST /sessions` answers `402` with `error: "subscription_required"`. Learners
+buy a plan on `/planos` (a RevenueCat Web Purchase Link carrying a random
+`app_user_id`, never the email) and see it on `/conta`. RevenueCat reports
+purchases, renewals, cancellations and expirations to
+`POST /webhooks/revenuecat`, which verifies the `Authorization` header and the
+`X-RevenueCat-Webhook-Signature` HMAC over the raw body before applying the
+event. Configure `REVENUECAT_WEBHOOK_AUTHORIZATION`,
+`REVENUECAT_WEBHOOK_SECRET`, `REVENUECAT_CARD_PURCHASE_LINK` and
+`REVENUECAT_PIX_PURCHASE_LINK`; without both webhook secrets the webhook answers
+`503`. See `docs/operations/revenuecat.md`.
 
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur

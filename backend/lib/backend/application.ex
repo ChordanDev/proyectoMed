@@ -18,6 +18,8 @@ defmodule Backend.Application do
       Backend.Stations.StationLoader,
       Backend.Stations.Conversation,
       Backend.Stations.MediaSession,
+      # In-memory counters of the auth and device-login rate limits (#380).
+      BackendWeb.RateLimit,
       # Start a worker by calling: Backend.Worker.start_link(arg)
       # {Backend.Worker, arg},
       # Start to serve requests, typically the last entry

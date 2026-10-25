@@ -370,6 +370,32 @@ if config_env() == :dev do
   end
 end
 
+# RevenueCat billing (#339, docs/operations/revenuecat.md). The webhook needs
+# both `REVENUECAT_WEBHOOK_AUTHORIZATION` (the dashboard's Authorization header
+# value) and `REVENUECAT_WEBHOOK_SECRET` (the HMAC signing secret); without
+# them it answers 503. `REVENUECAT_CARD_PURCHASE_LINK` and
+# `REVENUECAT_PIX_PURCHASE_LINK` are the Web Purchase Links
+# (`https://pay.rev.cat/<token>`) of the card and Pix plans. Production ignores
+# `SANDBOX` events unless `REVENUECAT_ACCEPT_SANDBOX=true`. `:test` reads none
+# of it.
+if config_env() != :test do
+  env = fn name ->
+    System.get_env(name, "") |> String.trim() |> then(&if(&1 == "", do: nil, else: &1))
+  end
+
+  purchase_links =
+    %{card: env.("REVENUECAT_CARD_PURCHASE_LINK"), pix: env.("REVENUECAT_PIX_PURCHASE_LINK")}
+    |> Enum.reject(fn {_payment, url} -> is_nil(url) end)
+    |> Map.new()
+
+  # Keyword configuration deep-merges with the plans of config.exs.
+  config :backend, Backend.Billing,
+    purchase_links: purchase_links,
+    webhook_authorization: env.("REVENUECAT_WEBHOOK_AUTHORIZATION"),
+    webhook_secret: env.("REVENUECAT_WEBHOOK_SECRET"),
+    accept_sandbox: config_env() != :prod or env.("REVENUECAT_ACCEPT_SANDBOX") == "true"
+end
+
 # Turn-based voice providers (issue #253). Off unless
 # `VOICE_PROVIDER=deepgram_elevenlabs` asks for it: without the variable both voice
 # endpoints keep the OpenAI configuration above. Deepgram transcribes the learner
@@ -553,6 +579,59 @@ if config_env() != :test do
       raise ArgumentError,
             "MAILER_PROVIDER must be resend, postmark, sendgrid, brevo, mailgun or local, got: " <>
               inspect(System.get_env("MAILER_PROVIDER"))
+  end
+end
+
+# Rate limits of the public authentication and device-login endpoints (#380).
+# `RATE_LIMIT_ENABLED=false` turns them off; `RATE_LIMIT_<ACTION>_<KIND>` sets
+# one limit as `<count>/<seconds>` (for example `RATE_LIMIT_LOGIN_IP=20/300`).
+# `TRUSTED_CLIENT_IP_HEADER` names the proxy header that carries the client IP
+# (`fly-client-ip` behind Fly); unset, the socket peer is the client IP. The
+# test config keeps its own settings.
+if config_env() != :test do
+  rate_limit_kinds = [
+    device_start: [:ip],
+    device_lookup: [:ip, :user],
+    login: [:ip, :email],
+    magic_link_email: [:ip, :email],
+    reset_password_email: [:ip, :email],
+    sign_up: [:ip]
+  ]
+
+  parse_rate_limit = fn name, value ->
+    case Regex.run(~r/^\s*(\d+)\s*\/\s*(\d+)\s*$/, value) do
+      [_, count, seconds] when seconds != "0" ->
+        {String.to_integer(count), String.to_integer(seconds) * 1000}
+
+      _ ->
+        raise "#{name} must be <count>/<seconds>, for example 20/300; got: #{inspect(value)}"
+    end
+  end
+
+  rate_limits =
+    for {action, kinds} <- rate_limit_kinds do
+      limits =
+        for kind <- kinds,
+            name = "RATE_LIMIT_" <> String.upcase("#{action}_#{kind}"),
+            value = System.get_env(name, ""),
+            String.trim(value) != "",
+            do: {kind, parse_rate_limit.(name, value)}
+
+      {action, limits}
+    end
+
+  rate_limit_enabled =
+    case System.get_env("RATE_LIMIT_ENABLED", "") |> String.trim() |> String.downcase() do
+      value when value in ["", "true", "1"] -> true
+      value when value in ["false", "0"] -> false
+      other -> raise "RATE_LIMIT_ENABLED must be true or false; got: #{inspect(other)}"
+    end
+
+  config :backend, BackendWeb.RateLimit, enabled: rate_limit_enabled, limits: rate_limits
+
+  case System.get_env("TRUSTED_CLIENT_IP_HEADER", "") |> String.trim() |> String.downcase() do
+    "" -> :ok
+    header -> config :backend, BackendWeb.Plugs.ClientIP, header: header
   end
 end
 

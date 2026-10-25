@@ -6,6 +6,7 @@ defmodule BackendWeb.Router do
   # LiveView pages (ADR-015 #347): cookie session, CSRF and browser headers.
   pipeline :browser do
     plug :accepts, ["html"]
+    plug BackendWeb.Plugs.ClientIP
     plug :fetch_session
     plug :fetch_live_flash
     plug :put_root_layout, html: {BackendWeb.Layouts, :root}
@@ -16,6 +17,7 @@ defmodule BackendWeb.Router do
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug BackendWeb.Plugs.ClientIP
   end
 
   # Bearer access token of the Unreal client's device login (#337).
@@ -71,6 +73,14 @@ defmodule BackendWeb.Router do
     post "/sessions/:id/transcribe", TranscriptionController, :create
     post "/sessions/:id/synthesize", TTSController, :create
     post "/sessions/:id/voice", VoiceSessionController, :create
+  end
+
+  # The learner's results history (#338): only the learner's own results.
+  scope "/me", BackendWeb do
+    pipe_through [:api, :device_auth]
+
+    get "/results", MeResultController, :index
+    get "/results/:id", MeResultController, :show
   end
 
   # Device login of the Unreal client (#337, RFC 8628 shape); the learner
@@ -135,6 +145,15 @@ defmodule BackendWeb.Router do
     post "/sessions/:id/usage", VoiceWorkerController, :report_usage
   end
 
+  # RevenueCat webhook (#339): authenticated by its `Authorization` header and
+  # HMAC signature in the controller. `log: false` keeps the payload out of
+  # the logs.
+  scope "/webhooks", BackendWeb do
+    pipe_through :api
+
+    post "/revenuecat", RevenueCatWebhookController, :create, log: false
+  end
+
   scope "/api/v2/stations", BackendWeb do
     pipe_through [:api, :legacy_station_api]
     get "/active/sessions/:id/result", StationController, :show_educational_result
@@ -148,10 +167,15 @@ defmodule BackendWeb.Router do
     pipe_through [:browser, :require_authenticated_user]
 
     live_session :require_authenticated_user,
-      on_mount: [{BackendWeb.UserAuth, :require_authenticated}] do
+      on_mount: [{BackendWeb.UserAuth, :require_authenticated}],
+      session: {BackendWeb.RateLimit, :live_session, []} do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
       live "/device", DeviceLive, :confirm
+      # Plans and subscription status (#339); `/conta` is also the success
+      # page of the RevenueCat Web Purchase Link.
+      live "/planos", BillingLive.Plans, :index
+      live "/conta", BillingLive.Account, :show
     end
 
     post "/users/update-password", UserSessionController, :update_password
@@ -162,7 +186,8 @@ defmodule BackendWeb.Router do
     pipe_through [:browser]
 
     live_session :current_user,
-      on_mount: [{BackendWeb.UserAuth, :mount_current_scope}] do
+      on_mount: [{BackendWeb.UserAuth, :mount_current_scope}],
+      session: {BackendWeb.RateLimit, :live_session, []} do
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/log-in/:token", UserLive.Confirmation, :new

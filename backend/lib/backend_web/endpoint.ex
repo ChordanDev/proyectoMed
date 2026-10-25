@@ -46,6 +46,9 @@ defmodule BackendWeb.Endpoint do
     # 413 with the documented error shape. Past this ceiling Plug still replies
     # 413, but with its own body.
     length: 20_000_000,
+    # Keeps the raw body of the RevenueCat webhook only, capped, for its HMAC
+    # signature (#339); every other request is read as usual.
+    body_reader: {BackendWeb.RevenueCatBodyReader, :read_body, []},
     json_decoder: Phoenix.json_library()
 
   plug Plug.MethodOverride
