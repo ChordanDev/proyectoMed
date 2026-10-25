@@ -23,6 +23,19 @@ defmodule Backend.Stations.StationAI.AddresseeTest do
       assert {:examiner, :marker, ""} = Addressee.split("[Examinador]")
     end
 
+    test "an exam marker is examiner-addressed with source exam_marker and leaves no text (#351)" do
+      assert {:examiner, :exam_marker, ""} = Addressee.split("[EXAMINADOR:EXAME]")
+      assert {:examiner, :exam_marker, ""} = Addressee.split(" [examinador : exame]\n")
+
+      assert {:examiner, :exam_marker, ""} =
+               Addressee.split("[EXAMINADOR:EXAME]", companion: true)
+    end
+
+    test "an unknown examiner sub-marker is not a marker and is kept (#351)" do
+      assert {:patient, :missing_marker, "[EXAMINADOR:OUTRO] Sim."} =
+               Addressee.split("[EXAMINADOR:OUTRO] Sim.")
+    end
+
     test "a missing marker is patient-addressed and keeps the whole text" do
       assert {:patient, :missing_marker, "A dor começou ontem."} =
                Addressee.split("A dor começou ontem.")
@@ -48,6 +61,11 @@ defmodule Backend.Stations.StationAI.AddresseeTest do
     test "decides as soon as the marker is closed" do
       assert {:decided, :examiner, :marker, ""} = Addressee.prefix("[EXAMINADOR]")
       assert {:decided, :patient, :marker, "Meu"} = Addressee.prefix("[PACIENTE] Meu")
+    end
+
+    test "waits for a split exam marker and decides it once closed (#351)" do
+      assert :undecided = Addressee.prefix("[EXAMINADOR:EX")
+      assert {:decided, :examiner, :exam_marker, ""} = Addressee.prefix("[EXAMINADOR:EXAME]")
     end
 
     test "decides on the first character that cannot start a marker" do
@@ -95,6 +113,13 @@ defmodule Backend.Stations.StationAI.AddresseeTest do
       assert :examiner = run_stream(["[EXAMIN", "ADOR]", " Anotado."])
 
       assert_received {:addressee, :examiner, :marker}
+      refute_received {:text, _}
+    end
+
+    test "an exam reply split across pieces forwards nothing (#351)" do
+      assert :examiner = run_stream(["[EXAMINADOR", ":EXA", "ME]", " Anotado."])
+
+      assert_received {:addressee, :examiner, :exam_marker}
       refute_received {:text, _}
     end
 

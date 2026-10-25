@@ -2,8 +2,11 @@ defmodule Backend.Stations.StationAI.Addressee do
   @moduledoc """
   The addressee marker the patient generator starts every reply with (issue
   #309, `docs/design/turn-addressee.md`): `[PACIENTE]` when the learner talks to
-  the patient, `[EXAMINADOR]` when the learner talks to the examiner (nothing
-  else follows it).
+  the patient, `[EXAMINADOR:EXAME]` when the learner asks the examiner for an
+  exam, a maneuver or a result (issue #351), `[EXAMINADOR]` for any other turn
+  to the examiner (nothing else follows either examiner marker). Both examiner
+  markers are examiner-addressed; the exam marker has source `:exam_marker`,
+  which only flags the turn as an exam request (display-only, #351).
 
   The marker is read in code from the first characters of the reply and is
   never part of the text handed on: nothing of it is verified, spoken, shown or
@@ -18,15 +21,19 @@ defmodule Backend.Stations.StationAI.Addressee do
   unknown marker, as before, so a station without a companion is unchanged.
   """
 
-  @markers %{"PACIENTE" => :patient, "EXAMINADOR" => :examiner}
-  @companion_markers Map.put(@markers, "ACOMPANHANTE", :companion)
+  @markers %{
+    "PACIENTE" => {:patient, :marker},
+    "EXAMINADOR" => {:examiner, :marker},
+    "EXAMINADOR:EXAME" => {:examiner, :exam_marker}
+  }
+  @companion_markers Map.put(@markers, "ACOMPANHANTE", {:companion, :marker})
 
   # The longest prefix that may still be an unclosed marker; past it, an
   # opening bracket is text.
   @max_marker_bytes 24
 
   @type addressee :: :patient | :companion | :examiner
-  @type source :: :marker | :missing_marker
+  @type source :: :marker | :exam_marker | :missing_marker
   @type opts :: [companion: boolean()]
 
   @doc """
@@ -64,8 +71,8 @@ defmodule Backend.Stations.StationAI.Addressee do
   defp bracket_prefix(text, "[" <> after_bracket = trimmed, markers) do
     case String.split(after_bracket, "]", parts: 2) do
       [tag, rest] ->
-        case Map.fetch(markers, tag |> String.trim() |> String.upcase()) do
-          {:ok, addressee} -> {:decided, addressee, :marker, String.trim_leading(rest)}
+        case Map.fetch(markers, normalize_tag(tag)) do
+          {:ok, {addressee, source}} -> {:decided, addressee, source, String.trim_leading(rest)}
           :error -> {:decided, :patient, :missing_marker, text}
         end
 
@@ -74,6 +81,14 @@ defmodule Backend.Stations.StationAI.Addressee do
           do: {:decided, :patient, :missing_marker, text},
           else: :undecided
     end
+  end
+
+  # Case and spaces inside the brackets, or around the `:` of a sub-marker,
+  # do not matter.
+  defp normalize_tag(tag) do
+    tag
+    |> String.split(":")
+    |> Enum.map_join(":", &(&1 |> String.trim() |> String.upcase()))
   end
 
   @doc """
