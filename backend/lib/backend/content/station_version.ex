@@ -6,6 +6,13 @@ defmodule Backend.Content.StationVersion do
   Station Package, the case Markdown at approval time, sequential version
   number for that case, and references to its case and revision (if edited).
   Published station versions are never updated.
+
+  The approved text is `markdown` on this row. `case_revision_id` does not
+  point to the approved text: a `CaseRevision` holds the Markdown that an admin
+  save *replaced*, so `case_revision_id` references the latest revision at
+  approval time (the edit history that led to this version), or `nil` when the
+  case was never edited. `station_id` is the `[ESTAÇÃO]` slug; it may repeat
+  across cases, so the catalog identity is the case number.
   """
 
   use Ecto.Schema

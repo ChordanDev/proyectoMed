@@ -148,6 +148,57 @@ can come with different statuses from different routes.
 | `session_not_finished` | 422 | `FetchResult` before `FinishSession` |
 | `invalid_attempt` | 502 | `FetchResult` when the run could not be assessed |
 
+## Station catalog (`GET /stations`)
+
+Phoenix lists the published stations a learner can pick (issue #333). There is
+no `UStationClient` method for it yet; a client calls the route directly.
+
+- **Routes:** `GET /stations` and `GET /api/stations` return the same body.
+- **Auth:** none today. Both routes sit on the public `:api` pipeline; they will
+  require the device token once #337 (Unreal device login) lands.
+- **Response:** `200` with a JSON array, `[]` when nothing is published.
+- **What is listed:** only cases whose status is approved, and for each case
+  only its latest approved version. Pending and disapproved cases never appear;
+  disapproving a case removes it at once.
+- **Ordering:** by case number, ascending.
+
+```json
+[
+  {
+    "id": 1,
+    "version": 2,
+    "slug": "acute-appendicitis",
+    "area": "Cirurgia Geral",
+    "theme": "Abdome agudo inflamatório — apendicite aguda",
+    "actors": [
+      {
+        "id": "paciente",
+        "role": "patient",
+        "name": "Rafael Nogueira",
+        "age": 27,
+        "voice": "masculina-adulta"
+      }
+    ]
+  }
+]
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | The case number: the station's identity in the catalog. Unique per entry. |
+| `version` | integer | The published version of that case, starting at 1; it grows each time an edited case is approved again. |
+| `slug` | string | The case's `[ESTAÇÃO]` id. For display only: two cases may share one slug, so never key on it. |
+| `area` | string | `[ÁREA]` of the published version. |
+| `theme` | string | `[TEMA]` of the published version. |
+| `actors[].id` | string | The `[ATOR]` id. |
+| `actors[].role` | string | `patient` or `companion`. |
+| `actors[].name` | string | The actor's display name. |
+| `actors[].age` | integer | The actor's age in years. |
+| `actors[].voice` | string | The voice key (`voz=`) the voice worker maps to a TTS voice. |
+
+Examiner-only data (facts, persona, tone, mandatory questions, presenting
+context, rubric, impressos) is never in the catalog.
+
 ## Not in the interface yet
 
 Joining the LiveKit room (publishing the microphone, receiving the patient voice

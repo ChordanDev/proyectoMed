@@ -1721,7 +1721,19 @@ defmodule BackendWeb.StationControllerTest do
         conn = get(conn, path)
         [station] = json_response(conn, 200)
 
-        assert station["id"] == "acute-appendicitis"
+        assert station["id"] == kase.number
+        assert station["version"] == 1
+        assert station["slug"] == "acute-appendicitis"
+
+        assert Map.keys(station) |> Enum.sort() == [
+                 "actors",
+                 "area",
+                 "id",
+                 "slug",
+                 "theme",
+                 "version"
+               ]
+
         assert station["area"] == package["area"]
         assert station["theme"] == package["theme"]
         assert is_list(station["actors"])
@@ -1736,6 +1748,36 @@ defmodule BackendWeb.StationControllerTest do
           refute Map.has_key?(actor, "tone")
           refute Map.has_key?(actor, "presenting_context")
         end
+      end
+    end
+
+    test "two approved cases sharing one [ESTAÇÃO] slug are two entries with distinct ids", %{
+      conn: conn
+    } do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      case_markdown = File.read!("priv/stations/acute-appendicitis/case.md")
+      {:ok, package} = Backend.Stations.parse_case(case_markdown)
+
+      [num1, num2] =
+        for theme <- ["Apendicite aguda", "Apendicite aguda (variante)"] do
+          %{rows: [[num]]} =
+            Backend.Repo.query!(
+              "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING number",
+              ["Cirurgia Geral", theme, case_markdown]
+            )
+
+          {:ok, _} =
+            Backend.Content.approve_case(Backend.Content.get_case_by_number(num), package, admin)
+
+          num
+        end
+
+      for path <- ["/stations", "/api/stations"] do
+        stations = json_response(get(conn, path), 200)
+
+        assert Enum.map(stations, & &1["id"]) == [num1, num2]
+        assert Enum.map(stations, & &1["slug"]) == ["acute-appendicitis", "acute-appendicitis"]
+        assert Enum.map(stations, & &1["version"]) == [1, 1]
       end
     end
 

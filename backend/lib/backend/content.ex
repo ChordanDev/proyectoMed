@@ -305,7 +305,9 @@ defmodule Backend.Content do
   @doc """
   Lists the latest published `StationVersion` for each approved case, ordered by
   the case's human number ascending. Cases that are pending or disapproved are
-  omitted.
+  omitted. Each version has its `case` preloaded: the case number is the
+  catalog identity, because several cases may share one `[ESTAÇÃO]` slug
+  (`station_id`).
   """
   @spec list_published_stations() :: [StationVersion.t()]
   def list_published_stations do
@@ -314,7 +316,8 @@ defmodule Backend.Content do
         join: c in assoc(sv, :case),
         where: c.status == :approved,
         distinct: c.number,
-        order_by: [asc: c.number, desc: sv.version_number]
+        order_by: [asc: c.number, desc: sv.version_number],
+        preload: [case: c]
     )
   end
 end

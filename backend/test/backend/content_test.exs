@@ -441,6 +441,25 @@ defmodule Backend.ContentTest do
       assert Enum.map(published, & &1.version_number) == [1, 2]
     end
 
+    test "Content.list_published_stations/0 keeps two approved cases that share one [ESTAÇÃO] slug",
+         %{admin: admin, package: package} do
+      case1 = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
+      case2 = insert_case!("Cirurgia Geral", "Apendicite (variante)", @reference_case)
+      {:ok, _} = Content.approve_case(case1, package, admin)
+      {:ok, _} = Content.approve_case(case2, package, admin)
+
+      published = Content.list_published_stations()
+
+      assert Enum.map(published, & &1.case_id) == [case1.id, case2.id]
+      assert Enum.map(published, & &1.station_id) == ["acute-appendicitis", "acute-appendicitis"]
+
+      catalog = Stations.list_catalog_stations()
+
+      assert Enum.map(catalog, & &1["id"]) == [case1.number, case2.number]
+      assert Enum.map(catalog, & &1["slug"]) == ["acute-appendicitis", "acute-appendicitis"]
+      assert Enum.map(catalog, & &1["version"]) == [1, 1]
+    end
+
     test "Stations.list_catalog_stations/0 projects catalog items without examiner secrets",
          %{admin: admin, package: package} do
       case1 = insert_case!("Cirurgia Geral", "Apendicite", @reference_case)
@@ -448,7 +467,9 @@ defmodule Backend.ContentTest do
 
       [catalog_item] = Stations.list_catalog_stations()
 
-      assert catalog_item["id"] == "acute-appendicitis"
+      assert catalog_item["id"] == case1.number
+      assert catalog_item["version"] == 1
+      assert catalog_item["slug"] == "acute-appendicitis"
       assert catalog_item["area"] == package["area"]
       assert catalog_item["theme"] == package["theme"]
       assert is_list(catalog_item["actors"])

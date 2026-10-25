@@ -75,8 +75,12 @@ defmodule Backend.Stations do
   # ============================================================================
 
   @doc """
-  Lists published stations for the catalog API (`GET /stations`): `id`, `area`,
-  `theme`, and public `actors` (`id`, `role`, `name`, `age`, `voice`).
+  Lists published stations for the catalog API (`GET /stations`): `id` (the
+  case number, the catalog identity), `version` (the published version number
+  of that case), `slug` (the `[ESTAÇÃO]` id, display only, may repeat across
+  cases), `area`, `theme`, and public `actors` (`id`, `role`, `name`, `age`,
+  `voice`). Only the latest approved version of each case is listed, ordered by
+  case number ascending.
 
   Examiner-only data (`fact_ids`, `mandatory_question_ids`, `presenting_context`,
   `persona`, `tone`) is stripped. Only approved cases appear; disapproved or
@@ -90,7 +94,9 @@ defmodule Backend.Stations do
 
   defp to_catalog_station(version) do
     %{
-      "id" => version.station_id,
+      "id" => version.case.number,
+      "version" => version.version_number,
+      "slug" => version.station_id,
       "area" => version.area,
       "theme" => version.theme,
       "actors" => catalog_actors(version.package["actors"] || [])
