@@ -556,6 +556,59 @@ if config_env() != :test do
   end
 end
 
+# Rate limits of the public authentication and device-login endpoints (#380).
+# `RATE_LIMIT_ENABLED=false` turns them off; `RATE_LIMIT_<ACTION>_<KIND>` sets
+# one limit as `<count>/<seconds>` (for example `RATE_LIMIT_LOGIN_IP=20/300`).
+# `TRUSTED_CLIENT_IP_HEADER` names the proxy header that carries the client IP
+# (`fly-client-ip` behind Fly); unset, the socket peer is the client IP. The
+# test config keeps its own settings.
+if config_env() != :test do
+  rate_limit_kinds = [
+    device_start: [:ip],
+    device_lookup: [:ip, :user],
+    login: [:ip, :email],
+    magic_link_email: [:ip, :email],
+    reset_password_email: [:ip, :email],
+    sign_up: [:ip]
+  ]
+
+  parse_rate_limit = fn name, value ->
+    case Regex.run(~r/^\s*(\d+)\s*\/\s*(\d+)\s*$/, value) do
+      [_, count, seconds] when seconds != "0" ->
+        {String.to_integer(count), String.to_integer(seconds) * 1000}
+
+      _ ->
+        raise "#{name} must be <count>/<seconds>, for example 20/300; got: #{inspect(value)}"
+    end
+  end
+
+  rate_limits =
+    for {action, kinds} <- rate_limit_kinds do
+      limits =
+        for kind <- kinds,
+            name = "RATE_LIMIT_" <> String.upcase("#{action}_#{kind}"),
+            value = System.get_env(name, ""),
+            String.trim(value) != "",
+            do: {kind, parse_rate_limit.(name, value)}
+
+      {action, limits}
+    end
+
+  rate_limit_enabled =
+    case System.get_env("RATE_LIMIT_ENABLED", "") |> String.trim() |> String.downcase() do
+      value when value in ["", "true", "1"] -> true
+      value when value in ["false", "0"] -> false
+      other -> raise "RATE_LIMIT_ENABLED must be true or false; got: #{inspect(other)}"
+    end
+
+  config :backend, BackendWeb.RateLimit, enabled: rate_limit_enabled, limits: rate_limits
+
+  case System.get_env("TRUSTED_CLIENT_IP_HEADER", "") |> String.trim() |> String.downcase() do
+    "" -> :ok
+    header -> config :backend, BackendWeb.Plugs.ClientIP, header: header
+  end
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

@@ -6,6 +6,7 @@ defmodule BackendWeb.Router do
   # LiveView pages (ADR-015 #347): cookie session, CSRF and browser headers.
   pipeline :browser do
     plug :accepts, ["html"]
+    plug BackendWeb.Plugs.ClientIP
     plug :fetch_session
     plug :fetch_live_flash
     plug :put_root_layout, html: {BackendWeb.Layouts, :root}
@@ -16,6 +17,7 @@ defmodule BackendWeb.Router do
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug BackendWeb.Plugs.ClientIP
   end
 
   # Bearer access token of the Unreal client's device login (#337).

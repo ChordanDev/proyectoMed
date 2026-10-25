@@ -124,6 +124,16 @@ config :phoenix, :filter_parameters, ["password", "secret", "token", "text", "co
 # harness and the E2E suite).
 config :backend, :legacy_station_api_unauthenticated, false
 
+# Rate limits of the public authentication and device-login endpoints (#380),
+# counted in memory (`BackendWeb.RateLimit`). `:limits` overrides the defaults
+# as `[action: [kind: {count, window_ms}]]`; config/runtime.exs reads the
+# `RATE_LIMIT_*` variables.
+config :backend, BackendWeb.RateLimit, enabled: true, limits: []
+
+# The client IP is the socket peer unless a trusted proxy header is named
+# (`TRUSTED_CLIENT_IP_HEADER`, for example `fly-client-ip` behind Fly).
+config :backend, BackendWeb.Plugs.ClientIP, header: nil
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
