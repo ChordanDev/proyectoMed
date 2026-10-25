@@ -126,7 +126,10 @@ only code that talks to it, and its interface is documented in
    the station by typing. Replies to typed turns are shown as text only; speaking
    them is a later slice. In a voice training, spoken turns join the same panel:
    the learner's words show in grey while they speak, then each turn and the
-   patient's spoken reply stay in the conversation like typed ones.
+   patient's spoken reply stay in the conversation like typed ones. Speaking
+   over the patient stops its voice and mouth at once (#193). A turn the patient
+   had not answered yet leaves the panel with its partial reply; an answer
+   already given stays. Finishing the station silences the patient too.
 5. The "Exames" button at the top right opens the exam panel. A request typed
    there ("exame físico", "eletrocardiograma") goes to Phoenix's impresso route,
    never to the patient, and never joins the conversation. Phoenix decides what
