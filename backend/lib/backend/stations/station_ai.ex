@@ -181,7 +181,9 @@ defmodule Backend.Stations.StationAI do
   """
   @spec system_prompt_parts(package(), map()) :: {String.t(), String.t()}
   def system_prompt_parts(package, context) when is_map(context) do
-    {base_prompt(package), withheld_section(package, Map.get(context, :withheld_fact_ids, []))}
+    {base_prompt(package),
+     withheld_section(package, Map.get(context, :withheld_fact_ids, [])) <>
+       mandatory_questions_section(Map.get(context, :mandatory_questions, []))}
   end
 
   defp base_prompt(package) do
@@ -430,6 +432,24 @@ defmodule Backend.Stations.StationAI do
   end
 
   defp withheld_section(_package, _ids), do: ""
+
+  # Issue #341: in the final minutes of a station with a companion, the
+  # mandatory questions not asked yet, each with the marker of the actor who
+  # asks it. Empty otherwise, so the per-turn part stays `""`.
+  defp mandatory_questions_section([_ | _] = questions) do
+    """
+
+    PERGUNTAS OBRIGATÓRIAS DOS MINUTOS FINAIS
+    A consulta está nos minutos finais e as perguntas abaixo ainda não foram feitas. Elas não são fatos oferecidos por iniciativa própria: o caso pede que sejam feitas agora.
+    Quando a última mensagem do estudante não pedir nenhum fato (por exemplo, quando ele explicar o diagnóstico ou a conduta, ou perguntar se há dúvidas), responda como quem faz a próxima pergunta da lista, com a marcação indicada, e faça essa pergunta com as palavras dela. Uma pergunta por resposta.
+    #{Enum.map_join(questions, "\n", &"  - #{question_marker(&1.speaker)} (#{&1.id}) #{&1.content}")}
+    """
+  end
+
+  defp mandatory_questions_section(_questions), do: ""
+
+  defp question_marker(:companion), do: "[ACOMPANHANTE]"
+  defp question_marker(_patient), do: "[PACIENTE]"
 
   # Issue #290: the explicit-question facts, again by id and content, ending
   # with a blank line so the next heading keeps its spacing. Empty without any.

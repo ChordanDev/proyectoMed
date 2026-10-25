@@ -52,7 +52,8 @@ defmodule Backend.Stations.CompanionTurnTest do
       :jev_decision_adapter,
       :companion_turn_test_pid,
       :companion_turn_reply,
-      :patient_verification
+      :patient_verification,
+      :mandatory_questions_window_ms
     ]
 
     previous = Map.new(keys, &{&1, Application.fetch_env(:backend, &1)})
@@ -209,6 +210,57 @@ defmodule Backend.Stations.CompanionTurnTest do
                Stations.process_voice_turn(voice_session.session_id, 2, "E a sua idade?")
 
       refute Map.has_key?(voice_result, :speaker)
+    end
+  end
+
+  describe "mandatory questions in the final minutes" do
+    @question_text "“Doutor, quando eu devo voltar com ele?”"
+
+    test "reach the generation once the station is in its final minutes",
+         %{package: package} do
+      Application.put_env(:backend, :mandatory_questions_window_ms, :timer.hours(1))
+      reply("[ACOMPANHANTE] " <> @reply)
+      session = session(package, false)
+
+      {:ok, _} = send_text(session, @question)
+
+      assert_received {:context,
+                       %{
+                         mandatory_questions: [
+                           %{id: "duvida-mae-01", speaker: :companion, content: @question_text}
+                         ]
+                       }}
+    end
+
+    test "are left out once asked", %{package: package} do
+      Application.put_env(:backend, :mandatory_questions_window_ms, :timer.hours(1))
+      reply("[ACOMPANHANTE] Doutor, quando eu devo voltar com ele?")
+      session = session(package, false)
+
+      {:ok, _} = send_text(session, "Alguma dúvida?")
+      assert_received {:context, %{mandatory_questions: [_question]}}
+
+      {:ok, _} = send_text(session, "Pode voltar se a febre persistir.")
+      assert_received {:context, context}
+      refute Map.has_key?(context, :mandatory_questions)
+    end
+
+    test "stay out before the final minutes", %{package: package} do
+      Application.put_env(:backend, :mandatory_questions_window_ms, 0)
+      reply("[ACOMPANHANTE] " <> @reply)
+      {:ok, _} = send_text(session(package, false), @question)
+
+      assert_received {:context, context}
+      refute Map.has_key?(context, :mandatory_questions)
+    end
+
+    test "stay out of a single-actor station" do
+      Application.put_env(:backend, :mandatory_questions_window_ms, :timer.hours(1))
+      reply("[PACIENTE] Meu nome é Ana.")
+      {:ok, _} = send_text(Stations.create_session(%{audio_consent: false}), "Qual é o seu nome?")
+
+      assert_received {:context, context}
+      assert Map.keys(context) |> Enum.sort() == [:conversation, :language]
     end
   end
 

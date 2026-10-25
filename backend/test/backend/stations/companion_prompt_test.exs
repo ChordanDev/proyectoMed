@@ -99,6 +99,21 @@ defmodule Backend.Stations.CompanionPromptTest do
     end
   end
 
+  describe "the per-turn part in the final minutes" do
+    test "asks for the pending mandatory questions with their speaker's marker" do
+      package = parse!(@companion_case)
+      question = %{id: "duvida-mae-01", speaker: :companion, content: "“Quando volto?”"}
+
+      {stable, per_turn} =
+        StationAI.system_prompt_parts(package, %{mandatory_questions: [question]})
+
+      assert stable == StationAI.system_prompt(package)
+      assert per_turn =~ "PERGUNTAS OBRIGATÓRIAS DOS MINUTOS FINAIS"
+      assert per_turn =~ "  - [ACOMPANHANTE] (duvida-mae-01) “Quando volto?”"
+      assert {_stable, ""} = StationAI.system_prompt_parts(package, %{})
+    end
+  end
+
   describe "a station without a companion" do
     test "keeps the prompt it had without actors" do
       package = parse!(@reference_case)

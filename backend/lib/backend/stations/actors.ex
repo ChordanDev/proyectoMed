@@ -72,6 +72,42 @@ defmodule Backend.Stations.Actors do
     if companion?(package), do: actor(package, speaker)["voice"]
   end
 
+  @doc """
+  The mandatory questions (`[PERGUNTA-OBRIGATÓRIA]`) of a station with a
+  companion that no stored reply has asked yet, each as `%{id, speaker,
+  content}`, the patient's first. A question counts as asked once a reply of the
+  station contains its words (quotes, case and surrounding punctuation
+  ignored). `[]` for a single-actor station.
+  """
+  @spec pending_questions(map(), [map()]) :: [
+          %{id: String.t(), speaker: speaker(), content: String.t()}
+        ]
+  def pending_questions(package, messages) do
+    if companion?(package) do
+      said = for %{role: :patient, text: text} <- messages, is_binary(text), do: normalize(text)
+
+      for speaker <- [:patient, :companion],
+          actor = actor(package, speaker),
+          ids = List.wrap(actor["mandatory_question_ids"]),
+          %{"id" => id, "content" => content} <- facts(package, actor),
+          id in ids,
+          not Enum.any?(said, &String.contains?(&1, normalize(content))) do
+        %{id: id, speaker: speaker, content: content}
+      end
+    else
+      []
+    end
+  end
+
+  defp normalize(text) do
+    text
+    |> String.downcase()
+    |> String.replace(~r/[“”"«»]/u, "")
+    |> String.trim()
+    |> String.trim_trailing("?")
+    |> String.trim()
+  end
+
   @doc "The actor of `speaker`, or `nil`."
   @spec actor(map(), speaker()) :: map() | nil
   def actor(package, :patient), do: patient(package)

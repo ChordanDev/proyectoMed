@@ -35,6 +35,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.TTS
   alias Backend.Stations.TTS.StageDirections
 
+  @default_mandatory_questions_window_ms :timer.minutes(3)
   @early_timer_finish_tolerance_ms 2_000
   @default_learner_message_max_characters 2_000
 
@@ -2172,6 +2173,30 @@ defmodule Backend.Stations do
       conversation: conversation,
       language: package["language"] || "pt-BR"
     }
+    |> put_mandatory_questions(session, package)
+  end
+
+  # In the final minutes of a station with a companion (#341), the mandatory
+  # questions no reply has asked yet; a single-actor station keeps today's
+  # context. The window is `:mandatory_questions_window_ms` before the deadline
+  # (default 3 minutes).
+  defp put_mandatory_questions(context, session, package) do
+    window_ms =
+      Application.get_env(
+        :backend,
+        :mandatory_questions_window_ms,
+        @default_mandatory_questions_window_ms
+      )
+
+    remaining_ms = DateTime.diff(session.deadline_at, DateTime.utc_now(), :millisecond)
+
+    case Actors.pending_questions(package, session.messages) do
+      [_ | _] = questions when remaining_ms <= window_ms ->
+        Map.put(context, :mandatory_questions, questions)
+
+      _none ->
+        context
+    end
   end
 
   # The generator sees its earlier replies with the addressee marker it wrote
