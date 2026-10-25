@@ -280,6 +280,7 @@ void FStationRunUnitSpec::Define()
 		Patient.Silence = [Silenced]() { ++*Silenced; };
 		Patient.Resume = [Resumed]() { ++*Resumed; };
 		Flow->SetPatientOutput(MoveTemp(Patient));
+		Flow->Step = EStationRunStep::Running;
 
 		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde")));
 		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
@@ -300,18 +301,25 @@ void FStationRunUnitSpec::Define()
 		TestEqual("the next reply plays", *Resumed, 2);
 	});
 
-	It("silences the patient as soon as the run ends", [this]()
+	It("silences the patient as soon as the run ends, for good", [this, Spoken]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
 		TSharedRef<int32> Silenced = MakeShared<int32>(0);
+		TSharedRef<int32> Resumed = MakeShared<int32>(0);
 		FStationPatientOutput Patient;
 		Patient.Silence = [Silenced]() { ++*Silenced; };
+		Patient.Resume = [Resumed]() { ++*Resumed; };
 		Flow->SetPatientOutput(MoveTemp(Patient));
 		Flow->Step = EStationRunStep::Running;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui."), 0));
 		Flow->PendingTurn = TEXT("Ainda dói?"); // the run closes only after Phoenix answers it
 
 		Flow->Finish();
-		TestEqual("silenced on finish", *Silenced, 1);
+		TestEqual("silenced on finish", *Silenced, 2);
+		// The room is left only once Phoenix closes the run; sentences still arrive.
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Muito."), 1));
+		TestEqual("a later sentence stays silent", *Resumed, 1);
 	});
 
 	It("neither finishes nor discards before the run is running", [this]()

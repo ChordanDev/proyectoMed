@@ -15,13 +15,17 @@ void FStationMouthState::PushControls(TMap<FName, float>&& RawControls)
 		}
 	}
 	FScopeLock Guard(&Lock);
-	Controls = MoveTemp(Mouth);
+	if (!bResting)
+	{
+		Controls = MoveTemp(Mouth);
+	}
 }
 
 void FStationMouthState::NoteSpeech()
 {
 	FScopeLock Guard(&Lock);
 	LastSpeechSeconds = FPlatformTime::Seconds();
+	bResting = false;
 }
 
 void FStationMouthState::Rest()
@@ -29,6 +33,7 @@ void FStationMouthState::Rest()
 	FScopeLock Guard(&Lock);
 	Controls.Reset();
 	LastSpeechSeconds = -1.0;
+	bResting = true;
 }
 
 bool FStationMouthState::Read(TMap<FName, float>& OutControls) const

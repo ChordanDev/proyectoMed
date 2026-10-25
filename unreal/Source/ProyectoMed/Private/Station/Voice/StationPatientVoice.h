@@ -9,7 +9,7 @@ class FStationMouthSolver;
 class UAnimSequence;
 class UAudioComponent;
 class USkeletalMeshComponent;
-class USoundWaveProcedural;
+class UStationPatientWave;
 struct FStationMouthState;
 
 /**
@@ -23,7 +23,7 @@ public:
 	/** Interleaved int16 PCM from `FStationVoiceHandlers::OnPatientPcm`; any thread. */
 	void Handle(TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels);
 
-	void Attach(USoundWaveProcedural* InWave, TSharedPtr<FStationMouthSolver> InSolver,
+	void Attach(UStationPatientWave* InWave, TSharedPtr<FStationMouthSolver> InSolver,
 		TSharedPtr<FStationMouthState, ESPMode::ThreadSafe> InMouth);
 	void Detach();
 
@@ -38,7 +38,7 @@ public:
 
 private:
 	FCriticalSection Lock;
-	USoundWaveProcedural* Wave = nullptr;
+	UStationPatientWave* Wave = nullptr;
 	TSharedPtr<FStationMouthSolver> Solver;
 	TSharedPtr<FStationMouthState, ESPMode::ThreadSafe> Mouth;
 	bool bSilenced = false;
@@ -72,7 +72,7 @@ private:
 	TSharedPtr<FStationMouthSolver> Solver;
 
 	UPROPERTY(Transient)
-	TObjectPtr<USoundWaveProcedural> Wave;
+	TObjectPtr<UStationPatientWave> Wave;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> Speaker;

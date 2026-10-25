@@ -752,7 +752,8 @@ void UStationRunFlow::SilencePatient()
 
 void UStationRunFlow::ResumePatient()
 {
-	if (Patient.Resume)
+	// Until Phoenix closes the run the room stays, and its sentences still arrive.
+	if (Step == EStationRunStep::Running && Patient.Resume)
 	{
 		Patient.Resume();
 	}

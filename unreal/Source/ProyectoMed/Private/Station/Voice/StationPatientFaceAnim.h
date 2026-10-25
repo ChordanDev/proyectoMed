@@ -24,6 +24,8 @@ private:
 	mutable FCriticalSection Lock;
 	TMap<FName, float> Controls;
 	double LastSpeechSeconds = -1.0;
+	/** Since `Rest`: the solver's late controls are ignored until the patient is heard again. */
+	bool bResting = false;
 };
 
 /** Plays the face idle loop and lays the speaking mouth over it (see `UStationPatientFaceAnim`). */

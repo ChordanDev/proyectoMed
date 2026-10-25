@@ -16,6 +16,7 @@ public class ProyectoMed : ModuleRules
 		// The patient's voice and the learner's microphone in a voice run (#191).
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"AudioCapture",
+			"AudioExtensions",
 			"AudioMixer",
 			"AudioPlatformConfiguration",
 			"MetaHumanCoreTech",
