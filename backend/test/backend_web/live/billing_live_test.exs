@@ -111,5 +111,47 @@ defmodule BackendWeb.BillingLiveTest do
       assert html =~ "Assinatura expirada"
       assert has_element?(lv, ~s(a[href="/planos"]))
     end
+
+    test "the account page shows today's remaining simulations (#340)",
+         %{conn: conn, user: user} do
+      subscribe_user(user)
+
+      {:ok, lv, _html} = live(conn, ~p"/conta")
+      assert has_element?(lv, "#daily-quota", "10 de 10 simulações restantes hoje")
+      assert has_element?(lv, "#daily-quota", "A cota renova à meia-noite (horário de Brasília).")
+
+      kase = Backend.ResultsFixtures.published_case_fixture()
+
+      {:ok, session} =
+        Backend.Stations.start_station_session({:station, kase.number}, %{
+          audio_consent: false,
+          user_id: user.id
+        })
+
+      on_exit(fn -> Backend.Stations.discard_session(session.session_id) end)
+
+      {:ok, lv, _html} = live(conn, ~p"/conta")
+      assert has_element?(lv, "#daily-quota", "9 de 10 simulações restantes hoje")
+    end
+
+    test "the account page says when today's simulations are used up (#340)",
+         %{conn: conn, user: user} do
+      subscribe_user(user)
+      {:ok, _quota} = Billing.set_daily_quota(card_product_id(), 0)
+
+      {:ok, lv, _html} = live(conn, ~p"/conta")
+      assert has_element?(lv, "#daily-quota", "0 de 0 simulações restantes hoje")
+      assert has_element?(lv, "#daily-quota", "Você usou todas as simulações de hoje.")
+    end
+
+    test "the account page shows no quota without an active subscription (#340)",
+         %{conn: conn, user: user} do
+      {:ok, lv, _html} = live(conn, ~p"/conta")
+      refute has_element?(lv, "#daily-quota")
+
+      subscribe_user(user, expiration_at_ms: now_ms() - 1_000)
+      {:ok, lv, _html} = live(conn, ~p"/conta")
+      refute has_element?(lv, "#daily-quota")
+    end
   end
 end

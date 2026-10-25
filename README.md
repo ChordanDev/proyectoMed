@@ -981,6 +981,13 @@ event. Configure `REVENUECAT_WEBHOOK_AUTHORIZATION`,
 `REVENUECAT_PIX_PURCHASE_LINK`; without both webhook secrets the webhook answers
 `503`. See `docs/operations/revenuecat.md`.
 
+Each plan has a daily simulation quota (issue #340), stored per RevenueCat
+`product_id` in the `billing_plan_quotas` table so it changes without a deploy.
+Only graded sessions and sessions in flight count; a technical failure never
+consumes quota. Past the quota, `POST /sessions` answers `429` with
+`error: "daily_quota_exhausted"` and `resets_at` (midnight in
+`America/Sao_Paulo`). `/conta` shows today's remaining simulations.
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.

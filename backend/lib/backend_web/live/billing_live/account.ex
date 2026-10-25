@@ -4,11 +4,15 @@ defmodule BackendWeb.BillingLive.Account do
   renewal date of a card plan or the due date of a Pix plan, a reminder when a
   Pix payment is due soon, and the state of a cancelled or expired
   subscription. It is also the success page of the Web Purchase Link.
+
+  With access, it also shows today's remaining simulations of the plan's daily
+  quota and when the quota resets (#340).
   """
 
   use BackendWeb, :live_view
 
   alias Backend.Billing
+  alias Backend.Stations
 
   @impl true
   def render(assigns) do
@@ -54,6 +58,17 @@ defmodule BackendWeb.BillingLive.Account do
           <% end %>
         </div>
       </section>
+
+      <section :if={@quota} id="daily-quota" class="card card-border">
+        <div class="card-body space-y-2">
+          <h2 class="card-title">Simulações de hoje</h2>
+          <p class="text-lg font-semibold">
+            {@quota.remaining} de {@quota.daily_quota} simulações restantes hoje
+          </p>
+          <p :if={@quota.remaining == 0}>Você usou todas as simulações de hoje.</p>
+          <p class="text-sm opacity-70">A cota renova à meia-noite (horário de Brasília).</p>
+        </div>
+      </section>
     </Layouts.app>
     """
   end
@@ -66,7 +81,10 @@ defmodule BackendWeb.BillingLive.Account do
     pix_url =
       if status.renewal_reminder?, do: Billing.purchase_url(status.plan, user), else: nil
 
-    {:ok, assign(socket, status: status, pix_url: pix_url)}
+    quota =
+      if status.state in [:active, :cancelled], do: Stations.daily_quota_status(user.id)
+
+    {:ok, assign(socket, status: status, pix_url: pix_url, quota: quota)}
   end
 
   defp plan_name(%{plan: %{name: name}}), do: name

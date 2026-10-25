@@ -24,6 +24,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.MediaSession
   alias Backend.Stations.PatientVerification
   alias Backend.Stations.Qualification
+  alias Backend.Stations.Results.DailyQuota
   alias Backend.Stations.Results.History, as: ResultHistory
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
@@ -179,11 +180,17 @@ defmodule Backend.Stations do
   number, and `{:error, :no_published_station}` when nothing is published in
   the area (or at all). A learner (`:user_id`) without an active simulator
   entitlement gets `{:error, :subscription_required}` (#339).
+
+  A learner who has used their plan's daily quota (#340, see
+  `daily_quota_status/1`) gets `{:error, {:daily_quota_exhausted, resets_at}}`,
+  where `resets_at` is the next local midnight in America/Sao_Paulo. A started
+  session holds one slot until it is graded or expires.
   """
   @spec start_station_session({:station, integer()} | {:random, String.t() | nil}, map()) ::
           {:ok, Conversation.session()}
           | {:error,
              :subscription_required
+             | {:daily_quota_exhausted, DateTime.t()}
              | :station_not_found
              | :no_published_station
              | :invalid_station_package}
@@ -193,20 +200,53 @@ defmodule Backend.Stations do
     with :ok <- require_entitlement(attrs[:user_id]),
          {:ok, version} <- published_version(selection),
          {:ok, package} <- pinned_package(version) do
-      {:ok,
-       attrs
-       |> Map.take([:audio_consent, :user_id])
-       |> Map.merge(%{
-         station_id: version.case.number,
-         station_version: version.version_number,
-         station_version_id: version.id,
-         station_slug: version.station_id,
-         station_area: version.area,
-         station_theme: version.theme,
-         package: package
-       })
-       |> Conversation.start()}
+      within_daily_quota(attrs[:user_id], fn ->
+        attrs
+        |> Map.take([:audio_consent, :user_id])
+        |> Map.merge(%{
+          station_id: version.case.number,
+          station_version: version.version_number,
+          station_version_id: version.id,
+          station_slug: version.station_id,
+          station_area: version.area,
+          station_theme: version.theme,
+          package: package
+        })
+        |> Conversation.start()
+      end)
     end
+  end
+
+  defp within_daily_quota(nil, start_fun), do: {:ok, start_fun.()}
+
+  defp within_daily_quota(user_id, start_fun) do
+    DailyQuota.reserve(
+      user_id,
+      Backend.Billing.daily_quota(user_id),
+      Backend.Billing.quota_day(),
+      start_fun
+    )
+  end
+
+  @doc """
+  Today's daily quota of the learner `user_id` (#340): `daily_quota`, the
+  plan's quota; `used`, the sessions graded since local midnight in
+  America/Sao_Paulo plus the sessions in flight; `remaining`, never below
+  zero; and `resets_at`, the next local midnight. A technical failure is
+  never graded, so it stops counting when its session expires.
+  """
+  @spec daily_quota_status(pos_integer()) :: %{
+          daily_quota: non_neg_integer(),
+          used: non_neg_integer(),
+          remaining: non_neg_integer(),
+          resets_at: DateTime.t()
+        }
+  def daily_quota_status(user_id) when is_integer(user_id) do
+    quota = Backend.Billing.daily_quota(user_id)
+    day = Backend.Billing.quota_day()
+    used = DailyQuota.used(user_id, day)
+
+    %{daily_quota: quota, used: used, remaining: max(quota - used, 0), resets_at: day.resets_at}
   end
 
   defp require_entitlement(nil), do: :ok

@@ -357,9 +357,41 @@ below.
 | Code | Status | When |
 | --- | --- | --- |
 | `invalid_parameters` | 400 | No station choice, both `station_id` and `random`, a `station_id` that is not a positive integer, a non-string `area`, or a missing or non-boolean `audio_consent`. |
+| `subscription_required` | 402 | The learner has no active subscription (#339). |
 | `station_not_found` | 404 | No published station has that `station_id` (unknown, pending or disapproved case). |
 | `no_published_station` | 404 | Nothing is published in that `area` (or at all, without one). |
+| `daily_quota_exhausted` | 429 | The learner has used today's simulations (#340). See [Daily quota](#daily-quota). |
 | `station_unavailable` | 503 | The published package could not be loaded; the run cannot start. |
+
+### Daily quota
+
+Each plan allows a number of simulations per day (#340). Past it, `POST
+/sessions` answers `429` with a `Retry-After` header (seconds until the reset)
+and this body:
+
+```json
+{
+  "error": "daily_quota_exhausted",
+  "message": "Você usou todas as simulações de hoje. A cota renova à meia-noite (horário de Brasília).",
+  "daily_quota": 10,
+  "resets_at": "2026-10-26T03:00:00.000000Z"
+}
+```
+
+- **Day boundary:** the quota resets at local midnight in `America/Sao_Paulo`,
+  which is 03:00 UTC (Brazil has no daylight saving time). `resets_at` is that
+  moment, in UTC.
+- **What counts:** sessions that reached a graded result that day, plus
+  sessions in flight. A session holds its slot from its start until it is
+  graded or until its `expires_at`. A session that is abandoned or fails
+  technically is never graded, so it releases its slot at `expires_at` and
+  never consumes quota. A graded session counts on the day it finished.
+- **Two starts at once:** starts of one learner are serialized. At one
+  simulation left, two `POST /sessions` sent at the same moment start one
+  session; the other answers `429`. Counting only graded results at start
+  would let both through.
+- Show the `message` and offer a retry after `resets_at`. The remaining count
+  is shown on the web account page (`/conta`).
 
 ### Pre-Station Notice (`GET /pre-station-notice`)
 
