@@ -39,11 +39,14 @@ defmodule Backend.ContentTest do
       assert abs(DateTime.diff(kase.inserted_at, DateTime.utc_now())) < 60
     end
 
-    test "numbers are sequential in insertion order" do
+    test "numbers increase in insertion order" do
       first = insert_case!("Pediatria", "Bronquiolite")
       second = insert_case!("Pediatria", "Asma")
 
-      assert second.number == first.number + 1
+      # The identity sequence is shared by concurrent (async) tests and is not
+      # rolled back, so another test may take the numbers in between: only the
+      # order is guaranteed, not the gap (issue #381).
+      assert second.number > first.number
     end
 
     test "n8n cannot choose the number" do
