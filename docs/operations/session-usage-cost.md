@@ -123,6 +123,9 @@ Jev calls, estimated Claude cost USD 0.003081 (no audio: text only).
 
 ## Resolver model
 
-The rubric resolver runs on `claude-opus-5-5` by default. The measured comparison of Opus, Sonnet and
-Haiku on the same transcripts, with agreement, latency and cost per session, is
-in `docs/research/resolver-model-comparison.md` (issue #343).
+The rubric resolver runs on `claude-haiku-5-5` by default (`ANTHROPIC_RESOLVER_MODEL`,
+issue #343); learner feedback stays on `claude-opus-5-5` (`ANTHROPIC_MODEL`).
+The measured comparison of Opus, Sonnet and Haiku on the same transcripts, with
+agreement, latency and cost per session, and the decision, are in
+`docs/research/resolver-model-comparison.md`. With live Jev the resolver costs
+about USD 0.0010 per session on Haiku, against USD 0.0239 on Opus.

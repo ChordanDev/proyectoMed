@@ -911,14 +911,15 @@ voice is not affected.
 |---|---|---|
 | `LLM_PROVIDER` | `anthropic` serves the three text seams from Claude (`dev` and `prod`; ignored in `test`). Unset, or any other value, keeps OpenAI unchanged. | unset |
 | `ANTHROPIC_API_KEY` | Claude API key. Without it every Claude call is a technical failure: the patient turn takes its existing technical-failure path, the resolver leaves actions uncertain and feedback keeps the authored texts. | unset |
-| `ANTHROPIC_MODEL` | Model for the rubric resolver and learner feedback (effort `medium`, model-default thinking). | `claude-opus-5-5` |
+| `ANTHROPIC_MODEL` | Model for learner feedback (effort `medium`, model-default thinking). | `claude-opus-5-5` |
+| `ANTHROPIC_RESOLVER_MODEL` | Model for the rubric resolver (issue #343, chosen by measured agreement and cost, see `docs/research/resolver-model-comparison.md`). Effort `medium`, model-default thinking; no server-side fallback on Haiku 5.5 (it has none). | `claude-haiku-5-5` |
 | `ANTHROPIC_PATIENT_MODEL` | Model for the simulated patient (issues #256 and #308, chosen for latency). Effort `low`; on Haiku 5.5 thinking is sent as `disabled` and requests carry no server-side fallbacks; on Sonnet 5.5 thinking is turned off with `between_tools`; any other model gets no thinking field. | `claude-haiku-5-5` |
 | `ANTHROPIC_ADJUDICATOR_MODEL` | Model of the undecided-verdict adjudicator (issue #290): one call when Jev leaves a patient reply `low_confidence`. Effort `low`; thinking off on Haiku 5.5; no server-side fallback (Haiku 5.5 has none). | `claude-haiku-5-5` |
 | `PATIENT_ADJUDICATOR` | `off` keeps a `low_confidence` verdict on its refusal path. Otherwise the adjudicator runs whenever `LLM_PROVIDER=anthropic`. | unset (on with Claude) |
 | `PATIENT_ADJUDICATOR_DEADLINE_MS` | The adjudicator's own deadline, always capped by the 3 s verification budget of the turn. Anything but a positive integer keeps the default. | `2000` |
 | `ANTHROPIC_BASE_URL` | API base URL. | `https://api.anthropic.com` |
 | `RUBRIC_RESOLVER` | `on` (or `openai`, kept for compatibility) turns the rubric resolver on; `LLM_PROVIDER` picks who serves it. Unset keeps it off. | unset |
-| `RUBRIC_RESOLVER_MODEL` | OpenAI model of the resolver; ignored on Claude, where `ANTHROPIC_MODEL` applies. | `OPENAI_MODEL` |
+| `RUBRIC_RESOLVER_MODEL` | OpenAI model of the resolver; ignored on Claude, where `ANTHROPIC_RESOLVER_MODEL` applies. | `OPENAI_MODEL` |
 
 With Claude selected, a patient reply Jev leaves undecided (`low_confidence`) is
 adjudicated once by `ANTHROPIC_ADJUDICATOR_MODEL` instead of being refused: it

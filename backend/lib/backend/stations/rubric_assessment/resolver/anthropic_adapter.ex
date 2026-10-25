@@ -10,6 +10,12 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter do
   still validates and merges every decision; nothing here grants credit.
   Thinking stays adaptive, so there is no `temperature`; the effort is `medium`.
 
+  The model is the client's `:resolver_model` (`ANTHROPIC_RESOLVER_MODEL`,
+  default `claude-haiku-5-5`, issue #343, chosen by measured agreement and cost
+  in `docs/research/resolver-model-comparison.md`). On Haiku 5.5 the request
+  carries no `fallbacks` (it has none) and no `thinking` field, which is the
+  shape that comparison measured.
+
   The fixed system prompt is the cached prompt prefix (issue #272, see
   `Backend.Stations.StationAI.AnthropicClient`); the per-request user content
   (criteria to decide and the learner evidence) stays after the breakpoint.
@@ -39,6 +45,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapter do
     config =
       AnthropicClient.config(opts,
         effort: @effort,
+        model_key: :resolver_model,
         receive_timeout: receive_timeout(opts)
       )
 
