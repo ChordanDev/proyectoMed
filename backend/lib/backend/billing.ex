@@ -86,15 +86,8 @@ defmodule Backend.Billing do
     now = DateTime.utc_now()
     plan = plan(sub.product_id)
 
-    state =
-      cond do
-        sub.status in [:active, :cancelled] and
-            (is_nil(sub.expires_at) or DateTime.compare(sub.expires_at, now) != :gt) ->
-          :expired
-
-        true ->
-          sub.status
-      end
+    lapsed? = is_nil(sub.expires_at) or DateTime.compare(sub.expires_at, now) != :gt
+    state = if sub.status in [:active, :cancelled] and lapsed?, do: :expired, else: sub.status
 
     pix? = match?(%{payment: :pix}, plan)
 

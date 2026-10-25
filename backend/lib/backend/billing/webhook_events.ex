@@ -50,15 +50,17 @@ defmodule Backend.Billing.WebhookEvents do
           :duplicate
 
         {:ok, recorded} ->
-          outcome = apply_event(type, event, opts)
-
-          if outcome == :ignored,
-            do: Repo.update!(Ecto.Changeset.change(recorded, outcome: "ignored"))
-
-          outcome
+          type |> apply_event(event, opts) |> record_outcome(recorded)
       end
     end)
   end
+
+  defp record_outcome(:ignored, recorded) do
+    Repo.update!(Ecto.Changeset.change(recorded, outcome: "ignored"))
+    :ignored
+  end
+
+  defp record_outcome(outcome, _recorded), do: outcome
 
   defp apply_event(type, event, opts) do
     cond do
