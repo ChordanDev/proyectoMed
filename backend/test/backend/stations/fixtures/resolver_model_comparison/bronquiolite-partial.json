@@ -1,0 +1,27 @@
+{
+  "description": "Issue #343: a fictional partial attempt at the bronquiolite companion case (n8n sample). The learner asks part of the history, requests the exams without the oximetry, reaches the diagnosis without classifying severity and gives incomplete management. Companion replies use the `patient` role.",
+  "station_id": "bronquiolite-viral-lactente",
+  "package": "case_format:n8n-sample-bronquiolite-companion.md",
+  "quality": "partial",
+  "expected_released_ids": [
+    "impresso-1-exame-geral",
+    "impresso-2-exame-respiratorio"
+  ],
+  "turns": [
+    {"role": "learner", "modality": "text", "text": "Boa noite, mãe. O que aconteceu com a bebê?"},
+    {"role": "patient", "modality": "text", "text": "A Helena está com tosse e cansada desde ontem."},
+    {"role": "learner", "modality": "text", "text": "Começou quando? Teve febre?"},
+    {"role": "patient", "modality": "text", "text": "Começou com nariz escorrendo há quatro dias. Teve febre de 38."},
+    {"role": "learner", "modality": "text", "text": "Ela está mamando?"},
+    {"role": "patient", "modality": "text", "text": "Mama pouco, cansa logo."},
+    {"role": "learner", "modality": "text", "text": "Ela nasceu prematura?"},
+    {"role": "patient", "modality": "text", "text": "Não, nasceu de 39 semanas."},
+    {"role": "learner", "modality": "impressos", "text": "Quero o exame físico geral e os sinais vitais."},
+    {"role": "learner", "modality": "impressos", "text": "Peço a ausculta pulmonar."},
+    {"role": "learner", "modality": "text", "text": "Ela está respirando rápido e tem chiado."},
+    {"role": "learner", "modality": "text", "text": "Parece bronquiolite."},
+    {"role": "learner", "modality": "text", "text": "Vamos internar e fazer lavagem nasal com soro."},
+    {"role": "patient", "modality": "text", "text": "Ela não vai tomar antibiótico ou fazer inalação? Isso é asma?"},
+    {"role": "learner", "modality": "text", "text": "Por enquanto não precisa de antibiótico."}
+  ]
+}

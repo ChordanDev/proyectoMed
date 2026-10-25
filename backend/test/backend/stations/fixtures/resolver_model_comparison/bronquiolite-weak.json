@@ -1,0 +1,21 @@
+{
+  "description": "Issue #343: a fictional weak attempt at the bronquiolite companion case (n8n sample). The learner barely asks, requests a chest X-ray and blood tests, treats it as asthma with corticosteroid and antibiotic and sends the infant home. Companion replies use the `patient` role.",
+  "station_id": "bronquiolite-viral-lactente",
+  "package": "case_format:n8n-sample-bronquiolite-companion.md",
+  "quality": "weak",
+  "expected_released_ids": [
+    "impresso-4-radiografia",
+    "impresso-5-hemograma-pcr"
+  ],
+  "turns": [
+    {"role": "learner", "modality": "text", "text": "O que ela tem?"},
+    {"role": "patient", "modality": "text", "text": "Tosse e cansaço, doutor."},
+    {"role": "learner", "modality": "text", "text": "Tem quanto tempo?"},
+    {"role": "patient", "modality": "text", "text": "Uns quatro dias."},
+    {"role": "learner", "modality": "impressos", "text": "Peço uma radiografia de tórax."},
+    {"role": "learner", "modality": "impressos", "text": "E um hemograma."},
+    {"role": "learner", "modality": "text", "text": "É uma crise de asma com pneumonia. Vou passar prednisolona e amoxicilina."},
+    {"role": "patient", "modality": "text", "text": "Ela não vai tomar antibiótico ou fazer inalação? Isso é asma?"},
+    {"role": "learner", "modality": "text", "text": "Vai tomar antibiótico e fazer inalação com salbutamol em casa. Se não melhorar, volte."}
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "description": "Issue #343: a fictional partial acute-appendicitis attempt. The learner asks part of the history, examines and requests some labs, reaches the hypothesis without imaging and gives incomplete management and explanations.",
+  "station_id": "acute-appendicitis",
+  "package": "station:acute-appendicitis",
+  "quality": "partial",
+  "expected_released_ids": [
+    "impresso-1-exame-fisico",
+    "impresso-2-hemograma",
+    "impresso-2-pcr"
+  ],
+  "turns": [
+    {"role": "learner", "modality": "text", "text": "Olá, tudo bem? O que o senhor está sentindo?"},
+    {"role": "patient", "modality": "text", "text": "Uma dor forte na barriga, doutor."},
+    {"role": "learner", "modality": "text", "text": "Onde é a dor?"},
+    {"role": "patient", "modality": "text", "text": "Começou no umbigo e agora está aqui do lado direito, embaixo."},
+    {"role": "learner", "modality": "text", "text": "Desde quando?"},
+    {"role": "patient", "modality": "text", "text": "Desde ontem à noite."},
+    {"role": "learner", "modality": "text", "text": "Teve febre ou vômito?"},
+    {"role": "patient", "modality": "text", "text": "Febre baixa e vomitei uma vez."},
+    {"role": "learner", "modality": "text", "text": "Tem alguma alergia?"},
+    {"role": "patient", "modality": "text", "text": "Não, nenhuma."},
+    {"role": "learner", "modality": "impressos", "text": "Quero o exame físico."},
+    {"role": "learner", "modality": "text", "text": "Ele tem dor na fossa ilíaca direita."},
+    {"role": "learner", "modality": "impressos", "text": "Peço hemograma e PCR."},
+    {"role": "learner", "modality": "text", "text": "Os leucócitos estão altos."},
+    {"role": "learner", "modality": "text", "text": "Acho que é apendicite. Vou deixar em jejum e passar um remédio para dor."},
+    {"role": "learner", "modality": "text", "text": "Vou pedir para a cirurgia avaliar."},
+    {"role": "patient", "modality": "text", "text": "Vou ter que operar? Quanto tempo vou ficar internado?"},
+    {"role": "learner", "modality": "text", "text": "Provavelmente sim, mas isso o cirurgião vai ver."}
+  ]
+}
