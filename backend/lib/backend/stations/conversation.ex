@@ -23,7 +23,9 @@ defmodule Backend.Stations.Conversation do
   @default_purge_interval_ms :timer.minutes(1)
   @default_station_duration_ms :timer.minutes(10)
   @default_turn_grace_ms :timer.seconds(30)
+  # `user_id` is the learner that started the session (#337).
   @pinned_station_keys [
+    :user_id,
     :package,
     :station_version_id,
     :station_slug,
@@ -52,6 +54,7 @@ defmodule Backend.Stations.Conversation do
             }
             | nil,
           optional(:package) => map(),
+          optional(:user_id) => pos_integer(),
           optional(:station_version_id) => pos_integer(),
           optional(:station_slug) => String.t(),
           optional(:station_area) => String.t(),

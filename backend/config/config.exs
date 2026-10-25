@@ -119,6 +119,11 @@ config :phoenix, :json_library, Jason
 # hides its access and refresh tokens.
 config :phoenix, :filter_parameters, ["password", "secret", "token", "text", "code"]
 
+# The deprecated `/api/stations/...` routes require the device access token
+# (#337) unless an environment opts out (dev and test, for the frozen web
+# harness and the E2E suite).
+config :backend, :legacy_station_api_unauthenticated, false
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

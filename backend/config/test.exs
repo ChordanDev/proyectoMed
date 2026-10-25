@@ -47,3 +47,7 @@ config :phoenix,
 config :backend,
   learner_feedback_adapter: Backend.Stations.LearnerFeedback.DisabledAdapter,
   learner_feedback_cooldown_ms: 0
+
+# The frozen web harness and the E2E suite call the deprecated
+# `/api/stations/...` routes without a device access token (#337).
+config :backend, :legacy_station_api_unauthenticated, true

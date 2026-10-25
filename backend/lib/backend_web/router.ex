@@ -23,6 +23,18 @@ defmodule BackendWeb.Router do
     plug BackendWeb.Plugs.DeviceAuth
   end
 
+  # The learner's station API: a valid access token, and an `:id` session the
+  # learner started (another learner's session is 404).
+  pipeline :learner_api do
+    plug BackendWeb.Plugs.DeviceAuth
+    plug BackendWeb.Plugs.SessionOwner
+  end
+
+  # Deprecated routes: unauthenticated only in dev and test (#337).
+  pipeline :legacy_station_api do
+    plug BackendWeb.Plugs.LegacyStationAuth
+  end
+
   # Admin case panel (#331): only the `admin` role (ADR-015 #347). The plugs
   # guard the first HTTP request; the on_mount hook guards live navigation.
   scope "/admin", BackendWeb do
@@ -38,6 +50,11 @@ defmodule BackendWeb.Router do
     pipe_through :api
 
     get "/", HealthController, :index
+  end
+
+  scope "/", BackendWeb do
+    pipe_through [:api, :learner_api]
+
     get "/stations", StationController, :index
 
     # Multi-station session API (issue #334, ADR-013 amendment on #209): a
@@ -77,7 +94,7 @@ defmodule BackendWeb.Router do
   # routes below serve any session, including one started by `POST /sessions`.
 
   scope "/api/stations", BackendWeb do
-    pipe_through :api
+    pipe_through [:api, :legacy_station_api]
 
     get "/", StationController, :index
     get "/active", StationController, :active
@@ -118,7 +135,7 @@ defmodule BackendWeb.Router do
   end
 
   scope "/api/v2/stations", BackendWeb do
-    pipe_through :api
+    pipe_through [:api, :legacy_station_api]
     get "/active/sessions/:id/result", StationController, :show_educational_result
   end
 
