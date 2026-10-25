@@ -303,6 +303,7 @@ defmodule Backend.BillingTest do
       assert Billing.purchase_url(plan, user) == nil
     end
   end
+
   describe "daily_quota/1 (#340)" do
     test "is the quota of the learner's product, seeded per plan", %{user: user} do
       subscribe_user(user)

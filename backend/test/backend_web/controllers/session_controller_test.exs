@@ -74,6 +74,54 @@ defmodule BackendWeb.SessionControllerTest do
     end
   end
 
+  describe "POST /sessions past the daily quota (#340)" do
+    test "answers 429 daily_quota_exhausted with the reset time", %{
+      conn: conn,
+      admin: admin,
+      package: package
+    } do
+      kase = publish!(package, admin)
+
+      {:ok, _quota} =
+        Backend.Billing.set_daily_quota(Backend.BillingFixtures.card_product_id(), 1)
+
+      params = %{"station_id" => kase.number, "audio_consent" => true}
+
+      %{"session_id" => session_id} = conn |> post(~p"/sessions", params) |> json_response(201)
+      on_exit(fn -> Stations.discard_session(session_id) end)
+
+      resets_at = Backend.Billing.quota_day().resets_at
+      refused = post(conn, ~p"/sessions", params)
+
+      assert json_response(refused, 429) == %{
+               "error" => "daily_quota_exhausted",
+               "message" =>
+                 "Você usou todas as simulações de hoje. A cota renova à meia-noite (horário de Brasília).",
+               "daily_quota" => 1,
+               "resets_at" => DateTime.to_iso8601(resets_at)
+             }
+
+      [retry_after] = get_resp_header(refused, "retry-after")
+      assert String.to_integer(retry_after) in 1..86_400
+    end
+
+    test "a subscription is still checked first: 402 before 429", %{
+      admin: admin,
+      package: package
+    } do
+      kase = publish!(package, admin)
+
+      {:ok, _quota} =
+        Backend.Billing.set_daily_quota(Backend.BillingFixtures.card_product_id(), 0)
+
+      assert %{"error" => "subscription_required"} =
+               build_conn()
+               |> log_in_device(Backend.AccountsFixtures.user_fixture())
+               |> post(~p"/sessions", %{"station_id" => kase.number, "audio_consent" => true})
+               |> json_response(402)
+    end
+  end
+
   describe "POST /sessions without an active subscription" do
     test "answers 402 subscription_required", %{
       admin: admin,
