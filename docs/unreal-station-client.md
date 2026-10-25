@@ -260,6 +260,49 @@ below.
 | `no_published_station` | 404 | Nothing is published in that `area` (or at all, without one). |
 | `station_unavailable` | 503 | The published package could not be loaded; the run cannot start. |
 
+### Pre-Station Notice (`GET /pre-station-notice`)
+
+Show it before a station, before asking for audio consent (ADR-003 #36). Phoenix
+derives `providers` from its running configuration, so it names every provider
+the station will actually call, and only those. All texts are pt-BR and can be
+shown as they are.
+
+```json
+{
+  "title": "Ferramenta Educacional",
+  "body": "Ferramenta educacional independente para treino de habilidades clínicas. Não insira dados de pacientes reais.",
+  "educational_disclaimer": "Estimativa educacional gerada por IA. Não é nota oficial do Revalida. …",
+  "audio_consent": "Ao ativar a voz, você aceita que o áudio da conversa seja processado pelos provedores de áudio listados. …",
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic (Claude)",
+      "processes": "text",
+      "roles": [
+        { "id": "simulated_patient", "processes": "text", "description": "Gera as falas do paciente simulado a partir do texto da conversa." }
+      ]
+    },
+    {
+      "id": "deepgram",
+      "name": "Deepgram",
+      "processes": "audio",
+      "roles": [
+        { "id": "speech_to_text", "processes": "audio", "description": "Transcreve a sua fala." }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `providers[].id` | `anthropic`, `openai`, `typesafe`, `livekit`, `deepgram` or `elevenlabs`. |
+| `providers[].processes` | `audio` when any of its roles receives audio, otherwise `text`. |
+| `providers[].roles[].id` | `simulated_patient`, `patient_adjudicator`, `jev_verification`, `rubric_resolver`, `learner_feedback`, `audio_transport`, `speech_to_text` or `text_to_speech`. |
+| `providers[].roles[].description` | What that provider does in the station, in pt-BR. |
+
+With voice off (`voice_mode` `off`) no audio provider is listed.
+
 ### Session routes
 
 Every operation is addressed by the session id; request and response bodies are

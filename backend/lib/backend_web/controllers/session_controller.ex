@@ -10,6 +10,14 @@ defmodule BackendWeb.SessionController do
 
   alias Backend.Stations
 
+  @doc """
+  The Pre-Station Notice with every active provider (ADR-003 #36), shown
+  before the learner gives or declines audio consent.
+  """
+  def notice(conn, _params) do
+    json(conn, Stations.pre_station_notice())
+  end
+
   def create(conn, params) do
     with {:ok, selection} <- selection(params),
          {:ok, audio_consent} <- audio_consent(params),

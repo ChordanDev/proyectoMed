@@ -116,6 +116,15 @@ defmodule Backend.Stations do
     end)
   end
 
+  @doc """
+  The Pre-Station Notice shown before a station (ADR-003 #36, issue #334): the
+  pt-BR `title`, `body`, `educational_disclaimer` and `audio_consent` texts and
+  `providers`, every active provider with its roles. See
+  `Backend.Stations.PreStationNotice`.
+  """
+  @spec pre_station_notice() :: map()
+  defdelegate pre_station_notice, to: Backend.Stations.PreStationNotice, as: :build
+
   # ============================================================================
   # Session Lifecycle
   # ============================================================================

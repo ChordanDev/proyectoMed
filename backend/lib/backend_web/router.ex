@@ -37,6 +37,7 @@ defmodule BackendWeb.Router do
 
     # Multi-station session API (issue #334, ADR-013 amendment on #209): a
     # session starts on a published station and every route is addressed by it.
+    get "/pre-station-notice", SessionController, :notice
     post "/sessions", SessionController, :create
     get "/sessions/:id", StationController, :show_session
     post "/sessions/:id/messages", StationController, :create_message

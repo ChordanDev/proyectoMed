@@ -59,6 +59,16 @@ defmodule BackendWeb.SessionControllerTest do
     approved
   end
 
+  describe "GET /pre-station-notice" do
+    test "serves the notice with every active provider", %{conn: conn} do
+      body = conn |> get(~p"/pre-station-notice") |> json_response(200)
+
+      assert body == Jason.decode!(Jason.encode!(Stations.pre_station_notice()))
+      assert body["body"] =~ "Não insira dados de pacientes reais"
+      assert is_list(body["providers"])
+    end
+  end
+
   describe "POST /sessions" do
     test "starts a session on a station id with its public station and brief",
          %{conn: conn, admin: admin, package: package} do
