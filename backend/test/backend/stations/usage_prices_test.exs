@@ -2,6 +2,7 @@ defmodule Backend.Stations.Usage.PricesTest do
   # async: false: some tests change the application environment.
   use ExUnit.Case, async: false
 
+  alias Backend.AppEnvHelpers
   alias Backend.Stations.Usage.Prices
 
   @snapshot %{
@@ -22,13 +23,14 @@ defmodule Backend.Stations.Usage.PricesTest do
   }
 
   defp with_override(override, fun) do
-    previous = Application.get_env(:backend, Prices)
-    Application.put_env(:backend, Prices, Keyword.put(previous || [], :override, override))
+    previous = AppEnvHelpers.snapshot(Prices)
+    current = Application.get_env(:backend, Prices) || []
+    Application.put_env(:backend, Prices, Keyword.put(current, :override, override))
 
     try do
       fun.()
     after
-      Application.put_env(:backend, Prices, previous)
+      AppEnvHelpers.restore(Prices, previous)
     end
   end
 

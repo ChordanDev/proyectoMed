@@ -41,6 +41,18 @@ defmodule Backend.AppEnvHelpersTest do
 
       assert Application.fetch_env(:backend, @key) == {:ok, nil}
     end
+
+    test "snapshot/2 and restore/3 do the same for another application" do
+      app = :app_env_helpers_test_app
+      on_exit(fn -> Application.delete_env(app, @key) end)
+
+      previous = AppEnvHelpers.snapshot(app, @key)
+      Application.put_env(app, @key, :temporary)
+
+      assert :ok = AppEnvHelpers.restore(app, @key, previous)
+
+      assert Application.fetch_env(app, @key) == :error
+    end
   end
 
   describe "leaked_nils/1 (#363)" do

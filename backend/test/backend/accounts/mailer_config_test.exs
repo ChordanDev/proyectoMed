@@ -148,9 +148,9 @@ defmodule Backend.Accounts.MailerConfigTest do
 
   describe "the configured HTTP client" do
     setup do
-      previous = Application.get_env(:swoosh, :api_client)
+      previous = Backend.AppEnvHelpers.snapshot(:swoosh, :api_client)
       Application.put_env(:swoosh, :api_client, Swoosh.ApiClient.Req)
-      on_exit(fn -> Application.put_env(:swoosh, :api_client, previous) end)
+      on_exit(fn -> Backend.AppEnvHelpers.restore(:swoosh, :api_client, previous) end)
     end
 
     test "delivers through the provider API with the key" do

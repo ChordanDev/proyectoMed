@@ -12,13 +12,13 @@ defmodule BackendWeb.RateLimitHelpers do
   counter, and restores the previous config when the test exits.
   """
   def enable_rate_limit(limits \\ []) do
-    previous = Application.get_env(:backend, BackendWeb.RateLimit)
+    previous = Backend.AppEnvHelpers.snapshot(BackendWeb.RateLimit)
 
     Application.put_env(:backend, BackendWeb.RateLimit, enabled: true, limits: limits)
     BackendWeb.RateLimit.reset()
 
     on_exit(fn ->
-      Application.put_env(:backend, BackendWeb.RateLimit, previous)
+      Backend.AppEnvHelpers.restore(BackendWeb.RateLimit, previous)
       BackendWeb.RateLimit.reset()
     end)
 

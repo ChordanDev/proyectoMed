@@ -15,17 +15,25 @@ defmodule Backend.AppEnvHelpers do
 
   @type snapshot :: {:ok, term()} | :error
 
-  @doc "Returns the current value of `key` as `{:ok, value}`, or `:error` when unset."
-  @spec snapshot(atom()) :: snapshot()
-  def snapshot(key), do: Application.fetch_env(:backend, key)
+  @doc "Returns the current `:backend` value of `key` as `{:ok, value}`, or `:error` when unset."
+  @spec snapshot(term()) :: snapshot()
+  def snapshot(key), do: snapshot(:backend, key)
+
+  @doc "Like `snapshot/1`, for the env of another application `app`."
+  @spec snapshot(atom(), term()) :: snapshot()
+  def snapshot(app, key), do: Application.fetch_env(app, key)
 
   @doc """
-  Puts back a value saved by `snapshot/1`: the saved value when the key was
-  set (an explicit `nil` included), or deletes the key when it was unset.
+  Puts back a `:backend` value saved by `snapshot/1`: the saved value when the
+  key was set (an explicit `nil` included), or deletes the key when it was unset.
   """
-  @spec restore(atom(), snapshot()) :: :ok
-  def restore(key, {:ok, value}), do: Application.put_env(:backend, key, value)
-  def restore(key, :error), do: Application.delete_env(:backend, key)
+  @spec restore(term(), snapshot()) :: :ok
+  def restore(key, snapshot), do: restore(:backend, key, snapshot)
+
+  @doc "Like `restore/2`, for the env of another application `app`."
+  @spec restore(atom(), term(), snapshot()) :: :ok
+  def restore(app, key, {:ok, value}), do: Application.put_env(app, key, value)
+  def restore(app, key, :error), do: Application.delete_env(app, key)
 
   @doc """
   Lists, sorted, the keys of `env` that hold `nil` but were absent or held

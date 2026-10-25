@@ -1,6 +1,7 @@
 defmodule BackendWeb.StationControllerTest do
   use BackendWeb.ConnCase, async: false
 
+  alias Backend.AppEnvHelpers
   alias Backend.Stations
   alias Backend.Stations.Conversation
   alias Backend.Stations.StationLoader
@@ -124,8 +125,8 @@ defmodule BackendWeb.StationControllerTest do
     end
 
     test "serves the configured voice mode (#270)", %{conn: conn} do
-      previous = Application.get_env(:backend, :voice_mode)
-      on_exit(fn -> Application.put_env(:backend, :voice_mode, previous) end)
+      previous = AppEnvHelpers.snapshot(:voice_mode)
+      on_exit(fn -> AppEnvHelpers.restore(:voice_mode, previous) end)
 
       for mode <- ["realtime", "turn", "off"] do
         Application.put_env(:backend, :voice_mode, mode)
@@ -834,12 +835,12 @@ defmodule BackendWeb.StationControllerTest do
 
   describe "POST /api/stations/active/sessions/:id/messages addressee (#274, #309)" do
     setup do
-      prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+      prev_adapter = AppEnvHelpers.snapshot(:station_ai_adapter)
       Application.put_env(:backend, :station_ai_adapter, MarkedAddresseeAdapter)
       Application.put_env(:backend, :jev_decision_adapter, AddresseeJevAdapter)
 
       on_exit(fn ->
-        Application.put_env(:backend, :station_ai_adapter, prev_adapter)
+        AppEnvHelpers.restore(:station_ai_adapter, prev_adapter)
         Application.delete_env(:backend, :controller_test_addressee)
       end)
 
