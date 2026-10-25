@@ -139,13 +139,16 @@ config :backend, BackendWeb.Plugs.ClientIP, header: nil
 # or payment method. Card plans renew automatically; Pix plans are paid
 # manually each period. The webhook secrets and the Web Purchase Links come from
 # the environment in runtime.exs; unset, the webhook answers 503 and the plan
-# page shows no purchase button.
+# page shows no purchase button. Daily quotas per product live in the
+# `billing_plan_quotas` table (#340); `default_daily_quota` is the quota of a
+# product without a row.
 config :backend, Backend.Billing,
   entitlement_id: "simulador",
   plans: [
     %{product_id: "revalida_mensal_cartao", name: "Mensal no cartão", payment: :card},
     %{product_id: "revalida_mensal_pix", name: "Mensal no Pix", payment: :pix}
   ],
+  default_daily_quota: 3,
   purchase_links: %{},
   webhook_authorization: nil,
   webhook_secret: nil,

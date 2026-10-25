@@ -11,10 +11,12 @@ defmodule Backend.Billing do
   the email.
 
   Plans live here, keyed by RevenueCat `product_id` (research A9): the webhook
-  carries no plan metadata or payment method. Daily quotas are #340.
+  carries no plan metadata or payment method. The daily simulation quota of a
+  product lives in the `billing_plan_quotas` table (#340), so it changes
+  without a deploy; a product without a row gets `:default_daily_quota`.
 
   Configuration (`config :backend, Backend.Billing`): `:entitlement_id`,
-  `:plans`, `:purchase_links` (`%{card: url, pix: url}`, the Web Purchase
+  `:plans`, `:default_daily_quota`, `:purchase_links` (`%{card: url, pix: url}`, the Web Purchase
   Link without the app_user_id), `:webhook_authorization`, `:webhook_secret`,
   `:signature_tolerance_s`, `:accept_sandbox` and `:pix_reminder_days`. See
   `docs/operations/revenuecat.md`.
@@ -25,7 +27,7 @@ defmodule Backend.Billing do
   import Ecto.Query
 
   alias Backend.Accounts.User
-  alias Backend.Billing.{Subscription, WebhookEvents, WebhookSignature}
+  alias Backend.Billing.{PlanQuota, Subscription, WebhookEvents, WebhookSignature}
   alias Backend.Repo
 
   @type plan :: %{product_id: String.t(), name: String.t(), payment: :card | :pix}
@@ -109,6 +111,60 @@ defmodule Backend.Billing do
 
   defp plan(nil), do: nil
   defp plan(product_id), do: Enum.find(plans(), &(&1.product_id == product_id))
+
+  # America/Sao_Paulo has kept UTC-03:00 all year since daylight saving time
+  # ended in 2019, so the quota day is a fixed offset (#340).
+  @quota_day_utc_offset_s -3 * 3_600
+
+  @doc """
+  The daily simulation quota of the learner `user_id` (#340): the
+  `billing_plan_quotas` row of the product of their subscription, or
+  `:default_daily_quota` for a product without a row or a learner without a
+  product.
+  """
+  @spec daily_quota(integer()) :: non_neg_integer()
+  def daily_quota(user_id) when is_integer(user_id) do
+    query =
+      from s in Subscription,
+        join: q in PlanQuota,
+        on: q.product_id == s.product_id,
+        where: s.user_id == ^user_id,
+        select: q.daily_quota
+
+    Repo.one(query) || config(:default_daily_quota)
+  end
+
+  @doc """
+  Sets the daily simulation quota of the RevenueCat `product_id`, adding the
+  product when it has no quota yet. Takes effect on the next session start.
+  """
+  @spec set_daily_quota(String.t(), non_neg_integer()) ::
+          {:ok, PlanQuota.t()} | {:error, Ecto.Changeset.t()}
+  def set_daily_quota(product_id, daily_quota) do
+    %PlanQuota{}
+    |> PlanQuota.changeset(%{product_id: product_id, daily_quota: daily_quota})
+    |> Repo.insert(
+      on_conflict: {:replace, [:daily_quota, :updated_at]},
+      conflict_target: :product_id,
+      returning: true
+    )
+  end
+
+  @doc """
+  The quota day containing `now` (#340): from local midnight in
+  America/Sao_Paulo (03:00 UTC) to the next one, when the quota resets.
+  """
+  @spec quota_day(DateTime.t()) :: %{starts_at: DateTime.t(), resets_at: DateTime.t()}
+  def quota_day(%DateTime{} = now \\ DateTime.utc_now()) do
+    local_date = now |> DateTime.add(@quota_day_utc_offset_s, :second) |> DateTime.to_date()
+
+    starts_at =
+      local_date
+      |> DateTime.new!(~T[00:00:00.000000], "Etc/UTC")
+      |> DateTime.add(-@quota_day_utc_offset_s, :second)
+
+    %{starts_at: starts_at, resets_at: DateTime.add(starts_at, 1, :day)}
+  end
 
   @doc """
   The Web Purchase Link of `plan` for `user`:

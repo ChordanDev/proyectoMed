@@ -6,7 +6,8 @@ defmodule BackendWeb.SessionController do
   Every later operation is addressed by the session under `/sessions/:id`.
   The session belongs to the learner of the device access token (#337), who
   needs an active subscription: without one it answers `402
-  subscription_required` (#339).
+  subscription_required` (#339). Past the plan's daily quota it answers `429
+  daily_quota_exhausted` with `resets_at` and a `Retry-After` header (#340).
   """
 
   use BackendWeb, :controller
@@ -52,6 +53,20 @@ defmodule BackendWeb.SessionController do
           "subscription_required",
           "Assine um plano para usar o simulador."
         )
+
+      {:error, {:daily_quota_exhausted, resets_at}} ->
+        retry_after = max(DateTime.diff(resets_at, DateTime.utc_now(), :second), 1)
+
+        conn
+        |> put_resp_header("retry-after", Integer.to_string(retry_after))
+        |> put_status(:too_many_requests)
+        |> json(%{
+          error: "daily_quota_exhausted",
+          message:
+            "Você usou todas as simulações de hoje. A cota renova à meia-noite (horário de Brasília).",
+          daily_quota: Backend.Billing.daily_quota(conn.assigns.current_scope.user.id),
+          resets_at: DateTime.to_iso8601(resets_at)
+        })
 
       {:error, :station_not_found} ->
         error(conn, :not_found, "station_not_found", "Estação não encontrada.")

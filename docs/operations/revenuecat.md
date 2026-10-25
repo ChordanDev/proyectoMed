@@ -7,8 +7,8 @@ How the simulator is gated on a RevenueCat subscription (#339). Research: `docs/
 | Page | What it does |
 | --- | --- |
 | `/planos` | Lists the plans. **Assinar** opens the plan's RevenueCat Web Purchase Link: `<link>/<app_user_id>?email=<email>`. |
-| `/conta` | Shows the subscription: plan, payment method, and the card renewal date or the Pix due date. A Pix plan due within 3 days shows a renewal reminder with a **Renovar com Pix** link. Cancelled and expired subscriptions are shown as such. |
-| `POST /sessions` | Without an active entitlement it answers `402` with `{"error": "subscription_required", "message": "Assine um plano para usar o simulador."}`. |
+| `/conta` | Shows the subscription: plan, payment method, and the card renewal date or the Pix due date. A Pix plan due within 3 days shows a renewal reminder with a **Renovar com Pix** link. Cancelled and expired subscriptions are shown as such. With access, it shows today's remaining simulations ("9 de 10 simulações restantes hoje") and that the quota resets at midnight, Brasília time (#340). |
+| `POST /sessions` | Without an active entitlement it answers `402` with `{"error": "subscription_required", "message": "Assine um plano para usar o simulador."}`. Past the plan's daily quota it answers `429` `daily_quota_exhausted` (see [Daily quotas](#daily-quotas)). |
 
 Payments run through the RevenueCat **Stripe Billing** integration, so learners can pay by card or Pix:
 
@@ -33,6 +33,22 @@ Each learner gets a random UUIDv4 `app_user_id` the first time it is needed (tab
 - Without both webhook secrets, the webhook rejects every request (fail closed).
 - Plans live in `config/config.exs` under `Backend.Billing`, keyed by RevenueCat `product_id`: `revalida_mensal_cartao` (card) and `revalida_mensal_pix` (Pix). The webhook carries no plan metadata or payment method, so the plan table decides both. The entitlement identifier is `simulador`.
 - Set the custom success page of each Web Purchase Link to `<host>/conta`.
+
+## Daily quotas
+
+Each plan has a daily simulation quota (#340). The webhook carries no plan metadata (research A9), so the quota lives in the `billing_plan_quotas` table, keyed by RevenueCat `product_id`. Changing it needs no deploy.
+
+| `product_id` | Daily quota (seeded) |
+| --- | --- |
+| `revalida_mensal_cartao` | 10 |
+| `revalida_mensal_pix` | 10 |
+
+- A product without a row (a new product in RevenueCat, or a learner without a product) gets `default_daily_quota` from `config/config.exs` (3). Add the row before selling a new product.
+- To change or add a quota, run `Backend.Billing.set_daily_quota("<product_id>", <n>)` in a remote console. An admin page can come later. A quota of 0 blocks every session of that product.
+- **What counts.** Sessions that reached a graded result (a stored Educational Result) that finished since the start of the day, plus sessions in flight. Starting a session reserves its slot (table `session_quota_reservations`) until it is graded or reaches its `expires_at`. An abandoned or technically failed session is never graded, so it releases its slot at expiry and never consumes quota.
+- **Concurrent starts.** Each start takes a per-learner Postgres advisory lock, counts, and reserves in one transaction. Two starts at quota−1 start one session; the other gets `429`. Reserving on start was chosen over counting only graded results at start, which would let both through and exceed the quota. The cost: a failed session holds its slot until it expires (30 minutes after the start).
+- **Past the quota.** `POST /sessions` answers `429` `daily_quota_exhausted` with `resets_at` and `Retry-After`. See `docs/unreal-station-client.md`.
+- **Day boundary.** The quota day starts at local midnight in `America/Sao_Paulo`, which is 03:00 UTC. Brazil has had no daylight saving time since 2019, so this is a fixed UTC−03:00 offset and no time zone database is used. If daylight saving time ever returns, `Backend.Billing.quota_day/1` must change.
 
 ## Webhook processing
 
@@ -74,4 +90,3 @@ The HMAC needs the exact bytes RevenueCat signed. `BackendWeb.RevenueCatBodyRead
 - Reconciling against `GET /subscribers` for events lost after RevenueCat stops retrying (about 80 minutes).
 - Email reminder before a Pix due date. Today the reminder is shown only on `/conta`.
 - `TRANSFER` handling.
-- Daily quotas per plan (#340).

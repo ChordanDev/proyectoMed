@@ -303,4 +303,67 @@ defmodule Backend.BillingTest do
       assert Billing.purchase_url(plan, user) == nil
     end
   end
+
+  describe "daily_quota/1 (#340)" do
+    test "is the quota of the learner's product, seeded per plan", %{user: user} do
+      subscribe_user(user)
+      assert Billing.daily_quota(user.id) == 10
+
+      pix_user = user_fixture()
+      subscribe_user(pix_user, product_id: pix_product_id())
+      assert Billing.daily_quota(pix_user.id) == 10
+    end
+
+    test "changes in the database without a deploy", %{user: user} do
+      subscribe_user(user)
+
+      assert {:ok, %{product_id: "revalida_mensal_cartao", daily_quota: 2}} =
+               Billing.set_daily_quota(card_product_id(), 2)
+
+      assert Billing.daily_quota(user.id) == 2
+    end
+
+    test "a product without a quota row gets the configured default", %{user: user} do
+      subscribe_user(user, product_id: "produto_desconhecido")
+      default = Application.fetch_env!(:backend, Billing)[:default_daily_quota]
+
+      assert default == 3
+      assert Billing.daily_quota(user.id) == default
+    end
+
+    test "a learner without a subscription gets the configured default" do
+      assert Billing.daily_quota(user_fixture().id) == 3
+    end
+
+    test "a new product's quota can be added" do
+      assert {:ok, _quota} = Billing.set_daily_quota("revalida_anual_cartao", 25)
+      user = user_fixture()
+      subscribe_user(user, product_id: "revalida_anual_cartao")
+      assert Billing.daily_quota(user.id) == 25
+    end
+
+    test "rejects a negative or non-integer quota" do
+      assert {:error, %Ecto.Changeset{}} = Billing.set_daily_quota(card_product_id(), -1)
+      assert {:error, %Ecto.Changeset{}} = Billing.set_daily_quota("", 5)
+    end
+  end
+
+  describe "quota_day/1 (#340)" do
+    test "starts at local midnight in America/Sao_Paulo (03:00 UTC)" do
+      assert Billing.quota_day(~U[2026-10-25 02:59:59.999999Z]) == %{
+               starts_at: ~U[2026-10-24 03:00:00.000000Z],
+               resets_at: ~U[2026-10-25 03:00:00.000000Z]
+             }
+
+      assert Billing.quota_day(~U[2026-10-25 03:00:00.000000Z]) == %{
+               starts_at: ~U[2026-10-25 03:00:00.000000Z],
+               resets_at: ~U[2026-10-26 03:00:00.000000Z]
+             }
+
+      assert Billing.quota_day(~U[2026-12-31 23:30:00Z]) == %{
+               starts_at: ~U[2026-12-31 03:00:00.000000Z],
+               resets_at: ~U[2027-01-01 03:00:00.000000Z]
+             }
+    end
+  end
 end
