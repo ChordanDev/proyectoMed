@@ -7,7 +7,7 @@ How the simulator is gated on a RevenueCat subscription (#339). Research: `docs/
 | Page | What it does |
 | --- | --- |
 | `/planos` | Lists the plans. **Assinar** opens the plan's RevenueCat Web Purchase Link: `<link>/<app_user_id>?email=<email>`. |
-| `/conta` | Shows the subscription: plan, payment method, and the card renewal date or the Pix due date. A Pix plan due within 3 days shows a renewal reminder with a **Renovar com Pix** link. Cancelled and expired subscriptions are shown as such. |
+| `/conta` | Shows the subscription: plan, payment method, and the card renewal date or the Pix due date. A Pix plan due within 3 days shows a renewal reminder with a **Renovar com Pix** link. Cancelled and expired subscriptions are shown as such. With access, it shows today's remaining simulations ("9 de 10 simulações restantes hoje") and that the quota resets at midnight, Brasília time (#340). |
 | `POST /sessions` | Without an active entitlement it answers `402` with `{"error": "subscription_required", "message": "Assine um plano para usar o simulador."}`. Past the plan's daily quota it answers `429` `daily_quota_exhausted` (see [Daily quotas](#daily-quotas)). |
 
 Payments run through the RevenueCat **Stripe Billing** integration, so learners can pay by card or Pix:
