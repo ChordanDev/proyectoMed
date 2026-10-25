@@ -37,7 +37,8 @@ defmodule Backend.Billing do
           plan: plan() | nil,
           expires_at: DateTime.t() | nil,
           auto_renews?: boolean(),
-          renewal_reminder?: boolean()
+          renewal_reminder?: boolean(),
+          refunded?: boolean()
         }
 
   @doc """
@@ -74,7 +75,8 @@ defmodule Backend.Billing do
   The learner's subscription as the account page shows it. `state` is
   `:expired` once the expiration has passed, even without an `EXPIRATION`
   event. `renewal_reminder?` is true for a Pix plan due within
-  `:pix_reminder_days`.
+  `:pix_reminder_days`. `refunded?` is true when a refund or chargeback ended
+  access (#388): the subscription is `:expired` at the refund time.
   """
   @spec subscription_status(User.t()) :: status()
   def subscription_status(%User{id: user_id}) do
@@ -101,7 +103,8 @@ defmodule Backend.Billing do
       auto_renews?: state == :active and not pix?,
       renewal_reminder?:
         state == :active and pix? and
-          DateTime.diff(sub.expires_at, now, :second) <= config(:pix_reminder_days) * 86_400
+          DateTime.diff(sub.expires_at, now, :second) <= config(:pix_reminder_days) * 86_400,
+      refunded?: state == :expired and not is_nil(sub.refunded_at)
     }
   end
 

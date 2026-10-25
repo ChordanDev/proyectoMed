@@ -58,6 +58,29 @@ defmodule BackendWeb.RevenueCatWebhookControllerTest do
       assert Billing.entitled?(ctx.user.id)
     end
 
+    test "a signed refund CANCELLATION ends access at once (#388)", %{conn: conn} = ctx do
+      t0 = now_ms()
+
+      raw =
+        body("INITIAL_PURCHASE", ctx.app_user_id,
+          event_timestamp_ms: t0 - 1,
+          expiration_at_ms: t0 + 30 * @day_ms
+        )
+
+      assert json_response(signed_post(conn, raw), 200) == %{"status" => "applied"}
+
+      refund =
+        body("CANCELLATION", ctx.app_user_id,
+          event_timestamp_ms: t0,
+          cancel_reason: "CUSTOMER_SUPPORT",
+          price: -99.9
+        )
+
+      assert json_response(signed_post(build_conn(), refund), 200) == %{"status" => "applied"}
+      refute Billing.entitled?(ctx.user.id)
+      assert Billing.subscription_status(ctx.user).refunded?
+    end
+
     test "a redelivered event id answers 200 and applies once", %{conn: conn} = ctx do
       now = now_ms()
 

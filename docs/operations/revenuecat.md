@@ -7,7 +7,7 @@ How the simulator is gated on a RevenueCat subscription (#339). Research: `docs/
 | Page | What it does |
 | --- | --- |
 | `/planos` | Lists the plans. **Assinar** opens the plan's RevenueCat Web Purchase Link: `<link>/<app_user_id>?email=<email>`. |
-| `/conta` | Shows the subscription: plan, payment method, and the card renewal date or the Pix due date. A Pix plan due within 3 days shows a renewal reminder with a **Renovar com Pix** link. Cancelled and expired subscriptions are shown as such. With access, it shows today's remaining simulations ("9 de 10 simulações restantes hoje") and that the quota resets at midnight, Brasília time (#340). |
+| `/conta` | Shows the subscription: plan, payment method, and the card renewal date or the Pix due date. A Pix plan due within 3 days shows a renewal reminder with a **Renovar com Pix** link. Cancelled and expired subscriptions are shown as such; a refunded one says access ended because of a refund (#388). With access, it shows today's remaining simulations ("9 de 10 simulações restantes hoje") and that the quota resets at midnight, Brasília time (#340). |
 | `POST /sessions` | Without an active entitlement it answers `402` with `{"error": "subscription_required", "message": "Assine um plano para usar o simulador."}`. Past the plan's daily quota it answers `429` `daily_quota_exhausted` (see [Daily quotas](#daily-quotas)). |
 
 Payments run through the RevenueCat **Stripe Billing** integration, so learners can pay by card or Pix:
@@ -57,15 +57,40 @@ Each plan has a daily simulation quota (#340). The webhook carries no plan metad
 1. **Authentication.** The `Authorization` header must match. `X-RevenueCat-Webhook-Signature: t=<unix>,v1=<hex>` must be the HMAC-SHA256 of `"<t>.<raw body>"`, with `t` within 5 minutes. Both comparisons are constant time.
 2. **Idempotency.** The event `id` is inserted under a unique index in the same transaction as its effect. A redelivery is a no-op. A failed effect leaves no id, so RevenueCat's retry still applies.
 3. **User lookup.** By `app_user_id`, then `original_app_user_id`, then `aliases`. If no learner resolves, the transaction rolls back and the endpoint must answer non-200 so RevenueCat retries.
-4. **Ordering.** An event whose `event_timestamp_ms` is older than the last applied one is ignored. An expiration never moves backwards.
+4. **Ordering.** An event whose `event_timestamp_ms` is older than the last applied one is ignored, refunds included. An expiration never moves backwards, except on a refund or chargeback (see [Refunds and chargebacks](#refunds-and-chargebacks)).
 5. **Effects.**
 
    | Event | Effect |
    | --- | --- |
    | `INITIAL_PURCHASE`, `RENEWAL`, `UNCANCELLATION`, `PRODUCT_CHANGE`, `SUBSCRIPTION_EXTENDED`, `NON_RENEWING_PURCHASE` | Grant the entitlement. |
-   | `CANCELLATION` | Keep access until the expiration. |
-   | `EXPIRATION` | End access. |
+   | `CANCELLATION` | Keep access until the expiration. A refund ends access at the event time. |
+   | `EXPIRATION` | End access. A refund also records the refund time. |
    | `TEST`, events for another entitlement, and other types (`BILLING_ISSUE`, `TRANSFER`, …) | Recorded, no effect. |
+
+## Refunds and chargebacks
+
+A refund or chargeback ends simulator access **at the event time** (#388). A plain cancellation still keeps access until the end of the paid period. There is no in-app refund button: refunds arrive through support, Stripe or the learner's bank.
+
+In Brazil, the Consumer Defense Code (Código de Defesa do Consumidor, art. 49) gives online buyers 7 days to withdraw with a full refund. Card chargebacks and Pix MED (Mecanismo Especial de Devolução) reversals also reverse payments without our action.
+
+**What counts as a refund.** A `CANCELLATION` or `EXPIRATION` event that has any of:
+
+| Field | Value | Source |
+| --- | --- | --- |
+| `cancel_reason` (`CANCELLATION` only) | `CUSTOMER_SUPPORT`: refunded through store support, RevenueCat or web billing (Stripe Billing included). | [Event types and fields][rc-events] |
+| `expiration_reason` (`EXPIRATION` only) | `CUSTOMER_SUPPORT` | [Event types and fields][rc-events] |
+| `price` | Negative: RevenueCat sends a negative price for refunds. | [Event types and fields][rc-events] |
+
+**Effect.** The subscription becomes `expired`, `expires_at` and `refunded_at` are set to the event time (`event_timestamp_ms`), even when that is earlier than the stored expiration. This is the only case where an expiration moves backwards. `POST /sessions` then answers `402` `subscription_required`. A session already in progress may finish. `/conta` shows "Acesso encerrado em <data> por reembolso ou estorno do pagamento."
+
+**Protections kept.** Event-id idempotency and event ordering still apply to refunds: a refund older than the last applied event is ignored. A later plain `CANCELLATION` does not reopen a refunded subscription. A later granting event (for example a new `INITIAL_PURCHASE`) grants access again and clears `refunded_at`.
+
+**What RevenueCat does not send.** RevenueCat documents no separate chargeback or dispute event; a Stripe dispute reaches us only if it is reflected as a refund above. `REFUND_REVERSED` is App Store only and is not handled. A Stripe refund issued after the billing period ended is not picked up by RevenueCat ([Refunds][rc-refunds]), and for subscriptions `CANCELLATION` fires only when the latest period is refunded.
+
+Sources (accessed 2026-10-25): [RevenueCat webhook event types and fields][rc-events], [RevenueCat refunds][rc-refunds].
+
+[rc-events]: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields
+[rc-refunds]: https://www.revenuecat.com/docs/subscription-guidance/refunds
 
 ## Webhook endpoint
 
