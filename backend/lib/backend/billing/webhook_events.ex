@@ -8,7 +8,11 @@ defmodule Backend.Billing.WebhookEvents do
   unknown subscriber included) rolls the id back so RevenueCat's retry still
   applies. The subscription row is locked while the event applies. An event
   generated before the last applied one (`event_timestamp_ms`) is ignored,
-  and an expiration never moves backwards.
+  and an expiration never moves backwards, except on a refund or chargeback
+  (#388): a `CANCELLATION` or `EXPIRATION` whose `cancel_reason` or
+  `expiration_reason` is `CUSTOMER_SUPPORT`, or whose `price` is negative, ends
+  access at the event time. A later plain `CANCELLATION` does not reopen it;
+  a later granting event (a new purchase) does.
   """
 
   import Ecto.Query
@@ -17,7 +21,8 @@ defmodule Backend.Billing.WebhookEvents do
   alias Backend.Repo
 
   @granting ~w(INITIAL_PURCHASE RENEWAL UNCANCELLATION PRODUCT_CHANGE SUBSCRIPTION_EXTENDED NON_RENEWING_PURCHASE)
-  @handled @granting ++ ~w(CANCELLATION EXPIRATION)
+  @refundable ~w(CANCELLATION EXPIRATION)
+  @handled @granting ++ @refundable
 
   @doc """
   `{:ok, :applied | :ignored | :duplicate}` or
@@ -79,7 +84,7 @@ defmodule Backend.Billing.WebhookEvents do
       :ignored
     else
       sub
-      |> Ecto.Changeset.change(changes(type, event, sub))
+      |> Ecto.Changeset.change(changes(type, event, sub, event_at))
       |> Ecto.Changeset.put_change(:last_event_at, event_at)
       |> Repo.update!()
 
@@ -87,23 +92,44 @@ defmodule Backend.Billing.WebhookEvents do
     end
   end
 
-  defp changes(type, event, sub) when type in @granting do
+  defp changes(type, event, sub, event_at) do
+    if type in @refundable and refund?(event),
+      do: refund(event_at),
+      else: plain_changes(type, event, sub)
+  end
+
+  # A refund or chargeback is the only exception to "an expiration never
+  # moves backwards" (#388): access ends at the event time.
+  defp refund(event_at), do: %{status: :expired, expires_at: event_at, refunded_at: event_at}
+
+  # RevenueCat signals a refund with cancel_reason (CANCELLATION) or
+  # expiration_reason (EXPIRATION) CUSTOMER_SUPPORT, or with a negative price.
+  defp refund?(event) do
+    "CUSTOMER_SUPPORT" in [event["cancel_reason"], event["expiration_reason"]] or
+      (is_number(event["price"]) and event["price"] < 0)
+  end
+
+  defp plain_changes(type, event, sub) when type in @granting do
     %{
       status: :active,
       product_id: event["product_id"] || sub.product_id,
       store: event["store"] || sub.store,
       environment: event["environment"] || sub.environment,
-      expires_at: latest(sub.expires_at, from_ms(event["expiration_at_ms"]))
+      expires_at: latest(sub.expires_at, from_ms(event["expiration_at_ms"])),
+      refunded_at: nil
     }
   end
 
-  defp changes("CANCELLATION", event, sub),
+  # A plain cancellation never reopens a refunded subscription.
+  defp plain_changes("CANCELLATION", _event, %Subscription{refunded_at: %DateTime{}}), do: %{}
+
+  defp plain_changes("CANCELLATION", event, sub),
     do: %{
       status: :cancelled,
       expires_at: latest(sub.expires_at, from_ms(event["expiration_at_ms"]))
     }
 
-  defp changes("EXPIRATION", _event, _sub), do: %{status: :expired}
+  defp plain_changes("EXPIRATION", _event, _sub), do: %{status: :expired}
 
   # Lookup order of research A7: app_user_id, original_app_user_id, aliases.
   defp resolve(event) do

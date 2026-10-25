@@ -8,7 +8,8 @@ defmodule Backend.Billing.Subscription do
   `:cancelled` or `:expired`); access also requires `expires_at` in the
   future, so an unpaid Pix period lapses cleanly without an event.
   `last_event_at` is the `event_timestamp_ms` of the last applied event: older
-  events are ignored.
+  events are ignored. `refunded_at` is the time of the refund or chargeback
+  event that ended access (#388), cleared by a later granting event.
   """
 
   use Ecto.Schema
@@ -24,6 +25,7 @@ defmodule Backend.Billing.Subscription do
     field :environment, :string
     field :expires_at, :utc_datetime_usec
     field :last_event_at, :utc_datetime_usec
+    field :refunded_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime)
   end

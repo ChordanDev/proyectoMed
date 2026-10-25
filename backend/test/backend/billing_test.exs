@@ -159,6 +159,150 @@ defmodule Backend.BillingTest do
       assert DateTime.to_unix(expires_at(user), :millisecond) == far
     end
 
+    test "a refund ends access at the event time, even before the stored expiration (#388)",
+         %{user: user} = ctx do
+      t0 = now_ms()
+
+      {:ok, :applied} =
+        process("INITIAL_PURCHASE", ctx.app_user_id,
+          event_timestamp_ms: t0 - 1_000,
+          expiration_at_ms: t0 + 30 * @day_ms
+        )
+
+      # RevenueCat sends the refund as a CANCELLATION with cancel_reason
+      # CUSTOMER_SUPPORT and a negative price; its expiration may be earlier.
+      assert {:ok, :applied} =
+               process("CANCELLATION", ctx.app_user_id,
+                 event_timestamp_ms: t0,
+                 expiration_at_ms: t0 + 10 * @day_ms,
+                 cancel_reason: "CUSTOMER_SUPPORT",
+                 price: -99.9
+               )
+
+      refute Billing.entitled?(user.id)
+      status = Billing.subscription_status(user)
+      assert status.state == :expired
+      assert status.refunded?
+      assert DateTime.to_unix(status.expires_at, :millisecond) == t0
+
+      assert {:error, :subscription_required} =
+               Backend.Stations.start_station_session(
+                 {:station, Backend.ResultsFixtures.published_case_fixture().number},
+                 %{audio_consent: false, user_id: user.id}
+               )
+    end
+
+    test "a negative price alone also signals a refund (#388)", %{user: user} = ctx do
+      t0 = now_ms()
+      {:ok, :applied} = process("INITIAL_PURCHASE", ctx.app_user_id, event_timestamp_ms: t0 - 1)
+
+      assert {:ok, :applied} =
+               process("CANCELLATION", ctx.app_user_id,
+                 event_timestamp_ms: t0,
+                 cancel_reason: "UNKNOWN",
+                 price: -99.9
+               )
+
+      refute Billing.entitled?(user.id)
+      assert Billing.subscription_status(user).refunded?
+    end
+
+    test "an EXPIRATION with expiration_reason CUSTOMER_SUPPORT is a refund (#388)",
+         %{user: user} = ctx do
+      t0 = now_ms()
+      {:ok, :applied} = process("INITIAL_PURCHASE", ctx.app_user_id, event_timestamp_ms: t0 - 1)
+
+      assert {:ok, :applied} =
+               process("EXPIRATION", ctx.app_user_id,
+                 event_timestamp_ms: t0,
+                 expiration_reason: "CUSTOMER_SUPPORT"
+               )
+
+      status = Billing.subscription_status(user)
+      assert status.state == :expired
+      assert status.refunded?
+      assert DateTime.to_unix(status.expires_at, :millisecond) == t0
+    end
+
+    test "a plain cancellation keeps access until the stored expiration (#388)",
+         %{user: user} = ctx do
+      t0 = now_ms()
+      stored = t0 + 30 * @day_ms
+
+      {:ok, :applied} =
+        process("INITIAL_PURCHASE", ctx.app_user_id,
+          event_timestamp_ms: t0,
+          expiration_at_ms: stored
+        )
+
+      assert {:ok, :applied} =
+               process("CANCELLATION", ctx.app_user_id,
+                 event_timestamp_ms: t0 + 1,
+                 expiration_at_ms: t0 + 10 * @day_ms,
+                 cancel_reason: "UNSUBSCRIBE"
+               )
+
+      assert Billing.entitled?(user.id)
+      status = Billing.subscription_status(user)
+      assert status.state == :cancelled
+      refute status.refunded?
+      assert DateTime.to_unix(status.expires_at, :millisecond) == stored
+    end
+
+    test "a later plain cancellation does not reopen a refunded subscription (#388)",
+         %{user: user} = ctx do
+      t0 = now_ms()
+      {:ok, :applied} = process("INITIAL_PURCHASE", ctx.app_user_id, event_timestamp_ms: t0 - 2)
+
+      {:ok, :applied} =
+        process("CANCELLATION", ctx.app_user_id,
+          event_timestamp_ms: t0 - 1,
+          cancel_reason: "CUSTOMER_SUPPORT"
+        )
+
+      assert {:ok, :applied} =
+               process("CANCELLATION", ctx.app_user_id,
+                 event_timestamp_ms: t0,
+                 cancel_reason: "UNSUBSCRIBE"
+               )
+
+      refute Billing.entitled?(user.id)
+      assert Billing.subscription_status(user).refunded?
+    end
+
+    test "a refund keeps event ordering and idempotency (#388)", %{user: user} = ctx do
+      t0 = now_ms()
+      {:ok, :applied} = process("RENEWAL", ctx.app_user_id, event_timestamp_ms: t0)
+
+      assert {:ok, :ignored} =
+               process("CANCELLATION", ctx.app_user_id,
+                 event_timestamp_ms: t0 - 1,
+                 cancel_reason: "CUSTOMER_SUPPORT"
+               )
+
+      assert Billing.entitled?(user.id)
+
+      {:ok, :applied} =
+        process("CANCELLATION", ctx.app_user_id,
+          id: "evt-refund",
+          event_timestamp_ms: t0 + 1,
+          cancel_reason: "CUSTOMER_SUPPORT"
+        )
+
+      # A new purchase after the refund grants access again and clears it.
+      {:ok, :applied} = process("INITIAL_PURCHASE", ctx.app_user_id, event_timestamp_ms: t0 + 2)
+
+      assert {:ok, :duplicate} =
+               process("CANCELLATION", ctx.app_user_id,
+                 id: "evt-refund",
+                 event_timestamp_ms: t0 + 3,
+                 cancel_reason: "CUSTOMER_SUPPORT"
+               )
+
+      assert Billing.entitled?(user.id)
+      refute Billing.subscription_status(user).refunded?
+    end
+
     test "a user is resolved by original_app_user_id, then aliases", %{user: user} = ctx do
       assert {:ok, :applied} =
                process("INITIAL_PURCHASE", "$RCAnonymousID:abc",

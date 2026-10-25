@@ -3,7 +3,8 @@ defmodule BackendWeb.BillingLive.Account do
   The account page (#339): the learner's subscription, with the plan, the
   renewal date of a card plan or the due date of a Pix plan, a reminder when a
   Pix payment is due soon, and the state of a cancelled or expired
-  subscription. It is also the success page of the Web Purchase Link.
+  subscription, and that access ended because of a refund or chargeback
+  (#388). It is also the success page of the Web Purchase Link.
 
   With access, it also shows today's remaining simulations of the plan's daily
   quota and when the quota resets (#340).
@@ -41,6 +42,11 @@ defmodule BackendWeb.BillingLive.Account do
             <% :none -> %>
               <p>Você ainda não tem uma assinatura.</p>
               <.link navigate={~p"/planos"} class="btn btn-primary">Ver planos</.link>
+            <% :expired when @status.refunded? -> %>
+              <p id="subscription-refunded">
+                Acesso encerrado em {date(@status.expires_at)} por reembolso ou estorno do pagamento.
+              </p>
+              <.link navigate={~p"/planos"} class="btn btn-primary">Assinar novamente</.link>
             <% :expired -> %>
               <p>
                 Assinatura expirada<span :if={@status.expires_at}> em {date(@status.expires_at)}</span>.

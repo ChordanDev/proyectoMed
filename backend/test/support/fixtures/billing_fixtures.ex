@@ -24,7 +24,9 @@ defmodule Backend.BillingFixtures do
   A webhook body (`%{"api_version" => "1.0", "event" => event}`) for `type`
   and `app_user_id`. Options override event fields: `:id`, `:product_id`,
   `:event_timestamp_ms`, `:expiration_at_ms`, `:environment`, `:entitlement_ids`,
-  `:original_app_user_id`, `:aliases`, `:store`.
+  `:original_app_user_id`, `:aliases`, `:store`, `:price`, and `:cancel_reason`
+  or `:expiration_reason` (added only when given, as RevenueCat sends them only
+  on `CANCELLATION` and `EXPIRATION`).
   """
   def webhook_payload(type, app_user_id, opts \\ []) do
     now = now_ms()
@@ -44,8 +46,13 @@ defmodule Backend.BillingFixtures do
       "store" => Keyword.get(opts, :store, "STRIPE"),
       "period_type" => "NORMAL",
       "currency" => "BRL",
-      "price" => 99.9
+      "price" => Keyword.get(opts, :price, 99.9)
     }
+
+    event =
+      opts
+      |> Keyword.take([:cancel_reason, :expiration_reason])
+      |> Enum.reduce(event, fn {key, value}, acc -> Map.put(acc, Atom.to_string(key), value) end)
 
     %{"api_version" => "1.0", "event" => event}
   end

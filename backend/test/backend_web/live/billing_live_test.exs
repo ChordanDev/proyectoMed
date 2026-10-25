@@ -112,6 +112,34 @@ defmodule BackendWeb.BillingLiveTest do
       assert has_element?(lv, ~s(a[href="/planos"]))
     end
 
+    test "the account page says access ended because of a refund (#388)",
+         %{conn: conn, user: user} do
+      t0 = now_ms()
+      subscribe_user(user, event_timestamp_ms: t0 - 1, expiration_at_ms: t0 + 30 * @day_ms)
+
+      {:ok, :applied} =
+        Billing.process_webhook_event(
+          webhook_payload("CANCELLATION", Billing.app_user_id(user),
+            event_timestamp_ms: t0,
+            cancel_reason: "CUSTOMER_SUPPORT",
+            price: -99.9
+          )
+        )
+
+      {:ok, lv, _html} = live(conn, ~p"/conta")
+      ended = t0 |> DateTime.from_unix!(:millisecond) |> Calendar.strftime("%d/%m/%Y")
+
+      assert has_element?(
+               lv,
+               "#subscription-refunded",
+               "Acesso encerrado em #{ended} por reembolso ou estorno do pagamento."
+             )
+
+      refute render(lv) =~ "Assinatura expirada"
+      refute has_element?(lv, "#daily-quota")
+      assert has_element?(lv, ~s(a[href="/planos"]), "Assinar novamente")
+    end
+
     test "the account page shows today's remaining simulations (#340)",
          %{conn: conn, user: user} do
       subscribe_user(user)
