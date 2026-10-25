@@ -47,3 +47,7 @@ config :phoenix,
 config :backend,
   learner_feedback_adapter: Backend.Stations.LearnerFeedback.DisabledAdapter,
   learner_feedback_cooldown_ms: 0
+
+# Session usage rows (issue #342) are written only by tests that turn the store
+# on: most session tests run without a database sandbox.
+config :backend, Backend.Stations.Usage.Store, enabled: false

@@ -308,6 +308,7 @@ defmodule Backend.Stations do
 
       {:ok, %{status: :completed} = session} ->
         cleanup_voice_room(session_id)
+        :ok = Usage.Store.persist(session)
         {:ok, session}
 
       {:error, reason} ->
@@ -323,6 +324,8 @@ defmodule Backend.Stations do
     case Conversation.complete(session_id, reason) do
       {:ok, session} ->
         cleanup_voice_room(session_id)
+        # The finished session's usage row (issue #342).
+        :ok = Usage.Store.persist(session)
         {:ok, session}
 
       {:error, reason} ->
@@ -841,10 +844,32 @@ defmodule Backend.Stations do
       with {:ok, assessment} <- graded_assessment(session_id, opts),
            {:ok, package} <- fetch_package(session_id) do
         assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
+        # Grading and feedback may have called providers after the finish (#342).
+        persist_usage(session_id)
         {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
       end
     end)
   end
+
+  defp persist_usage(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, session} -> Usage.Store.persist(session)
+      {:error, _reason} -> :ok
+    end
+  end
+
+  # ============================================================================
+  # Usage and cost (issue #342)
+  # ============================================================================
+
+  @doc """
+  The estimated cost of the sessions finished in `[from, to)`, per station
+  (issue #342): for each `station_id`, the number of `sessions`, the
+  `median_cost_usd` and the `total_cost_usd`, ordered by station id. Rows
+  are content-free (`Backend.Stations.Usage.SessionUsage`).
+  """
+  @spec session_cost_report(DateTime.t(), DateTime.t()) :: [map()]
+  defdelegate session_cost_report(from, to), to: Usage.Store, as: :cost_report
 
   defp graded_assessment(session_id, opts) do
     with {:ok, _session} <- fetch_completed_session(session_id) do
