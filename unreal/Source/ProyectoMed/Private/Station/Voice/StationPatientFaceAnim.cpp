@@ -24,6 +24,13 @@ void FStationMouthState::NoteSpeech()
 	LastSpeechSeconds = FPlatformTime::Seconds();
 }
 
+void FStationMouthState::Rest()
+{
+	FScopeLock Guard(&Lock);
+	Controls.Reset();
+	LastSpeechSeconds = -1.0;
+}
+
 bool FStationMouthState::Read(TMap<FName, float>& OutControls) const
 {
 	FScopeLock Guard(&Lock);

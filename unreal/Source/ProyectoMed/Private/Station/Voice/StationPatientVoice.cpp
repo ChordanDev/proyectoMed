@@ -41,6 +41,26 @@ void FStationPatientAudioSink::Detach()
 	Mouth.Reset();
 }
 
+void FStationPatientAudioSink::Silence()
+{
+	FScopeLock Guard(&Lock);
+	bSilenced = true;
+	if (Wave)
+	{
+		Wave->ResetAudio();
+	}
+	if (Mouth)
+	{
+		Mouth->Rest();
+	}
+}
+
+void FStationPatientAudioSink::Resume()
+{
+	FScopeLock Guard(&Lock);
+	bSilenced = false;
+}
+
 void FStationPatientAudioSink::Handle(TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 {
 	if (NumChannels <= 0 || Samples.IsEmpty())
@@ -62,7 +82,7 @@ void FStationPatientAudioSink::Handle(TConstArrayView<int16> Samples, int32 Samp
 	}
 
 	FScopeLock Guard(&Lock);
-	if (!Wave)
+	if (!Wave || bSilenced)
 	{
 		return;
 	}

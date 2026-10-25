@@ -133,6 +133,8 @@ void AStationPlayerController::PreparePatientVoice()
 			{
 				Sink->Handle(Samples, SampleRate, NumChannels);
 			};
+			Patient.Silence = [Sink]() { Sink->Silence(); };
+			Patient.Resume = [Sink]() { Sink->Resume(); };
 			Flow->SetPatientOutput(MoveTemp(Patient));
 			Flow->OnChanged.AddWeakLambda(this, [this, WeakVoice, WeakFace, WeakIdle]()
 			{

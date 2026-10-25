@@ -81,6 +81,41 @@ void FStationPatientVoiceUnitSpec::Define()
 		TestEqual("nothing after detach", Wave->GetAvailableAudioByteCount(), int32(480 * sizeof(int16)));
 	});
 
+	It("stops the patient's voice and mouth at once, until it may speak again", [this]()
+	{
+		USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>();
+		Wave->SetSampleRate(48000);
+		Wave->NumChannels = 1;
+		const TSharedRef<FStationMouthState, ESPMode::ThreadSafe> Mouth = MakeShared<FStationMouthState, ESPMode::ThreadSafe>();
+		FStationPatientAudioSink Sink;
+		Sink.Attach(Wave, nullptr, Mouth);
+		TArray<int16> Voice;
+		Voice.Init(8000, 480);
+		TMap<FName, float> Read;
+		// What the speaker plays next, as the audio thread pulls it.
+		auto Heard = [Wave]()
+		{
+			TArray<int16> Out;
+			Out.SetNumZeroed(4096);
+			const int32 Bytes = Wave->GeneratePCMData(reinterpret_cast<uint8*>(Out.GetData()), Out.Num());
+			return Out.ContainsByPredicate([](int16 Sample) { return Sample != 0; }) && Bytes > 0;
+		};
+		Sink.Handle(Voice, 48000, 1);
+
+		Sink.Silence();
+		TestFalse("the queued voice is gone", Heard());
+		TestFalse("the mouth rests", Mouth->Read(Read));
+
+		Sink.Handle(Voice, 48000, 1);
+		TestFalse("late voice is dropped", Heard());
+		TestFalse("and does not move the mouth", Mouth->Read(Read));
+
+		Sink.Resume();
+		Sink.Handle(Voice, 48000, 1);
+		TestTrue("the next reply plays", Heard());
+		TestTrue("and moves the mouth", Mouth->Read(Read));
+	});
+
 	It("treats a silent patient track as silence", [this]()
 	{
 		USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>();
