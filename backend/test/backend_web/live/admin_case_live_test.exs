@@ -36,13 +36,15 @@ defmodule BackendWeb.AdminCaseLiveTest do
   end
 
   describe "case list" do
-    test "a valid pending row appears with its sequential number", %{conn: conn} do
+    test "a valid pending row appears with its number", %{conn: conn} do
       number = insert_case!("Cirurgia Geral", "Apendicite aguda", @reference_case)
       next = insert_case!("Pediatria", "Bronquiolite", "[ESTAÇÃO x]")
 
       {:ok, view, _html} = live(conn, ~p"/admin")
 
-      assert next == number + 1
+      # Async tests share the identity sequence: only the order is guaranteed,
+      # not the gap (issue #381).
+      assert next > number
       assert has_element?(view, "#case-#{number}", "Cirurgia Geral")
       assert has_element?(view, "#case-#{number}", "Apendicite aguda")
       assert has_element?(view, "#case-#{number}", "Pendente")
