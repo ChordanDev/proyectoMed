@@ -8,6 +8,7 @@ defmodule BackendWeb.UserLive.Registration do
   use BackendWeb, :live_view
 
   alias Backend.Accounts
+  alias BackendWeb.RateLimit
 
   require Logger
 
@@ -101,14 +102,36 @@ defmodule BackendWeb.UserLive.Registration do
     {:ok, redirect(socket, to: ~p"/users/settings")}
   end
 
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     changeset = Accounts.change_user_registration(%{}, validate_unique: false)
 
-    {:ok, assign_form(socket, changeset), temporary_assigns: [form: nil]}
+    {:ok, socket |> assign(client_ip: session["client_ip"]) |> assign_form(changeset),
+     temporary_assigns: [form: nil]}
   end
 
   @impl true
   def handle_event("save", %{"user" => user_params}, socket) do
+    # Sign-ups are throttled per client IP (#380).
+    case RateLimit.check(:sign_up, ip: socket.assigns.client_ip) do
+      :ok ->
+        register(socket, user_params)
+
+      {:error, :rate_limited, _retry_after} ->
+        changeset = Accounts.change_user_registration(user_params, validate_unique: false)
+
+        {:noreply,
+         socket |> put_flash(:error, RateLimit.flash_message()) |> assign_form(changeset)}
+    end
+  end
+
+  def handle_event("validate", %{"user" => user_params}, socket) do
+    changeset =
+      Accounts.change_user_registration(user_params, validate_unique: false)
+
+    {:noreply, assign_form(socket, Map.put(changeset, :action, :validate))}
+  end
+
+  defp register(socket, user_params) do
     case Accounts.register_user(user_params) do
       {:ok, user} ->
         {:noreply,
@@ -119,13 +142,6 @@ defmodule BackendWeb.UserLive.Registration do
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign_form(socket, changeset)}
     end
-  end
-
-  def handle_event("validate", %{"user" => user_params}, socket) do
-    changeset =
-      Accounts.change_user_registration(user_params, validate_unique: false)
-
-    {:noreply, assign_form(socket, Map.put(changeset, :action, :validate))}
   end
 
   defp assign_form(socket, %Ecto.Changeset{} = changeset) do
