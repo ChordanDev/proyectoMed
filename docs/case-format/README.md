@@ -63,7 +63,7 @@ Examiner-only description of what the learner should do, added to `expected_acti
 
 ### `[ATOR id papel=… idade=… voz=…] name`
 
-At least one actor, and exactly one with `papel=paciente`. `papel` is `paciente` or `acompanhante`; `idade` is a non-negative integer; `voz` is the voice key the voice worker maps to a TTS voice. The child tags below must follow their `[ATOR]`.
+At least one actor, exactly one with `papel=paciente` and at most one with `papel=acompanhante` (issue #341: the patient generator's companion marker names one companion). `papel` is `paciente` or `acompanhante`; `idade` is a non-negative integer; `voz` is the voice key the voice worker maps to a TTS voice. The child tags below must follow their `[ATOR]`.
 
 | Child tag | Required | Becomes |
 |---|---|---|
@@ -193,6 +193,7 @@ Every rule reports an error at the line of the tag that breaks it; a missing sta
 | Required tag | `missing [TEMA] tag`, `missing [CONTEÚDO] for impresso impresso-2-pcr` |
 | Required attribute or id | `[FATO] requires the attribute ator=` |
 | Missing actor | `missing actor: the case declares no [ATOR]` |
+| One patient, at most one companion | `only one [ATOR] may have papel=paciente`, `only one [ATOR] may have papel=acompanhante` |
 | Unique ids (one namespace for tasks, expected conducts, rules, actors, facts, questions, impressos and items; criterion ids and level labels per item) | `duplicate id hda-01 (first defined on line 28)` |
 | Links resolve | `unknown actor medico`, `unknown PEP criterion item-02.criterio-9; …`, `unknown impresso impresso-9`, `unknown mandatory question duvida-9` |
 | Criterion types | `tipo=SOLICITAÇÃO requires the attribute impressos=` |

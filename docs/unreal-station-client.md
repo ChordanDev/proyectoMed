@@ -334,6 +334,43 @@ The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id
 which serves the language and speech-to-text keyterms of the session's own
 pinned station.
 
+## Who speaks in the voice room (`speaker`, issue #341)
+
+A station may have a companion besides the patient (the catalog's `actors`,
+`role: companion`). Both speak on the one patient voice track
+(`patient-voice`); the voice worker publishes each reply sentence on the
+room's `transcript` data topic, before its audio, and labels it with its
+speaker. This is the field the Unreal client (#322) reads to drive the right
+MetaHuman's lip sync and to name the speaker on screen.
+
+```json
+{
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "turn_id": 3,
+  "generation_id": 3,
+  "role": "patient",
+  "speaker": "companion",
+  "segment": 0,
+  "text": "A febre começou há dois dias."
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `role` | string | Always `patient` for a spoken reply (kept for older clients); `examiner` for the acknowledgement events, which speak nothing. |
+| `speaker` | string | `patient` or `companion`: the actor whose reply this is. Match it to the catalog `actors[].role`; a station has one actor of each role at most. Single-actor stations always send `patient`. |
+| `segment` | integer | The sentence index within the reply, when Phoenix streams it sentence by sentence. |
+| `text` | string | The verified sentence, without stage directions. |
+
+- The audio that follows the event, until the next reply event, is that
+  speaker's: each actor speaks with the ElevenLabs voice its voice key
+  (`actors[].voice`) maps to in the worker's `ELEVENLABS_VOICE_IDS`
+  (`voice-key=voice-id,...`); an unmapped key uses `ELEVENLABS_VOICE_ID`.
+- The `status: "complete"` end event of a streamed reply carries no `speaker`.
+- A worker built before #341 sends no `speaker`: read it as `patient`.
+- The session transcript (`RefreshSession`) does not carry the speaker yet: a
+  companion's reply is a `patient` message there.
+
 ## Not in the interface yet
 
 Joining the LiveKit room (publishing the microphone, receiving the patient voice
