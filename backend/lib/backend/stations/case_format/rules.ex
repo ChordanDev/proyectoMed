@@ -38,6 +38,7 @@ defmodule Backend.Stations.CaseFormat.Rules do
       placeholder(doc),
       Enum.map(doc.actors, &actor/1),
       patients(doc),
+      companions(doc),
       Enum.map(doc.facts, &fact(&1, index)),
       Enum.map(doc.impressos, &impresso/1),
       Enum.map(doc.items, &item(&1, index)),
@@ -212,6 +213,18 @@ defmodule Backend.Stations.CaseFormat.Rules do
 
       [_first | others] ->
         for %{tag: tag} <- others, do: error(tag.line, "only one [ATOR] may have papel=paciente")
+
+      [] ->
+        []
+    end
+  end
+
+  # Issue #341: one `[ACOMPANHANTE]` marker cannot tell two companions apart.
+  defp companions(doc) do
+    case Enum.filter(doc.actors, &(actor_role(&1.tag) == "companion")) do
+      [_first | others] ->
+        for %{tag: tag} <- others,
+            do: error(tag.line, "only one [ATOR] may have papel=acompanhante")
 
       [] ->
         []

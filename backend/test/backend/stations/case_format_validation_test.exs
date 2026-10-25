@@ -301,6 +301,31 @@ defmodule Backend.Stations.CaseFormatValidationTest do
       text = with_defect("papel=paciente", "papel=acompanhante")
       assert_error(text, 1, "missing actor: no [ATOR] has papel=paciente")
     end
+
+    # Issue #341: one `[ACOMPANHANTE]` marker cannot tell two companions apart.
+    test "a second companion" do
+      companions = """
+      [ATOR mae papel=acompanhante idade=34 voz=feminina-adulta] Juliana Souza
+      [PERFIL] Mãe do paciente.
+      [TOM] Fala de forma simples.
+
+      [ATOR pai papel=acompanhante idade=36 voz=masculina-adulta] Paulo Souza
+      [PERFIL] Pai do paciente.
+      [TOM] Fala pouco.
+
+      [TÓPICO] HDA — respostas padronizadas
+      """
+
+      text = with_defect("[TÓPICO] HDA — respostas padronizadas\n", companions)
+
+      assert_error(
+        text,
+        line_of(text, "[ATOR pai"),
+        "only one [ATOR] may have papel=acompanhante"
+      )
+
+      assert [_one] = Enum.filter(errors(text), &(&1.message =~ "acompanhante"))
+    end
   end
 
   describe "thresholds" do

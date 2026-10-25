@@ -11,24 +11,31 @@ defmodule Backend.Stations.StationAI.Addressee do
   reply that does not start with a known marker is patient-addressed with
   source `:missing_marker` and keeps its whole text, so an unknown bracket such
   as a stage direction is not lost.
+
+  A station with a companion (issue #341) adds `[ACOMPANHANTE]`: the learner
+  talks to the companion, whose reply follows the marker. It is read only when
+  the caller passes `companion: true`; without it `[ACOMPANHANTE]` is an
+  unknown marker, as before, so a station without a companion is unchanged.
   """
 
   @markers %{"PACIENTE" => :patient, "EXAMINADOR" => :examiner}
+  @companion_markers Map.put(@markers, "ACOMPANHANTE", :companion)
 
   # The longest prefix that may still be an unclosed marker; past it, an
   # opening bracket is text.
   @max_marker_bytes 24
 
-  @type addressee :: :patient | :examiner
+  @type addressee :: :patient | :companion | :examiner
   @type source :: :marker | :missing_marker
+  @type opts :: [companion: boolean()]
 
   @doc """
   Reads the marker of a whole reply: `{addressee, source, text}` where `text`
   is the reply without the marker (the whole reply when it has none).
   """
-  @spec split(String.t()) :: {addressee(), source(), String.t()}
-  def split(text) when is_binary(text) do
-    case prefix(text) do
+  @spec split(String.t(), opts()) :: {addressee(), source(), String.t()}
+  def split(text, opts \\ []) when is_binary(text) do
+    case prefix(text, opts) do
       {:decided, addressee, source, rest} -> {addressee, source, rest}
       :undecided -> {:patient, :missing_marker, text}
     end
@@ -39,21 +46,25 @@ defmodule Backend.Stations.StationAI.Addressee do
   `:undecided` while the marker may still be arriving, else
   `{:decided, addressee, source, rest}` with the text after the marker.
   """
-  @spec prefix(String.t()) :: :undecided | {:decided, addressee(), source(), String.t()}
-  def prefix(text) when is_binary(text) do
+  @spec prefix(String.t(), opts()) ::
+          :undecided | {:decided, addressee(), source(), String.t()}
+  def prefix(text, opts \\ []) when is_binary(text) do
     trimmed = String.trim_leading(text)
 
     cond do
       trimmed == "" -> :undecided
       not String.starts_with?(trimmed, "[") -> {:decided, :patient, :missing_marker, text}
-      true -> bracket_prefix(text, trimmed)
+      true -> bracket_prefix(text, trimmed, markers(opts))
     end
   end
 
-  defp bracket_prefix(text, "[" <> after_bracket = trimmed) do
+  defp markers(opts),
+    do: if(Keyword.get(opts, :companion, false), do: @companion_markers, else: @markers)
+
+  defp bracket_prefix(text, "[" <> after_bracket = trimmed, markers) do
     case String.split(after_bracket, "]", parts: 2) do
       [tag, rest] ->
-        case Map.fetch(@markers, tag |> String.trim() |> String.upcase()) do
+        case Map.fetch(markers, tag |> String.trim() |> String.upcase()) do
           {:ok, addressee} -> {:decided, addressee, :marker, String.trim_leading(rest)}
           :error -> {:decided, :patient, :missing_marker, text}
         end
@@ -72,20 +83,22 @@ defmodule Backend.Stations.StationAI.Addressee do
   Returns `{filter, finish}`. `filter` takes each generated piece; it holds the
   pieces back until the marker is decided, then calls `on_decision` once with
   `(addressee, source)`, and only after it hands the text that follows the
-  marker to `on_text`. An examiner reply hands nothing on. `finish` (call it
+  marker to `on_text`. An examiner reply hands nothing on; a patient or
+  companion reply hands its text on. `opts` are those of `prefix/2`. `finish` (call it
   when the generation ends) decides a reply that ended before its marker did
   as patient-addressed, hands on what was held back, and returns the
   addressee. Both must run in the process that generates: the state lives in
   its process dictionary.
   """
-  @spec stream((String.t() -> any()), (addressee(), source() -> any())) ::
+  @spec stream((String.t() -> any()), (addressee(), source() -> any()), opts()) ::
           {(String.t() -> :ok), (-> addressee())}
-  def stream(on_text, on_decision) when is_function(on_text, 1) and is_function(on_decision, 2) do
+  def stream(on_text, on_decision, opts \\ [])
+      when is_function(on_text, 1) and is_function(on_decision, 2) do
     key = {__MODULE__, make_ref()}
     Process.put(key, {:pending, ""})
 
     filter = fn piece when is_binary(piece) ->
-      Process.put(key, take(Process.get(key), piece, on_text, on_decision))
+      Process.put(key, take(Process.get(key), piece, on_text, on_decision, opts))
       :ok
     end
 
@@ -102,22 +115,22 @@ defmodule Backend.Stations.StationAI.Addressee do
 
   defp finish({:decided, addressee}, _on_text, _on_decision), do: addressee
 
-  defp take({:pending, held}, piece, on_text, on_decision) do
-    case prefix(held <> piece) do
+  defp take({:pending, held}, piece, on_text, on_decision, opts) do
+    case prefix(held <> piece, opts) do
       :undecided ->
         {:pending, held <> piece}
 
       {:decided, addressee, source, rest} ->
         on_decision.(addressee, source)
-        if addressee == :patient and rest != "", do: on_text.(rest)
+        if addressee != :examiner and rest != "", do: on_text.(rest)
         {:decided, addressee}
     end
   end
 
-  defp take({:decided, :patient} = state, piece, on_text, _on_decision) do
+  defp take({:decided, :examiner} = state, _piece, _on_text, _on_decision, _opts), do: state
+
+  defp take({:decided, _speaker} = state, piece, on_text, _on_decision, _opts) do
     on_text.(piece)
     state
   end
-
-  defp take({:decided, :examiner} = state, _piece, _on_text, _on_decision), do: state
 end
