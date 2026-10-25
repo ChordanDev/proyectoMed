@@ -3,6 +3,10 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
   Issue #309: the patient generator decides the addressee in the same call, by
   starting its reply with `[PACIENTE]` or `[EXAMINADOR]`. The marker is parsed
   before any text reaches the learner, the client or TTS, and never shows.
+
+  Issue #351: a dialogue turn never releases an impresso nor records an
+  impresso request; only `request_impresso/2` does. An examiner-addressed turn
+  carries a display-only `exam_request` flag instead.
   """
   use ExUnit.Case, async: false
 
@@ -183,7 +187,8 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
                 outcome: :examiner_acknowledged,
                 reply_text: nil,
                 learner_turn: learner_turn,
-                newly_released: []
+                newly_released: [],
+                exam_request: false
               }} = send_text(session, @finding)
 
       assert_received :patient_generation
@@ -194,33 +199,80 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
       assert stored.impresso_requests == []
     end
 
-    test "an authored impresso in the learner text is an examiner turn without the model" do
+    test "an authored impresso in the learner text is an exam request that releases nothing (#351)" do
       reply("[PACIENTE] " <> @reply)
       session = Stations.create_session(%{audio_consent: false})
 
       assert {:ok,
               %{
                 outcome: :examiner_acknowledged,
-                newly_released: [%{id: @lab_impresso, title: "IMPRESSO" <> _}]
+                reply_text: nil,
+                learner_turn: %{role: :learner, modality: :text, text: @lab_request},
+                newly_released: [],
+                exam_request: true
               }} = send_text(session, @lab_request)
 
       refute_received :patient_generation
       {:ok, stored} = Stations.get_session(session.session_id)
-      assert [%{text: @lab_request, decision: :released}] = stored.impresso_requests
+      assert stored.released_impressos == []
+      assert stored.impresso_requests == []
+    end
 
-      # Asking again records the repeat like the modal does, releasing nothing new.
-      assert {:ok, %{outcome: :examiner_acknowledged, newly_released: []}} =
-               send_text(session, @lab_request)
+    test "an exam marker acknowledges an exam request and releases nothing (#351)" do
+      reply("[EXAMINADOR:EXAME]")
+      session = Stations.create_session(%{audio_consent: false})
+
+      log =
+        info_log(fn ->
+          assert {:ok,
+                  %{
+                    outcome: :examiner_acknowledged,
+                    reply_text: nil,
+                    newly_released: [],
+                    exam_request: true
+                  }} = send_text(session, "Solicito uma tomografia de crânio")
+        end)
+
+      assert log =~ "turn_addressee decision=examiner source=exam_marker channel=text"
+      assert_received :patient_generation
+      refute_received :patient_verification
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: "Solicito uma tomografia de crânio"}] = stored.messages
+      refute Enum.any?(stored.messages, &(&1.text =~ "EXAMINADOR"))
+      assert stored.released_impressos == []
+      assert stored.impresso_requests == []
+    end
+
+    test "a patient reply never carries an exam request (#351)" do
+      reply("[PACIENTE] " <> @reply)
+      session = Stations.create_session(%{audio_consent: false})
+
+      assert {:ok, %{outcome: :patient_reply} = result} =
+               send_text(session, "O senhor já fez tomografia?")
+
+      refute Map.get(result, :exam_request)
+    end
+
+    test "the impresso route still releases an exam the dialogue already named (#351)" do
+      reply("[PACIENTE] " <> @reply)
+      session = Stations.create_session(%{audio_consent: false})
+
+      {:ok, %{outcome: :examiner_acknowledged, newly_released: []}} =
+        send_text(session, @lab_request)
+
+      assert {:ok, %{decision: "released", newly_released: [%{id: @lab_impresso}]}} =
+               Stations.request_impresso(session.session_id, %{"text" => @lab_request})
 
       {:ok, stored} = Stations.get_session(session.session_id)
       assert stored.released_impressos == [@lab_impresso]
+      assert [%{text: @lab_request, decision: :released}] = stored.impresso_requests
     end
 
     test "an exam named only to decline it goes to the model and releases nothing (#305)" do
       reply("[EXAMINADOR]")
       session = Stations.create_session(%{audio_consent: false})
 
-      assert {:ok, %{outcome: :examiner_acknowledged, newly_released: []}} =
+      assert {:ok, %{outcome: :examiner_acknowledged, newly_released: [], exam_request: false}} =
                send_text(session, "Não preciso do ECG")
 
       assert_received :patient_generation
@@ -279,8 +331,14 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
       reply("[EXAMINADOR]")
       session = Stations.create_session(%{audio_consent: true})
 
-      assert {:ok, {:kept, %{turn_id: 1, addressee: :examiner, refusal: :examiner_addressed}}} =
-               Stations.process_voice_turn(session.session_id, 1, @finding)
+      assert {:ok,
+              {:kept,
+               %{
+                 turn_id: 1,
+                 addressee: :examiner,
+                 refusal: :examiner_addressed,
+                 exam_request: false
+               }}} = Stations.process_voice_turn(session.session_id, 1, @finding)
 
       refute_received :patient_verification
       refute_received :addressee_check
@@ -288,19 +346,31 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
       assert [%{role: :learner, text: @finding}] = stored.messages
     end
 
-    test "an authored impresso releases it as an examiner turn without the model" do
+    test "an authored impresso is an exam request that releases nothing (#351)" do
       reply("[PACIENTE] " <> @reply)
       session = Stations.create_session(%{audio_consent: true})
 
-      assert {:ok, {:kept, %{addressee: :examiner}}} =
+      assert {:ok, {:kept, %{addressee: :examiner, exam_request: true}}} =
                Stations.process_voice_turn(session.session_id, 1, @lab_request)
 
       refute_received :patient_generation
       {:ok, stored} = Stations.get_session(session.session_id)
-      assert stored.released_impressos == [@lab_impresso]
+      assert [%{role: :learner, modality: :voice, text: @lab_request}] = stored.messages
+      assert stored.released_impressos == []
+      refute Enum.any?(stored.impresso_requests, &(&1.request_id == "voice-turn-1"))
+      assert stored.impresso_requests == []
+    end
 
-      assert [%{text: @lab_request, request_id: "voice-turn-1", released_ids: [@lab_impresso]}] =
-               stored.impresso_requests
+    test "an exam marker flags the kept turn as an exam request (#351)" do
+      reply("[EXAMINADOR:EXAME]")
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, {:kept, %{addressee: :examiner, exam_request: true}}} =
+               Stations.process_voice_turn(session.session_id, 1, "Quero ver a tomografia")
+
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert stored.released_impressos == []
+      assert stored.impresso_requests == []
     end
 
     test "a missing marker is patient-addressed" do
@@ -321,7 +391,10 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
 
       log =
         info_log(fn ->
-          assert {{:ok, {:kept, %{addressee: :examiner, refusal: :examiner_addressed}}}, []} =
+          assert {{:ok,
+                   {:kept,
+                    %{addressee: :examiner, refusal: :examiner_addressed, exam_request: false}}},
+                  []} =
                    Stations.stream_voice_turn(session.session_id, 1, @finding, [], collect_sink())
         end)
 
@@ -347,17 +420,36 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
                Stations.stream_voice_turn(session.session_id, 1, @finding, [], collect_sink())
     end
 
-    test "an authored impresso is released as an examiner turn without the model" do
+    test "an authored impresso is an exam request that releases nothing (#351)" do
       reply("[PACIENTE] " <> @reply)
       session = Stations.create_session(%{audio_consent: true})
 
-      assert {{:ok, {:kept, %{addressee: :examiner}}}, []} =
+      assert {{:ok, {:kept, %{addressee: :examiner, exam_request: true}}}, []} =
                Stations.stream_voice_turn(session.session_id, 1, @lab_request, [], collect_sink())
 
       refute_received :patient_generation
 
-      assert {:ok, %{released_impressos: [%{id: @lab_impresso}]}} =
-               Stations.list_impressos(session.session_id)
+      assert {:ok, %{released_impressos: []}} = Stations.list_impressos(session.session_id)
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert stored.impresso_requests == []
+    end
+
+    test "a streamed exam marker flags the kept turn and speaks nothing (#351)" do
+      reply("[EXAMINADOR:EXAME] Anotado.", ["[EXAMINADOR:", "EXAME]", " Anotado."])
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {{:ok, {:kept, %{addressee: :examiner, exam_request: true}}}, []} =
+               Stations.stream_voice_turn(
+                 session.session_id,
+                 1,
+                 "Quero ver a tomografia",
+                 [],
+                 collect_sink()
+               )
+
+      {:ok, stored} = Stations.get_session(session.session_id)
+      assert [%{role: :learner, text: "Quero ver a tomografia"}] = stored.messages
+      assert stored.impresso_requests == []
     end
 
     test "a missing marker streams the patient reply" do
@@ -392,7 +484,8 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
     end
   end
 
-  # Issue #302/#305: the impresso release of an examiner turn is the modal's.
+  # Issue #351 (superseding the dialogue release of #302): only the impresso
+  # route releases and records; #305's negation still holds there.
   describe "impressos requested from the examiner" do
     test "an examiner voice turn declining an exam releases, records and credits nothing" do
       reply("[EXAMINADOR]")
@@ -429,7 +522,7 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
                Stations.request_impresso(session.session_id, %{"text" => "Sem ECG por enquanto"})
     end
 
-    test "an impresso released by voice counts for the rubric like one from the modal" do
+    test "an exam asked only in the dialogue earns no credit until the impresso route is used" do
       reply("[EXAMINADOR]")
       spoken = Stations.create_session(%{audio_consent: true})
       modal = Stations.create_session(%{audio_consent: false})
@@ -456,8 +549,15 @@ defmodule Backend.Stations.AddresseeMarkerTurnTest do
           criterion
         end
 
-      assert spoken_criterion.status == :met
+      refute spoken_criterion.status == :met
       assert modal_criterion.status == :met
+      assert for(%{role: :impresso} = evidence <- spoken_criterion.evidence, do: evidence) == []
+
+      # The same session meets it once the exam is requested through the route.
+      {:ok, _released} = Stations.request_impresso(spoken.session_id, %{"text" => @lab_request})
+      {:ok, stored} = Stations.get_session(spoken.session_id)
+      [spoken_criterion] = Backend.Evaluator.evaluate(package, stored).criteria
+      assert spoken_criterion.status == :met
 
       impresso_evidence = fn criterion ->
         for %{role: :impresso, text: text} <- criterion.evidence,

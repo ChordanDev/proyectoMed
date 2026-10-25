@@ -421,15 +421,20 @@ defmodule Backend.Stations do
   Jev. It is never truncated.
 
   The patient generation decides who the turn is addressed to (#274, #309,
-  `docs/design/turn-addressee.md`): its reply starts with `[PACIENTE]` or
+  `docs/design/turn-addressee.md`): its reply starts with `[PACIENTE]`,
+  `[EXAMINADOR:EXAME]` (an exam request to the examiner, #351) or
   `[EXAMINADOR]`, stripped before anything else reads the text. A turn naming
   an authored impresso is examiner-addressed without any generation. An
   examiner-addressed turn is kept without a patient reply, nothing is verified,
   and the result is `{:ok, %{outcome: :examiner_acknowledged, learner_turn:
-  message, reply_text: nil, newly_released: impressos}}`, where `impressos` are
-  those the turn released by naming an authored impresso (#302), empty
-  otherwise. A missing or unknown marker is patient-addressed (and logged), and
-  the turn continues as below; its result carries `outcome: :patient_reply`.
+  message, reply_text: nil, newly_released: [], exam_request: boolean}}`.
+  A dialogue turn never releases an impresso nor records an impresso request
+  (#351): only `request_impresso/2` does, so `newly_released` is always empty.
+  `exam_request` is `true` when the turn names an authored impresso or the
+  generation marked it `[EXAMINADOR:EXAME]`; it is display-only (a client may
+  point the learner to the exam button) and is never graded. A missing or
+  unknown marker is patient-addressed (and logged), and the turn continues as
+  below; its result carries `outcome: :patient_reply` and no `exam_request`.
 
   In a station with a companion (#341) the reply may start with
   `[ACOMPANHANTE]`: the companion answers, checked against its own profile and
@@ -511,7 +516,7 @@ defmodule Backend.Stations do
 
     if impresso_request?(package, Map.get(params, :text) || Map.get(params, "text")) do
       log_turn_addressee(:examiner, :impresso, :text, started_at)
-      acknowledge_examiner_turn(session_id, token)
+      acknowledge_examiner_turn(session_id, token, true)
     else
       generate_patient_turn(session_id, token, params, started_at)
     end
@@ -519,9 +524,9 @@ defmodule Backend.Stations do
 
   # An examiner-addressed turn (#274) is real rubric evidence, stored exactly as
   # a refused patient-addressed turn is (#235): the learner message, no reply.
-  # Nothing is generated or verified. An exam request in it releases the
-  # matching impressos (#302), returned as `newly_released`.
-  defp acknowledge_examiner_turn(session_id, token) do
+  # Nothing is generated, verified or released (#351): an exam request in it
+  # only sets the display-only `exam_request` flag.
+  defp acknowledge_examiner_turn(session_id, token, exam_request) do
     case Conversation.resolve_turn(session_id, token, :keep_learner_turn) do
       {:ok, session} ->
         learner_turn = List.last(session.messages)
@@ -533,7 +538,8 @@ defmodule Backend.Stations do
            reply_audio_url: nil,
            used_facts: [],
            learner_turn: learner_turn,
-           newly_released: release_requested_impressos(session_id, learner_turn.text, %{})
+           newly_released: [],
+           exam_request: exam_request
          }}
 
       {:error, reason} ->
@@ -541,27 +547,9 @@ defmodule Backend.Stations do
     end
   end
 
-  # An examiner-addressed turn that names at least one authored impresso is an
-  # impresso request (#302): it goes through `request_impresso/2`, so the
-  # release and its rubric event are those of a modal request. A remark that
-  # matches nothing records nothing, unlike an unavailable modal request.
-  # `params` may carry a stable `request_id` for an idempotent retry.
-  # Returns the newly released impressos; a failure releases nothing.
-  defp release_requested_impressos(session_id, text, params) when is_binary(text) do
-    with {:ok, package} <- fetch_package(session_id),
-         [_ | _] <- Impressos.match(package["impressos"] || [], Impressos.normalize(text)),
-         {:ok, %{newly_released: newly_released}} <-
-           request_impresso(session_id, Map.put(params, :text, text)) do
-      newly_released
-    else
-      _nothing_released -> []
-    end
-  end
-
-  defp release_requested_impressos(_session_id, _text, _params), do: []
-
   # Whether the learner text names an authored impresso (#302, #305), which
-  # makes the turn an exam request to the examiner (#309).
+  # makes the turn an exam request to the examiner (#309, #351). It only
+  # decides the addressee and the `exam_request` flag; nothing is released.
   defp impresso_request?(package, text) when is_binary(text) do
     Impressos.match(package["impressos"] || [], Impressos.normalize(text)) != []
   end
@@ -569,17 +557,20 @@ defmodule Backend.Stations do
   defp impresso_request?(_package, _text), do: false
 
   # Splits the addressee decided by the generation's marker (#309) from the
-  # reply, logging it. In a station with a companion (#341) the reply keeps
-  # its `speaker` (`:patient` or `:companion`), which follows it to storage,
-  # verification and speech; a single-actor reply carries none.
+  # reply, logging it. An examiner turn returns only whether its marker was
+  # the exam marker (#351). In a station with a companion (#341) the reply
+  # keeps its `speaker` (`:patient` or `:companion`), which follows it to
+  # storage, verification and speech; a single-actor reply carries none.
   defp take_addressee(package, ai_reply, channel, started_at) do
     {addressee, ai_reply} = Map.pop(ai_reply, :addressee, :patient)
     {source, ai_reply} = Map.pop(ai_reply, :addressee_source, :missing_marker)
     log_turn_addressee(addressee, source, channel, started_at)
 
-    if addressee != :examiner and Actors.companion?(package),
-      do: {addressee, Map.put(ai_reply, :speaker, addressee)},
-      else: {addressee, ai_reply}
+    cond do
+      addressee == :examiner -> {:examiner, %{exam_request: source == :exam_marker}}
+      Actors.companion?(package) -> {addressee, Map.put(ai_reply, :speaker, addressee)}
+      true -> {addressee, ai_reply}
+    end
   end
 
   # One line per learner turn: the addressee, what decided it (`marker`,
@@ -598,8 +589,8 @@ defmodule Backend.Stations do
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
       case take_addressee(package, ai_reply, :text, started_at) do
-        {:examiner, _ai_reply} ->
-          acknowledge_examiner_turn(session_id, token)
+        {:examiner, %{exam_request: exam_request}} ->
+          acknowledge_examiner_turn(session_id, token, exam_request)
 
         {_speaker, ai_reply} ->
           verify_and_resolve_turn(
@@ -1617,9 +1608,9 @@ defmodule Backend.Stations do
 
       if impresso_request?(session_package(session), learner_text) do
         log_turn_addressee(:examiner, :impresso, :voice, started_at)
-        keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+        keep_examiner_voice_turn(session_id, turn_id, generation_id, true)
       else
-        generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at)
+        generate_voice_reply(session_id, turn_id, generation_id, started_at)
       end
     else
       {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
@@ -1627,34 +1618,27 @@ defmodule Backend.Stations do
   end
 
   # An examiner-addressed voice turn (#274) is kept like a refused one, with
-  # nothing generated, verified or spoken. An exam request in it releases the
-  # matching impressos (#302); the web learns of them by listing impressos
-  # after the examiner acknowledgement. The release reads the turn's own
-  # admitted text, never the latest learner message: another learner turn may
-  # have landed while this one was being classified.
-  defp keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text) do
+  # nothing generated, verified, spoken or released (#351). Its receipt carries
+  # the display-only `exam_request` flag.
+  defp keep_examiner_voice_turn(session_id, turn_id, generation_id, exam_request) do
     case keep_voice_turn(session_id, turn_id, generation_id, :examiner_addressed, :examiner) do
-      {:ok, kept} ->
-        release_requested_impressos(session_id, learner_text, %{
-          request_id: "voice-turn-#{turn_id}"
-        })
-
-        {:ok, kept}
+      {:ok, {:kept, kept}} ->
+        {:ok, {:kept, Map.put(kept, :exam_request, exam_request)}}
 
       {:error, reason} ->
         fail_voice_reply(session_id, generation_id, reason)
     end
   end
 
-  defp generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at) do
+  defp generate_voice_reply(session_id, turn_id, generation_id, started_at) do
     with {:ok, current_session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(current_session),
          package = session_package(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
       case take_addressee(package, ai_reply, :voice, started_at) do
-        {:examiner, _ai_reply} ->
-          keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+        {:examiner, %{exam_request: exam_request}} ->
+          keep_examiner_voice_turn(session_id, turn_id, generation_id, exam_request)
 
         {_speaker, ai_reply} ->
           deliver_voice_reply(
@@ -1744,11 +1728,11 @@ defmodule Backend.Stations do
          :ok <- ensure_voice_turn_open(session) do
       if impresso_request?(session_package(session), learner_text) do
         log_turn_addressee(:examiner, :impresso, :voice, started_at)
-        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, true), acc}
       else
         stream_marked_voice_reply(
           session,
-          {turn_id, generation_id, learner_text},
+          {turn_id, generation_id},
           started_at,
           acc,
           sink
@@ -1764,7 +1748,7 @@ defmodule Backend.Stations do
   # before anything of the generation is verified, handed over or stored.
   defp stream_marked_voice_reply(
          %{session_id: session_id} = session,
-         {turn_id, generation_id, learner_text},
+         {turn_id, generation_id},
          started_at,
          acc,
          sink
@@ -1797,11 +1781,12 @@ defmodule Backend.Stations do
       )
 
     speaker = streamed_speaker(package, marker)
+    exam_request = Process.get({marker, :exam_request}, false)
     flush_marker(marker)
 
     case outcome do
       {:closed, :examiner_addressed} ->
-        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, exam_request), acc}
 
       outcome ->
         {resolve_streamed_reply(
@@ -1827,12 +1812,14 @@ defmodule Backend.Stations do
 
     log_turn_addressee(addressee, source, :voice, started_at)
     Process.put({marker, :speaker}, addressee)
+    Process.put({marker, :exam_request}, source == :exam_marker)
     if addressee == :examiner, do: {:closed, :examiner_addressed}, else: :open
   end
 
   # A decision sent after the gate (a generation that timed out) is dropped.
   defp flush_marker(marker) do
     Process.delete({marker, :speaker})
+    Process.delete({marker, :exam_request})
 
     receive do
       {^marker, _addressee, _source} -> :ok

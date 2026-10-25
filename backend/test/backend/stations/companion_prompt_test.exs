@@ -94,7 +94,8 @@ defmodule Backend.Stations.CompanionPromptTest do
     end
 
     test "asks for one of the three markers", %{prompt: prompt} do
-      assert prompt =~ "[PACIENTE], [ACOMPANHANTE] ou [EXAMINADOR]"
+      assert prompt =~ "[PACIENTE], [ACOMPANHANTE], [EXAMINADOR:EXAME] ou [EXAMINADOR]"
+      assert prompt =~ "Use [EXAMINADOR:EXAME]"
       assert prompt =~ "Use [ACOMPANHANTE]"
     end
   end
@@ -121,7 +122,7 @@ defmodule Backend.Stations.CompanionPromptTest do
 
       assert prompt == StationAI.system_prompt(Map.delete(package, "actors"))
       refute prompt =~ "ACOMPANHANTE"
-      assert prompt =~ "[PACIENTE] ou [EXAMINADOR]"
+      assert prompt =~ "[PACIENTE], [EXAMINADOR:EXAME] ou [EXAMINADOR]"
     end
   end
 end

@@ -74,6 +74,7 @@ defmodule BackendWeb.StationControllerTest do
     def next_reply(_package, _context) do
       case Application.fetch_env!(:backend, :controller_test_addressee) do
         :examiner -> {:ok, %{text: "[EXAMINADOR]"}}
+        :exam -> {:ok, %{text: "[EXAMINADOR:EXAME]"}}
         :patient -> {:ok, %{text: "[PACIENTE] Estou com um aperto forte no peito há duas horas."}}
       end
     end
@@ -870,9 +871,10 @@ defmodule BackendWeb.StationControllerTest do
 
       assert {:ok, %{messages: [%{role: :learner}]}} = Conversation.fetch(session.session_id)
       assert body["newly_released"] == []
+      assert body["exam_request"] == false
     end
 
-    test "an examiner-addressed exam request answers with the newly released impressos (#302)",
+    test "an exam request naming an authored impresso releases nothing and is flagged (#351)",
          %{conn: conn, session: session} do
       Application.put_env(:backend, :controller_test_addressee, :examiner)
 
@@ -881,15 +883,27 @@ defmodule BackendWeb.StationControllerTest do
 
       assert %{
                "outcome" => "examiner_acknowledged",
-               "newly_released" => [
-                 %{
-                   "id" => "laboratorio-sangue-enzimas",
-                   "title" => "IMPRESSO" <> _,
-                   "category" => _,
-                   "content" => _
-                 }
-               ]
+               "reply_text" => nil,
+               "newly_released" => [],
+               "exam_request" => true
              } = body
+
+      assert {:ok, %{released_impressos: [], impresso_requests: []}} =
+               Conversation.fetch(session.session_id)
+    end
+
+    test "an exam marker answers exam_request true and never shows the marker (#351)",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :exam)
+
+      body =
+        conn
+        |> post_learner_text(session, "Solicito uma tomografia de crânio")
+        |> json_response(200)
+
+      assert %{"outcome" => "examiner_acknowledged", "exam_request" => true} = body
+      refute Jason.encode!(body) =~ "EXAMINADOR"
+      assert {:ok, %{released_impressos: []}} = Conversation.fetch(session.session_id)
     end
 
     test "a patient-addressed turn answers 200 patient_reply with the reply",
@@ -899,7 +913,9 @@ defmodule BackendWeb.StationControllerTest do
       assert %{
                "outcome" => "patient_reply",
                "reply_text" => "Estou com um aperto forte no peito há duas horas."
-             } = conn |> post_learner_text(session, "Bom dia.") |> json_response(200)
+             } = body = conn |> post_learner_text(session, "Bom dia.") |> json_response(200)
+
+      refute body["exam_request"]
     end
   end
 

@@ -139,7 +139,8 @@ defmodule Backend.Stations.StationAI do
   Issue #309: the prompt ends with `MARCAÇÃO DO DESTINATÁRIO`, which asks the
   model to start every reply with `[PACIENTE]` or `[EXAMINADOR]` (and nothing
   after an examiner marker), so the generation also decides who the learner
-  turn is addressed to. The marker is stripped in code
+  turn is addressed to. Issue #351 adds `[EXAMINADOR:EXAME]` for an exam
+  request to the examiner, which flags the turn as `exam_request`. The marker is stripped in code
   (`Backend.Stations.StationAI.Addressee`) and never reaches the learner.
 
   `presenting_context` is authored for the examiner in the second person, so
@@ -244,8 +245,10 @@ defmodule Backend.Stations.StationAI do
     6. Você NÃO pode dar diagnósticos nem indicar tratamentos, exames ou remédios.
 
     MARCAÇÃO DO DESTINATÁRIO
-    Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE] ou [EXAMINADOR].
-    Use [EXAMINADOR] quando a última mensagem do estudante for dirigida ao examinador e não a você: quando ele pede um exame, um resultado, uma manobra ou o exame físico, ou conta ao examinador o que fez, o que encontrou, o diagnóstico ou a conduta. Depois de [EXAMINADOR] não escreva mais nada.
+    Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE], [EXAMINADOR:EXAME] ou [EXAMINADOR].
+    #{exam_marker_rule()}
+    Use [EXAMINADOR] quando a última mensagem do estudante for dirigida ao examinador e não a você sem pedir um exame: quando ele conta ao examinador o que fez, o que encontrou, o que concluiu, o diagnóstico ou a conduta. Depois de [EXAMINADOR] não escreva mais nada.
+    #{patient_exam_question_rule()}
     Use [PACIENTE] quando a mensagem for dirigida a você e escreva a sua resposta logo depois da marcação.
     Na dúvida, use [PACIENTE].
     A marcação não faz parte da resposta: as regras acima valem para o que vem depois dela.
@@ -320,8 +323,10 @@ defmodule Backend.Stations.StationAI do
     6. Você NÃO pode dar diagnósticos nem indicar tratamentos, exames ou remédios.
 
     MARCAÇÃO DO DESTINATÁRIO
-    Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE], [ACOMPANHANTE] ou [EXAMINADOR].
-    Use [EXAMINADOR] quando a última mensagem do estudante for dirigida ao examinador e não ao paciente nem ao acompanhante: quando ele pede um exame, um resultado, uma manobra ou o exame físico, ou conta ao examinador o que fez, o que encontrou, o diagnóstico ou a conduta. Depois de [EXAMINADOR] não escreva mais nada.
+    Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE], [ACOMPANHANTE], [EXAMINADOR:EXAME] ou [EXAMINADOR].
+    #{exam_marker_rule()}
+    Use [EXAMINADOR] quando a última mensagem do estudante for dirigida ao examinador e não ao paciente nem ao acompanhante sem pedir um exame: quando ele conta ao examinador o que fez, o que encontrou, o que concluiu, o diagnóstico ou a conduta. Depois de [EXAMINADOR] não escreva mais nada.
+    #{patient_exam_question_rule()}
     Use [ACOMPANHANTE] quando a mensagem for dirigida ao acompanhante, ou quando pedir um fato que está só na lista do acompanhante, e escreva a resposta do acompanhante logo depois da marcação.
     Use [PACIENTE] quando a mensagem for dirigida ao paciente, ou quando pedir um fato que está na lista do paciente, e escreva a resposta do paciente logo depois da marcação.
     Na dúvida, responda como quem tem na sua lista o fato pedido; se ninguém tiver, use [PACIENTE].
@@ -355,6 +360,17 @@ defmodule Backend.Stations.StationAI do
   def explicit_question_fact?(_fact), do: false
 
   @explicit_topic ~r/perguntar?\s+explicitamente|pergunta\s+expl[ií]cita/iu
+
+  # Issue #351: an exam request to the examiner gets its own marker, so the
+  # client can point the learner to the exam button. Display-only: it
+  # releases nothing.
+  defp exam_marker_rule do
+    "Use [EXAMINADOR:EXAME] quando a última mensagem do estudante pedir ao examinador um exame físico, uma manobra, um exame complementar ou um resultado, mesmo um exame que não esteja disponível na estação. Depois de [EXAMINADOR:EXAME] não escreva mais nada."
+  end
+
+  defp patient_exam_question_rule do
+    ~s(Uma pergunta ao paciente sobre exames que ele já fez, como "o senhor já fez tomografia?", não é um pedido de exame ao examinador.)
+  end
 
   defp explicit_topic?(topic) when is_binary(topic), do: Regex.match?(@explicit_topic, topic)
   defp explicit_topic?(_topic), do: false
