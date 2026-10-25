@@ -6,7 +6,10 @@ transcript to Phoenix, which owns the transcript. Each reply Phoenix approves is
 to the room as patient text and then spoken through ElevenLabs (#120). A learner turn
 Phoenix kept without a reply is never spoken: a turn addressed to the examiner is
 published as an examiner acknowledgement (`status: acknowledged`, #274) and a refused
-patient reply as `status: kept` (#269). Never logs transcript text, reply text or audio.
+patient reply as `status: kept` (#269). Every reply event names its `speaker` (`patient`
+or `companion`, #341), and each actor speaks with the ElevenLabs voice its voice key maps
+to in `ELEVENLABS_VOICE_IDS`, on the one patient track. Never logs transcript text,
+reply text or audio.
 """
 
 # pyright: reportMissingImports=false
@@ -76,7 +79,13 @@ async def entrypoint(ctx: JobContext) -> None:
                 turn_id_floor=context.get("turn_id_floor"),
             )
             tts = build_tts(session_id, context)
-            player = SpeechPlayer(ctx.room, tracker, tts) if tts is not None else None
+            player = (
+                SpeechPlayer(
+                    ctx.room, tracker, tts, voices=build_voice_tts(session_id, context)
+                )
+                if tts is not None
+                else None
+            )
             voice = PatientVoice(ctx.room, player, session_id)
             await voice.start()
             # The job lives as long as the room; a reconnecting learner is a new participant.
@@ -136,6 +145,43 @@ def _required_setting(name: str) -> str:
     if not value:
         raise KeyError(name)
     return value
+
+
+def build_voice_tts(session_id: str, context) -> dict:
+    """ElevenLabs providers per voice key (#341), from `ELEVENLABS_VOICE_IDS`.
+
+    The variable is a comma-separated list of `voice-key=voice-id` pairs, for example
+    `feminina-adulta=<id>,infantil=<id>`; a reply whose voice key is not listed is
+    spoken with `ELEVENLABS_VOICE_ID`. Malformed pairs are skipped and only the
+    variable name is logged. Without an API key nothing is mapped.
+    """
+    raw = os.environ.get("ELEVENLABS_VOICE_IDS", "").strip()
+    api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not raw or not api_key:
+        return {}
+    model = os.environ.get("ELEVENLABS_MODEL", "").strip() or DEFAULT_TTS_MODEL
+    voices = {}
+    malformed = False
+    for pair in raw.split(","):
+        key, sep, voice_id = (part.strip() for part in pair.partition("="))
+        if not sep or not key or not voice_id:
+            malformed = True
+            continue
+        try:
+            voices[key] = elevenlabs.TTS(
+                api_key=api_key,
+                voice_id=voice_id,
+                model=model,
+                encoding=TTS_ENCODING,
+                language=context["language"],
+            )
+        except ValueError:
+            malformed = True
+    if malformed:
+        logger.warning(
+            "malformed ELEVENLABS_VOICE_IDS entries skipped for session %s", session_id
+        )
+    return voices
 
 
 def build_tts(session_id: str, context):
@@ -205,6 +251,8 @@ class PatientVoice:
             "turn_id": reply.turn_id,
             "generation_id": reply.generation_id,
             "role": "patient",
+            # Who says it (#341); Phoenix labels only a station with a companion.
+            "speaker": reply.speaker if reply.speaker == "companion" else "patient",
             "text": reply.reply_text,
         }
         if reply.index is not None:

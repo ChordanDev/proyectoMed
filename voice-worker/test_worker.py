@@ -24,7 +24,13 @@ from test_transcripts import (
     event,
 )
 from transcripts import TurnTracker, VoiceTurnReply
-from worker import PatientVoice, build_tts, phoenix_turn_settings, transcribe
+from worker import (
+    PatientVoice,
+    build_tts,
+    build_voice_tts,
+    phoenix_turn_settings,
+    transcribe,
+)
 
 REPLY_TEXT = "Resposta clinica confidencial"
 PROVIDER_SECRET = "sk-provider-secret"
@@ -155,6 +161,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
                         "turn_id": 1,
                         "generation_id": 1,
                         "role": "patient",
+                        "speaker": "patient",
                         "text": f"{REPLY_TEXT} 1",
                     },
                 ),
@@ -168,6 +175,24 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         await self.disconnect(task)
 
     # Issue #271: Phoenix streams the verified sentences of a reply.
+    # Issue #341: every spoken reply names its speaker; Phoenix sends one only
+    # for a station with a companion, and a reply without one is the patient's.
+    async def test_each_reply_event_names_its_speaker(self):
+        companion = VoiceTurnReply(1, "committed", 1, "Começou ontem.", index=0)
+        companion.speaker = "companion"
+        assert self.tracker.accept_sentence(companion) is companion
+        await self.voice.on_reply(companion)
+        unlabelled = VoiceTurnReply(1, "committed", 1, "Ainda dói.", index=1)
+        assert self.tracker.accept_sentence(unlabelled) is unlabelled
+        await self.voice.on_reply(unlabelled)
+        await settle()
+
+        self.assertEqual(
+            [(e["speaker"], e["text"]) for e in self.room.patient_events()],
+            [("companion", "Começou ontem."), ("patient", "Ainda dói.")],
+        )
+        await self.voice.stop()
+
     async def test_first_streamed_sentence_is_spoken_while_the_reply_still_streams(self):
         more = asyncio.Event()
         self.client.streams[1] = ["Começou ontem.", more, "Ainda dói."]
@@ -426,6 +451,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
                         "turn_id": 1,
                         "generation_id": 1,
                         "role": "patient",
+                        "speaker": "patient",
                         "text": f"{REPLY_TEXT} 1",
                     },
                     {
@@ -499,6 +525,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
                     "turn_id": 2,
                     "generation_id": 2,
                     "role": "patient",
+                    "speaker": "patient",
                     "text": f"{REPLY_TEXT} 2",
                 },
             ],
@@ -531,7 +558,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [sorted(payload) for payload in self.room.patient_events()],
             [
-                ["generation_id", "role", "session_id", "text", "turn_id"],
+                ["generation_id", "role", "session_id", "speaker", "text", "turn_id"],
                 ["failure", "generation_id", "session_id", "turn_id"],
             ],
         )
@@ -614,6 +641,63 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         output = "\n".join(logs.output)
         self.assertIn("synthesis_failed", output)
         self.assertNotIn(PROVIDER_SECRET, output)
+
+
+class BuildVoiceTTSTest(unittest.TestCase):
+    """Issue #341: voice keys (`voz=`) map to ElevenLabs voices by environment."""
+
+    CONTEXT = {"language": "pt-BR", "keyterms": []}
+    BASE = {"ELEVENLABS_API_KEY": PROVIDER_SECRET, "ELEVENLABS_VOICE_ID": "voice-1"}
+
+    def test_maps_each_voice_key_to_its_voice_id(self):
+        env = {
+            **self.BASE,
+            "ELEVENLABS_VOICE_IDS": "feminina-adulta=voice-f, infantil=voice-c",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+        ):
+            voices = build_voice_tts("s1", self.CONTEXT)
+
+        self.assertEqual(sorted(voices), ["feminina-adulta", "infantil"])
+        self.assertEqual(
+            sorted(call.kwargs["voice_id"] for call in tts.call_args_list),
+            ["voice-c", "voice-f"],
+        )
+        for call in tts.call_args_list:
+            self.assertEqual(call.kwargs["encoding"], "pcm_24000")
+            self.assertEqual(call.kwargs["api_key"], PROVIDER_SECRET)
+
+    def test_no_mapping_means_the_default_voice_only(self):
+        with (
+            patch.dict(os.environ, self.BASE, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+        ):
+            self.assertEqual(build_voice_tts("s1", self.CONTEXT), {})
+        tts.assert_not_called()
+
+    def test_malformed_entries_are_skipped_without_leaking_them(self):
+        env = {**self.BASE, "ELEVENLABS_VOICE_IDS": "feminina-adulta=voice-f,broken,=x,y="}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS"),
+            self.assertLogs("voice-worker", level="WARNING") as logs,
+        ):
+            voices = build_voice_tts("s1", self.CONTEXT)
+
+        self.assertEqual(list(voices), ["feminina-adulta"])
+        self.assertIn("ELEVENLABS_VOICE_IDS", "\n".join(logs.output))
+        self.assertNotIn("voice-f", "\n".join(logs.output))
+
+    def test_missing_api_key_maps_nothing(self):
+        env = {"ELEVENLABS_VOICE_IDS": "feminina-adulta=voice-f"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.elevenlabs, "TTS") as tts,
+        ):
+            self.assertEqual(build_voice_tts("s1", self.CONTEXT), {})
+        tts.assert_not_called()
 
 
 class BuildTTSTest(unittest.TestCase):

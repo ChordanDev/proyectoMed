@@ -660,6 +660,42 @@ class PhoenixClientSentenceStreamTest(unittest.IsolatedAsyncioTestCase):
             VoiceTurnReply(1, "committed", 1, "Começou ontem. Ainda dói."),
         )
 
+    # Issue #341: a station with a companion labels each sentence.
+    async def test_a_sentence_keeps_its_speaker_and_voice(self):
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=ndjson(
+                    {
+                        **sentence_line(0, "Começou ontem."),
+                        "speaker": "companion",
+                        "voice": "feminina-adulta",
+                    },
+                    sentence_line(1, "Ainda dói."),
+                    {
+                        "type": "result",
+                        "turn_id": 1,
+                        "status": "committed",
+                        "generation_id": 1,
+                        "reply_text": "Começou ontem. Ainda dói.",
+                    },
+                ),
+            )
+
+        sentences = []
+
+        async def on_sentence(sentence):
+            sentences.append(sentence)
+
+        async with self.client(handler) as client:
+            await client.commit(1, "Quando?", on_sentence=on_sentence)
+
+        self.assertEqual(
+            [(s.speaker, s.voice) for s in sentences],
+            [("companion", "feminina-adulta"), (None, None)],
+        )
+
     async def test_a_single_json_reply_is_still_understood(self):
         def handler(request):
             return httpx.Response(

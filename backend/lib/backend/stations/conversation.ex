@@ -76,14 +76,16 @@ defmodule Backend.Stations.Conversation do
   A transcript message. A patient message may carry `verified_fact_ids`: the
   authored ids of the facts the Jev verdict that verified it found stated
   (issue #286). The session's disclosed facts are derived from them, see
-  `disclosed_fact_ids/1`.
+  `disclosed_fact_ids/1`. In a station with a companion (issue #341) a patient
+  message carries the `speaker` of the actor who said it.
   """
   @type message :: %{
           required(:role) => term(),
           required(:modality) => term(),
           required(:text) => String.t(),
           required(:at) => DateTime.t(),
-          optional(:verified_fact_ids) => [String.t()]
+          optional(:verified_fact_ids) => [String.t()],
+          optional(:speaker) => :patient | :companion
         }
 
   @type impresso_request_event :: %{
@@ -309,12 +311,17 @@ defmodule Backend.Stations.Conversation do
   `verified_fact_ids` are stored on the appended patient message (issue #286);
   they are recorded only when the reply is, never for a stale, cancelled or
   kept generation.
+
+  `speaker` (issue #341) is `:companion` for a reply of a station's companion,
+  stored on the message as `speaker`; `nil` (the default) stores none, as for
+  every single-actor station.
   """
   @spec resolve_patient_reply(
           String.t(),
           pos_integer(),
           String.t() | :keep_learner_turn,
-          [String.t()]
+          [String.t()],
+          :patient | :companion | nil
         ) ::
           {:ok, session()}
           | {:error,
@@ -324,10 +331,16 @@ defmodule Backend.Stations.Conversation do
              | :stale_generation
              | :invalid_reply
              | :station_time_elapsed}
-  def resolve_patient_reply(session_id, generation_id, reply_text, verified_fact_ids \\ []) do
+  def resolve_patient_reply(
+        session_id,
+        generation_id,
+        reply_text,
+        verified_fact_ids \\ [],
+        speaker \\ nil
+      ) do
     GenServer.call(
       __MODULE__,
-      {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids}
+      {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids, speaker}
     )
   end
 
@@ -665,7 +678,8 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_call(
-        {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids},
+        {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids,
+         speaker},
         _from,
         state
       ) do
@@ -688,7 +702,7 @@ defmodule Backend.Stations.Conversation do
               session
               |> Map.put(
                 :messages,
-                session.messages ++ patient_messages(reply_text, verified_fact_ids)
+                session.messages ++ patient_messages(reply_text, verified_fact_ids, speaker)
               )
               |> Map.put(:active_generation_id, nil)
               |> Map.put(:active_voice_turn_id, nil)
@@ -1154,18 +1168,18 @@ defmodule Backend.Stations.Conversation do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
   end
 
-  defp patient_messages(:keep_learner_turn, _verified_fact_ids), do: []
+  defp patient_messages(:keep_learner_turn, _verified_fact_ids, _speaker), do: []
 
-  defp patient_messages(reply_text, verified_fact_ids) do
-    [
-      %{
-        role: :patient,
-        modality: :voice,
-        text: reply_text,
-        at: DateTime.utc_now(),
-        verified_fact_ids: Enum.filter(List.wrap(verified_fact_ids), &is_binary/1)
-      }
-    ]
+  defp patient_messages(reply_text, verified_fact_ids, speaker) do
+    message = %{
+      role: :patient,
+      modality: :voice,
+      text: reply_text,
+      at: DateTime.utc_now(),
+      verified_fact_ids: Enum.filter(List.wrap(verified_fact_ids), &is_binary/1)
+    }
+
+    [if(speaker, do: Map.put(message, :speaker, speaker), else: message)]
   end
 
   defp valid_reply_text?(:keep_learner_turn), do: true
