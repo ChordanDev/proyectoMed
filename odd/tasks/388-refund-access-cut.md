@@ -18,10 +18,11 @@ Refund signal (verified against RevenueCat docs, 2026-10-25): `CANCELLATION` (or
 | ID | Specs | Route | Status | Commit / evidence |
 | --- | --- | --- | --- | --- |
 | T1 | S1, S2, S3, S5 | inline (no writer reason: one behavior) | done | see Log L3 |
-| T2 | S4 | inline | pending | |
+| T2 | S4 | inline | done | see Log L4 |
 
 ## Log
 
 - **L1** (2026-10-25, issue #388) "Make refunds and chargebacks the only exception to that rule: when the webhook event signals a refund or a chargeback / reversal (RevenueCat `CANCELLATION` with a refund cancel reason, or the refund/reversal event types RevenueCat documents — verify the exact field values in the RevenueCat webhook docs and cite them), the entitlement ends at the event time and new sessions are refused with 402 `subscription_required`. The ordering, idempotency and never-move-backwards protections stay for every other event. A session already in progress may finish."
 - **L2** Design: a new nullable `billing_subscriptions.refunded_at` records the refund event time. A refund sets `status: :expired`, `expires_at` and `refunded_at` to the event time. Event-time ordering (`event_timestamp_ms`) and event-id idempotency still apply to refunds; only the expiration may move backwards. A later non-refund `CANCELLATION` does not reopen a refunded subscription; a later granting event (a new purchase) clears `refunded_at`.
 - **L3** T1 RED: `billing_test.exs` 31/37 (6 new refund tests failing); controller refund test against base code 16/17. GREEN: billing + controller tests 54/54. Refund rule in `Backend.Billing.WebhookEvents`, migration `20261025180000` adds `refunded_at`, `subscription_status/1` adds `refunded?`, docs section "Refunds and chargebacks". Sources: RevenueCat event types and fields, RevenueCat refunds (accessed 2026-10-25).
+- **L4** T2 RED: `billing_live_test.exs` 9/10 (refund copy missing). GREEN: 10/10. `/conta` shows "Acesso encerrado em <data> por reembolso ou estorno do pagamento." with **Assinar novamente**; no daily quota card.
