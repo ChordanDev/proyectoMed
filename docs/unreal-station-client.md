@@ -326,7 +326,9 @@ the ones of the operations table above.
 `/api/stations/active/sessions/:id/...` and `/api/v2/stations/active/sessions/:id/result`
 routes keep working until this client and the frozen web harness move to the
 routes above. The per-session aliases serve any session, including one started
-by `POST /sessions`.
+by `POST /sessions`. In production there is no active station (stations come
+only from the database), so `GET /api/stations/active` and
+`POST /api/stations/active/sessions` answer `404 no_active_station` there.
 
 The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
 which serves the language and speech-to-text keyterms of the session's own

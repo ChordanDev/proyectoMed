@@ -56,6 +56,14 @@ defmodule Backend.Stations do
   end
 
   @doc """
+  Whether a boot-time active station exists: the file loader runs in tests and
+  local development only; production serves stations only from the database
+  (issue #334).
+  """
+  @spec active_station_available?() :: boolean()
+  def active_station_available?, do: StationLoader.running?()
+
+  @doc """
   Returns the full validated active Station Package.
   """
   @spec get_active_package() :: map()

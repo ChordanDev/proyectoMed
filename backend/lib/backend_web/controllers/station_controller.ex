@@ -13,11 +13,31 @@ defmodule BackendWeb.StationController do
   # `voice_mode` (#270) tells the web which single voice experience to offer:
   # "realtime", "turn" or "off" (config/runtime.exs resolves VOICE_MODE).
   def active(conn, _params) do
-    voice_mode = Application.get_env(:backend, :voice_mode, "turn")
-    json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
+    if Stations.active_station_available?() do
+      voice_mode = Application.get_env(:backend, :voice_mode, "turn")
+      json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
+    else
+      no_active_station(conn)
+    end
   end
 
+  # Deprecated (issue #334): production has no boot-time active station.
   def create_session(conn, params) do
+    if Stations.active_station_available?(),
+      do: create_active_session(conn, params),
+      else: no_active_station(conn)
+  end
+
+  defp no_active_station(conn) do
+    conn
+    |> put_status(:not_found)
+    |> json(%{
+      error: "no_active_station",
+      message: "Nenhuma estação ativa: inicie a sessão por POST /sessions."
+    })
+  end
+
+  defp create_active_session(conn, params) do
     audio_consent =
       case params do
         %{"audio_consent" => val} -> val

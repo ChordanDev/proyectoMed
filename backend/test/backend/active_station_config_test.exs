@@ -86,11 +86,12 @@ defmodule Backend.ActiveStationConfigTest do
       :ok
     end
 
-    test "sets the active station id outside test" do
+    # Production refuses ACTIVE_STATION_ID (issue #334): see
+    # Backend.Config.StationSourceConfigTest.
+    test "sets the active station id in dev" do
       System.put_env("ACTIVE_STATION_ID", "acute-appendicitis")
 
       assert runtime_station_id(:dev) == "acute-appendicitis"
-      assert runtime_station_id(:prod) == "acute-appendicitis"
     end
 
     test "trims surrounding whitespace" do

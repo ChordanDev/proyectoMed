@@ -310,7 +310,20 @@ end
 # directory name (`[a-z0-9-]+`) and fails the boot, naming the id, when the id is
 # malformed, unknown, or its package is invalid. `:test` reads none of it, so the
 # suite always starts from the default station.
-if config_env() != :test do
+#
+# Production never boots from `priv/stations` (issue #334): stations come only
+# from the database (`POST /sessions`), so the file loader is off and
+# `ACTIVE_STATION_ID` refuses the boot.
+if config_env() == :prod do
+  if String.trim(System.get_env("ACTIVE_STATION_ID", "")) != "" do
+    raise "ACTIVE_STATION_ID is not supported in production: stations are served only " <>
+            "from the database, never from priv/stations. Unset ACTIVE_STATION_ID."
+  end
+
+  config :backend, :file_station_loader, false
+end
+
+if config_env() == :dev do
   case System.get_env("ACTIVE_STATION_ID", "") |> String.trim() do
     "" -> :ok
     station_id -> config :backend, :active_station_id, station_id

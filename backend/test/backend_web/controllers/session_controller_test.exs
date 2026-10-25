@@ -348,4 +348,53 @@ defmodule BackendWeb.SessionControllerTest do
                |> json_response(200)
     end
   end
+
+  describe "without the file station loader (production)" do
+    setup do
+      :ok = Supervisor.terminate_child(Backend.Supervisor, Backend.Stations.StationLoader)
+
+      on_exit(fn ->
+        {:ok, _pid} = Supervisor.restart_child(Backend.Supervisor, Backend.Stations.StationLoader)
+      end)
+
+      :ok
+    end
+
+    test "the deprecated active-station routes answer no_active_station", %{conn: conn} do
+      expected = %{
+        "error" => "no_active_station",
+        "message" => "Nenhuma estação ativa: inicie a sessão por POST /sessions."
+      }
+
+      assert conn |> get(~p"/api/stations/active") |> json_response(404) == expected
+
+      assert conn
+             |> recycle()
+             |> post(~p"/api/stations/active/sessions", %{"audio_consent" => true})
+             |> json_response(404) == expected
+    end
+
+    test "POST /sessions still plays a published station",
+         %{conn: conn, admin: admin, package: package} do
+      kase = publish!(package, admin)
+
+      %{"session_id" => id} =
+        conn
+        |> post(~p"/sessions", %{"station_id" => kase.number, "audio_consent" => false})
+        |> json_response(201)
+
+      assert %{"outcome" => "patient_reply"} =
+               conn
+               |> recycle()
+               |> post(~p"/sessions/#{id}/messages", %{
+                 "role" => "learner",
+                 "modality" => "text",
+                 "text" => "Quando começou a dor?"
+               })
+               |> json_response(200)
+
+      assert %{"released_impressos" => []} =
+               conn |> recycle() |> get(~p"/sessions/#{id}/impressos") |> json_response(200)
+    end
+  end
 end
