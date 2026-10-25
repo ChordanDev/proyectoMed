@@ -51,6 +51,27 @@ addressee request on any path (text, voice, streamed voice).
 - The verification of an examiner turn is never spent, and no `verified_fact_ids` are
   recorded for it (#286).
 
+## A station with a companion (#341)
+
+A package whose `actors` include a companion (`role: companion`, at most one)
+plays both actors in the same generation.
+
+| Item | Decision |
+|---|---|
+| Marker | The prompt asks for `[PACIENTE]`, `[ACOMPANHANTE]` or `[EXAMINADOR]`. `[ACOMPANHANTE]` = the learner addresses the companion, or asks for a fact only the companion's list has. In doubt, whoever has the fact in its list; if nobody has it, `[PACIENTE]`. `Addressee` reads `[ACOMPANHANTE]` only for such a package (`companion: true`); without a companion it stays an unknown marker, as before. |
+| Profiles and facts | The prompt (`StationAI`, `companion_prompt`) shows each actor's profile and its own fact list (`Backend.Stations.Actors.facts/2`). A companion reply is checked and audited against the companion's own profile and facts (`Actors.speaker_package/2`). |
+| Speaker | The reply, the stored patient message and the generator history carry the speaker: `speaker: :companion` and `[ACOMPANHANTE]` before the earlier reply. Each streamed sentence carries `speaker` and `voice` (the voice key) to the voice worker, which labels the room event and picks the voice (see `docs/unreal-station-client.md`). |
+| Mandatory questions | In the last `:mandatory_questions_window_ms` (default 3 minutes) the per-turn part of the prompt lists the actors' mandatory questions no stored reply contains yet, each with its marker; the speaker asks the next one on a learner turn that asks for no fact. |
+| Grading | Unchanged: evidence is the learner turns, whoever they were addressed to, so a question to the companion counts like one to the patient (`companion_turn_test.exs`). |
+
+A single-actor package is unchanged on every path: same prompt, markers,
+messages, results and sentence events (no `speaker` or `voice` key).
+
+Limitations: the text API response and the session transcript are serialized by
+controllers this issue does not change, so they do not show the speaker yet;
+the non-streamed voice receipt carries no speaker either, and the worker reads
+it as `patient`.
+
 ## What each outcome shows
 
 | Outcome | Stored | Text API | Voice | Web |

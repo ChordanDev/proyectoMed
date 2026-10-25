@@ -87,6 +87,9 @@ class VoiceTurnReply:
     when the patient reply was refused, and `None` from an older server.
     `speech_ended_at` is the event-loop time the learner's
     utterance ended, set by `TurnManager` for the first-audio latency log.
+
+    A sentence of a station with a companion (#341) carries `speaker` (`patient`
+    or `companion`) and `voice`, the speaker's voice key; `None` otherwise.
     """
 
     def __init__(
@@ -97,6 +100,8 @@ class VoiceTurnReply:
         reply_text: str | None = None,
         index: int | None = None,
         addressee: str | None = None,
+        speaker: str | None = None,
+        voice: str | None = None,
     ):
         self.turn_id = turn_id
         self.status = status
@@ -104,6 +109,8 @@ class VoiceTurnReply:
         self.reply_text = reply_text
         self.index = index
         self.addressee = addressee
+        self.speaker = speaker
+        self.voice = voice
         self.speech_ended_at: float | None = None
 
     def is_committed_receipt(self) -> bool:
@@ -416,6 +423,8 @@ class PhoenixClient:
                                 generation_id=item.get("generation_id"),
                                 reply_text=item.get("text"),
                                 index=item.get("index"),
+                                speaker=_label(item.get("speaker")),
+                                voice=_label(item.get("voice")),
                             )
                         )
                     elif kind == "result" and isinstance(item.get("status"), str):
@@ -477,6 +486,11 @@ class PhoenixClient:
             raise VoiceFailure("malformed")
         if response.status_code >= 300:
             raise VoiceFailure("disconnected")
+
+
+def _label(value) -> str | None:
+    """A speaker or voice label from Phoenix (#341); anything but a non-empty string is none."""
+    return value if isinstance(value, str) and value else None
 
 
 def _stream_item(line: str) -> dict:
