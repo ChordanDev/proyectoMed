@@ -39,7 +39,7 @@ defmodule Backend.Stations.LearnerFeedback.AnthropicAdapterTest do
   end
 
   describe "request" do
-    test "uses the shared model setting, never the patient model (issue #256)" do
+    test "uses the shared model setting, never the patient or resolver model (issues #256, #343)" do
       previous = Application.fetch_env(:backend, Backend.Stations.StationAI.AnthropicClient)
 
       on_exit(fn ->
@@ -54,7 +54,8 @@ defmodule Backend.Stations.LearnerFeedback.AnthropicAdapterTest do
 
       Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient,
         model: "claude-opus-5-5",
-        patient_model: "claude-haiku-5-5"
+        patient_model: "claude-haiku-5-5",
+        resolver_model: "claude-sonnet-5-5"
       )
 
       test_pid = self()
