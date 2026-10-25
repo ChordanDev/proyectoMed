@@ -23,7 +23,7 @@ release of #302/#305. Phoenix must enforce it and tell the client when to show t
 - `request_impresso/2` (including its `unavailable` branch, owned by sibling #357) is untouched.
 - No extra model call; the marker set gains `[EXAMINADOR:EXAME]`.
 - `exam_request` is additive; every existing response field stays.
-- Web harness is frozen and outside this worker's edit surface (see Follow-ups).
+- Web harness is frozen and outside this worker's edit surface (see Log L5).
 
 ## Specs
 
@@ -40,8 +40,8 @@ release of #302/#305. Phoenix must enforce it and tell the client when to show t
 
 | ID | Specs | Route | Status | Commit / evidence |
 | --- | --- | --- | --- | --- |
-| T1 | S5, S6 | inline (bounded writer) | done | see Log L3 |
-| T2 | S1-S5, S7, S8 | inline (bounded writer) | done | see Log L4 |
+| T1 | S5, S6 | inline (bounded writer) | done | 966c899; RED 7 failing / GREEN 56 passed |
+| T2 | S1-S5, S7, S8 | inline (bounded writer) | done | 713d535; RED 21 failing / GREEN 158 passed |
 
 - T1 `Addressee` parses `[EXAMINADOR:EXAME]` (source `:exam_marker`); both prompts ask for it.
 - T2 Text, voice and streamed voice examiner turns release nothing, record no event and carry
@@ -53,3 +53,18 @@ release of #302/#305. Phoenix must enforce it and tell the client when to show t
 - L2 Exploration: release happens in `acknowledge_examiner_turn/2` and `keep_examiner_voice_turn/4`
   via `release_requested_impressos/3` (`backend/lib/backend/stations.ex`). The marker source
   flows through `take_addressee/4` and the streamed `marker_gate/2`; the flag rides on it.
+- L3 T1 (966c899): `Addressee` maps `[EXAMINADOR:EXAME]` to `{:examiner, :exam_marker}`;
+  both prompts ask for it and keep patient questions about past exams on `[PACIENTE]`.
+  RED: 7 failing in the addressee/prompt tests; GREEN: 56 passed; full backend 2347 passed.
+- L4 T2 (713d535): `release_requested_impressos/3` removed; `acknowledge_examiner_turn/3`
+  and `keep_examiner_voice_turn/4` carry `exam_request`; the streamed gate keeps the
+  flag per marker; `StationController` serializes `exam_request`, `VoiceWorkerController`
+  adds it to examiner receipts only. #302 release tests rewritten (not deleted), rubric
+  test now asserts no credit until the route is used. RED: 21 failing; GREEN: 158 passed;
+  full backend 2355 passed. Docs: `docs/design/turn-addressee.md`, `docs/unreal-station-client.md`.
+- L5 Checks: local CI PASSED (web 337 tests, ExUnit 2355, E2E 4, Credo, Dialyzer 0 errors);
+  voice worker `python -m unittest` 168 OK with no code change. Pending: the live pt-BR
+  marker check (needs the real model; not run by this worker) and the web harness tests
+  named in the acceptance criteria (`web/` is outside this worker's edit surface; the
+  web tests mock the backend, so they still pass).
+- Next step: PR review; run the live marker check and log misclassifications in the PR.
