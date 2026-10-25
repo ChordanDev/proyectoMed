@@ -39,7 +39,7 @@ defmodule Backend.Stations.UsageStoreTest do
     previous_adapter = Application.get_env(:backend, :station_ai_adapter)
     previous_store = Application.get_env(:backend, Backend.Stations.Usage.Store)
     Application.put_env(:backend, :station_ai_adapter, RecordingAdapter)
-    Application.put_env(:backend, Backend.Stations.Usage.Store, enabled: true)
+    Application.put_env(:backend, Backend.Stations.Usage.Store, enabled: true, async: false)
 
     on_exit(fn ->
       restore(:station_ai_adapter, previous_adapter)
@@ -63,6 +63,17 @@ defmodule Backend.Stations.UsageStoreTest do
       )
 
     %{kase: kase}
+  end
+
+  defp eventually(fun, attempts \\ 50) do
+    case fun.() do
+      nil when attempts > 0 ->
+        Process.sleep(20)
+        eventually(fun, attempts - 1)
+
+      result ->
+        result
+    end
   end
 
   defp restore(key, nil), do: Application.delete_env(:backend, key)
@@ -132,6 +143,27 @@ defmodule Backend.Stations.UsageStoreTest do
       id = start!(kase)
       Stations.create_message(id, %{role: :learner, text: @learner_text})
       assert Repo.get(SessionUsage, id) == nil
+    end
+
+    test "by default the row is written outside the finishing request", %{kase: kase} do
+      Application.put_env(:backend, Backend.Stations.Usage.Store, enabled: true)
+      id = start!(kase)
+      {:ok, _} = Stations.complete_session(id, :user)
+
+      assert eventually(fn -> Repo.get(SessionUsage, id) end)
+    end
+
+    test "an older computation never replaces a newer row", %{kase: kase} do
+      id = start!(kase)
+      {:ok, _} = Stations.complete_session(id, :user)
+      future = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      Repo.update_all(from(u in SessionUsage, where: u.session_id == ^id),
+        set: [jev_calls: 99, updated_at: future]
+      )
+
+      {:ok, _} = Stations.complete_session(id, :user)
+      assert Repo.get!(SessionUsage, id).jev_calls == 99
     end
 
     test "the store writes nothing when disabled (the test default)", %{kase: kase} do

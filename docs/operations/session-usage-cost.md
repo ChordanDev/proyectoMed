@@ -36,7 +36,10 @@ add up. A failed report is logged by kind and never stops the worker.
 The row is an upsert keyed by `session_id`, written when the session is
 finished (`POST /sessions/:id/finish`, or the timer), again after the
 educational result (grading and feedback call Claude after the finish), and
-again after a worker report. A session that is never finished, or that expires
+again after a worker report. The row is computed at the call and written in a
+separate process, so a slow or unreachable database never delays the finish or
+the result; a failed write is logged as `session usage not persisted` with the
+error type only. A write never replaces a row computed later. A session that is never finished, or that expires
 in memory before it is finished, has no row. Discarding a session drops its
 in-memory counters, never an existing row.
 

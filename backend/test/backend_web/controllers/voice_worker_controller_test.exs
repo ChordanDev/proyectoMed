@@ -1000,7 +1000,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
     setup do
       previous = Application.get_env(:backend, Backend.Stations.Usage.Store)
-      Application.put_env(:backend, Backend.Stations.Usage.Store, enabled: true)
+      Application.put_env(:backend, Backend.Stations.Usage.Store, enabled: true, async: false)
 
       on_exit(fn ->
         if previous,
