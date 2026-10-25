@@ -981,10 +981,14 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 if floor is not None:
                     context["turn_id_floor"] = floor
                 posted = []
+                usage = []
 
                 def handler(request):
                     if request.method == "GET":
                         return httpx.Response(200, json=context)
+                    if request.url.path.endswith("/usage"):
+                        usage.append(json.loads(request.content))
+                        return httpx.Response(202, json={"status": "recorded"})
                     body = json.loads(request.content)
                     posted.append(body)
                     if body["turn_id"] < expected:
@@ -1017,7 +1021,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 replies = []
 
                 async def run_transcribe(
-                    room, learner, context, tracker, phoenix, voice=None
+                    room, learner, context, tracker, phoenix, voice=None, meter=None
                 ):
                     self.assertEqual(tracker.last_accepted_turn_id, committed)
                     self.assertIsInstance(voice, worker.PatientVoice)
@@ -1042,6 +1046,17 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
 
                 self.assertEqual(posted, [{"turn_id": expected, "text": "New question"}])
+                # The job's usage is reported once, when it ends (#342).
+                self.assertEqual(len(usage), 1)
+                self.assertEqual(
+                    set(usage[0]),
+                    {
+                        "report_id",
+                        "deepgram_audio_seconds",
+                        "elevenlabs_characters",
+                        "livekit_participant_minutes",
+                    },
+                )
                 self.assertEqual(len(replies), 1)
                 self.assertEqual(replies[0].turn_id, expected)
                 ctx.shutdown.assert_called_once()
@@ -1051,11 +1066,17 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     ):
         posted = []
 
+        usage = []
+
         def handler(request):
             if request.method == "GET":
                 return httpx.Response(
                     200, json={"last_turn_id": 0, "language": "pt-BR", "keyterms": []}
                 )
+            if request.url.path.endswith("/usage"):
+                # The session is over, and the usage of its job is still reported (#342).
+                usage.append(json.loads(request.content))
+                return httpx.Response(202, json={"status": "recorded"})
             if request.url.path.endswith("/cancel"):
                 # The timer already completed the session on the server.
                 return httpx.Response(422, json={"error": "session_completed"})
@@ -1078,7 +1099,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         replies = []
         streams_started = []
 
-        async def run_transcribe(room, learner, context, tracker, phoenix, voice=None):
+        async def run_transcribe(
+            room, learner, context, tracker, phoenix, voice=None, meter=None
+        ):
             streams_started.append(1)
             await transcribe(
                 room, learner, context, tracker, phoenix,
@@ -1104,6 +1127,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted, [{"turn_id": 1, "text": "Late question"}])
         self.assertEqual(replies, [])
         self.assertEqual(len(streams_started), 1)
+        self.assertEqual(len(usage), 1)
         publish.assert_awaited_with(
             room, {"session_id": "s1", "error": "station_time_elapsed"}
         )

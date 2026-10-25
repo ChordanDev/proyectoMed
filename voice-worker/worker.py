@@ -8,8 +8,9 @@ Phoenix kept without a reply is never spoken: a turn addressed to the examiner i
 published as an examiner acknowledgement (`status: acknowledged`, #274) and a refused
 patient reply as `status: kept` (#269). Every reply event names its `speaker` (`patient`
 or `companion`, #341), and each actor speaks with the ElevenLabs voice its voice key maps
-to in `ELEVENLABS_VOICE_IDS`, on the one patient track. Never logs transcript text,
-reply text or audio.
+to in `ELEVENLABS_VOICE_IDS`, on the one patient track. When the job ends it reports
+its provider usage (Deepgram audio seconds, ElevenLabs characters, LiveKit
+participant minutes, #342) to Phoenix. Never logs transcript text, reply text or audio.
 """
 
 # pyright: reportMissingImports=false
@@ -34,6 +35,7 @@ from transcripts import (
     classify_provider_error,
     process_speech_stream,
 )
+from usage import UsageMeter, report_usage
 
 ROOM_PREFIX = "station-session-"
 # Silence that closes an utterance. Deepgram's plugin default (25 ms) split one sentence
@@ -66,11 +68,16 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_retries=turn_retries,
     )
     voice = None
+    # Deepgram seconds, ElevenLabs characters and room minutes of this job (#342).
+    meter = UsageMeter()
+    connected = False
     async with phoenix:
         try:
             # Consent/active check happens before any audio reaches Deepgram.
             context = await phoenix.context()
             await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+            connected = True
+            meter.join("voice-worker")
             # Older Phoenix contexts expose only the committed cursor. Deploy the
             # additive server floor before relying on restart-safe allocation.
             tracker = TurnTracker(
@@ -81,7 +88,11 @@ async def entrypoint(ctx: JobContext) -> None:
             tts = build_tts(session_id, context)
             player = (
                 SpeechPlayer(
-                    ctx.room, tracker, tts, voices=build_voice_tts(session_id, context)
+                    ctx.room,
+                    tracker,
+                    tts,
+                    voices=build_voice_tts(session_id, context),
+                    meter=meter,
                 )
                 if tts is not None
                 else None
@@ -94,9 +105,19 @@ async def entrypoint(ctx: JobContext) -> None:
                     identity=f"learner-{session_id}"
                 )
                 tracker.segments = []  # never glue a half utterance onto the next connection
-                await transcribe(
-                    ctx.room, learner, context, tracker, phoenix, voice=voice
-                )
+                meter.join(learner.identity)
+                try:
+                    await transcribe(
+                        ctx.room,
+                        learner,
+                        context,
+                        tracker,
+                        phoenix,
+                        voice=voice,
+                        meter=meter,
+                    )
+                finally:
+                    meter.leave(learner.identity)
         except VoiceFailure as failure:
             logger.warning(
                 "voice worker stopped for session %s: %s", session_id, failure.kind
@@ -105,7 +126,17 @@ async def entrypoint(ctx: JobContext) -> None:
         finally:
             if voice is not None:
                 await voice.aclose()
+            if connected:
+                meter.leave("voice-worker")
+                await report_usage(phoenix, meter, job_id(ctx), session_id)
             ctx.shutdown()
+
+
+def job_id(ctx) -> str:
+    """The LiveKit job id names the usage report, so a retried report replaces itself."""
+    job = getattr(ctx, "job", None)
+    value = getattr(job, "id", None)
+    return value if isinstance(value, str) and value else f"job-{id(ctx)}"
 
 
 def phoenix_turn_settings(environ) -> tuple[float, int]:
@@ -414,6 +445,7 @@ async def transcribe(
     on_reply=None,
     cleanup_timeout: float = 1.0,
     voice: PatientVoice | None = None,
+    meter: UsageMeter | None = None,
 ) -> None:
     if voice is not None and on_reply is None:
         on_reply = voice.on_reply
@@ -437,6 +469,8 @@ async def transcribe(
     async def pump() -> None:
         async for frame_event in audio:
             stream.push_frame(frame_event.frame)
+            if meter is not None:
+                meter.add_audio(frame_event.frame)
         stream.end_input()
 
     pump_task = asyncio.create_task(pump())

@@ -34,6 +34,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
   alias Backend.Stations.TTS.StageDirections
+  alias Backend.Stations.Usage
 
   @default_mandatory_questions_window_ms :timer.minutes(3)
   @early_timer_finish_tolerance_ms 2_000
@@ -322,6 +323,7 @@ defmodule Backend.Stations do
 
       {:ok, %{status: :completed} = session} ->
         cleanup_voice_room(session_id)
+        :ok = Usage.Store.persist(session)
         {:ok, session}
 
       {:error, reason} ->
@@ -337,6 +339,8 @@ defmodule Backend.Stations do
     case Conversation.complete(session_id, reason) do
       {:ok, session} ->
         cleanup_voice_room(session_id)
+        # The finished session's usage row (issue #342).
+        :ok = Usage.Store.persist(session)
         {:ok, session}
 
       {:error, reason} ->
@@ -406,7 +410,10 @@ defmodule Backend.Stations do
              | :message_too_long
              | {:refused, :low_confidence | :semantic_refusal, Conversation.message()}
              | term()}
-  def create_message(session_id, params) do
+  def create_message(session_id, params),
+    do: Usage.track(session_id, fn -> do_create_message(session_id, params) end)
+
+  defp do_create_message(session_id, params) do
     role = Map.get(params, :role) || Map.get(params, "role") || :learner
     modality = normalize_modality(Map.get(params, :modality) || Map.get(params, "modality"))
     text = Map.get(params, :text) || Map.get(params, "text")
@@ -823,9 +830,11 @@ defmodule Backend.Stations do
              | :expired
              | {:invalid_attempt, RubricAssessment.attempt_error()}}
   def assess_session(session_id, opts \\ []) do
-    with {:ok, session} <- fetch_completed_session(session_id) do
-      RubricAssessment.assess(session_package(session), session, opts)
-    end
+    Usage.track(session_id, fn ->
+      with {:ok, session} <- fetch_completed_session(session_id) do
+        RubricAssessment.assess(session_package(session), session, opts)
+      end
+    end)
   end
 
   @doc """
@@ -846,12 +855,54 @@ defmodule Backend.Stations do
   """
   @spec get_educational_result(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_educational_result(session_id, opts \\ []) do
-    with {:ok, assessment} <- graded_assessment(session_id, opts),
-         {:ok, package} <- fetch_package(session_id) do
-      assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
-      {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
+    Usage.track(session_id, fn ->
+      with {:ok, assessment} <- graded_assessment(session_id, opts),
+           {:ok, package} <- fetch_package(session_id) do
+        assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
+        # Grading and feedback may have called providers after the finish (#342).
+        persist_usage(session_id)
+        {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
+      end
+    end)
+  end
+
+  @doc """
+  Records the audio usage the voice worker reports for a session (issue #342;
+  audio never passes through Phoenix, ADR-013 #209): `report_id` (the worker
+  job), `deepgram_audio_seconds`, `elevenlabs_characters` and
+  `livekit_participant_minutes`, cumulative per job (see
+  `Backend.Stations.Usage.voice_report/1`). An active or finished session
+  accepts it; a finished session's usage row is rewritten with it.
+  """
+  @spec record_voice_usage(String.t(), map()) ::
+          :ok | {:error, :invalid_usage | :not_found | :expired}
+  def record_voice_usage(session_id, params) when is_map(params) do
+    with {:ok, report_id, voice} <- Usage.voice_report(params),
+         {:ok, session} <- Conversation.fetch(session_id) do
+      :ok = Usage.record_voice(session_id, report_id, voice)
+      Usage.Store.persist(session)
     end
   end
+
+  defp persist_usage(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, session} -> Usage.Store.persist(session)
+      {:error, _reason} -> :ok
+    end
+  end
+
+  # ============================================================================
+  # Usage and cost (issue #342)
+  # ============================================================================
+
+  @doc """
+  The estimated cost of the sessions finished in `[from, to)`, per station
+  (issue #342): for each `station_id`, the number of `sessions`, the
+  `median_cost_usd` and the `total_cost_usd`, ordered by station id. Rows
+  are content-free (`Backend.Stations.Usage.SessionUsage`).
+  """
+  @spec session_cost_report(DateTime.t(), DateTime.t()) :: [map()]
+  defdelegate session_cost_report(from, to), to: Usage.Store, as: :cost_report
 
   defp graded_assessment(session_id, opts) do
     with {:ok, _session} <- fetch_completed_session(session_id) do
@@ -1006,7 +1057,10 @@ defmodule Backend.Stations do
   @spec request_impresso(String.t(), map()) ::
           {:ok, map()}
           | {:error, :not_found | :expired | :completed | :invalid_request | :message_too_long}
-  def request_impresso(session_id, request_params) do
+  def request_impresso(session_id, request_params),
+    do: Usage.track(session_id, fn -> do_request_impresso(session_id, request_params) end)
+
+  defp do_request_impresso(session_id, request_params) do
     text = get_param(request_params, :text)
 
     # The request text enters the rubric evidence pool, so it shares the
@@ -1235,13 +1289,15 @@ defmodule Backend.Stations do
              | term()}
   def process_voice_turn(session_id, turn_id, text)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
-    case admit_voice_turn(session_id, turn_id, text) do
-      {:ok, generation_id, learner_text} ->
-        process_voice_reply(session_id, turn_id, generation_id, learner_text)
+    Usage.track(session_id, fn ->
+      case admit_voice_turn(session_id, turn_id, text) do
+        {:ok, generation_id, learner_text} ->
+          process_voice_reply(session_id, turn_id, generation_id, learner_text)
 
-      other ->
-        other
-    end
+        other ->
+          other
+      end
+    end)
   end
 
   def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
@@ -1318,13 +1374,15 @@ defmodule Backend.Stations do
   def stream_voice_turn(session_id, turn_id, text, acc, sink)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) and
              is_function(sink, 2) do
-    case admit_voice_turn(session_id, turn_id, text) do
-      {:ok, generation_id, learner_text} ->
-        stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
+    Usage.track(session_id, fn ->
+      case admit_voice_turn(session_id, turn_id, text) do
+        {:ok, generation_id, learner_text} ->
+          stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
 
-      other ->
-        {other, acc}
-    end
+        other ->
+          {other, acc}
+      end
+    end)
   end
 
   def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink),

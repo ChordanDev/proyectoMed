@@ -44,8 +44,11 @@ class SpeechPlayer:
         source_factory=None,
         track_factory=None,
         voices: dict | None = None,
+        meter=None,
     ):
         self.room = room
+        # Counts the characters sent to ElevenLabs (#342); optional.
+        self.meter = meter
         self.tracker = tracker
         self.session_id = tracker.session_id
         self.tts = tts
@@ -209,6 +212,8 @@ class SpeechPlayer:
                 return None
             tts = self.voices.get(getattr(reply, "voice", None), self.tts)
             stream = tts.synthesize(reply.reply_text, conn_options=SYNTHESIS_OPTIONS)
+            if self.meter is not None:
+                self.meter.add_characters(reply.reply_text)
             async for audio in stream:
                 if self._speaking is not reply:
                     return None
