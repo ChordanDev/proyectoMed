@@ -13,11 +13,31 @@ defmodule BackendWeb.StationController do
   # `voice_mode` (#270) tells the web which single voice experience to offer:
   # "realtime", "turn" or "off" (config/runtime.exs resolves VOICE_MODE).
   def active(conn, _params) do
-    voice_mode = Application.get_env(:backend, :voice_mode, "turn")
-    json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
+    if Stations.active_station_available?() do
+      voice_mode = Application.get_env(:backend, :voice_mode, "turn")
+      json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
+    else
+      no_active_station(conn)
+    end
   end
 
+  # Deprecated (issue #334): production has no boot-time active station.
   def create_session(conn, params) do
+    if Stations.active_station_available?(),
+      do: create_active_session(conn, params),
+      else: no_active_station(conn)
+  end
+
+  defp no_active_station(conn) do
+    conn
+    |> put_status(:not_found)
+    |> json(%{
+      error: "no_active_station",
+      message: "Nenhuma estação ativa: inicie a sessão por POST /sessions."
+    })
+  end
+
+  defp create_active_session(conn, params) do
     audio_consent =
       case params do
         %{"audio_consent" => val} -> val
@@ -256,7 +276,7 @@ defmodule BackendWeb.StationController do
   def show_session(conn, %{"id" => session_id}) do
     case Stations.get_session(session_id) do
       {:ok, session} ->
-        json(conn, %{
+        %{
           session_id: session.session_id,
           station_id: session.station_id,
           station_version: session.station_version,
@@ -269,7 +289,9 @@ defmodule BackendWeb.StationController do
             session |> Map.get(:completion_reason) |> completion_reason_to_string(),
           messages: Enum.map(session.messages, &message_to_json/1),
           server_now: DateTime.to_iso8601(DateTime.utc_now())
-        })
+        }
+        |> put_station(Stations.session_station(session))
+        |> then(&json(conn, &1))
 
       {:error, :not_found} ->
         conn
@@ -430,6 +452,10 @@ defmodule BackendWeb.StationController do
         })
     end
   end
+
+  # A session started on a published station (issue #334) also shows it.
+  defp put_station(body, nil), do: body
+  defp put_station(body, station), do: Map.put(body, :station, station)
 
   defp parse_finish_reason("user"), do: {:ok, :user}
   defp parse_finish_reason("timer"), do: {:ok, :timer}

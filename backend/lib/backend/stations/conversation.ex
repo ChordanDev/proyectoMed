@@ -23,6 +23,13 @@ defmodule Backend.Stations.Conversation do
   @default_purge_interval_ms :timer.minutes(1)
   @default_station_duration_ms :timer.minutes(10)
   @default_turn_grace_ms :timer.seconds(30)
+  @pinned_station_keys [
+    :package,
+    :station_version_id,
+    :station_slug,
+    :station_area,
+    :station_theme
+  ]
 
   @type session :: %{
           optional(:completed_at) => DateTime.t(),
@@ -44,9 +51,14 @@ defmodule Backend.Stations.Conversation do
               reason: :station_ai_unavailable
             }
             | nil,
+          optional(:package) => map(),
+          optional(:station_version_id) => pos_integer(),
+          optional(:station_slug) => String.t(),
+          optional(:station_area) => String.t(),
+          optional(:station_theme) => String.t(),
           session_id: String.t(),
-          station_id: String.t(),
-          station_version: String.t(),
+          station_id: String.t() | pos_integer(),
+          station_version: String.t() | pos_integer(),
           audio_consent: boolean(),
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
@@ -73,8 +85,8 @@ defmodule Backend.Stations.Conversation do
 
   @type impresso_request_event :: %{
           request_id: String.t(),
-          station_id: String.t(),
-          station_version: String.t(),
+          station_id: String.t() | pos_integer(),
+          station_version: String.t() | pos_integer(),
           order: pos_integer(),
           text: String.t(),
           matched_ids: [String.t()],
@@ -118,6 +130,10 @@ defmodule Backend.Stations.Conversation do
   @doc """
   Starts a session. `:audio_consent` defaults to `false`: audio transcription is
   refused until the learner explicitly grants it.
+
+  A session started on a published Station version (issue #334) also carries
+  its pinned `:package` and the version's `:station_version_id`,
+  `:station_slug`, `:station_area` and `:station_theme`.
   """
   @spec start(map() | keyword()) :: session()
   def start(attrs \\ %{}) do
@@ -522,6 +538,8 @@ defmodule Backend.Stations.Conversation do
       next_generation_id: 1,
       failed_voice_turn: nil
     }
+
+    session = Map.merge(session, Map.take(attrs, @pinned_station_keys))
 
     true = :ets.insert(__MODULE__, {session.session_id, session})
     Process.send_after(self(), {:deadline, session.session_id}, station_duration_ms())

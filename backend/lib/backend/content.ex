@@ -320,4 +320,51 @@ defmodule Backend.Content do
         preload: [case: c]
     )
   end
+
+  @doc """
+  The published version a new session plays for case `number` (issue #334):
+  the latest version of an approved case, with its case preloaded, or `nil`
+  when the number is unknown or the case is pending or disapproved.
+  """
+  @spec get_published_station(integer()) :: StationVersion.t() | nil
+  def get_published_station(number) when is_integer(number) do
+    Repo.one(
+      from sv in StationVersion,
+        join: c in assoc(sv, :case),
+        where: c.status == :approved and c.number == ^number,
+        order_by: [desc: sv.version_number],
+        limit: 1,
+        preload: [case: c]
+    )
+  end
+
+  @doc """
+  Draws one published station at random (issue #334): the latest version of a
+  random approved case, within `area` (the `[ÁREA]` of that version) when one
+  is given. Returns `nil` when nothing is published there.
+  """
+  @spec random_published_station(String.t() | nil) :: StationVersion.t() | nil
+  def random_published_station(area \\ nil) do
+    latest_ids =
+      from sv in StationVersion,
+        join: c in assoc(sv, :case),
+        where: c.status == :approved,
+        distinct: c.number,
+        order_by: [asc: c.number, desc: sv.version_number],
+        select: sv.id
+
+    query =
+      from sv in StationVersion,
+        where: sv.id in subquery(latest_ids),
+        order_by: fragment("random()"),
+        limit: 1,
+        preload: [:case]
+
+    query
+    |> where_area(area)
+    |> Repo.one()
+  end
+
+  defp where_area(query, area) when is_binary(area), do: where(query, [sv], sv.area == ^area)
+  defp where_area(query, _area), do: query
 end

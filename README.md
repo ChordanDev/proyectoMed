@@ -747,17 +747,24 @@ key, domain or sender refuses to boot, naming the missing variable.
 
 ### Active station
 
-The backend serves one active station, chosen at boot. No code edit is needed to
-switch it.
+In local development the backend also serves one active station from
+`backend/priv/stations`, chosen at boot, for the deprecated
+`/api/stations/active` routes of the frozen web harness. No code edit is needed
+to switch it.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `ACTIVE_STATION_ID` | Station directory under `backend/priv/stations` to load at boot, for example `acute-appendicitis` (`dev` and `prod`; ignored in `test`). Unset or blank keeps the default. | `chest-pain-initial-assessment` |
+| `ACTIVE_STATION_ID` | Station directory under `backend/priv/stations` to load at boot, for example `acute-appendicitis` (`dev` only; ignored in `test`; refused in `prod`). Unset or blank keeps the default. | `chest-pain-initial-assessment` |
 
 `backend/config/runtime.exs` reads it once, at boot. Only a plain directory name
 (`[a-z0-9-]+`) is accepted. A malformed id, an unknown id, or a package that
 fails validation stops the boot with an error that names the id. Check the
 result with `curl http://localhost:4000/api/stations/active`.
+
+Production never boots from `priv/stations` (issue #334): the file loader is
+off, setting `ACTIVE_STATION_ID` stops the boot, and the active-station routes
+answer `404 no_active_station`. Learners start sessions on published stations
+from the database with `POST /sessions` (see `docs/unreal-station-client.md`).
 
 ### Turn-based voice providers (Deepgram and ElevenLabs)
 

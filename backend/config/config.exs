@@ -54,6 +54,10 @@ config :backend,
   patient_audit_deadline_ms: 10_000,
   learner_message_max_characters: 2_000,
   active_station_id: "chest-pain-initial-assessment",
+  # The file loader serves the boot-time active station from priv/stations to
+  # tests and local development; production turns it off and serves stations
+  # only from the database (issue #334, see runtime.exs).
+  file_station_loader: true,
   # Resolved from VOICE_MODE in runtime.exs outside :test (#270).
   voice_mode: "turn"
 

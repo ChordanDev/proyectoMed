@@ -28,6 +28,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.StationAI.Addressee
   alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
+  alias Backend.Stations.StationPackage
   alias Backend.Stations.SttKeyterms
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
@@ -53,6 +54,14 @@ defmodule Backend.Stations do
     |> Map.take(["station_id", "version", "language", "display_title"])
     |> Map.put("candidate_brief", Map.take(package["candidate_brief"], ["scenario", "tasks"]))
   end
+
+  @doc """
+  Whether a boot-time active station exists: the file loader runs in tests and
+  local development only; production serves stations only from the database
+  (issue #334).
+  """
+  @spec active_station_available?() :: boolean()
+  def active_station_available?, do: StationLoader.running?()
 
   @doc """
   Returns the full validated active Station Package.
@@ -115,6 +124,15 @@ defmodule Backend.Stations do
     end)
   end
 
+  @doc """
+  The Pre-Station Notice shown before a station (ADR-003 #36, issue #334): the
+  pt-BR `title`, `body`, `educational_disclaimer` and `audio_consent` texts and
+  `providers`, every active provider with its roles. See
+  `Backend.Stations.PreStationNotice`.
+  """
+  @spec pre_station_notice() :: map()
+  defdelegate pre_station_notice, to: Backend.Stations.PreStationNotice, as: :build
+
   # ============================================================================
   # Session Lifecycle
   # ============================================================================
@@ -136,6 +154,110 @@ defmodule Backend.Stations do
       |> Map.put_new(:station_version, package["version"])
 
     Conversation.start(merged_attrs)
+  end
+
+  @doc """
+  Starts a session on a published Station version from the database (issue
+  #334, ADR-013 amendment on #209).
+
+  `selection` is `{:station, number}` (the catalog id, which is the case
+  number) or `{:random, area}`, where `area` is an `[ÁREA]` or `nil` for any
+  area. The session pins the latest published version at this moment: its
+  validated package is kept with the session, so a later re-publish never
+  changes a session in progress. `attrs` takes `:audio_consent`.
+
+  The session's `station_id` is the case number and `station_version` the
+  published version number; `station_slug`, `station_area` and
+  `station_theme` describe that version.
+
+  Returns `{:error, :station_not_found}` when no published station has that
+  number, and `{:error, :no_published_station}` when nothing is published in
+  the area (or at all).
+  """
+  @spec start_station_session({:station, integer()} | {:random, String.t() | nil}, map()) ::
+          {:ok, Conversation.session()}
+          | {:error, :station_not_found | :no_published_station | :invalid_station_package}
+  def start_station_session(selection, attrs \\ %{}) do
+    attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
+
+    with {:ok, version} <- published_version(selection),
+         {:ok, package} <- pinned_package(version) do
+      {:ok,
+       attrs
+       |> Map.take([:audio_consent])
+       |> Map.merge(%{
+         station_id: version.case.number,
+         station_version: version.version_number,
+         station_version_id: version.id,
+         station_slug: version.station_id,
+         station_area: version.area,
+         station_theme: version.theme,
+         package: package
+       })
+       |> Conversation.start()}
+    end
+  end
+
+  defp published_version({:station, number}) when is_integer(number) do
+    case Backend.Content.get_published_station(number) do
+      nil -> {:error, :station_not_found}
+      version -> {:ok, version}
+    end
+  end
+
+  defp published_version({:random, area}) when is_binary(area) or is_nil(area) do
+    case Backend.Content.random_published_station(area) do
+      nil -> {:error, :no_published_station}
+      version -> {:ok, version}
+    end
+  end
+
+  # The stored package passed the case format parser at approval; validating it
+  # again yields the same runtime shape the file loader serves after decoding.
+  defp pinned_package(version) do
+    case StationPackage.validate(version.package) do
+      {:ok, package} ->
+        {:ok, package}
+
+      {:error, _errors} ->
+        Logger.error("[Stations] invalid published package station_version_id=#{version.id}")
+        {:error, :invalid_station_package}
+    end
+  end
+
+  @doc """
+  The learner-facing station of a session started on a published version
+  (issue #334): the catalog fields (`id`, `version`, `slug`, `area`, `theme`,
+  public `actors`) plus `display_title`, `language` and the `candidate_brief`
+  projected to its `scenario` and `tasks`. `nil` for a session started on the
+  deprecated active station. Nothing examiner-only is included.
+  """
+  @spec session_station(Conversation.session()) :: map() | nil
+  def session_station(%{package: package} = session) when is_map(package) do
+    %{
+      "id" => session.station_id,
+      "version" => session.station_version,
+      "slug" => session.station_slug,
+      "area" => session.station_area,
+      "theme" => session.station_theme,
+      "display_title" => package["display_title"],
+      "language" => package["language"],
+      "candidate_brief" => Map.take(package["candidate_brief"] || %{}, ["scenario", "tasks"]),
+      "actors" => catalog_actors(package["actors"] || [])
+    }
+  end
+
+  def session_station(_legacy_session), do: nil
+
+  # The package a session plays: the version it pinned (issue #334), or, for
+  # a session started on the deprecated active station, the file loader's.
+  defp session_package(%{package: package}) when is_map(package), do: package
+  defp session_package(_legacy_session), do: get_active_package()
+
+  defp fetch_package(session_id) do
+    with {:ok, session} <- Conversation.fetch(session_id) do
+      {:ok, session_package(session)}
+    end
   end
 
   @doc """
@@ -273,8 +395,8 @@ defmodule Backend.Stations do
     }
 
     with :ok <- validate_learner_message_length(text),
-         {:ok, _session, token} <- Conversation.begin_turn(session_id, learner_message) do
-      generate_and_resolve_turn(session_id, token, params)
+         {:ok, session, token} <- Conversation.begin_turn(session_id, learner_message) do
+      generate_and_resolve_turn(session_id, session_package(session), token, params)
     end
   end
 
@@ -301,10 +423,10 @@ defmodule Backend.Stations do
   # An exam request that names an authored impresso is examiner-addressed
   # without asking the model (#309); any other turn is decided by the marker
   # the patient generation starts with.
-  defp generate_and_resolve_turn(session_id, token, params) do
+  defp generate_and_resolve_turn(session_id, package, token, params) do
     started_at = JevDecision.monotonic_now_ms()
 
-    if impresso_request?(Map.get(params, :text) || Map.get(params, "text")) do
+    if impresso_request?(package, Map.get(params, :text) || Map.get(params, "text")) do
       log_turn_addressee(:examiner, :impresso, :text, started_at)
       acknowledge_examiner_turn(session_id, token)
     else
@@ -343,9 +465,8 @@ defmodule Backend.Stations do
   # `params` may carry a stable `request_id` for an idempotent retry.
   # Returns the newly released impressos; a failure releases nothing.
   defp release_requested_impressos(session_id, text, params) when is_binary(text) do
-    package = get_active_package()
-
-    with [_ | _] <- Impressos.match(package["impressos"] || [], Impressos.normalize(text)),
+    with {:ok, package} <- fetch_package(session_id),
+         [_ | _] <- Impressos.match(package["impressos"] || [], Impressos.normalize(text)),
          {:ok, %{newly_released: newly_released}} <-
            request_impresso(session_id, Map.put(params, :text, text)) do
       newly_released
@@ -358,12 +479,11 @@ defmodule Backend.Stations do
 
   # Whether the learner text names an authored impresso (#302, #305), which
   # makes the turn an exam request to the examiner (#309).
-  defp impresso_request?(text) when is_binary(text) do
-    package = get_active_package()
+  defp impresso_request?(package, text) when is_binary(text) do
     Impressos.match(package["impressos"] || [], Impressos.normalize(text)) != []
   end
 
-  defp impresso_request?(_text), do: false
+  defp impresso_request?(_package, _text), do: false
 
   # Splits the addressee decided by the generation's marker (#309) from the
   # reply, logging it.
@@ -385,9 +505,8 @@ defmodule Backend.Stations do
   end
 
   defp generate_patient_turn(session_id, token, params, started_at) do
-    package = get_active_package()
-
     with {:ok, current_session} <- Conversation.fetch(session_id),
+         package = session_package(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
       case take_addressee(ai_reply, :text, started_at) do
@@ -603,7 +722,7 @@ defmodule Backend.Stations do
   def get_session_result(session_id) do
     case Conversation.fetch(session_id) do
       {:ok, %{status: :completed} = session} ->
-        package = get_active_package()
+        package = session_package(session)
         evaluation = Evaluator.evaluate(package, session)
 
         criteria =
@@ -664,7 +783,7 @@ defmodule Backend.Stations do
              | {:invalid_attempt, RubricAssessment.attempt_error()}}
   def assess_session(session_id, opts \\ []) do
     with {:ok, session} <- fetch_completed_session(session_id) do
-      RubricAssessment.assess(get_active_package(), session, opts)
+      RubricAssessment.assess(session_package(session), session, opts)
     end
   end
 
@@ -686,8 +805,8 @@ defmodule Backend.Stations do
   """
   @spec get_educational_result(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_educational_result(session_id, opts \\ []) do
-    with {:ok, assessment} <- graded_assessment(session_id, opts) do
-      package = get_active_package()
+    with {:ok, assessment} <- graded_assessment(session_id, opts),
+         {:ok, package} <- fetch_package(session_id) do
       assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
       {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
     end
@@ -852,8 +971,8 @@ defmodule Backend.Stations do
     # The request text enters the rubric evidence pool, so it shares the
     # learner message limit and is rejected (never truncated) before recording.
     with :ok <- validate_impresso_text(text),
-         :ok <- validate_learner_message_length(text) do
-      package = get_active_package()
+         :ok <- validate_learner_message_length(text),
+         {:ok, package} <- fetch_package(session_id) do
       normalized_text = Impressos.normalize(text)
       matched_ids = Impressos.match(package["impressos"] || [], normalized_text)
       request_id = resolve_request_id(request_params)
@@ -878,7 +997,7 @@ defmodule Backend.Stations do
   def list_impressos(session_id) do
     case Conversation.fetch(session_id) do
       {:ok, session} ->
-        package = get_active_package()
+        package = session_package(session)
 
         {:ok,
          %{
@@ -956,7 +1075,7 @@ defmodule Backend.Stations do
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_active(session),
          :ok <- ensure_audio_consent(session) do
-      package = get_active_package()
+      package = session_package(session)
 
       {:ok,
        %{
@@ -1313,7 +1432,7 @@ defmodule Backend.Stations do
          :ok <- ensure_voice_turn_open(session) do
       started_at = JevDecision.monotonic_now_ms()
 
-      if impresso_request?(learner_text) do
+      if impresso_request?(session_package(session), learner_text) do
         log_turn_addressee(:examiner, :impresso, :voice, started_at)
         keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
       else
@@ -1345,10 +1464,9 @@ defmodule Backend.Stations do
   end
 
   defp generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at) do
-    package = get_active_package()
-
     with {:ok, current_session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(current_session),
+         package = session_package(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
       case take_addressee(ai_reply, :voice, started_at) do
@@ -1441,7 +1559,7 @@ defmodule Backend.Stations do
 
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(session) do
-      if impresso_request?(learner_text) do
+      if impresso_request?(session_package(session), learner_text) do
         log_turn_addressee(:examiner, :impresso, :voice, started_at)
         {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
       else
@@ -1468,7 +1586,7 @@ defmodule Backend.Stations do
          acc,
          sink
        ) do
-    package = get_active_package()
+    package = session_package(session)
     context = format_context(session, package)
     mode = PatientVerification.mode()
     parent = self()
