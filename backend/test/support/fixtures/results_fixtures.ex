@@ -76,9 +76,12 @@ defmodule Backend.ResultsFixtures do
 
   @doc """
   Starts a session of `user` on `kase`, sends one learner message and finishes
-  it. Returns the session id.
+  it. Returns the session id. A learner gets an active subscription first,
+  since starting a session requires one (#339).
   """
   def finished_session_fixture(user, kase) do
+    if user, do: Backend.BillingFixtures.subscribe_user(user)
+
     {:ok, session} =
       Stations.start_station_session({:station, kase.number}, %{
         audio_consent: false,
