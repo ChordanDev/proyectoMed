@@ -64,6 +64,7 @@ config :backend, Backend.Billing,
     %{product_id: "revalida_mensal_cartao", name: "Mensal no cartão", payment: :card},
     %{product_id: "revalida_mensal_pix", name: "Mensal no Pix", payment: :pix}
   ],
+  default_daily_quota: 3,
   purchase_links: %{
     card: "https://pay.rev.cat/test-card-token",
     pix: "https://pay.rev.cat/test-pix-token"

@@ -34,6 +34,19 @@ Each learner gets a random UUIDv4 `app_user_id` the first time it is needed (tab
 - Plans live in `config/config.exs` under `Backend.Billing`, keyed by RevenueCat `product_id`: `revalida_mensal_cartao` (card) and `revalida_mensal_pix` (Pix). The webhook carries no plan metadata or payment method, so the plan table decides both. The entitlement identifier is `simulador`.
 - Set the custom success page of each Web Purchase Link to `<host>/conta`.
 
+## Daily quotas
+
+Each plan has a daily simulation quota (#340). The webhook carries no plan metadata (research A9), so the quota lives in the `billing_plan_quotas` table, keyed by RevenueCat `product_id`. Changing it needs no deploy.
+
+| `product_id` | Daily quota (seeded) |
+| --- | --- |
+| `revalida_mensal_cartao` | 10 |
+| `revalida_mensal_pix` | 10 |
+
+- A product without a row (a new product in RevenueCat, or a learner without a product) gets `default_daily_quota` from `config/config.exs` (3). Add the row before selling a new product.
+- To change or add a quota, run `Backend.Billing.set_daily_quota("<product_id>", <n>)` in a remote console. An admin page can come later. A quota of 0 blocks every session of that product.
+- **Day boundary.** The quota day starts at local midnight in `America/Sao_Paulo`, which is 03:00 UTC. Brazil has had no daylight saving time since 2019, so this is a fixed UTC−03:00 offset and no time zone database is used. If daylight saving time ever returns, `Backend.Billing.quota_day/1` must change.
+
 ## Webhook processing
 
 `Backend.Billing.verify_webhook/3` and `Backend.Billing.process_webhook_event/1`:
