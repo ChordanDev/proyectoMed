@@ -51,9 +51,26 @@ Each learner gets a random UUIDv4 `app_user_id` the first time it is needed (tab
    | `EXPIRATION` | End access. |
    | `TEST`, events for another entitlement, and other types (`BILLING_ISSUE`, `TRANSFER`, …) | Recorded, no effect. |
 
+## Webhook endpoint
+
+Set the webhook URL in the RevenueCat dashboard to `https://<host>/webhooks/revenuecat`, with the `Authorization` header value of `REVENUECAT_WEBHOOK_AUTHORIZATION` and the signing secret of `REVENUECAT_WEBHOOK_SECRET`.
+
+`BackendWeb.RevenueCatWebhookController` answers:
+
+| Status | `error` | When |
+| --- | --- | --- |
+| `200` | | The event was committed: `status` is `applied`, `ignored` or `duplicate`. |
+| `400` | `invalid_event` | The body has no event `id` and `type`. |
+| `401` | `unauthorized` | The `Authorization` header does not match. |
+| `401` | `invalid_signature` | The signature is missing, malformed, stale (more than 5 minutes) or does not match the raw body. |
+| `404` | `unknown_subscriber` | No learner resolves; nothing is recorded, so RevenueCat's retry still applies. |
+| `413` | | The body is over 1 MB. |
+| `503` | `webhook_not_configured` | `REVENUECAT_WEBHOOK_AUTHORIZATION` or `REVENUECAT_WEBHOOK_SECRET` is unset. |
+
+The HMAC needs the exact bytes RevenueCat signed. `BackendWeb.RevenueCatBodyReader`, the `body_reader` of `Plug.Parsers` in `BackendWeb.Endpoint`, keeps the raw body for `POST /webhooks/revenuecat` only, capped at 1 MB; every other request keeps no raw copy. The route sets `log: false`, so neither the payload nor the headers reach the logs.
+
 ## Open
 
-- The HTTP endpoint (`POST /webhooks/revenuecat`) needs the raw request body for the HMAC. See the #339 PR notes.
 - Reconciling against `GET /subscribers` for events lost after RevenueCat stops retrying (about 80 minutes).
 - Email reminder before a Pix due date. Today the reminder is shown only on `/conta`.
 - `TRANSFER` handling.
