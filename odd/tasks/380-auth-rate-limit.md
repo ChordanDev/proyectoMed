@@ -23,7 +23,7 @@ Why: Jorge review of PR #379 (SP-1/SP-2) and #361 follow-ups: a single client ca
 |---|---|---|---|---|
 | T1 | S1 (device start), S2 (API), S3, S4, S6, S8 | inline | done | 4841e9d; RED 0/12 (module missing), GREEN 12/12; full backend 2228 passed |
 | T2 | S1 (login, sign-up, reset, magic link, `/device` lookup), S2 (flash), S4, S6, S7 | inline | done | 8daedbe; RED 3/13 passed (10 failing: nothing throttled), GREEN 13/13; full backend 2241 passed |
-| T3 | S5 (README docs) | inline | done | passive docs, no runnable RED; structural readback; S7 normal-use tests landed in T1/T2 |
+| T3 | S5 (README docs) | inline | done | 5f1b072; passive docs, no runnable RED; structural readback; S7 normal-use tests landed in T1/T2 |
 
 Route evidence: one bounded unit per task, written by the parent writer inline; no Writer trigger (no parallel units, no context backstop).
 
@@ -36,4 +36,5 @@ Checks: focused `mix test` per task; final `local_ci.sh` (requires "LOCAL CI PAS
 - T1: `BackendWeb.RateLimit` (+ `Backend.Application` child), `BackendWeb.Plugs.RateLimit` on `DeviceController.start` (`429`, `retry-after`, `rate_limited`), `BackendWeb.Plugs.ClientIP` in the `:browser` and `:api` pipelines (off by default), `RATE_LIMIT_*` and `TRUSTED_CLIENT_IP_HEADER` in `config/runtime.exs` (checked with `mix run`: `RATE_LIMIT_LOGIN_IP=3/60` parses, `abc` refuses to boot). Action `login_email` renamed `magic_link_email` so env names stay unambiguous.
 - T2: `POST /users/log-in` (password and link) per IP and email, redirect with the pt-BR flash; login-link and reset emails per IP and email; sign-up per IP; `/device` lookups per IP and learner (the verification link counts twice: static and live render). `update_password` keeps the unthrottled path. The client IP reaches LiveViews through `session: {BackendWeb.RateLimit, :live_session, []}` on the two `live_session`s. Found, not fixed (baseline, `Backend.Accounts`): a malformed link token to `POST /users/log-in` raises `MatchError` in `login_user_by_magic_link/1` (500).
 - T3: README "Rate limits" section under Accounts: endpoints, defaults, error and flash, variables, Fly header. Follow-up: `docs/unreal-station-client.md` (outside this issue's edit surface) should list `429 rate_limited` on `POST /device/start`.
-- Next step: local CI, push, PR.
+- Local CI (`MIX_TEST_PARTITION=_issue380 local_ci.sh`): LOCAL CI PASSED. Web 337 tests (16 files), backend 2241 passed, process E2E 4 passed, format, `--warnings-as-errors`, credo strict and dialyzer (0 errors) clean. Without the partition the shared `backend_test` database fails to migrate (`educational_results` already exists), unrelated to this branch. GitHub Actions is blocked by billing.
+- Next step: push and open the PR to `feat/326-production-launch`.
