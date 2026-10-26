@@ -73,7 +73,7 @@ cost with every other Claude seam on Haiku (`docs/operations/session-usage-cost.
 | issue-228 | acute-appendicitis | `backend/test/backend/stations/rubric_assessment/fixtures/issue_228_session.json` |
 | issue-243 | acute-appendicitis | `backend/test/backend/stations/rubric_assessment/fixtures/issue_243_session.json` (learner turns of the 2026-10-19 live attempt) |
 | aa-strong, aa-partial, aa-weak | acute-appendicitis | `backend/test/backend/stations/fixtures/resolver_model_comparison/acute-appendicitis-*.json` (synthetic) |
-| br-strong, br-partial, br-weak | bronquiolite-viral-lactente (companion case) | `backend/test/backend/stations/fixtures/resolver_model_comparison/bronquiolite-*.json` (synthetic, over `n8n-sample-bronquiolite-companion.md`) |
+| br-strong, br-partial, br-weak | bronquiolite-viral-lactente (companion case) | `backend/test/backend/stations/fixtures/resolver_model_comparison/bronquiolite-*.json` (synthetic, over `case_format/resolver-comparison-bronquiolite.md`, the 2026-10-22 n8n bronquiolite sample kept unchanged after the samples were regenerated) |
 
 The #290/#307 live 10-turn transcripts are not stored anywhere in the
 repository (sessions are content-free, ADR-001/ADR-009), so they could not be

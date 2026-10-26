@@ -1,7 +1,7 @@
 {
   "description": "Issue #343: a fictional weak attempt at the bronquiolite companion case (n8n sample). The learner barely asks, requests a chest X-ray and blood tests, treats it as asthma with corticosteroid and antibiotic and sends the infant home. Companion replies use the `patient` role.",
   "station_id": "bronquiolite-viral-lactente",
-  "package": "case_format:n8n-sample-bronquiolite-companion.md",
+  "package": "case_format:resolver-comparison-bronquiolite.md",
   "quality": "weak",
   "expected_released_ids": [
     "impresso-4-radiografia",
