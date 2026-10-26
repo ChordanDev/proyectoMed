@@ -311,12 +311,6 @@ defmodule Backend.Stations do
   defp session_package(%{package: package}) when is_map(package), do: package
   defp session_package(_legacy_session), do: get_active_package()
 
-  defp fetch_package(session_id) do
-    with {:ok, session} <- Conversation.fetch(session_id) do
-      {:ok, session_package(session)}
-    end
-  end
-
   @doc """
   Returns false when the session exists and belongs to another learner than
   `user_id` (#337), including a session started without a learner on the
@@ -1121,6 +1115,23 @@ defmodule Backend.Stations do
   feedback_message}}`, where `decision` is `"released"`, `"already_released"`,
   or `"unavailable"`.
 
+  An `"unavailable"` request (the matcher found no authored impresso) is
+  answered as the Revalida examiner does (#357). Jev classifies whether the
+  exam makes clinical sense for the case (`JevDecision.decide_impresso_request/2`,
+  bounded by its own deadline, 2,000 ms by default, and metered as a Jev call
+  of the session) and code maps the label to a fixed text; the model never
+  writes what the learner reads:
+
+    * `plausible` → `"Considere solicitado."`;
+    * anything else → `"Não consta no script."`: `not_plausible`, `undecided`,
+      a timeout, a technical failure, or the disabled adapter (the default).
+
+  Either way nothing is released and nothing is graded: the classification is
+  stored on the request's `impresso_requests` event and the rubric ignores it.
+  Jev is asked only for a new `request_id` on an active session; a retried
+  `request_id` returns its stored event, so it gets the same text without a
+  second Jev call. `"released"` and `"already_released"` never ask Jev.
+
   Stable extension point for Ticket 12 / ADR-008 (#105, #107).
   """
   @spec request_impresso(String.t(), map()) ::
@@ -1136,18 +1147,52 @@ defmodule Backend.Stations do
     # learner message limit and is rejected (never truncated) before recording.
     with :ok <- validate_impresso_text(text),
          :ok <- validate_learner_message_length(text),
-         {:ok, package} <- fetch_package(session_id) do
+         {:ok, session} <- Conversation.fetch(session_id) do
+      package = session_package(session)
       normalized_text = Impressos.normalize(text)
       matched_ids = Impressos.match(package["impressos"] || [], normalized_text)
       request_id = resolve_request_id(request_params)
 
-      case Conversation.record_impresso_request(session_id, request_id, matched_ids, text) do
+      record_opts =
+        unavailable_request_opts(session, request_id, matched_ids, text, package)
+
+      case Conversation.record_impresso_request(
+             session_id,
+             request_id,
+             matched_ids,
+             text,
+             record_opts
+           ) do
         {:ok, %{event: event, session: session}} ->
           {:ok, build_impresso_response(package, event, session)}
 
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  # Only a new request that matched nothing, on an active session, asks Jev
+  # (#357). A retried request_id returns its stored event, so it is not asked
+  # again; any Jev failure is stored as :unclassified.
+  defp unavailable_request_opts(%{status: :active} = session, request_id, [], text, package) do
+    if Enum.any?(session.impresso_requests, &(&1.request_id == request_id)) do
+      []
+    else
+      [classification: classify_unavailable_request(text, package)]
+    end
+  end
+
+  defp unavailable_request_opts(_session, _request_id, _matched_ids, _text, _package), do: []
+
+  defp classify_unavailable_request(text, package) do
+    case JevDecision.decide_impresso_request(%{text: text, package: package}) do
+      {:ok, %{classification: classification}}
+      when classification in [:plausible, :not_plausible, :undecided] ->
+        classification
+
+      _failure ->
+        :unclassified
     end
   end
 
@@ -2409,9 +2454,14 @@ defmodule Backend.Stations do
     }
   end
 
-  defp impresso_feedback_message(%{decision: :unavailable}, _impressos_by_id) do
-    "Exame não disponível nesta estação"
-  end
+  defp impresso_feedback_message(
+         %{decision: :unavailable, classification: :plausible},
+         _impressos_by_id
+       ),
+       do: "Considere solicitado."
+
+  defp impresso_feedback_message(%{decision: :unavailable}, _impressos_by_id),
+    do: "Não consta no script."
 
   defp impresso_feedback_message(%{decision: :released, released_ids: ids}, impressos_by_id) do
     "Impresso liberado: #{impresso_titles(impressos_by_id, ids)}"
