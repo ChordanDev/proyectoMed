@@ -20,7 +20,7 @@ Branch: `test/401-worker-load-test` from `develop`; PR to `develop` with `Refs #
 | T1 | S2 | inline | done | `8988ed0` metrics; RED: `tests.test_loadtest_metrics` import error (module missing); GREEN: 15 tests OK |
 | T2 | S1, S4 | inline | done | `8f69bf8` harness; RED: `tests.test_loadtest_harness` import error (modules missing); GREEN: 13 tests OK; smoke run N=2 × 3 turns: 6/6 turns ok, p50 650 ms, all ports freed |
 | T3 | S2, S3, S5 | inline | done | report `docs/research/voice-worker-capacity.md` + raw JSON; harness fix `5244630` (RED: worker_entry import error, then OwnTreeLoad missing; GREEN: 5 tests) and `max_gap` (RED: import error; GREEN) |
-| T4 | S6 | inline | pending | comment measured sessions per machine on #344 |
+| T4 | S6 | inline | done | https://github.com/ChordanDev/proyectoMed/issues/344#issuecomment-6418718750 |
 
 ## Log
 
@@ -29,3 +29,4 @@ Branch: `test/401-worker-load-test` from `develop`; PR to `develop` with `Refs #
 - L3: T1 and T2 done. Worker suite `uv run python -m unittest`: 208 tests OK. Smoke run proved the stack starts, learners are real WebRTC participants (Python `livekit.rtc`), and teardown frees 4159/7990/7991/18866.
 - L4: First full run invalid: the laptop slept during N=25/N=50 (pmset log, uptime jumps). It also showed two harness defects: `dev`'s 0 warm processes made LiveKit drop dispatches ("no servers available") after ~13 cold jobs, and the machine-wide CPU of the shared laptop marked the worker full. Fixed with `loadtest/worker_entry.py` (8 warm processes, own process-tree load), SIGTERM cleanup and `caffeinate`. Orphans of the killed run were stopped by PID after checking their cwd was this worktree.
 - L5: Second full run (2026-10-26 08:40-09:08, no sleep in pmset log): N=10 400/400 p95 636 ms; N=25 1000/1000 p95 1,099 ms; N=50 degraded (p95 1,862 ms, 64.5% failed turns, 4.3 GB swap). Stopped after N=50 by the harness. Per session: ~360 MB RSS, 6.4% of an M3 core. Fly prices from https://fly.io/pricing (2026-10-26): perf-4x $132.01, perf-8x $264.01, RAM $6/GB, gru x1.615. Recommendation: performance-4x 12 GB at 20 sessions, 11 machines, ~$2,772/month.
+- L6: Local CI passed (web 342, ExUnit 2432, E2E 4, Dialyzer clean); worker suite 227 OK. PR #403 opened to `develop`. `backend_load401` dropped after the run. Next step: a one-off run on a Fly performance-4x in `gru` to replace the CPU assumption.
