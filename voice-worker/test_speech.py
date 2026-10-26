@@ -649,6 +649,28 @@ class StreamingProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sources[0].frames, ["c1"])
         self.assertEqual((self.tts.prewarms, companion_tts.prewarms), (2, 2))
 
+    async def test_closing_while_speaking_never_prewarms_afterwards(self):
+        task = await self.start(accepted(self.tracker, 1))
+        warmed_before_close = self.tts.prewarms
+
+        await self.player.aclose()
+        self.assertIsNone(await task)
+
+        self.assertEqual(self.tts.prewarms, warmed_before_close)
+
+    async def test_a_stream_failing_mid_reply_is_content_free_and_prewarms_once(self):
+        reply = accepted(self.tracker, 1)
+        task = await self.start(reply)
+        warmed_before_failure = self.tts.prewarms
+        with self.assertLogs("voice-worker.speech", level="WARNING") as logs:
+            self.tts.streams[0].queue.put_nowait(chunk("a1"))
+            self.tts.streams[0].queue.put_nowait(RuntimeError(reply.reply_text))
+            failure = await task
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertNotIn(reply.reply_text, "\n".join(logs.output))
+        self.assertEqual(self.tts.prewarms, warmed_before_failure + 1)
+
     async def test_prewarm_failure_never_stops_the_reply(self):
         self.tts.prewarm_error = RuntimeError(PROVIDER_SECRET)
         with self.assertLogs("voice-worker.speech", level="WARNING") as logs:
