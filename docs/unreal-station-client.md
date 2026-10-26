@@ -141,10 +141,10 @@ can come with different statuses from different routes.
 | `invalid_token` | 401 | every authenticated route with an unknown, expired or revoked access token: refresh, or log in again |
 | `session_not_found` | 404 | every session route, also for another learner's session |
 | `session_expired` | 410 | every session route |
-| `session_completed` | 422, 409 | `SendTurn` and `RequestVoiceCredential` (422); `RequestImpresso` (409) |
+| `session_completed` | 422, 409 | `SendTurn` and `RequestVoiceCredential` (422); `RequestImpresso` and `POST .../exam-mode` (409) |
 | `station_time_elapsed` | 409 | `SendTurn` after the deadline |
 | `deadline_not_reached` | 409 | `FinishSession(Timer)` called early |
-| `no_consent` | 403 | `RequestVoiceCredential` on a run without audio consent |
+| `no_consent` | 403 | `RequestVoiceCredential` and `POST .../exam-mode` on a run without audio consent |
 | `voice_unavailable` | 503 | `RequestVoiceCredential` when Phoenix has no LiveKit set up |
 | `rate_limited` | 429 | `RequestVoiceCredential` more than 5 times a minute |
 | `reply_verification_failed`, `station_ai_unavailable`, `timeout` | 502, 504 | `SendTurn` |
@@ -447,6 +447,7 @@ the ones of the operations table above.
 | `POST /sessions/:id/messages` | A learner turn (`SendTurn`). |
 | `POST /sessions/:id/impressos/request` | An impresso request (`RequestImpresso`). |
 | `GET /sessions/:id/impressos` | Released impressos (`ListImpressos`). |
+| `POST /sessions/:id/exam-mode`, `DELETE /sessions/:id/exam-mode` | Arm or cancel the [spoken exam request](#spoken-exam-requests-issue-364) (no `UStationClient` method yet). |
 | `POST /sessions/:id/voice` | LiveKit credential (`RequestVoiceCredential`). |
 | `POST /sessions/:id/transcribe`, `POST /sessions/:id/synthesize` | Turn-based voice (legacy HTTP audio). |
 | `POST /sessions/:id/finish` | Finish (`FinishSession`). |
@@ -677,6 +678,46 @@ An examiner-addressed text reply of `POST /sessions/:id/messages`:
   stays `{role: "examiner", status: "acknowledged"}` (#191/#194 open question).
 - `FStationTurnReply` (`StationJson.cpp`) does not parse `exam_request` yet;
   the field is an addition, so the current parser keeps working.
+
+## Spoken exam requests (issue #364)
+
+In a voice run the exam button asks for the exam aloud: the learner presses
+it, then says the request ("Solicito hemograma e PCR"). The spoken request goes
+to the same impresso request as `RequestImpresso`, never to the patient.
+
+1. On the press, call `POST /sessions/:id/exam-mode` (bearer token; no body).
+   Phoenix arms an exam mode for the learner's next utterance:
+
+   ```json
+   {"status": "armed", "expires_at": "2026-10-25T14:03:31.204Z", "server_now": "2026-10-25T14:03:11.204Z"}
+   ```
+
+2. The learner speaks. The voice worker posts the final transcript to Phoenix
+   as for any turn; Phoenix sees the armed mode and sends the text through the
+   impresso request (the same keyword matcher and negation handling as a typed
+   request), records an `impresso_requests` event with request id
+   `voice-exam-<turn_id>` and records no dialogue turn. The patient
+   generation never sees the request, now or later, and nothing is spoken.
+3. The worker publishes the outcome on the room's `transcript` data topic (see
+   the event below); read the released impressos with `ListImpressos`, as
+   after a typed request.
+
+The mode disarms after that one utterance, at `expires_at` (20 seconds after
+the press by default) or on `DELETE /sessions/:id/exam-mode` (`200`,
+`{"status": "disarmed"}`; also when nothing was armed), e.g. when the learner
+closes the exam prompt without speaking. Pressing again re-arms it and
+restarts the expiry. An utterance the learner finishes after `expires_at` is a
+dialogue turn: an exam it names releases nothing ([#351](#exam-requests-in-the-dialogue-issue-351)).
+
+- Errors: `403 no_consent` on a run without audio consent (a typed request
+  needs no exam mode), `409 session_completed`, `404 session_not_found`,
+  `410 session_expired`.
+- Typed requests (`RequestImpresso`) are unchanged and do not touch the mode.
+- The learner's LiveKit token still has no data-publishing grant: the mode is
+  set over HTTP and only the worker publishes room events.
+- An utterance the learner was already speaking when the button was pressed
+  may be the one that consumes the mode; arm it before the learner starts the
+  request.
 
 ## Not in the interface yet
 
