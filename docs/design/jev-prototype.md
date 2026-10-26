@@ -101,6 +101,19 @@ Sharing an interface boundary does not collapse those capabilities into one adap
 
 Provider selection, credentials, API limits, zero-data-retention terms, legal terms, and clinical pt-BR calibration are unresolved qualification gates. Vendor statements are inputs to review, not repository validation.
 
+### Unavailable impresso classification (#357)
+
+When the exam button names an exam that matches no authored impresso, `Backend.Stations.request_impresso/2` asks Jev (`JevDecision.decide_impresso_request/2`) one constrained question: does the requested exam make clinical sense for the case? Only the request text, as untrusted state, and the case context (`candidate_brief`, `patient_profile`) reach the adapter; authored impressos, facts and the rubric never do. The TypeSafe adapter thresholds one `noul` answer into `plausible`, `not_plausible` or `undecided`.
+
+Code maps the label to a fixed pt-BR text; the model never writes what the learner reads:
+
+| Outcome | `feedback_message` |
+| --- | --- |
+| `plausible` | `Considere solicitado.` |
+| `not_plausible`, `undecided`, timeout, malformed output, transport failure, disabled adapter (the default) | `Não consta no script.` |
+
+The decision stays `unavailable`, nothing is released, and the classification (`plausible`, `not_plausible`, `undecided`, or `unclassified` on any failure) is stored on the request's `impresso_requests` event, which the rubric reads exactly as before, so it is never graded. A retried `request_id` returns its stored event and does not ask Jev again; two identical requests arriving at the same instant may each ask Jev, but the first recorded classification wins and both return its text. The call has its own deadline (`:jev_decision_impresso_deadline_ms`, 2,000 ms by default), so the impresso route waits at most about two seconds, and it is metered as a Jev call of the session (#342). Live use follows the human gate of #183; until then the disabled adapter answers `Não consta no script.`.
+
 ## Integration with real-time voice
 
 ADR-009 (#114) already selects LiveKit/WebRTC + Deepgram + ElevenLabs for the prototype. Issues #119–#121 are integration boundaries, not blanket blockers for every Ticket 14 child. Jev integration must extend their flow without duplicating ownership:

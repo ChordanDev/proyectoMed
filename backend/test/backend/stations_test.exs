@@ -2203,9 +2203,8 @@ defmodule Backend.StationsTest do
       assert {:ok, %{released_impressos: []}} = Stations.list_impressos(session.session_id)
     end
 
-    test "an unavailable exam returns the exact required message and releases nothing", %{
-      session: session
-    } do
+    test "an unavailable exam with Jev disabled answers Não consta no script. and releases nothing",
+         %{session: session} do
       assert {:ok, result} =
                Stations.request_impresso(session.session_id, %{
                  "text" => "quero uma tomografia de crânio"
@@ -2214,7 +2213,7 @@ defmodule Backend.StationsTest do
       assert result.decision == "unavailable"
       assert result.newly_released == []
       assert result.released_impressos == []
-      assert result.feedback_message == "Exame não disponível nesta estação"
+      assert result.feedback_message == "Não consta no script."
       refute result.feedback_message == "Não há alterações relatadas"
     end
 
@@ -2303,6 +2302,244 @@ defmodule Backend.StationsTest do
       {:ok, _pid} = Supervisor.restart_child(Backend.Supervisor, Backend.Stations.Conversation)
 
       assert Stations.get_session(session.session_id) == {:error, :not_found}
+    end
+  end
+
+  defmodule ImpressoJevDouble do
+    # Reads its reply from the :impresso_jev_double env ({test_pid, reply}) and
+    # reports each call, so a test can count how often Jev was asked.
+    def decide_impresso_request(request) do
+      {test_pid, reply} = Application.fetch_env!(:backend, :impresso_jev_double)
+      send(test_pid, {:jev_impresso_called, request})
+
+      case reply do
+        {:sleep, ms, then} ->
+          Process.sleep(ms)
+          then
+
+        reply ->
+          reply
+      end
+    end
+  end
+
+  describe "unavailable impresso wording (#357)" do
+    setup do
+      saved =
+        for key <- [
+              :jev_decision_adapter,
+              :impresso_jev_double,
+              :jev_decision_impresso_deadline_ms,
+              Backend.Stations.JevDecision.TypesafeAdapter
+            ],
+            do: {key, AppEnvHelpers.snapshot(key)}
+
+      on_exit(fn ->
+        Enum.each(saved, fn {key, value} -> AppEnvHelpers.restore(key, value) end)
+      end)
+
+      session = Stations.create_session(%{audio_consent: false})
+      %{session: session}
+    end
+
+    defp jev_replies(reply) do
+      Application.put_env(:backend, :jev_decision_adapter, ImpressoJevDouble)
+      Application.put_env(:backend, :impresso_jev_double, {self(), reply})
+    end
+
+    test "a plausible request answers Considere solicitado. and releases nothing", %{
+      session: session
+    } do
+      jev_replies({:ok, %{classification: "plausible"}})
+
+      assert {:ok, result} =
+               Stations.request_impresso(session.session_id, %{
+                 "text" => "quero uma tomografia de abdome"
+               })
+
+      assert result.decision == "unavailable"
+      assert result.feedback_message == "Considere solicitado."
+      assert result.newly_released == []
+      assert result.released_impressos == []
+
+      assert_received {:jev_impresso_called, %{text: "quero uma tomografia de abdome"}}
+
+      {:ok, raw} = Stations.get_session(session.session_id)
+
+      assert [%{decision: :unavailable, classification: :plausible, released_ids: []}] =
+               raw.impresso_requests
+
+      assert raw.released_impressos == []
+    end
+
+    test "a not plausible request answers Não consta no script.", %{session: session} do
+      jev_replies({:ok, %{classification: "not_plausible"}})
+
+      assert {:ok, result} =
+               Stations.request_impresso(session.session_id, %{"text" => "quero uma colonoscopia"})
+
+      assert result.decision == "unavailable"
+      assert result.feedback_message == "Não consta no script."
+      assert result.newly_released == []
+
+      {:ok, raw} = Stations.get_session(session.session_id)
+      assert [%{classification: :not_plausible}] = raw.impresso_requests
+    end
+
+    test "undecided, a failure, a timeout or the disabled adapter answer Não consta no script.",
+         %{session: session} do
+      Application.put_env(:backend, :jev_decision_impresso_deadline_ms, 50)
+
+      cases = [
+        {:undecided, fn -> jev_replies({:ok, %{classification: "undecided"}}) end},
+        {:unclassified, fn -> jev_replies({:error, {:upstream_error, 503}}) end},
+        {:unclassified, fn -> jev_replies({:ok, %{classification: "Considere solicitado."}}) end},
+        {:unclassified,
+         fn -> jev_replies({:sleep, 300, {:ok, %{classification: "plausible"}}}) end},
+        {:unclassified,
+         fn ->
+           Application.put_env(
+             :backend,
+             :jev_decision_adapter,
+             Backend.Stations.JevDecision.DisabledAdapter
+           )
+         end}
+      ]
+
+      for {{expected, arrange}, index} <- Enum.with_index(cases, 1) do
+        arrange.()
+
+        assert {:ok, result} =
+                 Stations.request_impresso(session.session_id, %{
+                   "text" => "quero uma ressonância #{index}",
+                   "request_id" => "fallback-#{index}"
+                 })
+
+        assert result.decision == "unavailable"
+        assert result.feedback_message == "Não consta no script."
+        assert result.newly_released == []
+
+        {:ok, raw} = Stations.get_session(session.session_id)
+        event = Enum.find(raw.impresso_requests, &(&1.request_id == "fallback-#{index}"))
+        assert event.classification == expected
+      end
+
+      {:ok, raw} = Stations.get_session(session.session_id)
+      assert length(raw.impresso_requests) == length(cases)
+      assert raw.released_impressos == []
+    end
+
+    test "released and already released requests never ask Jev", %{session: session} do
+      jev_replies({:ok, %{classification: "plausible"}})
+
+      assert {:ok, first} =
+               Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+
+      assert first.decision == "released"
+      assert first.feedback_message =~ "Impresso liberado: "
+
+      assert {:ok, again} =
+               Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+
+      assert again.decision == "already_released"
+      assert again.feedback_message =~ "Impresso já liberado: "
+
+      refute_received {:jev_impresso_called, _}
+
+      {:ok, raw} = Stations.get_session(session.session_id)
+      refute Enum.any?(raw.impresso_requests, &Map.has_key?(&1, :classification))
+    end
+
+    test "a retried request_id returns the same text and asks Jev at most once", %{
+      session: session
+    } do
+      jev_replies({:ok, %{classification: "plausible"}})
+      params = %{"text" => "quero uma tomografia de abdome", "request_id" => "retry-1"}
+
+      assert {:ok, first} = Stations.request_impresso(session.session_id, params)
+      assert first.feedback_message == "Considere solicitado."
+      assert_received {:jev_impresso_called, _}
+
+      jev_replies({:ok, %{classification: "not_plausible"}})
+
+      assert {:ok, retried} = Stations.request_impresso(session.session_id, params)
+      assert retried == first
+      refute_received {:jev_impresso_called, _}
+
+      {:ok, raw} = Stations.get_session(session.session_id)
+      assert [%{classification: :plausible}] = raw.impresso_requests
+    end
+
+    test "a completed session never asks Jev", %{session: session} do
+      jev_replies({:ok, %{classification: "plausible"}})
+      {:ok, _} = Stations.complete_session(session.session_id, :user)
+
+      assert Stations.request_impresso(session.session_id, %{"text" => "tomografia"}) ==
+               {:error, :completed}
+
+      refute_received {:jev_impresso_called, _}
+    end
+
+    test "the classification is not graded", %{session: session} do
+      jev_replies({:ok, %{classification: "plausible"}})
+      {:ok, _} = Stations.request_impresso(session.session_id, %{"text" => "sinais vitais"})
+
+      {:ok, _} =
+        Stations.request_impresso(session.session_id, %{"text" => "tomografia de abdome"})
+
+      {:ok, plausible} = Stations.get_session(session.session_id)
+      package = Map.get(plausible, :package) || Stations.get_active_package()
+
+      for other <- [:not_plausible, :undecided, :unclassified, nil] do
+        swapped = %{
+          plausible
+          | impresso_requests:
+              Enum.map(plausible.impresso_requests, fn
+                %{classification: _} = event when is_nil(other) ->
+                  Map.delete(event, :classification)
+
+                %{classification: _} = event ->
+                  %{event | classification: other}
+
+                event ->
+                  event
+              end)
+        }
+
+        assert swapped != plausible
+
+        assert Backend.Stations.Evaluator.evaluate(package, swapped) ==
+                 Backend.Stations.Evaluator.evaluate(package, plausible)
+
+        assert Backend.Stations.RubricAssessment.Evidence.build(swapped, package) ==
+                 Backend.Stations.RubricAssessment.Evidence.build(plausible, package)
+      end
+    end
+
+    test "the Jev call is metered as one Jev call of the session (#342)", %{session: session} do
+      Req.Test.stub(ImpressoStationsUsageStub, fn conn ->
+        Req.Test.json(conn, %{
+          "model" => "jev-1.13.0",
+          "answers" => %{"plausible" => %{"type" => "noul", "noul" => 0.95}}
+        })
+      end)
+
+      Application.put_env(
+        :backend,
+        :jev_decision_adapter,
+        Backend.Stations.JevDecision.TypesafeAdapter
+      )
+
+      Application.put_env(:backend, Backend.Stations.JevDecision.TypesafeAdapter,
+        api_key: "ts-test-key",
+        req_options: [plug: {Req.Test, ImpressoStationsUsageStub}]
+      )
+
+      assert {:ok, result} =
+               Stations.request_impresso(session.session_id, %{"text" => "tomografia de abdome"})
+
+      assert result.feedback_message == "Considere solicitado."
+      assert Backend.Stations.Usage.snapshot(session.session_id).jev_calls == 1
     end
   end
 

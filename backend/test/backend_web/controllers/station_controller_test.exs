@@ -1309,7 +1309,7 @@ defmodule BackendWeb.StationControllerTest do
       assert unchanged.impresso_requests == []
     end
 
-    test "an unavailable exam returns the exact required message", %{
+    test "an unavailable exam with Jev disabled answers Não consta no script.", %{
       conn: conn,
       session: session
     } do
@@ -1322,7 +1322,7 @@ defmodule BackendWeb.StationControllerTest do
                "decision" => "unavailable",
                "newly_released" => [],
                "released_impressos" => [],
-               "feedback_message" => "Exame não disponível nesta estação"
+               "feedback_message" => "Não consta no script."
              } = json_response(conn, 200)
     end
 
