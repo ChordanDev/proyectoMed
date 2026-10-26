@@ -654,6 +654,27 @@ if config_env() != :test do
   end
 end
 
+# Fly deploy (#344, docs/operations/deploy.md). `FLY_MACHINE_ID`, set by Fly on
+# every machine, names the machine that owns each session it starts: session
+# ids become `<machine id>.<random>`, and a request for a session of another
+# machine is answered with `fly-replay: instance=<owner>`. Unset outside Fly.
+# A value that cannot be a machine id refuses to boot. `:test` reads none of it.
+if config_env() != :test do
+  case System.get_env("FLY_MACHINE_ID", "") |> String.trim() do
+    "" ->
+      :ok
+
+    machine_id ->
+      unless Regex.match?(~r/\A[a-z0-9]{1,32}\z/, machine_id) do
+        raise ArgumentError,
+              "FLY_MACHINE_ID must be lowercase letters and digits, got: " <>
+                inspect(machine_id)
+      end
+
+      config :backend, :machine_id, machine_id
+  end
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

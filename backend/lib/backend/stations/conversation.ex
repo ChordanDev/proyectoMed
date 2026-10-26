@@ -19,6 +19,7 @@ defmodule Backend.Stations.Conversation do
 
   use GenServer
 
+  alias Backend.Stations.Drain
   alias Backend.Stations.Usage
 
   @default_timeout_ms :timer.minutes(30)
@@ -61,6 +62,7 @@ defmodule Backend.Stations.Conversation do
           optional(:station_slug) => String.t(),
           optional(:station_area) => String.t(),
           optional(:station_theme) => String.t(),
+          optional(:owner_machine_id) => String.t() | nil,
           session_id: String.t(),
           station_id: String.t() | pos_integer(),
           station_version: String.t() | pos_integer(),
@@ -568,6 +570,7 @@ defmodule Backend.Stations.Conversation do
 
     session = %{
       session_id: session_id(),
+      owner_machine_id: Drain.machine_id(),
       station_id: station_id,
       station_version: station_version,
       audio_consent: audio_consent,
@@ -1510,9 +1513,8 @@ defmodule Backend.Stations.Conversation do
     end
   end
 
-  defp session_id do
-    :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
-  end
+  # `<machine id>.<random>` on a Fly machine (#344, `Backend.Stations.Drain`).
+  defp session_id, do: Drain.new_session_id()
 
   defp do_record_impresso_request(session, request_id, matched_ids, text, opts) do
     case Enum.find(session.impresso_requests, &(&1.request_id == request_id)) do

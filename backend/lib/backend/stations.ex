@@ -263,6 +263,14 @@ defmodule Backend.Stations do
     %{draining: Drain.draining?(), active_sessions: active_session_count()}
   end
 
+  @doc """
+  Where a request for `session_id` is served (#344): `{:replay, machine_id}`
+  when the session belongs to another Fly machine, which holds its
+  conversation, otherwise `:local`.
+  """
+  @spec session_placement(String.t()) :: :local | {:replay, String.t()}
+  defdelegate session_placement(session_id), to: Drain, as: :placement
+
   defp within_daily_quota(nil, start_fun), do: {:ok, start_fun.()}
 
   defp within_daily_quota(user_id, start_fun) do
