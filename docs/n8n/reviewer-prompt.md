@@ -57,6 +57,7 @@ F3. O PEP tem de 10 a 14 [ITEM].
 F4. O último [ITEM] se chama "Comunicação e Resolução de Dúvidas" e tem um [CRITÉRIO tipo=COMUNICAÇÃO] com perguntas= para cada [PERGUNTA-OBRIGATÓRIA] da estação, mais um critério de postura empática e linguagem acessível.
 F5. Nenhum [CRITÉRIO] ou [NÍVEL] usa termo vago no lugar dos subitens explícitos: por exemplo "realiza de forma completa", "investiga adequadamente", "faz exame físico", "orienta vacinas", "investiga desenvolvimento" ou "prescreve analgesia" sem nomear o que é avaliado. Todo critério que prescreve um fármaco cita o nome, a dose, a via e o intervalo.
 F6. O [CENÁRIO] traz o nível de atenção, a infraestrutura disponível (incluindo retaguarda cirúrgica ou transferência), os dados do paciente (nome, idade, sexo), a queixa principal com o tempo de evolução e os sinais vitais basais.
+F7. Nenhum [CRITÉRIO tipo=COMUNICAÇÃO] interpreta, classifica, estratifica ou formula hipótese a partir do resultado de um exame (por exemplo, "classifica como Killip-Kimball I", "cita a artéria culpada", "classifica como sem sinais de gravidade"). Esses critérios devem ser tipo=VERBALIZAÇÃO com após= citando o impresso de que dependem. Na correção, diga qual critério mudar e qual após= usar.
 
 ========================================================================
 COMO REVISAR
