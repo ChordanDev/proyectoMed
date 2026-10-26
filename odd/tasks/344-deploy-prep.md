@@ -20,13 +20,13 @@ Constraints: repo-side only (no `fly`, `flyctl`, `neonctl`, `livekit-cli`, no ac
 
 | ID | Specs | Route | Status | Commit / evidence |
 |---|---|---|---|---|
-| T1 | S1, S7 | inline | pending | |
-| T2 | S4 (drain gate, operator action) | inline | pending | |
-| T3 | S4 (fly-replay to the owning machine) | inline | pending | |
-| T4 | S5 | inline | pending | |
-| T5 | S2, S4 (drain-and-deploy script) | inline | pending | |
-| T6 | S3 | inline | pending | |
-| T7 | S6 | inline | pending | |
+| T1 | S1, S7 | inline | done | 2c5cf55; RED 8/9 failing, GREEN 9/9; release built and run locally (migrate, create_admin twice: created then already exists, /health 200 over HTTP, other paths 301); `docker build` backend OK and container served /health |
+| T2 | S4 (drain gate, operator action) | inline | done | 37708aa; RED 7/7 failing, GREEN 7/7; `bin/drain status|start|stop` exercised on the local release through rpc |
+| T3 | S4 (fly-replay to the owning machine) | inline | done | d8b63b0; RED 9/10 placement+plug, 2/4 runtime config; GREEN 10/10 and 4/4 |
+| T4 | S5 | inline | done | ca57efc; RED 4/10 and 2/7 runtime config; GREEN 10/10 and 7/7 |
+| T5 | S2, S4 (drain-and-deploy script) | inline | done | 2e47497; deploy script RED 6/6 failing, GREEN 6/6 (stub `fly`); fly.toml test written after the file (no RED) |
+| T6 | S3 | inline | done | 9cd65bd; no runnable RED (image config); `docker build` OK, image imports livekit-agents 1.8.3 and runs as uid 10001 |
+| T7 | S6 | inline | done | d826c07; passive docs, structural readback |
 
 - T1 `Backend.Release` (`migrate/0`, `rollback/2`, `create_admin/0`), release overlays (`bin/server`, `bin/migrate`, `bin/create_admin`), loopback-only distribution for `bin/backend rpc`, `/health` route outside `force_ssl`, backend `Dockerfile` and `.dockerignore`.
 - T2 `Backend.Stations.Drain`: node flag, active-session count, `{:error, :draining}` from `Stations.start_station_session/2`, `503 draining` + `Retry-After`, `Backend.Release.drain/0`, `resume/0`, `drain_status/0` and `bin/drain start|stop|status`.
@@ -42,3 +42,6 @@ Routing: every task inline (no Writer trigger: one sequential delivery, units de
 
 - L1 (2026-10-25, user): "dale" (the workflow task: implement the repo-side preparation of #344 as specified above).
 - L2 Plan: conversations live only in ETS (`Backend.Stations.Conversation`), so the owning machine is encoded in the session id (`<machine id>.<random>`) instead of a database column; no migration is in scope.
+- L3 (2026-10-25) Verification: local CI on the branch: web typecheck, lint, backend format, compile with warnings as errors, Credo strict (no issues), web unit 342/342, ExUnit 2480/2480 passed. The process-level E2E (`stationFlow.test.ts`) failed on the session-expiry scenario with a 14.6 s timeout after a 587 s wall-clock test; reruns failed with "Phoenix failed to start within 25000ms" and a vitest worker fetch timeout. `pmset` shows the host cycling through DarkWake on battery (load average 16), and a manual dev boot of this branch serves `/health` in 4 s, so the failures are environmental timing, not this change (which does not touch `web/` and leaves session ids unchanged without `FLY_MACHINE_ID`).
+- L4 Pending live checks (need the owner's authorization): first deploy, a deploy during a running station, `fly machines list --quiet` and `fly ssh console --command` exit status as `rel/deploy.sh` assumes, gru to Neon latency, the voice worker load test (50/100/200 sessions).
+
