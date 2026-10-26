@@ -12,6 +12,7 @@ defmodule Backend.Stations.MediaSession do
   require Logger
 
   alias Backend.Stations.Conversation
+  alias Backend.Stations.Drain
   alias Backend.Stations.ExamMode
   alias Backend.Stations.LiveKit
   alias Backend.Stations.LiveKit.RoomService
@@ -152,7 +153,11 @@ defmodule Backend.Stations.MediaSession do
   defp sweep_room(room_name) do
     session_id = String.replace_prefix(room_name, @room_prefix, "")
 
-    unless active_session?(session_id) do
+    # Every machine lists the whole LiveKit project, but a session lives only
+    # in its owner's Conversation table (#344): another machine's room is not
+    # an orphan here. A room whose owner machine is gone is left to LiveKit's
+    # empty-room timeout.
+    unless owned_elsewhere?(session_id) or active_session?(session_id) do
       case RoomService.delete_room(room_name) do
         :ok ->
           :ok
@@ -166,6 +171,8 @@ defmodule Backend.Stations.MediaSession do
       :ets.delete(@table, session_id)
     end
   end
+
+  defp owned_elsewhere?(session_id), do: match?({:replay, _owner}, Drain.placement(session_id))
 
   defp active_session?(session_id) do
     match?({:ok, %{status: :active}}, Conversation.fetch(session_id))
