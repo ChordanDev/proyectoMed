@@ -2,11 +2,14 @@ defmodule BackendWeb.RateLimit do
   @moduledoc """
   In-memory throttling of the public authentication and device-login
   endpoints (#380): unauthenticated `POST /device/start`, user-code lookups on
-  `/device`, login, sign-up, and the password-reset and login-link emails.
+  `/device`, login, sign-up, and the password-reset and login-link emails; and
+  of the learner session routes that call paid providers (#395, the
+  `session_*` actions, through `BackendWeb.Plugs.SessionRateLimit`).
 
   Each `{action, kind}` pair has a limit of `count` requests per `window_ms`,
   counted per key (`:ip` the client IP, `:email` the normalized email, `:user`
-  the logged-in user id). A window opens on a key's first request; a request
+  the logged-in user id, `:session` the station session id, `:learner` the
+  device access token's user id). A window opens on a key's first request; a request
   beyond the limit is refused until the window ends. Counters live in a public
   ETS table owned by this process: one Phoenix node at launch (ADR-014 #346),
   so no shared store is needed. A restart forgets every counter.
@@ -38,7 +41,16 @@ defmodule BackendWeb.RateLimit do
     login: [ip: {20, 5 * @minute}, email: {10, 5 * @minute}],
     magic_link_email: [ip: {20, @hour}, email: {5, @hour}],
     reset_password_email: [ip: {20, @hour}, email: {5, @hour}],
-    sign_up: [ip: {10, @hour}]
+    sign_up: [ip: {10, @hour}],
+    # Learner session routes that call paid providers (#395). A human-paced
+    # station sends a turn every few seconds at most: these sit well above it.
+    session_message: [session: {20, @minute}, learner: {40, @minute}],
+    session_transcribe: [session: {20, @minute}, learner: {40, @minute}],
+    session_synthesize: [session: {30, @minute}, learner: {60, @minute}],
+    session_voice: [session: {10, @minute}, learner: {20, @minute}],
+    session_impresso: [session: {15, @minute}, learner: {30, @minute}],
+    session_exam_mode: [session: {20, @minute}, learner: {40, @minute}],
+    session_result: [session: {20, @minute}, learner: {40, @minute}]
   ]
 
   @typedoc "A throttled endpoint."
@@ -49,6 +61,13 @@ defmodule BackendWeb.RateLimit do
           | :magic_link_email
           | :reset_password_email
           | :sign_up
+          | :session_message
+          | :session_transcribe
+          | :session_synthesize
+          | :session_voice
+          | :session_impresso
+          | :session_exam_mode
+          | :session_result
 
   @doc "The pt-BR flash of a throttled browser page."
   def flash_message, do: "Muitas tentativas. Aguarde alguns minutos e tente novamente."

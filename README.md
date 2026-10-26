@@ -762,8 +762,33 @@ key is refused until the window ends.
 | Password-reset email (`/users/reset-password`) | `reset_password_email` | IP: 20 per hour; email: 5 per hour |
 | Sign-up (`/users/register`) | `sign_up` | IP: 10 per hour |
 
+The learner session routes that call paid providers are throttled per
+session and per learner (#395) by `BackendWeb.Plugs.SessionRateLimit`, on the
+same limiter. The deprecated `/api/stations/active/sessions/:id/...` and
+`/api/v2/...` aliases share the counters of their `/sessions/:id/...` route.
+
+| Endpoint | Action | Key: default limit |
+|---|---|---|
+| `POST /sessions/:id/messages` (Claude, Jev) | `session_message` | session: 20 per minute; learner: 40 per minute |
+| `POST /sessions/:id/transcribe` (OpenAI) | `session_transcribe` | session: 20 per minute; learner: 40 per minute |
+| `POST /sessions/:id/synthesize` (OpenAI) | `session_synthesize` | session: 30 per minute; learner: 60 per minute |
+| `POST /sessions/:id/voice` (LiveKit credential) | `session_voice` | session: 10 per minute; learner: 20 per minute |
+| `POST /sessions/:id/impressos/request` (Jev) | `session_impresso` | session: 15 per minute; learner: 30 per minute |
+| `POST` and `DELETE /sessions/:id/exam-mode` | `session_exam_mode` | session: 20 per minute; learner: 40 per minute |
+| `GET /sessions/:id/result` (grading) | `session_result` | session: 20 per minute; learner: 40 per minute |
+
+A human-paced 10-minute station (a turn every few seconds, a handful of
+impresso requests, finish, result) stays well below them (tested). The
+voice-worker routes (`/api/internal/voice/...`) are not throttled: a refused
+transcript would drop a spoken turn. Realtime voice cost is bounded at the
+learner's entry points instead: the LiveKit credential (`session_voice`, plus
+its existing 5 per minute per session), the exam mode (`session_exam_mode`)
+and the station deadline, which ends the voice session.
+
 `POST /device/start` answers `429` with a `retry-after` header (seconds) and
-`{"error": "rate_limited", "message": "Muitas tentativas. Aguarde N s e tente novamente."}`.
+`{"error": "rate_limited", "message": "Muitas tentativas. Aguarde N s e tente novamente."}`;
+a session route answers the same with the message "Muitas solicitações nesta
+sessão. Aguarde N s e tente novamente.".
 The pages show the flash "Muitas tentativas. Aguarde alguns minutos e tente
 novamente." and send no email, create no account and log nobody in. A throttled
 request logs `rate limited action=<action> keys=<kinds>`: never an IP, email,
@@ -773,7 +798,7 @@ already answers `slow_down`.
 | Variable | Meaning | Default |
 |---|---|---|
 | `RATE_LIMIT_ENABLED` | `false` (or `0`) turns every limit off. Any value other than `true`, `1`, `false` or `0` refuses to boot. | `true` |
-| `RATE_LIMIT_<ACTION>_<KIND>` | One limit as `<count>/<seconds>`, for example `RATE_LIMIT_LOGIN_IP=20/300` or `RATE_LIMIT_DEVICE_LOOKUP_USER=10/60`. `<ACTION>` and `<KIND>` (`IP`, `EMAIL`, `USER`) come from the table above. A malformed value refuses to boot, naming the variable. | the table above |
+| `RATE_LIMIT_<ACTION>_<KIND>` | One limit as `<count>/<seconds>`, for example `RATE_LIMIT_LOGIN_IP=20/300` or `RATE_LIMIT_DEVICE_LOOKUP_USER=10/60`. `<ACTION>` and `<KIND>` (`IP`, `EMAIL`, `USER`, `SESSION`, `LEARNER`) come from the tables above, for example `RATE_LIMIT_SESSION_MESSAGE_SESSION=20/60`. A malformed value refuses to boot, naming the variable. | the tables above |
 | `TRUSTED_CLIENT_IP_HEADER` | The request header that carries the client IP, set by a trusted proxy: `fly-client-ip` on Fly. Unset, the client IP is the socket peer, which behind Fly's proxy is the proxy itself. Set it only when every request goes through that proxy, since a client that reaches the app directly can send the header itself. `X-Forwarded-For` is never read. | unset |
 
 `backend/config/runtime.exs` reads them at boot (not in `test`, where the
