@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs pending migrations (#344): Fly's `release_command` before each deploy.
+set -eu
+
+cd -P -- "$(dirname -- "$0")"
+exec ./backend eval Backend.Release.migrate

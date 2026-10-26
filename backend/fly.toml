@@ -1,0 +1,63 @@
+# Fly app of the Phoenix backend (#344). Runbook: docs/operations/deploy.md.
+# Secrets (DATABASE_URL, SECRET_KEY_BASE, provider keys) are set with
+# `fly secrets set`, never here. Deploy with `rel/deploy.sh`, which drains
+# the running machine first.
+#
+# Replace the placeholders (`app`, `PHX_HOST`) before the first deploy.
+
+app = "proyectomed"
+primary_region = "gru"
+
+# A station lasts 10 minutes, longer than Fly's 300 s ceiling: rel/deploy.sh
+# drains the machine before deploying; this timeout covers what is left.
+kill_signal = "SIGTERM"
+kill_timeout = 300
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  # Runs on a temporary machine with the new image before any machine is replaced.
+  release_command = "/app/bin/migrate"
+  # New machines boot next to the old ones and take traffic once healthy, so
+  # requests for the old machine's sessions can be replayed to it (fly-replay).
+  strategy = "bluegreen"
+
+[env]
+  PHX_HOST = "proyectomed.fly.dev"
+  PHX_SERVER = "true"
+  PORT = "8080"
+  # Rate limits key on the client IP that Fly's proxy sets.
+  TRUSTED_CLIENT_IP_HEADER = "fly-client-ip"
+  VOICE_MODE = "realtime"
+  VOICE_PROVIDER = "deepgram_cartesia"
+  LLM_PROVIDER = "anthropic"
+  JEV_ADAPTER = "typesafe"
+  DATABASE_SSL = "true"
+  POOL_SIZE = "10"
+  MAX_CONCURRENT_SESSIONS = "200"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Conversations live in the machine's memory: never stop it while idle.
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 250
+    hard_limit = 500
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/health"
+
+# One machine at launch (`fly scale count 1`); sizing from the research (#328 A2).
+[[vm]]
+  size = "performance-1x"
+  memory = "2gb"

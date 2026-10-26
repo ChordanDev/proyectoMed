@@ -1,0 +1,19 @@
+# Build context of backend/Dockerfile (#344): only what `mix release` needs.
+.git
+_build/
+deps/
+cover/
+doc/
+tmp/
+priv/plts/
+priv/static/assets/
+erl_crash.dump
+*.ez
+*.plt
+*.plt.hash
+.env
+.env.*
+fly.toml
+test/
+e2e_support/
+rel/deploy.sh

@@ -14,8 +14,10 @@ defmodule Backend.Stations do
 
   alias Backend.Stations.Actors
   alias Backend.Stations.CandidateGate
+  alias Backend.Stations.Capacity
   alias Backend.Stations.CaseFormat
   alias Backend.Stations.Conversation
+  alias Backend.Stations.Drain
   alias Backend.Stations.Evaluator
   alias Backend.Stations.ExamMode
   alias Backend.Stations.Impressos
@@ -186,11 +188,18 @@ defmodule Backend.Stations do
   `daily_quota_status/1`) gets `{:error, {:daily_quota_exhausted, resets_at}}`,
   where `resets_at` is the next local midnight in America/Sao_Paulo. A started
   session holds one slot until it is graded or expires.
+
+  A node draining for a deploy (`start_draining/0`, #344) answers
+  `{:error, :draining}` before any other check, and a node at its
+  concurrent-session cap (`MAX_CONCURRENT_SESSIONS`, `Backend.Stations.Capacity`)
+  answers `{:error, :capacity_exhausted}`.
   """
   @spec start_station_session({:station, integer()} | {:random, String.t() | nil}, map()) ::
           {:ok, Conversation.session()}
           | {:error,
-             :subscription_required
+             :draining
+             | :capacity_exhausted
+             | :subscription_required
              | {:daily_quota_exhausted, DateTime.t()}
              | :station_not_found
              | :no_published_station
@@ -198,7 +207,8 @@ defmodule Backend.Stations do
   def start_station_session(selection, attrs \\ %{}) do
     attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
 
-    with :ok <- require_entitlement(attrs[:user_id]),
+    with :ok <- admit_new_session(),
+         :ok <- require_entitlement(attrs[:user_id]),
          {:ok, version} <- published_version(selection),
          {:ok, package} <- pinned_package(version) do
       within_daily_quota(attrs[:user_id], fn ->
@@ -217,6 +227,55 @@ defmodule Backend.Stations do
       end)
     end
   end
+
+  # The node-level gates come first (#344): a draining node or a full one
+  # refuses before any entitlement, quota or station work.
+  defp admit_new_session do
+    if Drain.draining?(),
+      do: {:error, :draining},
+      else: Capacity.admit(active_session_count())
+  end
+
+  # ============================================================================
+  # Deploy Drain Gate (#344)
+  # ============================================================================
+
+  @doc """
+  Switches this node to "no new sessions" before a deploy (#344):
+  `start_station_session/2` answers `{:error, :draining}` while running
+  sessions finish. Run by the operator through `bin/drain start`.
+  """
+  @spec start_draining() :: :ok
+  def start_draining do
+    :ok = Drain.start()
+    Logger.info("drain started: new sessions refused, #{active_session_count()} active")
+  end
+
+  @doc "Admits new sessions on this node again (`bin/drain stop`)."
+  @spec resume_sessions() :: :ok
+  def resume_sessions, do: Drain.stop()
+
+  @doc "Whether this node refuses new sessions for a deploy drain."
+  @spec draining?() :: boolean()
+  defdelegate draining?, to: Drain
+
+  @doc "The running sessions of this node: started, not completed, not expired."
+  @spec active_session_count() :: non_neg_integer()
+  defdelegate active_session_count, to: Conversation, as: :active_count
+
+  @doc "The drain state of this node: `draining` and its `active_sessions`."
+  @spec drain_status() :: %{draining: boolean(), active_sessions: non_neg_integer()}
+  def drain_status do
+    %{draining: Drain.draining?(), active_sessions: active_session_count()}
+  end
+
+  @doc """
+  Where a request for `session_id` is served (#344): `{:replay, machine_id}`
+  when the session belongs to another Fly machine, which holds its
+  conversation, otherwise `:local`.
+  """
+  @spec session_placement(String.t()) :: :local | {:replay, String.t()}
+  defdelegate session_placement(session_id), to: Drain, as: :placement
 
   defp within_daily_quota(nil, start_fun), do: {:ok, start_fun.()}
 

@@ -19,6 +19,7 @@ defmodule Backend.Stations.Conversation do
 
   use GenServer
 
+  alias Backend.Stations.Drain
   alias Backend.Stations.Usage
 
   @default_timeout_ms :timer.minutes(30)
@@ -61,6 +62,7 @@ defmodule Backend.Stations.Conversation do
           optional(:station_slug) => String.t(),
           optional(:station_area) => String.t(),
           optional(:station_theme) => String.t(),
+          optional(:owner_machine_id) => String.t() | nil,
           session_id: String.t(),
           station_id: String.t() | pos_integer(),
           station_version: String.t() | pos_integer(),
@@ -517,6 +519,27 @@ defmodule Backend.Stations.Conversation do
     GenServer.call(__MODULE__, {:settle_learner_feedback, session_id, entries})
   end
 
+  @doc """
+  The number of running sessions on this node: started, not completed and
+  not expired (#344, the drain gate and the concurrent-session cap).
+  """
+  @spec active_count() :: non_neg_integer()
+  def active_count do
+    now = DateTime.utc_now()
+
+    :ets.foldl(
+      fn
+        {_id, %{status: :active} = session}, count ->
+          if expired?(session, now), do: count, else: count + 1
+
+        _entry, count ->
+          count
+      end,
+      0,
+      __MODULE__
+    )
+  end
+
   @impl true
   def init(_options) do
     :ets.new(__MODULE__, [:named_table, :set, :public, read_concurrency: true])
@@ -547,6 +570,7 @@ defmodule Backend.Stations.Conversation do
 
     session = %{
       session_id: session_id(),
+      owner_machine_id: Drain.machine_id(),
       station_id: station_id,
       station_version: station_version,
       audio_consent: audio_consent,
@@ -1489,9 +1513,8 @@ defmodule Backend.Stations.Conversation do
     end
   end
 
-  defp session_id do
-    :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
-  end
+  # `<machine id>.<random>` on a Fly machine (#344, `Backend.Stations.Drain`).
+  defp session_id, do: Drain.new_session_id()
 
   defp do_record_impresso_request(session, request_id, matched_ids, text, opts) do
     case Enum.find(session.impresso_requests, &(&1.request_id == request_id)) do

@@ -1,0 +1,43 @@
+# Fly app of the LiveKit voice worker (#344). Runbook: docs/operations/deploy.md.
+# A separate app from Phoenix so it scales on its own (`fly scale count`).
+# It serves no public HTTP: LiveKit Cloud dispatches jobs over the worker's
+# outbound connection. Secrets (LIVEKIT_API_KEY, LIVEKIT_API_SECRET,
+# VOICE_WORKER_SECRET, DEEPGRAM_API_KEY, CARTESIA_API_KEY) are set with
+# `fly secrets set`, never here.
+#
+# Replace the placeholders (`app`, `PHOENIX_URL`) before the first deploy.
+
+app = "proyectomed-voice"
+primary_region = "gru"
+
+# On SIGTERM the agent server stops taking jobs and finishes the running ones;
+# Fly waits at most 300 s, so deploy it right after the Phoenix drain gate
+# (no session running).
+kill_signal = "SIGTERM"
+kill_timeout = 300
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Phoenix through Fly's proxy, so fly-replay reaches the machine that owns a session.
+  PHOENIX_URL = "https://proyectomed.fly.dev"
+  CARTESIA_MODEL = "sonic-3"
+
+# Machine-level check on the agent server's own health endpoint; no service
+# is published.
+[checks]
+  [checks.agent]
+    type = "http"
+    port = 8081
+    path = "/"
+    method = "GET"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+
+# Sizing from LiveKit's guidance (4 cores, 8 GB for 10-25 jobs, research #328
+# A11); confirm with the load test before launch.
+[[vm]]
+  size = "performance-4x"
+  memory = "8gb"

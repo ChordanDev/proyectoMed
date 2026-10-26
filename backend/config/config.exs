@@ -23,6 +23,8 @@ config :backend, :scopes,
 config :backend,
   ecto_repos: [Backend.Repo],
   generators: [timestamp_type: :utc_datetime],
+  # Concurrent running sessions one node admits (#344, `MAX_CONCURRENT_SESSIONS`).
+  max_concurrent_sessions: 200,
   openai_transcription_model: "whisper-1",
   openai_tts_model: "tts-1",
   openai_tts_voice: "alloy",

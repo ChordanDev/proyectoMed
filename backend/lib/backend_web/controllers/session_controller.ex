@@ -8,11 +8,20 @@ defmodule BackendWeb.SessionController do
   needs an active subscription: without one it answers `402
   subscription_required` (#339). Past the plan's daily quota it answers `429
   daily_quota_exhausted` with `resets_at` and a `Retry-After` header (#340).
+  A node draining for a deploy answers `503 draining` with a `Retry-After`
+  header, and a node at its concurrent-session cap `503 capacity_exhausted`,
+  also with `Retry-After` (#344).
   """
 
   use BackendWeb, :controller
 
   alias Backend.Stations
+
+  # A draining node (#344) is replaced within minutes by `fly deploy`; the new
+  # machine takes new sessions.
+  @drain_retry_after_seconds 30
+  # A full node (#344) frees a slot as stations end (10 minutes at most).
+  @capacity_retry_after_seconds 60
 
   # The largest value of the bigint `cases.number` column.
   @max_case_number 9_223_372_036_854_775_807
@@ -44,6 +53,25 @@ defmodule BackendWeb.SessionController do
           "invalid_parameters",
           "Parâmetros inválidos: informe 'station_id' (número da estação) ou 'random': true " <>
             "com 'area' opcional, e 'audio_consent' booleano."
+        )
+
+      {:error, :draining} ->
+        conn
+        |> put_resp_header("retry-after", Integer.to_string(@drain_retry_after_seconds))
+        |> error(
+          :service_unavailable,
+          "draining",
+          "O simulador está sendo atualizado. Tente iniciar a estação novamente em instantes."
+        )
+
+      {:error, :capacity_exhausted} ->
+        conn
+        |> put_resp_header("retry-after", Integer.to_string(@capacity_retry_after_seconds))
+        |> error(
+          :service_unavailable,
+          "capacity_exhausted",
+          "Todas as vagas de simulação estão ocupadas no momento. " <>
+            "Tente novamente em alguns minutos."
         )
 
       {:error, :subscription_required} ->

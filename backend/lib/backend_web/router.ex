@@ -26,15 +26,24 @@ defmodule BackendWeb.Router do
   end
 
   # The learner's station API: a valid access token, and an `:id` session the
-  # learner started (another learner's session is 404).
+  # learner started (another learner's session is 404). A session held by
+  # another Fly machine is replayed to it first (#344).
   pipeline :learner_api do
+    plug BackendWeb.Plugs.SessionReplay
     plug BackendWeb.Plugs.DeviceAuth
     plug BackendWeb.Plugs.SessionOwner
   end
 
   # Deprecated routes: unauthenticated only in dev and test (#337).
+  # Sessions of another Fly machine are replayed to it (#344).
   pipeline :legacy_station_api do
+    plug BackendWeb.Plugs.SessionReplay
     plug BackendWeb.Plugs.LegacyStationAuth
+  end
+
+  # A session held by another Fly machine is replayed to it (#344).
+  pipeline :session_replay do
+    plug BackendWeb.Plugs.SessionReplay
   end
 
   # Per-session and per-learner limits of the routes that call paid
@@ -82,6 +91,8 @@ defmodule BackendWeb.Router do
     pipe_through :api
 
     get "/", HealthController, :index
+    # Fly health checks (#344): plain HTTP, outside force_ssl (config/prod.exs).
+    get "/health", HealthController, :index
   end
 
   scope "/", BackendWeb do
@@ -213,7 +224,7 @@ defmodule BackendWeb.Router do
   # drop a spoken turn. Voice cost is bounded at the learner's entry points
   # (`POST /sessions/:id/voice`, `.../exam-mode`) and by the station deadline.
   scope "/api/internal/voice", BackendWeb do
-    pipe_through :api
+    pipe_through [:api, :session_replay]
 
     get "/sessions/:id", VoiceWorkerController, :show
     post "/sessions/:id/transcripts", VoiceWorkerController, :create_transcript
