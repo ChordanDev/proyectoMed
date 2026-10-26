@@ -17,7 +17,9 @@ defmodule Backend.Release.DeployScriptTest do
   set -u
   echo "$*" >> "$STUB_DIR/calls"
   case "$1 ${2:-}" in
-    "machines list") for m in $MACHINES; do echo "$m"; done ;;
+    "machines list")
+      [ -n "${LIST_EXIT:-}" ] && { echo "Error: unauthorized" >&2; exit "$LIST_EXIT"; }
+      for m in ${MACHINES:-}; do echo "$m"; done ;;
     "ssh console")
       machine=""; command=""
       while [ $# -gt 0 ]; do
@@ -130,5 +132,48 @@ defmodule Backend.Release.DeployScriptTest do
              "machines list --app proyectomed-test --quiet",
              "deploy --app proyectomed-test"
            ]
+  end
+
+  test "a failed machine list stops before draining or deploying", %{dir: dir} do
+    {output, status, calls} = run(dir, [{"MACHINES", "m1"}, {"LIST_EXIT", "1"}])
+
+    assert status != 0
+    assert output =~ "could not list"
+    assert calls == ["machines list --app proyectomed-test --quiet"]
+  end
+
+  test "an interrupt while waiting resumes every drained machine", %{dir: dir} do
+    counts(dir, "m1", [1])
+    counts(dir, "m2", [1])
+
+    env = [
+      {"PATH", Path.join(dir, "bin") <> ":" <> System.get_env("PATH")},
+      {"STUB_DIR", dir},
+      {"FLY_APP", "proyectomed-test"},
+      {"DRAIN_POLL_S", "30"},
+      {"MACHINES", "m1 m2"}
+    ]
+
+    # Signal the script once it is polling, as Ctrl-C or a cancelled CI job would.
+    wrapper = ~S"""
+    bash "$1" & pid=$!
+    for _ in $(seq 1 100); do
+      grep -q "m2 --command /app/bin/drain status" "$STUB_DIR/calls" 2>/dev/null && break
+      sleep 0.1
+    done
+    kill -TERM "$pid"
+    wait "$pid"
+    """
+
+    {output, status} =
+      System.cmd("bash", ["-c", wrapper, "wrapper", @script], env: env, stderr_to_stdout: true)
+
+    calls = dir |> Path.join("calls") |> File.read!() |> String.split("\n", trim: true)
+
+    assert status != 0
+    assert output =~ "interrupted"
+    refute Enum.any?(calls, &String.starts_with?(&1, "deploy"))
+    assert Enum.any?(calls, &(&1 =~ "--machine m1 --command /app/bin/drain stop"))
+    assert Enum.any?(calls, &(&1 =~ "--machine m2 --command /app/bin/drain stop"))
   end
 end

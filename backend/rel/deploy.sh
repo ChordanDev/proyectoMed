@@ -10,7 +10,9 @@
 #    (default 720, 12 minutes: a 10-minute station plus margin) have passed.
 # 3. Runs `fly deploy` (bluegreen, fly.toml): new machines take new sessions;
 #    requests for sessions of the old machines are replayed to them.
-# If the drain status cannot be read or the deploy fails, it runs
+# If the machine list cannot be read, it stops before draining or deploying.
+# If the drain status cannot be read, the deploy fails, or the script is
+# interrupted (INT, TERM, HUP) once draining starts, it runs
 # `/app/bin/drain stop` on every drained machine and exits non-zero.
 #
 # FLY_APP overrides the app named in fly.toml.
@@ -31,12 +33,20 @@ drain() {
   fly ssh console --app "$app" --machine "$1" --command "/app/bin/drain $2"
 }
 
+# Captured first: a process substitution would hide a failed list, and an
+# empty list would then deploy without draining.
+if ! list="$(fly machines list --app "$app" --quiet)"; then
+  echo "deploy: could not list the machines of $app; nothing drained or deployed" >&2
+  exit 1
+fi
+
 machines=()
 while IFS= read -r line; do
   if [[ "$line" =~ ^[a-z0-9]+$ ]]; then machines+=("$line"); fi
-done < <(fly machines list --app "$app" --quiet)
+done <<< "$list"
 
 drained=()
+sleep_pid=""
 
 resume() {
   local machine
@@ -46,10 +56,16 @@ resume() {
 }
 
 fail() {
+  trap - INT TERM HUP
+  if [ -n "$sleep_pid" ]; then kill "$sleep_pid" 2>/dev/null || true; fi
   echo "deploy: $1; resuming the drained machines" >&2
   resume
   exit 1
 }
+
+# Kept through `fly deploy`: resuming machines that a finished deploy
+# replaces is harmless, leaving them draining after an aborted one is not.
+trap 'fail interrupted' INT TERM HUP
 
 for machine in "${machines[@]+"${machines[@]}"}"; do
   drained+=("$machine")
@@ -81,7 +97,11 @@ if [ "${#machines[@]}" -gt 0 ]; then
       break
     fi
 
-    sleep "$poll_s"
+    # In the background so a signal runs the trap without waiting for it.
+    sleep "$poll_s" &
+    sleep_pid=$!
+    wait "$sleep_pid"
+    sleep_pid=""
   done
 fi
 
