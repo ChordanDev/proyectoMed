@@ -2,11 +2,14 @@ defmodule BackendWeb.RateLimit do
   @moduledoc """
   In-memory throttling of the public authentication and device-login
   endpoints (#380): unauthenticated `POST /device/start`, user-code lookups on
-  `/device`, login, sign-up, and the password-reset and login-link emails.
+  `/device`, login, sign-up, and the password-reset and login-link emails; and
+  of the learner session routes that call paid providers (#395, the
+  `session_*` actions, through `BackendWeb.Plugs.SessionRateLimit`).
 
   Each `{action, kind}` pair has a limit of `count` requests per `window_ms`,
   counted per key (`:ip` the client IP, `:email` the normalized email, `:user`
-  the logged-in user id). A window opens on a key's first request; a request
+  the logged-in user id, `:session` the station session id, `:learner` the
+  device access token's user id). A window opens on a key's first request; a request
   beyond the limit is refused until the window ends. Counters live in a public
   ETS table owned by this process: one Phoenix node at launch (ADR-014 #346),
   so no shared store is needed. A restart forgets every counter.
@@ -16,9 +19,12 @@ defmodule BackendWeb.RateLimit do
     * `:enabled` - `false` allows every request (the test config, since every
       test conn comes from the same IP);
     * `:limits` - `[action: [kind: {count, window_ms}]]`, merged over the
-      defaults below; `config/runtime.exs` reads the `RATE_LIMIT_*` variables.
+      defaults below; `config/runtime.exs` reads the `RATE_LIMIT_*` variables;
+    * `:clock_offset_ms` - tests only: moves the limiter's clock forward
+      (`BackendWeb.RateLimitHelpers.advance_rate_limit_clock/1`).
 
-  Emails are hashed before they become keys, and a throttled request logs only
+  Emails and session ids are hashed before they become keys, so a key's size
+  never depends on the request, and a throttled request logs only
   the action and the key kinds, never an IP, email, code or token.
   """
 
@@ -38,7 +44,16 @@ defmodule BackendWeb.RateLimit do
     login: [ip: {20, 5 * @minute}, email: {10, 5 * @minute}],
     magic_link_email: [ip: {20, @hour}, email: {5, @hour}],
     reset_password_email: [ip: {20, @hour}, email: {5, @hour}],
-    sign_up: [ip: {10, @hour}]
+    sign_up: [ip: {10, @hour}],
+    # Learner session routes that call paid providers (#395). A human-paced
+    # station sends a turn every few seconds at most: these sit well above it.
+    session_message: [session: {40, @minute}, learner: {80, @minute}],
+    session_transcribe: [session: {40, @minute}, learner: {80, @minute}],
+    session_synthesize: [session: {30, @minute}, learner: {60, @minute}],
+    session_voice: [session: {10, @minute}, learner: {20, @minute}],
+    session_impresso: [session: {15, @minute}, learner: {30, @minute}],
+    session_exam_mode: [session: {20, @minute}, learner: {40, @minute}],
+    session_result: [session: {20, @minute}, learner: {40, @minute}]
   ]
 
   @typedoc "A throttled endpoint."
@@ -49,6 +64,13 @@ defmodule BackendWeb.RateLimit do
           | :magic_link_email
           | :reset_password_email
           | :sign_up
+          | :session_message
+          | :session_transcribe
+          | :session_synthesize
+          | :session_voice
+          | :session_impresso
+          | :session_exam_mode
+          | :session_result
 
   @doc "The pt-BR flash of a throttled browser page."
   def flash_message, do: "Muitas tentativas. Aguarde alguns minutos e tente novamente."
@@ -62,7 +84,9 @@ defmodule BackendWeb.RateLimit do
   @doc """
   Counts one request of `action` for every `{kind, value}` key and answers
   `:ok`, or `{:error, :rate_limited, retry_after_seconds}` when any key is
-  beyond its limit. A key whose value is `nil` or that has no limit is skipped.
+  beyond its limit. A refused request is taken back from the keys that allowed
+  it, so it spends none of their budget. A key whose value is `nil` or that has
+  no limit is skipped.
   """
   @spec check(action(), keyword()) :: :ok | {:error, :rate_limited, pos_integer()}
   def check(action, keys) do
@@ -116,23 +140,22 @@ defmodule BackendWeb.RateLimit do
   defp count(action, keys) do
     now = now_ms()
 
-    refused =
-      Enum.flat_map(keys, fn {kind, value} ->
-        with false <- is_nil(value),
-             {_count, _window_ms} = limit <- limit(action, kind),
-             retry_ms when is_integer(retry_ms) <-
-               hit({action, kind, key(kind, value)}, limit, now) do
-          [{kind, retry_ms}]
-        else
-          _allowed -> []
-        end
-      end)
+    hits =
+      for {kind, value} <- keys,
+          not is_nil(value),
+          limit = limit(action, kind),
+          limit != nil do
+        key = {action, kind, key(kind, value)}
+        {kind, key, hit(key, limit, now)}
+      end
 
-    case refused do
+    case for {kind, _key, retry_ms} <- hits, retry_ms != nil, do: {kind, retry_ms} do
       [] ->
         :ok
 
       refused ->
+        for {_kind, key, nil} <- hits, do: :ets.update_counter(@table, key, {2, -1})
+
         kinds = refused |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.join(",")
         Logger.warning("rate limited action=#{action} keys=#{kinds}")
 
@@ -163,6 +186,9 @@ defmodule BackendWeb.RateLimit do
   defp key(:email, email) when is_binary(email),
     do: :crypto.hash(:sha256, email |> String.trim() |> String.downcase())
 
+  defp key(:session, session_id) when is_binary(session_id),
+    do: :crypto.hash(:sha256, session_id)
+
   defp key(_kind, value), do: value
 
   defp limit(action, kind) do
@@ -174,5 +200,6 @@ defmodule BackendWeb.RateLimit do
 
   defp config, do: Application.get_env(:backend, __MODULE__) || []
 
-  defp now_ms, do: System.monotonic_time(:millisecond)
+  defp now_ms,
+    do: System.monotonic_time(:millisecond) + Keyword.get(config(), :clock_offset_ms, 0)
 end

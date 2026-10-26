@@ -146,7 +146,7 @@ can come with different statuses from different routes.
 | `deadline_not_reached` | 409 | `FinishSession(Timer)` called early |
 | `no_consent` | 403 | `RequestVoiceCredential` and `POST .../exam-mode` on a run without audio consent |
 | `voice_unavailable` | 503 | `RequestVoiceCredential` when Phoenix has no LiveKit set up |
-| `rate_limited` | 429 | `RequestVoiceCredential` more than 5 times a minute |
+| `rate_limited` | 429 | every session route that calls a paid provider, past its per-session or per-learner limit (see [Rate limits](#rate-limits-issue-395)); `RequestVoiceCredential` also more than 5 times a minute |
 | `reply_verification_failed`, `station_ai_unavailable`, `timeout` | 502, 504 | `SendTurn` |
 | `session_not_finished` | 422 | `FetchResult` before `FinishSession` |
 | `invalid_attempt` | 502 | `FetchResult` when the run could not be assessed |
@@ -453,6 +453,33 @@ the ones of the operations table above.
 | `POST /sessions/:id/finish` | Finish (`FinishSession`). |
 | `GET /sessions/:id/result` | The v2 educational result (`FetchResult`). |
 | `POST /sessions/:id/discard` | Discard (`DiscardSession`). |
+
+### Rate limits (issue #395)
+
+The routes that call paid providers are throttled per session and per
+learner: `POST .../messages` (`SendTurn`), `.../transcribe`, `.../synthesize`,
+`.../voice` (`RequestVoiceCredential`), `.../impressos/request`
+(`RequestImpresso`), `POST`/`DELETE .../exam-mode` and `GET .../result`
+(`FetchResult`). The defaults (per minute, per session: 40 turns, 40
+transcriptions, 30 syntheses, 10 voice credentials, 15 impresso requests, 20
+exam-mode changes, 20 result fetches; per learner, twice that) sit well above
+a human-paced station, so a client that waits for each answer before the next
+request never meets them. Operators can change them (`RATE_LIMIT_<ACTION>_<KIND>`,
+see the README).
+
+Past a limit the route answers `429` with a `Retry-After` header (seconds)
+and this body; the request did nothing and counts toward neither limit, so the client may resend it after
+`Retry-After`, but never in a loop:
+
+```json
+{
+  "error": "rate_limited",
+  "message": "Muitas solicitações nesta sessão. Aguarde 12 s e tente novamente."
+}
+```
+
+The voice worker's routes are never throttled, so a spoken turn is never
+dropped by a limit.
 
 ### Deprecated active-station routes
 

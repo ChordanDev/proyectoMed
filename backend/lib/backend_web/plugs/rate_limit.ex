@@ -23,15 +23,25 @@ defmodule BackendWeb.Plugs.RateLimit do
         conn
 
       {:error, :rate_limited, retry_after} ->
-        conn
-        |> put_resp_header("retry-after", Integer.to_string(retry_after))
-        |> put_resp_header("cache-control", "no-store")
-        |> put_status(:too_many_requests)
-        |> Phoenix.Controller.json(%{
-          error: "rate_limited",
-          message: "Muitas tentativas. Aguarde #{retry_after} s e tente novamente."
-        })
-        |> halt()
+        too_many_requests(
+          conn,
+          retry_after,
+          "Muitas tentativas. Aguarde #{retry_after} s e tente novamente."
+        )
     end
+  end
+
+  @doc """
+  Halts `conn` with `429`, the `retry-after` header (seconds), and the JSON
+  error `rate_limited` carrying the pt-BR `message`.
+  """
+  @spec too_many_requests(Plug.Conn.t(), pos_integer(), String.t()) :: Plug.Conn.t()
+  def too_many_requests(conn, retry_after, message) do
+    conn
+    |> put_resp_header("retry-after", Integer.to_string(retry_after))
+    |> put_resp_header("cache-control", "no-store")
+    |> put_status(:too_many_requests)
+    |> Phoenix.Controller.json(%{error: "rate_limited", message: message})
+    |> halt()
   end
 end

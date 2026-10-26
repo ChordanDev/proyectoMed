@@ -39,6 +39,39 @@ defmodule BackendWeb.RateLimitTest do
     assert :ok = RateLimit.check(:sign_up, ip: @ip)
   end
 
+  test "a refused request spends no other key's budget" do
+    enable_rate_limit(login: [ip: {1, 60_000}, email: {1, 60_000}])
+
+    assert :ok = RateLimit.check(:login, ip: @ip, email: "a@example.com")
+    assert {:error, :rate_limited, _} = RateLimit.check(:login, ip: @ip, email: "b@example.com")
+    assert :ok = RateLimit.check(:login, ip: {10, 0, 0, 2}, email: "b@example.com")
+  end
+
+  @tag :capture_log
+  test "allows exactly the limit to concurrent requests on one key" do
+    enable_rate_limit(device_start: [ip: {5, 60_000}])
+
+    results =
+      1..50
+      |> Task.async_stream(fn _ -> RateLimit.check(:device_start, ip: @ip) end)
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.count(results, &(&1 == :ok)) == 5
+  end
+
+  test "stores a session id hashed, never verbatim" do
+    enable_rate_limit(session_message: [session: {1, 60_000}])
+    session_id = String.duplicate("a", 8_000)
+
+    assert :ok = RateLimit.check(:session_message, session: session_id)
+    assert {:error, :rate_limited, _} = RateLimit.check(:session_message, session: session_id)
+
+    for {{_action, _kind, key}, _count, _expires_at} <- :ets.tab2list(RateLimit) do
+      refute key == session_id
+      assert byte_size(key) == 32
+    end
+  end
+
   test "treats an email the same whatever its case and surrounding spaces" do
     enable_rate_limit(login: [email: {1, 60_000}])
 

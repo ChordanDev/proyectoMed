@@ -584,7 +584,8 @@ if config_env() != :test do
   end
 end
 
-# Rate limits of the public authentication and device-login endpoints (#380).
+# Rate limits of the public authentication and device-login endpoints (#380)
+# and of the learner session routes that call paid providers (#395).
 # `RATE_LIMIT_ENABLED=false` turns them off; `RATE_LIMIT_<ACTION>_<KIND>` sets
 # one limit as `<count>/<seconds>` (for example `RATE_LIMIT_LOGIN_IP=20/300`).
 # `TRUSTED_CLIENT_IP_HEADER` names the proxy header that carries the client IP
@@ -597,7 +598,14 @@ if config_env() != :test do
     login: [:ip, :email],
     magic_link_email: [:ip, :email],
     reset_password_email: [:ip, :email],
-    sign_up: [:ip]
+    sign_up: [:ip],
+    session_message: [:session, :learner],
+    session_transcribe: [:session, :learner],
+    session_synthesize: [:session, :learner],
+    session_voice: [:session, :learner],
+    session_impresso: [:session, :learner],
+    session_exam_mode: [:session, :learner],
+    session_result: [:session, :learner]
   ]
 
   parse_rate_limit = fn name, value ->
