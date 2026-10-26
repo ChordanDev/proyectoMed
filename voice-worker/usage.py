@@ -29,7 +29,11 @@ class UsageMeter:
         """One audio frame pushed to the STT stream."""
         samples = getattr(frame, "samples_per_channel", 0)
         sample_rate = getattr(frame, "sample_rate", 0)
-        if isinstance(samples, int) and isinstance(sample_rate, int) and sample_rate > 0:
+        if (
+            isinstance(samples, int)
+            and isinstance(sample_rate, int)
+            and sample_rate > 0
+        ):
             self._audio_seconds += samples / sample_rate
 
     def add_characters(self, text) -> None:
@@ -58,7 +62,9 @@ class UsageMeter:
         }
 
 
-async def report_usage(phoenix, meter: UsageMeter, report_id: str, session_id: str) -> None:
+async def report_usage(
+    phoenix, meter: UsageMeter, report_id: str, session_id: str
+) -> None:
     """Send the job's usage to Phoenix; a failure is logged by kind and never raised."""
     try:
         await phoenix.report_usage(meter.report(report_id))

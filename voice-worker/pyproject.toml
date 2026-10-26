@@ -8,3 +8,30 @@ dependencies = [
     "livekit-plugins-cartesia>=1.2",
     "livekit-plugins-deepgram>=1.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pyright[nodejs]==1.1.414",
+    "ruff==0.17.2",
+]
+
+# ruff is pinned in the dev group, so its default rule set only changes when
+# the pin is bumped on purpose.
+[tool.ruff.lint]
+# Provider and publication boundaries catch every exception on purpose: they
+# classify it into a VoiceFailure kind or log a fixed message, because provider
+# errors can echo credentials or transcript text.
+ignore = ["BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests build request handlers inside subTest loops and call them within the
+# same iteration, so late binding of loop variables cannot bite.
+"test_*.py" = ["B023"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+# Production modules only for now: the tests pass hand-written fakes where
+# LiveKit and httpx types are expected, which pyright reports as errors.
+include = ["*.py"]
+exclude = ["test_*.py", ".venv"]
