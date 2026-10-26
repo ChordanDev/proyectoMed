@@ -11,6 +11,7 @@ Run it with `scripts/load/run-worker-load-test.sh` (see docs/research/voice-work
 
 import argparse
 import asyncio
+import itertools
 import json
 import multiprocessing
 import os
@@ -62,6 +63,12 @@ def steady_window(turns) -> tuple[float, float] | None:
         return None
     start, end = max(first.values()), min(last.values())
     return (start, end) if start < end else None
+
+
+def max_gap(times) -> float:
+    """The longest pause between consecutive samples: seconds the machine stalled or slept."""
+    ordered = sorted(times)
+    return max((b - a for a, b in itertools.pairwise(ordered)), default=0.0)
 
 
 def _shard(indexes, offsets, phoenix, script, results) -> None:
@@ -165,6 +172,8 @@ def run_step(n: int, stack: Stack, args, script: Script, idle: dict) -> dict:
     step["min_available_mb"] = min_available / 2**20
     step["session_failures"] = sorted({lr["failed"] for lr in learners if lr["failed"]})
     step["aborted"] = aborted
+    # Samples are about 1 s apart; a long gap means a sleeping or stalled laptop.
+    step["max_sample_gap_s"] = max_gap(r["at"] for r in samples["worker"])
     return step
 
 

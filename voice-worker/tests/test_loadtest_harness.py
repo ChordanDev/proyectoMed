@@ -2,7 +2,7 @@ import array
 import unittest
 
 from loadtest.learner import is_audible, session_offsets
-from loadtest.run import parse_steps, steady_window
+from loadtest.run import max_gap, parse_steps, steady_window
 from loadtest.stack import (
     LOOPBACK,
     Ports,
@@ -154,6 +154,11 @@ class RunTest(unittest.TestCase):
             {"session": 1, "started_at": 40.0, "ended_at": 120.0},
         ]
         self.assertEqual(steady_window(turns), (30.0, 90.0))
+
+    def test_max_gap_flags_a_stalled_machine(self):
+        self.assertEqual(max_gap([1.0, 2.0, 3.1, 20.1, 21.0]), 17.0)
+        self.assertEqual(max_gap([5.0]), 0.0)
+        self.assertEqual(max_gap([]), 0.0)
 
     def test_no_overlap_has_no_window(self):
         turns = [

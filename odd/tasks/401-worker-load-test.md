@@ -17,12 +17,15 @@ Branch: `test/401-worker-load-test` from `develop`; PR to `develop` with `Refs #
 
 | ID | Specs | Route | Status | Commit / evidence |
 |----|-------|-------|--------|-------------------|
-| T1 | S2 | inline | pending | metrics: percentiles, per-N summary, degradation point, process-tree sampling |
-| T2 | S1, S4 | inline | pending | load driver (`voice-worker/loadtest/`) + one-command harness (`scripts/load/`) |
-| T3 | S2, S3, S5 | inline | pending | run N=10..200, report in `docs/research/` with Fly gru prices |
+| T1 | S2 | inline | done | `8988ed0` metrics; RED: `tests.test_loadtest_metrics` import error (module missing); GREEN: 15 tests OK |
+| T2 | S1, S4 | inline | done | `8f69bf8` harness; RED: `tests.test_loadtest_harness` import error (modules missing); GREEN: 13 tests OK; smoke run N=2 × 3 turns: 6/6 turns ok, p50 650 ms, all ports freed |
+| T3 | S2, S3, S5 | inline | done | report `docs/research/voice-worker-capacity.md` + raw JSON; harness fix `5244630` (RED: worker_entry import error, then OwnTreeLoad missing; GREEN: 5 tests) and `max_gap` (RED: import error; GREEN) |
 | T4 | S6 | inline | pending | comment measured sessions per machine on #344 |
 
 ## Log
 
 - L1 (2026-10-25, user request relayed by the workflow): "dale" — implement issue #401 "Measure voice worker capacity with a local load test" as a bounded writer.
 - L2: Exploration. The worker runs one process per job (`livekit-agents` 1.8.3, `JobExecutorType.PROCESS`, spawn), so memory per session is a process. `dev` mode has no load cap (`load_threshold=inf`), `start` caps at 0.7 machine CPU. `scripts/run-voice-stack.sh` pins LiveKit to 7880 and Phoenix to the dev DB, so the load harness starts its own stack (LiveKit 7990/7991/7992 UDP, Phoenix 4159, separate `backend_load401` database). Machine: Apple M3, 8 cores, 16 GB.
+- L3: T1 and T2 done. Worker suite `uv run python -m unittest`: 208 tests OK. Smoke run proved the stack starts, learners are real WebRTC participants (Python `livekit.rtc`), and teardown frees 4159/7990/7991/18866.
+- L4: First full run invalid: the laptop slept during N=25/N=50 (pmset log, uptime jumps). It also showed two harness defects: `dev`'s 0 warm processes made LiveKit drop dispatches ("no servers available") after ~13 cold jobs, and the machine-wide CPU of the shared laptop marked the worker full. Fixed with `loadtest/worker_entry.py` (8 warm processes, own process-tree load), SIGTERM cleanup and `caffeinate`. Orphans of the killed run were stopped by PID after checking their cwd was this worktree.
+- L5: Second full run (2026-10-26 08:40-09:08, no sleep in pmset log): N=10 400/400 p95 636 ms; N=25 1000/1000 p95 1,099 ms; N=50 degraded (p95 1,862 ms, 64.5% failed turns, 4.3 GB swap). Stopped after N=50 by the harness. Per session: ~360 MB RSS, 6.4% of an M3 core. Fly prices from https://fly.io/pricing (2026-10-26): perf-4x $132.01, perf-8x $264.01, RAM $6/GB, gru x1.615. Recommendation: performance-4x 12 GB at 20 sessions, 11 machines, ~$2,772/month.

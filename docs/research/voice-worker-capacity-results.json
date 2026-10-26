@@ -1,0 +1,152 @@
+{
+  "machine": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "cpus": 8,
+    "memory_mb": 16384.0
+  },
+  "script": {
+    "turns": 40,
+    "turn_interval_s": 7.5,
+    "speech_s": 1.2,
+    "reply_timeout_s": 15.0,
+    "join_timeout_s": 60.0
+  },
+  "worker_idle": {
+    "cpu_percent": 0.0,
+    "rss_mb": 2920.859375,
+    "processes": 11
+  },
+  "ramp_per_session_s": 1.0,
+  "degradation": {
+    "n": 50,
+    "reason": "latency_p95_ms 1862 > 1500"
+  },
+  "limits": {
+    "p95_ms": 1500,
+    "error_rate": 0.01
+  },
+  "steps": [
+    {
+      "n": 10,
+      "sessions_started": 10,
+      "sessions_failed": 0,
+      "turns_total": 400,
+      "turns_ok": 400,
+      "turns_failed": 0,
+      "failures": {},
+      "error_rate": 0.0,
+      "latency_p50_ms": 617.7992290031398,
+      "latency_p95_ms": 635.9851250024803,
+      "latency_p99_ms": 641.1460827336123,
+      "latency_max_ms": 657.9545419954229,
+      "worker": {
+        "cpu_avg_percent": 51.22535714285713,
+        "cpu_peak_percent": 187.3,
+        "rss_peak_mb": 6518.65625,
+        "processes_peak": 21
+      },
+      "phoenix": {
+        "cpu_avg_percent": 5.720357142857143,
+        "cpu_peak_percent": 12.200000000000001,
+        "rss_peak_mb": 296.5625,
+        "processes_peak": 7
+      },
+      "worker_rss_per_session_mb": 359.7796875,
+      "worker_cpu_per_session_percent": 5.122535714285712,
+      "livekit": {
+        "cpu_avg_percent": 4.644285714285715,
+        "cpu_peak_percent": 7.5,
+        "rss_peak_mb": 119.078125,
+        "processes_peak": 1
+      },
+      "steady_window_s": 285.6574149131775,
+      "min_available_mb": 4992.9375,
+      "session_failures": [],
+      "aborted": null
+    },
+    {
+      "n": 25,
+      "sessions_started": 25,
+      "sessions_failed": 0,
+      "turns_total": 1000,
+      "turns_ok": 1000,
+      "turns_failed": 0,
+      "failures": {},
+      "error_rate": 0.0,
+      "latency_p50_ms": 673.5069374917657,
+      "latency_p95_ms": 1098.7818795045314,
+      "latency_p99_ms": 1317.8114126691066,
+      "latency_max_ms": 1525.6994170049438,
+      "worker": {
+        "cpu_avg_percent": 159.66513409961692,
+        "cpu_peak_percent": 252.5,
+        "rss_peak_mb": 5921.953125,
+        "processes_peak": 36
+      },
+      "phoenix": {
+        "cpu_avg_percent": 14.058620689655173,
+        "cpu_peak_percent": 45.800000000000004,
+        "rss_peak_mb": 244.859375,
+        "processes_peak": 7
+      },
+      "worker_rss_per_session_mb": 120.04375,
+      "worker_cpu_per_session_percent": 6.3866053639846765,
+      "livekit": {
+        "cpu_avg_percent": 14.204980842911878,
+        "cpu_peak_percent": 23.8,
+        "rss_peak_mb": 196.203125,
+        "processes_peak": 1
+      },
+      "steady_window_s": 267.4440927505493,
+      "min_available_mb": 2796.875,
+      "session_failures": [],
+      "aborted": null
+    },
+    {
+      "n": 50,
+      "sessions_started": 50,
+      "sessions_failed": 15,
+      "turns_total": 2000,
+      "turns_ok": 711,
+      "turns_failed": 1289,
+      "failures": {
+        "session_worker_not_joined": 600,
+        "no_reply_end": 78,
+        "no_audio": 586,
+        "station_time_elapsed": 25
+      },
+      "error_rate": 0.6445,
+      "latency_p50_ms": 943.7376659916481,
+      "latency_p95_ms": 1862.1361249897745,
+      "latency_p99_ms": 10213.458504201837,
+      "latency_max_ms": 14787.177125006565,
+      "worker": {
+        "cpu_avg_percent": 184.58702064896755,
+        "cpu_peak_percent": 555.2,
+        "rss_peak_mb": 7081.515625,
+        "processes_peak": 44
+      },
+      "phoenix": {
+        "cpu_avg_percent": 16.91376597836775,
+        "cpu_peak_percent": 85.4,
+        "rss_peak_mb": 219.515625,
+        "processes_peak": 7
+      },
+      "worker_rss_per_session_mb": 83.213125,
+      "worker_cpu_per_session_percent": 3.691740412979351,
+      "livekit": {
+        "cpu_avg_percent": 13.109636184857424,
+        "cpu_peak_percent": 44.5,
+        "rss_peak_mb": 281.921875,
+        "processes_peak": 1
+      },
+      "steady_window_s": null,
+      "min_available_mb": 2813.296875,
+      "session_failures": [
+        "worker_not_joined"
+      ],
+      "aborted": null
+    }
+  ]
+}
