@@ -263,9 +263,13 @@ class SpeechPlayer:
             if self._speaking is not reply or not self._is_current(reply):
                 return None
             tts = self.voices.get(getattr(reply, "voice", None), self.tts)
-            stream = self._open_stream(tts, reply.reply_text)
+            text = reply.reply_text
+            assert text is not None  # a current reply is committed, so it has text
+            stream = self._open_stream(tts, text)
             if self.meter is not None:
-                self.meter.add_characters(reply.reply_text)
+                self.meter.add_characters(text)
+            source = self._source
+            assert source is not None  # start() published the track
             heard = retried = False
             while True:
                 try:
@@ -275,11 +279,11 @@ class SpeechPlayer:
                         if not self._is_current(reply):
                             # Fenced by the tracker alone: drop this frame and every
                             # later one.
-                            self._source.clear_queue()
+                            source.clear_queue()
                             return None
                         heard = True
                         self._log_first_audio(reply)
-                        await self._source.capture_frame(audio.frame)
+                        await source.capture_frame(audio.frame)
                     break
                 except (APIStatusError, APIConnectionError) as error:
                     # A pooled websocket can die while it waits for the reply (J400-2):
@@ -301,10 +305,10 @@ class SpeechPlayer:
                     await self._release(closing.aclose())
                     if self._speaking is not reply or not self._is_current(reply):
                         return None
-                    stream = self._open_stream(tts, reply.reply_text)
+                    stream = self._open_stream(tts, text)
             # Still this generation until the buffered tail is heard, so a cancel in
             # that window clears it instead of being a finished-generation no-op.
-            await self._source.wait_for_playout()
+            await source.wait_for_playout()
             return None
         except Exception:
             if self._speaking is not reply:

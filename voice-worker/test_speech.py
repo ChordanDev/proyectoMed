@@ -698,7 +698,7 @@ def socket_closed():
 
 def provider_timeout():
     def raise_timeout(_context_id):
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     return raise_timeout
 
@@ -894,7 +894,9 @@ class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
         await self.player.aclose()
 
     async def test_a_provider_cut_after_audio_is_not_retried(self):
-        self.answers.extend([[*provider_audio()[:1], socket_closed()], provider_audio()])
+        self.answers.extend(
+            [[*provider_audio()[:1], socket_closed()], provider_audio()]
+        )
         await self.player.start()
 
         failure = await self.player.speak(accepted(self.tracker, 1))
