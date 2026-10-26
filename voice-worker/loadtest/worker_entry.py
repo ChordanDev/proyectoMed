@@ -9,7 +9,9 @@ number of warm processes. It also reports as its load the CPU of its own process
 tree, not of the whole machine: on the laptop the learners, LiveKit and Phoenix share
 the CPU, and LiveKit stops dispatching to a worker whose reported load reaches 1,
 while on a dedicated worker machine the two are the same. It refuses to start unless
-the fake speech providers are on and LiveKit is on a loopback address.
+the fake speech providers are on and LiveKit is on a loopback address. It runs jobs
+with the executor of `VOICE_WORKER_EXECUTOR` and, when `LOADTEST_FAULT` is set,
+makes one session crash or hang (`loadtest.faults`, #405).
 
 Usage (from voice-worker/): python -m loadtest.worker_entry dev --no-reload
 """
@@ -22,6 +24,7 @@ from livekit.agents import cli
 
 import worker
 from fake_providers import fake_providers_from_env
+from loadtest import faults
 from loadtest.metrics import ProcessTreeSampler
 
 WARM_PROCESSES = 8  # livekit-agents' production default of num_idle_processes
@@ -48,8 +51,11 @@ def configure(environ):
         raise SystemExit("the load test worker runs only with fake speech providers")
     try:
         server = worker.configure_server(environ)  # VOICE_WORKER_EXECUTOR (#405)
+        fault = faults.fault_from_env(environ)
     except ValueError as error:
         raise SystemExit(str(error)) from None
+    if fault is not None:  # one session crashes or hangs (#405)
+        server._entrypoint_fnc = faults.entrypoint
     server.update_options(num_idle_processes=WARM_PROCESSES)
     server.load_fnc = OwnTreeLoad()
     return server

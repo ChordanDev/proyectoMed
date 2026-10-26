@@ -29,6 +29,8 @@ from pathlib import Path
 
 import psutil
 
+from loadtest.faults import KINDS as FAULT_KINDS
+from loadtest.faults import fault_impact
 from loadtest.learner import Script, run_learners, session_offsets
 from loadtest.metrics import (
     ProcessTreeSampler,
@@ -175,6 +177,10 @@ def run_step(n: int, stack: Stack, args, script: Script, idle: dict) -> dict:
     step["aborted"] = aborted
     # Samples are about 1 s apart; a long gap means a sleeping or stalled laptop.
     step["max_sample_gap_s"] = max_gap(r["at"] for r in samples["worker"])
+    if args.fault:
+        marker = stack.logs / FAULT_MARKER
+        fired = json.loads(marker.read_text()) if marker.exists() else None
+        step["fault"] = fault_impact(args.fault, fired, learners)
     return step
 
 
@@ -205,6 +211,20 @@ def drain(
         time.sleep(2)
 
 
+FAULT_MARKER = "fault.json"
+
+
+def fault_env(args, out: Path) -> dict:
+    """The worker environment of `--fault`: the first job of the run faults."""
+    if not args.fault:
+        return {}
+    return {
+        "LOADTEST_FAULT": args.fault,
+        "LOADTEST_FAULT_AFTER_S": str(args.fault_after_s),
+        "LOADTEST_FAULT_MARKER": str(out / FAULT_MARKER),
+    }
+
+
 def positive_int(text: str) -> int:
     value = int(text)
     if value < 1:
@@ -219,6 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
     # by side on the machine (several in thread mode is the hybrid setup).
     parser.add_argument("--executor", choices=("process", "thread"), default="process")
     parser.add_argument("--workers", type=positive_int, default=1)
+    # #405: the first session of the run crashes its process or hangs its event loop
+    # this many seconds in. Run one step: the fault fires once per run.
+    parser.add_argument("--fault", choices=FAULT_KINDS, default=None)
+    parser.add_argument("--fault-after-s", type=float, default=60.0)
     parser.add_argument("--turns", type=int, default=Script.turns)
     parser.add_argument("--turn-interval", type=float, default=Script.turn_interval_s)
     parser.add_argument("--ramp-per-session", type=float, default=1.0)
@@ -243,7 +267,12 @@ def main(argv=None) -> int:
     out = args.out or Path(tempfile.mkdtemp(prefix="voice-load-"))
     out.mkdir(parents=True, exist_ok=True)
     stack = Stack(
-        Ports(), args.database, out, executor=args.executor, workers=args.workers
+        Ports(),
+        args.database,
+        out,
+        executor=args.executor,
+        workers=args.workers,
+        worker_extra_env=fault_env(args, out),
     )
     steps: list[dict] = []
     idle: dict = {}
@@ -280,6 +309,8 @@ def _write(out: Path, args, script: Script, steps, idle) -> None:
         "script": asdict(script),
         "executor": args.executor,
         "workers": args.workers,
+        "fault": args.fault,
+        "fault_after_s": args.fault_after_s if args.fault else None,
         "worker_idle": idle,
         "ramp_per_session_s": args.ramp_per_session,
         "degradation": degradation_point(steps, args.p95_limit_ms, args.error_limit),

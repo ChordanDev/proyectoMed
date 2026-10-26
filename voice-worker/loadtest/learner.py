@@ -106,6 +106,7 @@ class Learner:
         self.script = script
         self.turns: list[dict] = []
         self.failed: str | None = None
+        self.session_id: str | None = None
         self._awaiting_since: float | None = None
         self._reply_audio = asyncio.Event()
         self._reply_done = asyncio.Event()
@@ -168,7 +169,7 @@ class Learner:
         session = await asyncio.to_thread(
             post, self.phoenix, "/api/stations/active/sessions"
         )
-        session_id = session["session_id"]
+        session_id = self.session_id = session["session_id"]
         path = f"/api/stations/active/sessions/{session_id}"
         room = rtc.Room()
         mic = None
@@ -256,5 +257,11 @@ async def run_learners(indexes, offsets, phoenix: str, script: Script) -> list[d
     learners = [Learner(i, phoenix, script) for i in indexes]
     await asyncio.gather(*(lr.run(d) for lr, d in zip(learners, offsets, strict=True)))
     return [
-        {"index": lr.index, "failed": lr.failed, "turns": lr.turns} for lr in learners
+        {
+            "index": lr.index,
+            "session_id": lr.session_id,
+            "failed": lr.failed,
+            "turns": lr.turns,
+        }
+        for lr in learners
     ]
