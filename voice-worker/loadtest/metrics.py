@@ -73,7 +73,10 @@ def degradation_point(steps, p95_limit_ms: float, error_limit: float) -> dict | 
         p95 = step["latency_p95_ms"]
         if p95 is None or p95 > p95_limit_ms:
             shown = "none" if p95 is None else f"{p95:.0f}"
-            return {"n": step["n"], "reason": f"latency_p95_ms {shown} > {p95_limit_ms:.0f}"}
+            return {
+                "n": step["n"],
+                "reason": f"latency_p95_ms {shown} > {p95_limit_ms:.0f}",
+            }
         if step["error_rate"] > error_limit:
             return {
                 "n": step["n"],
