@@ -47,8 +47,8 @@ defmodule BackendWeb.RateLimit do
     sign_up: [ip: {10, @hour}],
     # Learner session routes that call paid providers (#395). A human-paced
     # station sends a turn every few seconds at most: these sit well above it.
-    session_message: [session: {20, @minute}, learner: {40, @minute}],
-    session_transcribe: [session: {20, @minute}, learner: {40, @minute}],
+    session_message: [session: {40, @minute}, learner: {80, @minute}],
+    session_transcribe: [session: {40, @minute}, learner: {80, @minute}],
     session_synthesize: [session: {30, @minute}, learner: {60, @minute}],
     session_voice: [session: {10, @minute}, learner: {20, @minute}],
     session_impresso: [session: {15, @minute}, learner: {30, @minute}],

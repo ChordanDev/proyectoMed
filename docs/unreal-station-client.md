@@ -460,7 +460,7 @@ The routes that call paid providers are throttled per session and per
 learner: `POST .../messages` (`SendTurn`), `.../transcribe`, `.../synthesize`,
 `.../voice` (`RequestVoiceCredential`), `.../impressos/request`
 (`RequestImpresso`), `POST`/`DELETE .../exam-mode` and `GET .../result`
-(`FetchResult`). The defaults (per minute, per session: 20 turns, 20
+(`FetchResult`). The defaults (per minute, per session: 40 turns, 40
 transcriptions, 30 syntheses, 10 voice credentials, 15 impresso requests, 20
 exam-mode changes, 20 result fetches; per learner, twice that) sit well above
 a human-paced station, so a client that waits for each answer before the next

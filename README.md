@@ -769,8 +769,8 @@ same limiter. The deprecated `/api/stations/active/sessions/:id/...` and
 
 | Endpoint | Action | Key: default limit |
 |---|---|---|
-| `POST /sessions/:id/messages` (Claude, Jev) | `session_message` | session: 20 per minute; learner: 40 per minute |
-| `POST /sessions/:id/transcribe` (OpenAI) | `session_transcribe` | session: 20 per minute; learner: 40 per minute |
+| `POST /sessions/:id/messages` (Claude, Jev) | `session_message` | session: 40 per minute; learner: 80 per minute |
+| `POST /sessions/:id/transcribe` (OpenAI) | `session_transcribe` | session: 40 per minute; learner: 80 per minute |
 | `POST /sessions/:id/synthesize` (OpenAI) | `session_synthesize` | session: 30 per minute; learner: 60 per minute |
 | `POST /sessions/:id/voice` (LiveKit credential) | `session_voice` | session: 10 per minute; learner: 20 per minute |
 | `POST /sessions/:id/impressos/request` (Jev) | `session_impresso` | session: 15 per minute; learner: 30 per minute |
