@@ -462,7 +462,9 @@ pending turn, a stale result or the learner disconnecting stops the provider str
 clears the buffered audio and drops any frame that arrives late. Phoenix remains the
 only text authority; the worker never composes, edits or retries reply text. Learner
 speech over an answer that is already playing stops it at once, also when Phoenix has
-already settled the turn (#193); a settled reply's text stays stored. With `VOICE_MODE=realtime`
+already settled the turn (#193); a settled reply's text stays stored. Only transcribed
+words count as speaking over the patient: Deepgram's voice activity events are off,
+because noise and breath also raised them and cancelled the learner's own turn. With `VOICE_MODE=realtime`
 the web renders these events in the station transcript (#270): it shows the stored
 patient reply (the full verified text, as on the text path) for each patient event,
 "Anotado." for a kept learner turn, and failures as notices; the patient audio plays

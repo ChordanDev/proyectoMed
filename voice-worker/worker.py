@@ -164,6 +164,10 @@ def build_stt(context):
         interim_results=True,
         endpointing_ms=ENDPOINTING_MS,
         keyterm=context["keyterms"],
+        # Deepgram's SpeechStarted also fires on noise and breath; as a barge-in it
+        # cancelled the learner's own turn (#193). Without it an utterance starts
+        # with its first transcribed words.
+        vad_events=False,
     )
 
 
