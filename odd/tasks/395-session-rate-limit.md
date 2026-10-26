@@ -26,11 +26,12 @@ The daily quota (#340) bounds how many sessions a learner starts, not how often 
 
 ## Tasks
 
-- [x] T1 S1 S2 S4 S5: session/learner limits, plug, router wiring, runtime env vars, docs. Route: inline (no writer reason). RED: 11/12 new tests failed (no 429; the worker guard passed). GREEN: 12/12; full suite 2419 passed. Commit: see L3.
-- [ ] T2 S3: scripted normal 10-minute station never throttled at the default limits (limiter clock offset). Route: inline. Commit: pending.
+- [x] T1 S1 S2 S4 S5: session/learner limits, plug, router wiring, runtime env vars, docs. Route: inline (no writer reason). RED: 11/12 new tests failed (no 429; the worker guard passed). GREEN: 12/12; full suite 2419 passed. Commit: `66c8d53`.
+- [x] T2 S3: scripted normal 10-minute station never throttled at the default limits (limiter clock offset). Route: inline. RED: the scripted station was throttled (`post /transcribe was throttled`, the clock never advanced). GREEN: 13/13 in the file; full suite 2420 passed. Commit: this commit.
 
 ## Log
 
 - L1 (2026-10-25, issue #395 body) "The daily quota (#340) limits how many sessions a learner starts, but inside one session nothing limits how often the paid routes are called. Every `POST /sessions/:id/messages`, voice turn, `POST /sessions/:id/impressos/request` (Jev classification since #357) and result fetch can trigger Claude or Jev calls, and the learner session routes have no `BackendWeb.RateLimit` (found in the #357 review). A client bug or an abusive learner can multiply provider cost within a session."
 - L2 Explored `BackendWeb.RateLimit`, `Plugs.RateLimit`, `Plugs.ClientIP`, router `:learner_api`, the voice controllers and `MediaSession` (existing 5/min per-session LiveKit token limit). Phoenix 1.8 sets the controller action only after pipelines, so per-route pipelines carry the action.
 - L3 T1 done: `BackendWeb.Plugs.SessionRateLimit`, seven `session_*` actions with defaults in `BackendWeb.RateLimit`, per-route pipelines on `/sessions/:id/...` and the legacy aliases (shared counters), `RATE_LIMIT_SESSION_*_{SESSION,LEARNER}` in `config/runtime.exs` (checked with `mix run` in dev: `3/30` parsed, `abc` refuses to boot), README and `docs/unreal-station-client.md`. Voice-worker routes stay unthrottled (tested).
+- L4 T2 done: test-only `:clock_offset_ms` in `BackendWeb.RateLimit` and `RateLimitHelpers.advance_rate_limit_clock/1`; the scripted station (2 voice credentials, 150 turns at 4 s each with transcribe + message + synthesize, 6 impresso requests and exam-mode arms, one cancel, finish, 10 result polls at 2 s) passes at the default limits, every turn committed (2xx).

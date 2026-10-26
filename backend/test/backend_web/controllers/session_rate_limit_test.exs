@@ -16,8 +16,23 @@ defmodule BackendWeb.SessionRateLimitTest do
   import Backend.BillingFixtures
   import BackendWeb.RateLimitHelpers
 
+  alias Backend.AppEnvHelpers
   alias Backend.Content
   alias Backend.Stations
+
+  defmodule PatientAdapter do
+    @behaviour Backend.Stations.StationAI
+    @impl true
+    def next_reply(_package, _context), do: {:ok, %{text: "Estou com dor na barriga."}}
+  end
+
+  defmodule VerifyingJevAdapter do
+    @behaviour Backend.Stations.JevDecision.Adapter
+    @impl true
+    def decide_patient(_request), do: {:ok, %{status: :verified}}
+    @impl true
+    def decide_rubric(_request), do: {:error, :not_implemented}
+  end
 
   @reference_case File.read!("priv/stations/acute-appendicitis/case.md")
 
@@ -148,14 +163,7 @@ defmodule BackendWeb.SessionRateLimitTest do
     @secret "issue-395-worker-secret"
 
     setup do
-      previous = Application.get_env(:backend, :voice_worker_secret)
-      Application.put_env(:backend, :voice_worker_secret, @secret)
-
-      on_exit(fn ->
-        if previous,
-          do: Application.put_env(:backend, :voice_worker_secret, previous),
-          else: Application.delete_env(:backend, :voice_worker_secret)
-      end)
+      put_backend_env(:voice_worker_secret, @secret)
     end
 
     test "is never throttled, so no spoken turn is dropped", %{conn: conn, kase: kase} do
@@ -175,5 +183,65 @@ defmodule BackendWeb.SessionRateLimitTest do
                }).status == 429
       end
     end
+  end
+
+  describe "a normal 10-minute station" do
+    setup do
+      put_backend_env(:station_ai_adapter, PatientAdapter)
+      put_backend_env(:jev_decision_adapter, VerifyingJevAdapter)
+    end
+
+    test "is never throttled at the default limits", %{conn: conn, kase: kase} do
+      enable_rate_limit()
+      learner = learner_conn(conn)
+      session_id = start_session!(learner, kase)
+      path = &"/sessions/#{session_id}#{&1}"
+
+      send! = fn method, suffix, params ->
+        response = request(learner, method, path.(suffix), params)
+        refute response.status == 429, "#{method} #{suffix} was throttled"
+        response
+      end
+
+      # The client joins the voice room, and reconnects once.
+      for _ <- 1..2, do: send!.(:post, "/voice", %{})
+
+      # A turn every 4 s for 10 minutes, over the turn-based voice path: the
+      # learner's audio, the turn, the patient's audio.
+      for turn <- 1..150 do
+        send!.(:post, "/transcribe", %{})
+
+        response = send!.(:post, "/messages", %{@message | "text" => "Pergunta #{turn}"})
+        assert response.status in 200..299
+
+        send!.(:post, "/synthesize", %{"text" => "Estou com dor na barriga."})
+
+        # Halfway through, a handful of impresso requests and spoken exam
+        # requests (the exam button arms, and once cancels, the exam mode).
+        if turn in 75..80 do
+          send!.(:post, "/impressos/request", %{"text" => "hemograma #{turn}"})
+          send!.(:post, "/exam-mode", %{})
+        end
+
+        if turn == 80, do: send!.(:delete, "/exam-mode", %{})
+
+        advance_rate_limit_clock(4_000)
+      end
+
+      assert %{"status" => "completed"} =
+               request(learner, :post, path.("/finish"), %{}) |> json_response(200)
+
+      # The client polls the result every 2 s while it is graded.
+      for _ <- 1..10 do
+        send!.(:get, "/result", %{})
+        advance_rate_limit_clock(2_000)
+      end
+    end
+  end
+
+  defp put_backend_env(key, value) do
+    previous = AppEnvHelpers.snapshot(key)
+    Application.put_env(:backend, key, value)
+    on_exit(fn -> AppEnvHelpers.restore(key, previous) end)
   end
 end

@@ -24,4 +24,20 @@ defmodule BackendWeb.RateLimitHelpers do
 
     :ok
   end
+
+  @doc """
+  Moves the limiter's clock `ms` milliseconds forward (#395), so a test can
+  script minutes of requests without waiting. Call it after
+  `enable_rate_limit/1`, which restores the clock when the test exits.
+  """
+  def advance_rate_limit_clock(ms) when is_integer(ms) and ms >= 0 do
+    config = Application.get_env(:backend, BackendWeb.RateLimit, [])
+    offset = Keyword.get(config, :clock_offset_ms, 0) + ms
+
+    Application.put_env(
+      :backend,
+      BackendWeb.RateLimit,
+      Keyword.put(config, :clock_offset_ms, offset)
+    )
+  end
 end

@@ -19,7 +19,9 @@ defmodule BackendWeb.RateLimit do
     * `:enabled` - `false` allows every request (the test config, since every
       test conn comes from the same IP);
     * `:limits` - `[action: [kind: {count, window_ms}]]`, merged over the
-      defaults below; `config/runtime.exs` reads the `RATE_LIMIT_*` variables.
+      defaults below; `config/runtime.exs` reads the `RATE_LIMIT_*` variables;
+    * `:clock_offset_ms` - tests only: moves the limiter's clock forward
+      (`BackendWeb.RateLimitHelpers.advance_rate_limit_clock/1`).
 
   Emails are hashed before they become keys, and a throttled request logs only
   the action and the key kinds, never an IP, email, code or token.
@@ -193,5 +195,6 @@ defmodule BackendWeb.RateLimit do
 
   defp config, do: Application.get_env(:backend, __MODULE__) || []
 
-  defp now_ms, do: System.monotonic_time(:millisecond)
+  defp now_ms,
+    do: System.monotonic_time(:millisecond) + Keyword.get(config(), :clock_offset_ms, 0)
 end
