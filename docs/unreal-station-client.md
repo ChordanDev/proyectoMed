@@ -642,6 +642,20 @@ MetaHuman's lip sync and to name the speaker on screen.
     streamed (`application/x-ndjson`) result line does not: its sentences
     already carry the speaker.
 
+## Unavailable exam answers (issue #357)
+
+When `RequestImpresso` names an exam the station has no impresso for, the
+reply keeps `decision: "unavailable"`, releases nothing, and carries one of the
+two answers the Revalida examiner gives in `feedback_message`. Show it as is:
+
+| `feedback_message` | When |
+| --- | --- |
+| `Considere solicitado.` | The exam makes clinical sense for the case but is not in the checklist. It earns no points. |
+| `Não consta no script.` | The exam makes no sense for the case, or Phoenix could not decide. |
+
+No new decision value exists, so the parser in `StationJson.cpp` needs no
+change. Retrying with the same `RequestId` returns the same text.
+
 ## Exam requests in the dialogue (issue #351)
 
 Exam findings and impressos are released only by the exam button, which calls

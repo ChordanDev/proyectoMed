@@ -91,6 +91,7 @@ defmodule Backend.Stations.Conversation do
         }
 
   @type impresso_request_event :: %{
+          optional(:classification) => :plausible | :not_plausible | :undecided | :unclassified,
           request_id: String.t(),
           station_id: String.t() | pos_integer(),
           station_version: String.t() | pos_integer(),
@@ -213,16 +214,22 @@ defmodule Backend.Stations.Conversation do
   event, and updates `released_impressos` — all within a single GenServer
   call, so concurrent requests for the same session never race.
 
+  `opts` accepts `:classification`, the Jev classification of an unavailable
+  request (#357), stored on the new event; without it the event has no
+  `:classification` key. The classification is never graded.
+
   A repeated `request_id` is idempotent: it returns the originally stored
-  event and does not append a new one or change `released_impressos`.
+  event untouched (its classification included) and does not append a new one
+  or change `released_impressos`.
   """
-  @spec record_impresso_request(String.t(), String.t(), [String.t()], String.t()) ::
+  @spec record_impresso_request(String.t(), String.t(), [String.t()], String.t(), keyword()) ::
           {:ok, %{event: impresso_request_event(), session: session()}}
           | {:error, :not_found | :expired | :completed}
-  def record_impresso_request(session_id, request_id, matched_ids, text) do
+  def record_impresso_request(session_id, request_id, matched_ids, text, opts \\ []) do
     GenServer.call(
       __MODULE__,
-      {:record_impresso_request, session_id, request_id, matched_ids, text}
+      {:record_impresso_request, session_id, request_id, matched_ids, text,
+       Keyword.take(opts, [:classification])}
     )
   end
 
@@ -855,13 +862,13 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_call(
-        {:record_impresso_request, session_id, request_id, matched_ids, text},
+        {:record_impresso_request, session_id, request_id, matched_ids, text, opts},
         _from,
         state
       ) do
     case active_session(session_id) do
       {:ok, %{status: :active} = session} ->
-        {:reply, do_record_impresso_request(session, request_id, matched_ids, text), state}
+        {:reply, do_record_impresso_request(session, request_id, matched_ids, text, opts), state}
 
       {:ok, %{status: :completed}} ->
         {:reply, {:error, :completed}, state}
@@ -1486,7 +1493,7 @@ defmodule Backend.Stations.Conversation do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
 
-  defp do_record_impresso_request(session, request_id, matched_ids, text) do
+  defp do_record_impresso_request(session, request_id, matched_ids, text, opts) do
     case Enum.find(session.impresso_requests, &(&1.request_id == request_id)) do
       %{} = existing_event ->
         {:ok, %{event: existing_event, session: session}}
@@ -1506,6 +1513,15 @@ defmodule Backend.Stations.Conversation do
           released_ids: newly_released,
           at: DateTime.utc_now()
         }
+
+        event =
+          case Keyword.fetch(opts, :classification) do
+            {:ok, classification} when not is_nil(classification) ->
+              Map.put(event, :classification, classification)
+
+            _none ->
+              event
+          end
 
         updated_session = %{
           session
