@@ -9,8 +9,8 @@ published as an examiner acknowledgement (`status: acknowledged`, #274) and a re
 patient reply as `status: kept` (#269). A turn Phoenix sent to the impresso request
 because the learner armed the exam mode (#364) is published as `status:
 impresso_requested` with its outcome, and nothing is spoken. Every reply event names its `speaker` (`patient`
-or `companion`, #341), and each actor speaks with the ElevenLabs voice its voice key maps
-to in `ELEVENLABS_VOICE_IDS`, on the one patient track. When the job ends it reports
+or `companion`, #341), and each actor speaks with the Cartesia voice its voice key maps
+to in `CARTESIA_VOICE_IDS` (#398), on the one patient track. When the job ends it reports
 its provider usage (Deepgram audio seconds, ElevenLabs characters, LiveKit
 participant minutes, #342) to Phoenix. Never logs transcript text, reply text or audio.
 """
@@ -183,18 +183,18 @@ def _required_setting(name: str) -> str:
 
 
 def build_voice_tts(session_id: str, context) -> dict:
-    """ElevenLabs providers per voice key (#341), from `ELEVENLABS_VOICE_IDS`.
+    """Cartesia providers per voice key (#341, #398), from `CARTESIA_VOICE_IDS`.
 
     The variable is a comma-separated list of `voice-key=voice-id` pairs, for example
     `feminina-adulta=<id>,infantil=<id>`; a reply whose voice key is not listed is
-    spoken with `ELEVENLABS_VOICE_ID`. Malformed pairs are skipped and only the
-    variable name is logged. Without an API key nothing is mapped.
+    spoken with `CARTESIA_VOICE_ID`. Malformed pairs are skipped and only the
+    variable name is logged. Without an API key, or with the fake providers on,
+    nothing is mapped.
     """
-    raw = os.environ.get("ELEVENLABS_VOICE_IDS", "").strip()
-    api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
-    if not raw or not api_key:
+    raw = os.environ.get("CARTESIA_VOICE_IDS", "").strip()
+    api_key = os.environ.get("CARTESIA_API_KEY", "").strip()
+    if not raw or not api_key or _fake_transcript() is not None:
         return {}
-    model = os.environ.get("ELEVENLABS_MODEL", "").strip() or DEFAULT_TTS_MODEL
     voices = {}
     malformed = False
     for pair in raw.split(","):
@@ -203,20 +203,28 @@ def build_voice_tts(session_id: str, context) -> dict:
             malformed = True
             continue
         try:
-            voices[key] = elevenlabs.TTS(
-                api_key=api_key,
-                voice_id=voice_id,
-                model=model,
-                encoding=TTS_ENCODING,
-                language=context["language"],
-            )
+            voices[key] = _cartesia_tts(api_key, voice_id, context)
         except ValueError:
             malformed = True
     if malformed:
         logger.warning(
-            "malformed ELEVENLABS_VOICE_IDS entries skipped for session %s", session_id
+            "malformed CARTESIA_VOICE_IDS entries skipped for session %s", session_id
         )
     return voices
+
+
+def _cartesia_tts(api_key: str, voice_id: str, context):
+    """One Cartesia provider speaking `voice_id` in the session language."""
+    return cartesia.TTS(
+        api_key=api_key,
+        voice=voice_id,
+        model=os.environ.get("CARTESIA_MODEL", "").strip() or DEFAULT_TTS_MODEL,
+        encoding=TTS_ENCODING,
+        sample_rate=TTS_SAMPLE_RATE,
+        # Unused (speech plays whole sentences) and unsupported for Portuguese.
+        word_timestamps=False,
+        language=context["language"],
+    )
 
 
 def _fake_transcript() -> str | None:
@@ -258,15 +266,10 @@ def build_tts(session_id: str, context):
     if _fake_transcript() is not None:
         return FakeTTS()
     try:
-        return cartesia.TTS(
-            api_key=_required_setting("CARTESIA_API_KEY"),
-            voice=_required_setting("CARTESIA_VOICE_ID"),
-            model=os.environ.get("CARTESIA_MODEL", "").strip() or DEFAULT_TTS_MODEL,
-            encoding=TTS_ENCODING,
-            sample_rate=TTS_SAMPLE_RATE,
-            # Unused (speech plays whole sentences) and unsupported for Portuguese.
-            word_timestamps=False,
-            language=context["language"],
+        return _cartesia_tts(
+            _required_setting("CARTESIA_API_KEY"),
+            _required_setting("CARTESIA_VOICE_ID"),
+            context,
         )
     except (KeyError, ValueError):
         logger.warning(
