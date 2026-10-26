@@ -709,6 +709,38 @@ closes the exam prompt without speaking. Pressing again re-arms it and
 restarts the expiry. An utterance the learner finishes after `expires_at` is a
 dialogue turn: an exam it names releases nothing ([#351](#exam-requests-in-the-dialogue-issue-351)).
 
+The room event of a spoken exam request (`transcript` topic, published by the
+worker, nothing spoken):
+
+```json
+{
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "turn_id": 4,
+  "role": "examiner",
+  "status": "impresso_requested",
+  "request_id": "voice-exam-4",
+  "decision": "released",
+  "newly_released": [
+    {"id": "laboratorio-sangue-enzimas", "title": "IMPRESSO — EXAMES LABORATORIAIS", "category": "laboratory"}
+  ],
+  "feedback_message": "Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS"
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `status` | string | `impresso_requested`: the utterance was the exam request, not a dialogue turn. |
+| `request_id` | string | `voice-exam-<turn_id>`, the id of the recorded `impresso_requests` event. |
+| `decision` | string | As `RequestImpresso`: `released`, `already_released` or `unavailable` (an exam the station does not author, or a declined request). |
+| `newly_released` | array | The impressos this request released: `id`, `title`, `category`, without `content`; read the content with `ListImpressos`. |
+| `feedback_message` | string | The pt-BR line a typed request shows ("Impresso liberado: ...", "Exame não disponível nesta estação"). |
+
+- Show the outcome as after a typed request: `feedback_message`, then
+  `ListImpressos` for what was released.
+- The event carries no `generation_id` and no `text`; no audio follows it.
+- When the room event is lost (a publish error or a barge-in that dropped the
+  receipt), the request is still recorded: `ListImpressos` shows it.
+
 - Errors: `403 no_consent` on a run without audio consent (a typed request
   needs no exam mode), `409 session_completed`, `404 session_not_found`,
   `410 session_expired`.

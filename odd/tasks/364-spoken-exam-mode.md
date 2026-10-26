@@ -19,8 +19,8 @@ Design (decided here, not by the user):
 ## Tasks
 
 - [x] T1 S1 S3 S5: `ExamMode` + `Stations.arm_exam_mode/1`, `cancel_exam_mode/1`; voice turns routed to `request_impresso` while armed; worker receipt `impresso_requested` — inline — `097d7ef`. RED: 13/13 failed (`arm_exam_mode/1` undefined), 3/3 controller tests failed (CaseClauseError). GREEN: 13 + 43 passed; full suite 2377 passed.
-- [x] T2 S4 S5 S6: `POST`/`DELETE /sessions/:id/exam-mode` in `SessionController` + router + docs — inline — this commit. RED: 5/5 failed (no route, 404). GREEN: 25 passed in `session_controller_test.exs`.
-- [ ] T3 S2 S4 S6: voice worker parses the receipt and publishes the room event; docs of the event — inline
+- [x] T2 S4 S5 S6: `POST`/`DELETE /sessions/:id/exam-mode` in `SessionController` + router + docs — inline — `98d07f4`. RED: 5/5 failed (no route, 404). GREEN: 25 passed in `session_controller_test.exs`.
+- [x] T3 S2 S4 S6: voice worker parses the receipt and publishes the room event; docs of the event — inline — this commit. RED: 3 errors (`VoiceTurnReply` has no `impresso`). GREEN: `uv run python -m unittest` 171 OK.
 
 Route evidence: one understood change per task, ~100-250 lines each; no Writer trigger reason, all inline in this bounded writer.
 
