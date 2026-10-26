@@ -3,8 +3,8 @@ defmodule Backend.Stations.TTS do
   Single point of contact between the backend and the text-to-speech provider.
 
   OpenAI's speech API is the default. When `:voice_provider` is
-  `:deepgram_elevenlabs`, the text goes to ElevenLabs instead
-  (`Backend.Stations.TTS.ElevenLabs`); text and voice validation, consent and session
+  `:deepgram_cartesia`, the text goes to Cartesia instead
+  (`Backend.Stations.TTS.Cartesia`); text and voice validation, consent and session
   checks, the mp3 format and the error outcomes are the same for both providers.
 
   Before either provider is called, the patient's stage directions (`*…*` spans and a
@@ -23,7 +23,7 @@ defmodule Backend.Stations.TTS do
   """
 
   alias Backend.Stations.Conversation
-  alias Backend.Stations.TTS.ElevenLabs
+  alias Backend.Stations.TTS.Cartesia
   alias Backend.Stations.TTS.StageDirections
 
   @allowed_voices ~w(alloy echo fable onyx nova shimmer)
@@ -61,7 +61,7 @@ defmodule Backend.Stations.TTS do
 
   defp provider_synthesize(text, voice, opts) do
     case Application.get_env(:backend, :voice_provider, :openai) do
-      :deepgram_elevenlabs -> ElevenLabs.synthesize(text, opts)
+      :deepgram_cartesia -> Cartesia.synthesize(text, opts)
       _openai -> request(text, voice, config(opts))
     end
   end
