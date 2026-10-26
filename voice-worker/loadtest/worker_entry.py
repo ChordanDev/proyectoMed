@@ -46,9 +46,13 @@ def configure(environ):
         raise SystemExit(str(error)) from None
     if transcript is None:
         raise SystemExit("the load test worker runs only with fake speech providers")
-    worker.server.update_options(num_idle_processes=WARM_PROCESSES)
-    worker.server.load_fnc = OwnTreeLoad()
-    return worker.server
+    try:
+        server = worker.configure_server(environ)  # VOICE_WORKER_EXECUTOR (#405)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    server.update_options(num_idle_processes=WARM_PROCESSES)
+    server.load_fnc = OwnTreeLoad()
+    return server
 
 
 if __name__ == "__main__":

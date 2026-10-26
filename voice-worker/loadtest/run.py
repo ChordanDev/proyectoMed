@@ -1,7 +1,8 @@
 """Voice worker load test (#401): N simulated learners against one local worker.
 
-Starts the local stack (`loadtest.stack`), then for each N in `--steps` runs N
-learners (`loadtest.learner`) split into shard processes, samples the worker,
+Starts the local stack (`loadtest.stack`) with `--workers` voice worker processes
+running their jobs as `--executor` processes or threads (#405), then for each N in
+`--steps` runs N learners (`loadtest.learner`) split into shard processes, samples the worker,
 Phoenix and LiveKit process trees once a second, and writes `results.json` and
 `table.md` to `--out`. Stops at the first step that fails badly (most turns failed)
 or when the machine runs low on memory, then stops everything it started.
@@ -31,6 +32,7 @@ import psutil
 from loadtest.learner import Script, run_learners, session_offsets
 from loadtest.metrics import (
     ProcessTreeSampler,
+    ProcessTreesSampler,
     degradation_point,
     render_table,
     summarize_samples,
@@ -119,8 +121,9 @@ def run_step(n: int, stack: Stack, args, script: Script, idle: dict) -> dict:
         proc.start()
         shards.append(proc)
     samplers = {
-        name: ProcessTreeSampler(stack.procs[name].pid)
-        for name in ("worker", "phoenix", "livekit")
+        "worker": ProcessTreesSampler(stack.worker_pids()),
+        "phoenix": ProcessTreeSampler(stack.procs["phoenix"].pid),
+        "livekit": ProcessTreeSampler(stack.procs["livekit"].pid),
     }
     samples: dict[str, list] = {name: [] for name in samplers}
     learners: list[dict] = []
@@ -188,17 +191,34 @@ def steady_rows(rows, window: tuple[float, float] | None) -> list[dict]:
     return inside or rows
 
 
-def drain(stack: Stack, baseline: int, seconds: float = 120) -> None:
+def drain(
+    stack: Stack, baseline: int, seconds: float = 120, settle: float = 15
+) -> None:
+    """Deletes the rooms and waits for the job processes to end. Thread jobs end
+    without changing the process count, so it always waits `settle` seconds."""
     asyncio.run(_delete_rooms(stack.ports))
-    sampler = ProcessTreeSampler(stack.procs["worker"].pid)
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline and sampler.sample()["processes"] > baseline:
+    sampler = ProcessTreesSampler(stack.worker_pids())
+    start = time.monotonic()
+    while time.monotonic() - start < seconds and (
+        time.monotonic() - start < settle or sampler.sample()["processes"] > baseline
+    ):
         time.sleep(2)
 
 
-def main(argv=None) -> int:
+def positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1: {text}")
+    return value
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--steps", default="10,25,50,100,200", type=parse_steps)
+    # #405: how the worker runs each session, and how many worker processes run side
+    # by side on the machine (several in thread mode is the hybrid setup).
+    parser.add_argument("--executor", choices=("process", "thread"), default="process")
+    parser.add_argument("--workers", type=positive_int, default=1)
     parser.add_argument("--turns", type=int, default=Script.turns)
     parser.add_argument("--turn-interval", type=float, default=Script.turn_interval_s)
     parser.add_argument("--ramp-per-session", type=float, default=1.0)
@@ -208,7 +228,11 @@ def main(argv=None) -> int:
     parser.add_argument("--error-limit", type=float, default=0.01)
     parser.add_argument("--database", default="backend_load401")
     parser.add_argument("--out", type=Path, default=None)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
     # A stopped run still stops the stack: SIGTERM and SIGHUP unwind through `finally`.
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, lambda num, _frame: sys.exit(128 + num))
@@ -218,13 +242,15 @@ def main(argv=None) -> int:
     script = Script(turns=args.turns, turn_interval_s=args.turn_interval)
     out = args.out or Path(tempfile.mkdtemp(prefix="voice-load-"))
     out.mkdir(parents=True, exist_ok=True)
-    stack = Stack(Ports(), args.database, out)
+    stack = Stack(
+        Ports(), args.database, out, executor=args.executor, workers=args.workers
+    )
     steps: list[dict] = []
     idle: dict = {}
     try:
         stack.start()
         time.sleep(20)  # the warm job processes start
-        idle = ProcessTreeSampler(stack.procs["worker"].pid).sample()
+        idle = ProcessTreesSampler(stack.worker_pids()).sample()
         baseline = idle["processes"]
         for n in args.steps:
             print(f"load test: N={n} ({script.turns} turns each)", flush=True)
@@ -252,6 +278,8 @@ def _write(out: Path, args, script: Script, steps, idle) -> None:
             "memory_mb": psutil.virtual_memory().total / 2**20,
         },
         "script": asdict(script),
+        "executor": args.executor,
+        "workers": args.workers,
         "worker_idle": idle,
         "ramp_per_session_s": args.ramp_per_session,
         "degradation": degradation_point(steps, args.p95_limit_ms, args.error_limit),

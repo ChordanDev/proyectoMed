@@ -1,11 +1,21 @@
 import array
+import io
 import unittest
+from contextlib import redirect_stderr
+from pathlib import Path
 
 from loadtest.learner import is_audible, session_offsets
-from loadtest.run import max_gap, parse_steps, steady_window, summarize_process
+from loadtest.run import (
+    build_parser,
+    max_gap,
+    parse_steps,
+    steady_window,
+    summarize_process,
+)
 from loadtest.stack import (
     LOOPBACK,
     Ports,
+    Stack,
     clean_env,
     livekit_config_body,
     phoenix_env,
@@ -105,6 +115,27 @@ class WorkerEnvTest(unittest.TestCase):
         self.assertEqual(env["VOICE_WORKER_SECRET"], "secret-1")
         self.assertFalse(PAID & env.keys())
         self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertEqual(env["VOICE_WORKER_EXECUTOR"], "process")
+
+    def test_passes_the_executor(self):
+        env = worker_env(USER_ENV, PORTS, "secret-1", executor="thread")
+        self.assertEqual(env["VOICE_WORKER_EXECUTOR"], "thread")
+
+
+class StackWorkersTest(unittest.TestCase):
+    def test_one_worker_by_default(self):
+        stack = Stack(PORTS, "backend_load401", Path("/nonexistent"))
+        self.assertEqual(stack.worker_names, ["worker-0"])
+        self.assertEqual(stack.executor, "process")
+
+    def test_several_workers_in_thread_mode(self):
+        stack = Stack(PORTS, "db", Path("/nonexistent"), executor="thread", workers=3)
+        self.assertEqual(stack.worker_names, ["worker-0", "worker-1", "worker-2"])
+        self.assertEqual(stack.executor, "thread")
+
+    def test_refuses_no_worker(self):
+        with self.assertRaises(ValueError):
+            Stack(PORTS, "db", Path("/nonexistent"), workers=0)
 
 
 class RequireLoopbackTest(unittest.TestCase):
@@ -137,6 +168,25 @@ class LearnerTest(unittest.TestCase):
         self.assertEqual(session_offsets(4, 2.0), [0.0, 0.5, 1.0, 1.5])
         self.assertEqual(session_offsets(1, 10.0), [0.0])
         self.assertEqual(session_offsets(0, 10.0), [])
+
+
+class ParserTest(unittest.TestCase):
+    def test_defaults_are_the_401_setup(self):
+        args = build_parser().parse_args([])
+        self.assertEqual(args.executor, "process")
+        self.assertEqual(args.workers, 1)
+
+    def test_thread_hybrid(self):
+        args = build_parser().parse_args(["--executor", "thread", "--workers", "4"])
+        self.assertEqual((args.executor, args.workers), ("thread", 4))
+
+    def test_refuses_bad_executor_or_workers(self):
+        for argv in (["--executor", "hybrid"], ["--workers", "0"], ["--workers", "x"]):
+            with (
+                self.assertRaises(SystemExit, msg=argv),
+                redirect_stderr(io.StringIO()),
+            ):
+                build_parser().parse_args(argv)
 
 
 class RunTest(unittest.TestCase):

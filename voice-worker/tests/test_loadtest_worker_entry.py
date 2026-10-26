@@ -1,5 +1,7 @@
 import unittest
 
+from livekit.agents import JobExecutorType
+
 from loadtest import worker_entry
 from loadtest.worker_entry import WARM_PROCESSES, configure
 
@@ -10,6 +12,23 @@ FAKE_ENV = {
 
 
 class ConfigureTest(unittest.TestCase):
+    def tearDown(self):
+        worker_entry.worker.server.update_options(
+            job_executor_type=JobExecutorType.PROCESS
+        )
+
+    def test_runs_each_job_in_a_process_by_default(self):
+        server = configure(FAKE_ENV)
+        self.assertIs(server._job_executor_type, JobExecutorType.PROCESS)
+
+    def test_takes_the_executor_from_the_environment(self):
+        server = configure({**FAKE_ENV, "VOICE_WORKER_EXECUTOR": "thread"})
+        self.assertIs(server._job_executor_type, JobExecutorType.THREAD)
+
+    def test_refuses_an_unknown_executor(self):
+        with self.assertRaisesRegex(SystemExit, "VOICE_WORKER_EXECUTOR"):
+            configure({**FAKE_ENV, "VOICE_WORKER_EXECUTOR": "hybrid"})
+
     def test_keeps_the_production_number_of_warm_processes(self):
         server = configure(FAKE_ENV)
         self.assertIs(server, worker_entry.worker.server)

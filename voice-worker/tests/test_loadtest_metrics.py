@@ -6,6 +6,7 @@ import psutil
 
 from loadtest.metrics import (
     ProcessTreeSampler,
+    ProcessTreesSampler,
     degradation_point,
     percentile,
     render_table,
@@ -38,8 +39,8 @@ class PercentileTest(unittest.TestCase):
 class SummarizeSamplesTest(unittest.TestCase):
     def test_average_and_peak_cpu_and_peak_memory(self):
         samples = [
-            {"cpu_percent": 50.0, "rss_mb": 100.0, "processes": 2},
-            {"cpu_percent": 150.0, "rss_mb": 300.0, "processes": 4},
+            {"cpu_percent": 50.0, "rss_mb": 100.0, "processes": 2, "threads": 30},
+            {"cpu_percent": 150.0, "rss_mb": 300.0, "processes": 4, "threads": 20},
         ]
         self.assertEqual(
             summarize_samples(samples),
@@ -48,6 +49,7 @@ class SummarizeSamplesTest(unittest.TestCase):
                 "cpu_peak_percent": 150.0,
                 "rss_peak_mb": 300.0,
                 "processes_peak": 4,
+                "threads_peak": 30,
             },
         )
 
@@ -59,6 +61,7 @@ class SummarizeSamplesTest(unittest.TestCase):
                 "cpu_peak_percent": None,
                 "rss_peak_mb": None,
                 "processes_peak": 0,
+                "threads_peak": 0,
             },
         )
 
@@ -154,6 +157,7 @@ class ProcessTreeSamplerTest(unittest.TestCase):
             sampler.sample()  # the first cpu_percent of a process is always 0
             sample = sampler.sample()
             self.assertGreaterEqual(sample["processes"], 2)
+            self.assertGreaterEqual(sample["threads"], 2)
             self.assertGreater(sample["rss_mb"], 1)
             self.assertGreaterEqual(sample["cpu_percent"], 0)
         finally:
@@ -164,7 +168,34 @@ class ProcessTreeSamplerTest(unittest.TestCase):
         child = subprocess.Popen([sys.executable, "-c", "pass"])
         child.wait()
         sample = ProcessTreeSampler(child.pid).sample()
-        self.assertEqual(sample, {"cpu_percent": 0.0, "rss_mb": 0.0, "processes": 0})
+        self.assertEqual(
+            sample, {"cpu_percent": 0.0, "rss_mb": 0.0, "processes": 0, "threads": 0}
+        )
+
+
+class ProcessTreesSamplerTest(unittest.TestCase):
+    def test_sums_every_tree(self):
+        sampler = ProcessTreesSampler([1, 2])
+        rows = iter(
+            [
+                {"cpu_percent": 50.0, "rss_mb": 100.0, "processes": 3, "threads": 9},
+                {"cpu_percent": 25.0, "rss_mb": 300.0, "processes": 1, "threads": 4},
+            ]
+        )
+        for tree in sampler.trees:
+            tree.sample = lambda: next(rows)
+        self.assertEqual(
+            sampler.sample(),
+            {"cpu_percent": 75.0, "rss_mb": 400.0, "processes": 4, "threads": 13},
+        )
+
+    def test_one_tree_is_that_tree(self):
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        self.assertEqual(
+            ProcessTreesSampler([child.pid]).sample(),
+            {"cpu_percent": 0.0, "rss_mb": 0.0, "processes": 0, "threads": 0},
+        )
 
 
 if __name__ == "__main__":

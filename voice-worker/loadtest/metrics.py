@@ -4,7 +4,8 @@ Turn records come from the simulated learners: one dict per spoken turn with its
 `outcome` (`ok`, or the failure kind) and `latency_ms`, the time from the end of the
 learner's speech to the first audible frame of the patient's reply. Process samples
 come from `ProcessTreeSampler`: CPU (percent of one core) and resident memory of a
-process and all its children, which for the worker includes one process per job.
+process and all its children, which for the worker includes one process per job
+(or one thread per job with the thread executor, #405).
 """
 
 import math
@@ -29,6 +30,7 @@ def summarize_samples(samples) -> dict:
         "cpu_peak_percent": max(cpu) if cpu else None,
         "rss_peak_mb": max(s["rss_mb"] for s in samples) if samples else None,
         "processes_peak": max((s["processes"] for s in samples), default=0),
+        "threads_peak": max((s.get("threads", 0) for s in samples), default=0),
     }
 
 
@@ -143,9 +145,9 @@ class ProcessTreeSampler:
             root = psutil.Process(self._pid)
             tree = [root, *root.children(recursive=True)]
         except psutil.Error:
-            return {"cpu_percent": 0.0, "rss_mb": 0.0, "processes": 0}
+            return {"cpu_percent": 0.0, "rss_mb": 0.0, "processes": 0, "threads": 0}
         cpu = rss = 0.0
-        count = 0
+        count = threads = 0
         alive: dict[int, psutil.Process] = {}
         for proc in tree:
             known = self._seen.get(proc.pid, proc)
@@ -153,9 +155,29 @@ class ProcessTreeSampler:
                 with known.oneshot():
                     cpu += known.cpu_percent(None)
                     rss += known.memory_info().rss
+                    threads += known.num_threads()
             except psutil.Error:
                 continue
             alive[proc.pid] = known
             count += 1
         self._seen = alive
-        return {"cpu_percent": cpu, "rss_mb": rss / 2**20, "processes": count}
+        return {
+            "cpu_percent": cpu,
+            "rss_mb": rss / 2**20,
+            "processes": count,
+            "threads": threads,
+        }
+
+
+class ProcessTreesSampler:
+    """The sum of several process trees: every worker process of one machine (#405)."""
+
+    def __init__(self, pids):
+        self.trees = [ProcessTreeSampler(pid) for pid in pids]
+
+    def sample(self) -> dict:
+        total = {"cpu_percent": 0.0, "rss_mb": 0.0, "processes": 0, "threads": 0}
+        for tree in self.trees:
+            for key, value in tree.sample().items():
+                total[key] += value
+        return total

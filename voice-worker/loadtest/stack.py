@@ -2,7 +2,7 @@
 
 `livekit-server --dev` on its own ports, the mock OpenAI of the voice stack (#191),
 Phoenix in dev on its own port and database with the approving Jev adapter, and one
-voice worker with its fake speech providers. Every process starts from `clean_env`,
+or more voice worker processes with their fake speech providers. Every process starts from `clean_env`,
 an allow-list of toolchain variables, so no provider key or URL from the caller's
 shell reaches them, and no `.env` file is ever read. Stopping the stack stops every
 process group it started.
@@ -98,13 +98,16 @@ def phoenix_env(environ, ports: Ports, worker_secret: str, database: str) -> dic
     }
 
 
-def worker_env(environ, ports: Ports, worker_secret: str) -> dict:
+def worker_env(
+    environ, ports: Ports, worker_secret: str, executor: str = "process"
+) -> dict:
     return {
         **clean_env(environ),
         **_livekit_env(ports),
         "PHOENIX_URL": phoenix_url(ports),
         "VOICE_WORKER_SECRET": worker_secret,
         "VOICE_WORKER_FAKE_PROVIDERS": "true",
+        "VOICE_WORKER_EXECUTOR": executor,
     }
 
 
@@ -115,14 +118,34 @@ def port_open(port: int) -> bool:
 
 
 class Stack:
-    """Starts the four processes, each in its own process group, and stops them all."""
+    """Starts the processes, each in its own process group, and stops them all.
 
-    def __init__(self, ports: Ports, database: str, logs: Path):
+    `workers` voice worker processes run side by side, as on one machine (#405); each
+    runs its jobs with `executor` (`process` or `thread`, `VOICE_WORKER_EXECUTOR`).
+    """
+
+    def __init__(
+        self,
+        ports: Ports,
+        database: str,
+        logs: Path,
+        executor: str = "process",
+        workers: int = 1,
+        worker_extra_env: dict | None = None,
+    ):
+        if workers < 1:
+            raise ValueError(f"at least one worker: {workers}")
         self.ports = ports
         self.database = database
         self.logs = logs
+        self.executor = executor
+        self.worker_names = [f"worker-{i}" for i in range(workers)]
+        self.worker_extra_env = worker_extra_env or {}
         self.secret = "load-test-" + secrets.token_hex(8)
         self.procs: dict[str, subprocess.Popen] = {}
+
+    def worker_pids(self) -> list[int]:
+        return [self.procs[name].pid for name in self.worker_names]
 
     def _spawn(self, name: str, args, cwd: Path, env: dict) -> subprocess.Popen:
         log = open(self.logs / f"{name}.log", "wb")  # noqa: SIM115 - lives with the process
@@ -204,27 +227,31 @@ class Stack:
         )
         # `dev`: no CPU-load cap, so the worker takes every job and degradation shows;
         # `worker_entry` adds the production number of warm job processes.
-        self._spawn(
-            "worker",
-            [
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "loadtest.worker_entry",
-                "dev",
-                "--no-reload",
-                "--log-level",
-                "INFO",
-            ],
-            ROOT / "voice-worker",
-            worker_env(base, p, self.secret),
-        )
-        self._wait(
-            "worker",
-            lambda: b"registered worker" in (self.logs / "worker.log").read_bytes(),
-            120,
-        )
+        env = {
+            **worker_env(base, p, self.secret, self.executor),
+            **self.worker_extra_env,
+        }
+        for name in self.worker_names:
+            self._spawn(
+                name,
+                [
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "loadtest.worker_entry",
+                    "dev",
+                    "--no-reload",
+                    "--log-level",
+                    "INFO",
+                ],
+                ROOT / "voice-worker",
+                env,
+            )
+            log = self.logs / f"{name}.log"
+            self._wait(
+                name, lambda log=log: b"registered worker" in log.read_bytes(), 120
+            )
 
     def stop(self) -> None:
         for proc in reversed(list(self.procs.values())):
