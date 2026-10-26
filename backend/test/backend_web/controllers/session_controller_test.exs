@@ -473,6 +473,82 @@ defmodule BackendWeb.SessionControllerTest do
     end
   end
 
+  describe "exam mode for a spoken request (#364)" do
+    setup %{conn: conn, admin: admin, package: package} do
+      kase = publish!(package, admin)
+
+      start = fn consent ->
+        conn
+        |> recycle()
+        |> post(~p"/sessions", %{"station_id" => kase.number, "audio_consent" => consent})
+        |> json_response(201)
+        |> Map.fetch!("session_id")
+      end
+
+      %{start: start}
+    end
+
+    test "POST arms the next utterance as an impresso request", %{conn: conn, start: start} do
+      id = start.(true)
+
+      body = conn |> recycle() |> post(~p"/sessions/#{id}/exam-mode") |> json_response(200)
+      assert %{"status" => "armed", "expires_at" => expires_at, "server_now" => _} = body
+      assert {:ok, _, _} = DateTime.from_iso8601(expires_at)
+
+      assert {:ok, {:impresso, %{decision: "released", request_id: "voice-exam-1"}}} =
+               Stations.process_voice_turn(id, 1, @imaging_request)
+
+      assert {:ok, %{messages: [], released_impressos: [@imaging_impresso]}} =
+               Stations.get_session(id)
+    end
+
+    test "DELETE disarms it", %{conn: conn, start: start} do
+      id = start.(true)
+      conn |> recycle() |> post(~p"/sessions/#{id}/exam-mode") |> json_response(200)
+
+      assert %{"status" => "disarmed"} =
+               conn |> recycle() |> delete(~p"/sessions/#{id}/exam-mode") |> json_response(200)
+
+      assert {:ok, {:kept, %{addressee: :examiner}}} =
+               Stations.process_voice_turn(id, 1, @imaging_request)
+
+      assert {:ok, %{impresso_requests: []}} = Stations.get_session(id)
+    end
+
+    test "needs audio consent and an active session", %{conn: conn, start: start} do
+      no_consent = start.(false)
+
+      assert %{"error" => "no_consent"} =
+               conn
+               |> recycle()
+               |> post(~p"/sessions/#{no_consent}/exam-mode")
+               |> json_response(403)
+
+      finished = start.(true)
+      conn |> recycle() |> post(~p"/sessions/#{finished}/finish") |> json_response(200)
+
+      assert %{"error" => "session_completed"} =
+               conn
+               |> recycle()
+               |> post(~p"/sessions/#{finished}/exam-mode")
+               |> json_response(409)
+    end
+
+    test "an unknown session is session_not_found", %{conn: conn} do
+      for method <- [:post, :delete] do
+        conn = conn |> recycle() |> dispatch(@endpoint, method, "/sessions/nope/exam-mode", %{})
+        assert %{"error" => "session_not_found"} = json_response(conn, 404)
+      end
+    end
+
+    test "needs the device access token" do
+      for method <- [:post, :delete] do
+        conn = dispatch(build_conn(), @endpoint, method, "/sessions/nope/exam-mode", %{})
+        assert json_response(conn, 401)
+      end
+    end
+  end
+
   describe "without the file station loader (production)" do
     setup do
       :ok = Supervisor.terminate_child(Backend.Supervisor, Backend.Stations.StationLoader)

@@ -620,6 +620,43 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tts.texts, [])
         self.assertEqual(self.client.cancel_calls, [])
 
+    async def test_spoken_exam_request_publishes_its_outcome_and_speaks_nothing(self):
+        # Issue #364: in exam mode Phoenix routed the utterance to the impresso
+        # request. The outcome goes to the learner's screen; nothing is spoken.
+        outcome = {
+            "request_id": "voice-exam-1",
+            "decision": "released",
+            "newly_released": [
+                {"id": "lab", "title": "Laboratório", "category": "laboratory"}
+            ],
+            "feedback_message": "Impresso liberado: Laboratório",
+        }
+        self.client.replies[1] = VoiceTurnReply(
+            turn_id=1, status="impresso_requested", impresso=outcome
+        )
+        task = self.connect()
+        with self.assertNoLogs("voice-worker", level="WARNING"):
+            await self.say("solicito hemograma")
+            await self.say("onde dói")
+            self.tts.streams[0].queue.put_nowait(chunk("a2"))
+            await settle()
+            await self.disconnect(task)
+
+        self.assertEqual(
+            self.room.patient_events()[0],
+            {
+                "session_id": "s1",
+                "turn_id": 1,
+                "role": "examiner",
+                "status": "impresso_requested",
+                **outcome,
+            },
+        )
+        # The next utterance is a dialogue turn again.
+        self.assertEqual(self.room.patient_events()[1]["role"], "patient")
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 2"])
+        self.assertEqual(self.client.cancel_calls, [])
+
     async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
         self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
         task = self.connect()

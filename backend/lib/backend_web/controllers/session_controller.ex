@@ -89,6 +89,52 @@ defmodule BackendWeb.SessionController do
     end
   end
 
+  @doc """
+  `POST /sessions/:id/exam-mode` (#364): the learner pressed the exam button
+  and will say the request aloud. The next utterance goes to the impresso
+  request instead of the patient. `200` with `status: "armed"`, `expires_at`
+  and `server_now`.
+  """
+  def arm_exam_mode(conn, %{"id" => session_id}) do
+    case Stations.arm_exam_mode(session_id) do
+      {:ok, %{expires_at: expires_at}} ->
+        json(conn, %{
+          status: "armed",
+          expires_at: DateTime.to_iso8601(expires_at),
+          server_now: DateTime.to_iso8601(DateTime.utc_now())
+        })
+
+      {:error, reason} ->
+        session_error(conn, reason)
+    end
+  end
+
+  @doc "`DELETE /sessions/:id/exam-mode` (#364): disarms it. `200` with `status: \"disarmed\"`."
+  def cancel_exam_mode(conn, %{"id" => session_id}) do
+    case Stations.cancel_exam_mode(session_id) do
+      :ok -> json(conn, %{status: "disarmed"})
+      {:error, reason} -> session_error(conn, reason)
+    end
+  end
+
+  defp session_error(conn, :not_found),
+    do: error(conn, :not_found, "session_not_found", "Sessão não encontrada.")
+
+  defp session_error(conn, :expired),
+    do: error(conn, :gone, "session_expired", "A sessão expirou.")
+
+  defp session_error(conn, :completed),
+    do: error(conn, :conflict, "session_completed", "A sessão já foi concluída.")
+
+  defp session_error(conn, :no_consent),
+    do:
+      error(
+        conn,
+        :forbidden,
+        "no_consent",
+        "A solicitação falada exige o consentimento de áudio."
+      )
+
   defp selection(%{"station_id" => _id, "random" => _random}), do: {:error, :invalid_parameters}
 
   defp selection(%{"station_id" => id}) when is_integer(id) and id > 0, do: station(id)

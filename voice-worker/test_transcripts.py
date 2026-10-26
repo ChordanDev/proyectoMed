@@ -360,6 +360,43 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply.addressee, addressee)
             self.assertIs(reply.is_examiner_acknowledgement(), acknowledged)
 
+    async def test_commit_reads_a_spoken_exam_request_receipt(self):
+        # Issue #364: in exam mode Phoenix routes the turn to the impresso
+        # request; the receipt has no generation and nothing to speak.
+        outcome = {
+            "request_id": "voice-exam-1",
+            "decision": "released",
+            "newly_released": [
+                {"id": "lab", "title": "Laboratório", "category": "laboratory"}
+            ],
+            "feedback_message": "Impresso liberado: Laboratório",
+        }
+
+        def handler(request):
+            return httpx.Response(
+                201, json={"turn_id": 1, "status": "impresso_requested", **outcome}
+            )
+
+        async with phoenix(handler) as client:
+            reply = await client.commit(1, "Solicito hemograma e PCR")
+        self.assertTrue(reply.is_impresso_receipt())
+        self.assertTrue(reply.is_settled_receipt())
+        self.assertFalse(reply.is_kept_receipt())
+        self.assertIsNone(reply.generation_id)
+        self.assertIsNone(reply.reply_text)
+        self.assertEqual(reply.impresso, outcome)
+
+        tracker = TurnTracker("s1", 0)
+        self.assertIs(tracker.accept_reply(reply), reply)
+        self.assertEqual(tracker.last_accepted_turn_id, 1)
+        # A retry of the same turn is not accepted twice.
+        self.assertIsNone(tracker.accept_reply(reply))
+
+    async def test_a_malformed_exam_receipt_is_not_settled(self):
+        reply = VoiceTurnReply(turn_id=1, status="impresso_requested")
+        self.assertFalse(reply.is_impresso_receipt())
+        self.assertIsNone(TurnTracker("s1", 0).accept_reply(reply))
+
     async def test_a_kept_reply_from_an_older_server_is_not_an_acknowledgement(self):
         def handler(request):
             return httpx.Response(

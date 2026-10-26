@@ -70,6 +70,9 @@ defmodule BackendWeb.Router do
     get "/sessions/:id/result", StationController, :show_educational_result
     post "/sessions/:id/impressos/request", StationController, :request_impresso
     get "/sessions/:id/impressos", StationController, :list_impressos
+    # The exam button's spoken request (#364): arms or cancels the exam mode.
+    post "/sessions/:id/exam-mode", SessionController, :arm_exam_mode
+    delete "/sessions/:id/exam-mode", SessionController, :cancel_exam_mode
     post "/sessions/:id/transcribe", TranscriptionController, :create
     post "/sessions/:id/synthesize", TTSController, :create
     post "/sessions/:id/voice", VoiceSessionController, :create

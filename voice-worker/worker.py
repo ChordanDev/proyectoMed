@@ -6,7 +6,9 @@ transcript to Phoenix, which owns the transcript. Each reply Phoenix approves is
 to the room as patient text and then spoken through ElevenLabs (#120). A learner turn
 Phoenix kept without a reply is never spoken: a turn addressed to the examiner is
 published as an examiner acknowledgement (`status: acknowledged`, #274) and a refused
-patient reply as `status: kept` (#269). Every reply event names its `speaker` (`patient`
+patient reply as `status: kept` (#269). A turn Phoenix sent to the impresso request
+because the learner armed the exam mode (#364) is published as `status:
+impresso_requested` with its outcome, and nothing is spoken. Every reply event names its `speaker` (`patient`
 or `companion`, #341), and each actor speaks with the ElevenLabs voice its voice key maps
 to in `ELEVENLABS_VOICE_IDS`, on the one patient track. When the job ends it reports
 its provider usage (Deepgram audio seconds, ElevenLabs characters, LiveKit
@@ -274,6 +276,9 @@ class PatientVoice:
             )
 
     async def on_reply(self, reply: VoiceTurnReply) -> None:
+        if reply.is_impresso_receipt():
+            await self._publish_impresso(reply)
+            return
         if reply.is_kept_receipt():
             await self._acknowledge(reply)
             return
@@ -324,6 +329,32 @@ class PatientVoice:
             )
         except Exception:
             await self._publish_failure(reply, "text_delivery_failed")
+
+    async def _publish_impresso(self, reply: VoiceTurnReply) -> None:
+        """Phoenix sent the utterance to the impresso request (exam mode, #364).
+
+        The outcome goes to the learner's screen as an examiner event; nothing is
+        spoken. A room publish error is logged content-free and never stops the
+        job: the request is recorded, and the client can read it with
+        `GET /sessions/:id/impressos`.
+        """
+        try:
+            await publish(
+                self.room,
+                {
+                    "session_id": self.session_id,
+                    "turn_id": reply.turn_id,
+                    "role": "examiner",
+                    "status": "impresso_requested",
+                    **reply.impresso,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "impresso outcome not published for session %s turn %d",
+                self.session_id,
+                reply.turn_id,
+            )
 
     async def on_turn_end(self, reply: VoiceTurnReply) -> None:
         """Phoenix settled a reply streamed sentence by sentence (#281).

@@ -1025,6 +1025,68 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     end
   end
 
+  describe "spoken exam requests in exam mode (#364)" do
+    defmodule NoGenerationAdapter do
+      @behaviour Backend.Stations.StationAI
+
+      @impl true
+      def next_reply(_package, _context), do: raise("an exam-mode turn never reaches the patient")
+    end
+
+    for stream? <- [false, true] do
+      test "answers 201 impresso_requested with the request outcome (streamed: #{stream?})",
+           %{conn: conn} do
+        Application.put_env(:backend, :station_ai_adapter, NoGenerationAdapter)
+        id = Stations.create_session(%{audio_consent: true}).session_id
+        {:ok, _} = Stations.arm_exam_mode(id)
+
+        conn =
+          if unquote(stream?),
+            do: put_req_header(conn, "accept", "application/x-ndjson, application/json"),
+            else: conn
+
+        resp =
+          conn
+          |> post(transcripts_path(id), %{turn_id: 1, text: "Solicito hemograma e PCR"})
+          |> json_response(201)
+
+        assert %{
+                 "turn_id" => 1,
+                 "status" => "impresso_requested",
+                 "request_id" => "voice-exam-1",
+                 "decision" => "released",
+                 "newly_released" => [
+                   %{"id" => "laboratorio-sangue-enzimas", "title" => _, "category" => _} =
+                     released
+                 ],
+                 "feedback_message" => "Impresso liberado: " <> _
+               } = resp
+
+        refute Map.has_key?(released, "content")
+        refute Map.has_key?(resp, "generation_id")
+
+        {:ok, stored} = Stations.get_session(id)
+        assert stored.messages == []
+        assert [%{request_id: "voice-exam-1"}] = stored.impresso_requests
+      end
+    end
+
+    test "an unauthored exam answers decision unavailable with Jev disabled", %{conn: conn} do
+      id = Stations.create_session(%{audio_consent: true}).session_id
+      {:ok, _} = Stations.arm_exam_mode(id)
+
+      assert %{
+               "status" => "impresso_requested",
+               "decision" => "unavailable",
+               "newly_released" => [],
+               "feedback_message" => "Não consta no script."
+             } =
+               conn
+               |> post(transcripts_path(id), %{turn_id: 1, text: "Solicito uma tomografia"})
+               |> json_response(201)
+    end
+  end
+
   describe "POST usage (#342)" do
     defp usage_path(id), do: ~p"/api/internal/voice/sessions/#{id}/usage"
 

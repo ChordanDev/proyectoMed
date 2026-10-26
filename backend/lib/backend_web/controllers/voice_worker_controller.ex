@@ -13,6 +13,11 @@ defmodule BackendWeb.VoiceWorkerController do
       and answers `201` with `status: "kept"`, `addressee: "examiner"` and the
       display-only boolean `exam_request` (#351): an exam request to the
       examiner. A dialogue turn never releases an impresso.
+      While the learner's exam mode is armed (#364, `POST /sessions/:id/exam-mode`)
+      the next fresh turn is an impresso request instead: `201` with
+      `status: "impresso_requested"`, `request_id` (`voice-exam-<turn_id>`),
+      `decision`, `newly_released` (`id`, `title`, `category`) and
+      `feedback_message`, never streamed and without a generation.
       With `application/x-ndjson` in `Accept` (#271; the worker sends `application/x-ndjson, application/json`, since the API pipeline accepts JSON) the reply is streamed: the
       first verified sentence opens a `200` chunked NDJSON body, one line per
       verified sentence (`{"type":"sentence","turn_id","generation_id","index","text"}`,
@@ -165,6 +170,20 @@ defmodule BackendWeb.VoiceWorkerController do
             kept_exam_request(kept)
           )
         )
+
+      # A spoken exam request in exam mode (#364): nothing to speak, no generation.
+      {:impresso, %{turn_id: ^turn_id} = request} ->
+        conn
+        |> put_status(:created)
+        |> json(%{
+          turn_id: turn_id,
+          status: "impresso_requested",
+          request_id: request.request_id,
+          decision: request.decision,
+          newly_released:
+            Enum.map(request.newly_released, &Map.take(&1, [:id, :title, :category])),
+          feedback_message: request.feedback_message
+        })
     end
   end
 

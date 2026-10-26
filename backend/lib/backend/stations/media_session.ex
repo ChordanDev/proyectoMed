@@ -12,6 +12,7 @@ defmodule Backend.Stations.MediaSession do
   require Logger
 
   alias Backend.Stations.Conversation
+  alias Backend.Stations.ExamMode
   alias Backend.Stations.LiveKit
   alias Backend.Stations.LiveKit.RoomService
 
@@ -76,6 +77,8 @@ defmodule Backend.Stations.MediaSession do
   @impl true
   def init(_opts) do
     :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
+    # This process also owns the exam mode table (#364).
+    :ok = ExamMode.create_table()
     schedule_tick()
     {:ok, %{sweeping?: false}}
   end
