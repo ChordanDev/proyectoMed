@@ -14,6 +14,7 @@ defmodule Backend.Release do
   """
 
   alias Backend.Accounts
+  alias Backend.Stations
 
   @app :backend
 
@@ -97,6 +98,33 @@ defmodule Backend.Release do
 
   defp report_admin({:error, {:repo, reason}}, _email),
     do: IO.puts("no admin created: the database is unavailable (#{inspect(reason)})")
+
+  @doc """
+  Switches the running node to "no new sessions" for a deploy (#344) and
+  prints its state. Runs inside the running node through `bin/drain start`
+  (`bin/backend rpc`), never through `eval`.
+  """
+  def drain do
+    :ok = Stations.start_draining()
+    print_drain_status()
+  end
+
+  @doc "Admits new sessions again (`bin/drain stop`) and prints the node state."
+  def resume do
+    :ok = Stations.resume_sessions()
+    print_drain_status()
+  end
+
+  @doc """
+  Prints `draining=<true|false> active_sessions=<n>` for the running node
+  (`bin/drain status`); `rel/deploy.sh` parses this line.
+  """
+  def drain_status, do: print_drain_status()
+
+  defp print_drain_status do
+    %{draining: draining, active_sessions: active} = Stations.drain_status()
+    IO.puts("draining=#{draining} active_sessions=#{active}")
+  end
 
   defp repos, do: Application.fetch_env!(@app, :ecto_repos)
 

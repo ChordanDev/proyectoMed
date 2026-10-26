@@ -517,6 +517,27 @@ defmodule Backend.Stations.Conversation do
     GenServer.call(__MODULE__, {:settle_learner_feedback, session_id, entries})
   end
 
+  @doc """
+  The number of running sessions on this node: started, not completed and
+  not expired (#344, the drain gate and the concurrent-session cap).
+  """
+  @spec active_count() :: non_neg_integer()
+  def active_count do
+    now = DateTime.utc_now()
+
+    :ets.foldl(
+      fn
+        {_id, %{status: :active} = session}, count ->
+          if expired?(session, now), do: count, else: count + 1
+
+        _entry, count ->
+          count
+      end,
+      0,
+      __MODULE__
+    )
+  end
+
   @impl true
   def init(_options) do
     :ets.new(__MODULE__, [:named_table, :set, :public, read_concurrency: true])
