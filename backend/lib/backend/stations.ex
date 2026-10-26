@@ -17,6 +17,7 @@ defmodule Backend.Stations do
   alias Backend.Stations.CaseFormat
   alias Backend.Stations.Conversation
   alias Backend.Stations.Evaluator
+  alias Backend.Stations.ExamMode
   alias Backend.Stations.Impressos
   alias Backend.Stations.JevDecision
   alias Backend.Stations.LiveKit
@@ -1152,6 +1153,100 @@ defmodule Backend.Stations do
   end
 
   @doc """
+  Arms the exam mode for the learner's next utterance (#364): the learner
+  pressed the exam button and will say the request aloud.
+
+  While armed, the next fresh voice turn (`process_voice_turn/3` or
+  `stream_voice_turn/5`) is not a dialogue turn: its text goes to
+  `request_impresso/2` with request id `voice-exam-<turn_id>`, no learner
+  message is recorded and no patient generation runs, now or later. The mode
+  disarms after that one utterance, at `expires_at`
+  (`:exam_mode_ttl_ms`, default 20 000 ms) or on `cancel_exam_mode/1`.
+  Arming again replaces an earlier mode and restarts its expiry.
+
+  Needs an active session with audio consent: a typed request goes to
+  `request_impresso/2` directly.
+  """
+  @spec arm_exam_mode(String.t()) ::
+          {:ok, %{expires_at: DateTime.t()}}
+          | {:error, :not_found | :expired | :completed | :no_consent}
+  def arm_exam_mode(session_id) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(session),
+         :ok <- ensure_audio_consent(session) do
+      expires_at = DateTime.add(DateTime.utc_now(), exam_mode_ttl_ms(), :millisecond)
+      :ok = ExamMode.arm(session_id, expires_at)
+      {:ok, %{expires_at: expires_at}}
+    end
+  end
+
+  @doc """
+  Disarms the exam mode (#364), e.g. when the learner closes the exam prompt
+  without speaking. Idempotent: `:ok` also when nothing was armed.
+  """
+  @spec cancel_exam_mode(String.t()) :: :ok | {:error, :not_found | :expired}
+  def cancel_exam_mode(session_id) do
+    with {:ok, _session} <- Conversation.fetch(session_id) do
+      ExamMode.disarm(session_id)
+    end
+  end
+
+  defp exam_mode_ttl_ms, do: Application.get_env(:backend, :exam_mode_ttl_ms, 20_000)
+
+  # The exam mode (#364) decides whether a voice turn is a spoken impresso
+  # request. `:dialogue` lets the turn go on as a dialogue turn.
+  defp exam_mode_turn(session_id, turn_id, text) do
+    text = String.trim(text)
+
+    cond do
+      text == "" -> :dialogue
+      ExamMode.consumed_by?(session_id, turn_id) -> request_spoken_exam(session_id, turn_id, text)
+      ExamMode.armed?(session_id) -> consume_exam_mode(session_id, turn_id, text)
+      true -> :dialogue
+    end
+  end
+
+  # Only a fresh turn consumes the mode: a retry or a stale turn stays a
+  # dialogue turn, which answers it as before.
+  defp consume_exam_mode(session_id, turn_id, text) do
+    now = DateTime.utc_now()
+
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_voice_turn_open(session),
+         :ok <- ensure_audio_consent(session),
+         true <- fresh_voice_turn?(session, turn_id, now),
+         :ok <- ExamMode.consume(session_id, turn_id, now) do
+      # Fence the turn id as a turn-only cancel does, so the worker's cursor and
+      # `turn_id_floor` move past it although no learner message is recorded.
+      _fenced = Conversation.cancel_voice_turn(session_id, turn_id: turn_id)
+      request_spoken_exam(session_id, turn_id, text)
+    else
+      _not_an_exam_turn -> :dialogue
+    end
+  end
+
+  defp fresh_voice_turn?(session, turn_id, now) do
+    turn_id > Map.get(session, :last_voice_turn_id, 0) and
+      turn_id > Map.get(session, :cancelled_voice_turn_id, 0) and
+      DateTime.compare(now, session.deadline_at) == :lt
+  end
+
+  # The same request route as the exam button's typed request; the stable
+  # request id makes a retry of the turn idempotent.
+  defp request_spoken_exam(session_id, turn_id, text) do
+    case request_impresso(session_id, %{"text" => text, "request_id" => "voice-exam-#{turn_id}"}) do
+      {:ok, result} ->
+        {:ok, {:impresso, Map.put(result, :turn_id, turn_id)}}
+
+      {:error, reason} when reason in [:invalid_request, :message_too_long] ->
+        {:error, :invalid_transcript}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Lists the impressos currently released for a session, in release order.
 
   Allowed for both active and completed sessions.
@@ -1311,6 +1406,12 @@ defmodule Backend.Stations do
        verified or spoken, as
        `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
        A missing marker continues as patient-addressed.
+    4b. While the exam mode is armed (`arm_exam_mode/1`, #364) a fresh turn
+       is none of the above: its text goes to `request_impresso/2` with request
+       id `voice-exam-<turn_id>`, no learner turn is recorded, no generation
+       runs, and the result is `{:ok, {:impresso, %{turn_id: turn_id,
+       request_id, decision, released_impressos, newly_released,
+       feedback_message}}}`. A retry of that turn replays the same result.
     7. Failing closed on technical failures: a reply that is denied, unverifiable,
        or left without usable text fails the generation as
        `:station_ai_unavailable` and commits no patient content.
@@ -1345,6 +1446,7 @@ defmodule Backend.Stations do
                 refusal: :low_confidence | :semantic_refusal | :unspeakable | :examiner_addressed,
                 addressee: :examiner | :patient
               }}}
+          | {:ok, {:impresso, map()}}
           | {:ok, :duplicate}
           | {:error,
              :not_found
@@ -1359,12 +1461,14 @@ defmodule Backend.Stations do
   def process_voice_turn(session_id, turn_id, text)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
     Usage.track(session_id, fn ->
-      case admit_voice_turn(session_id, turn_id, text) do
-        {:ok, generation_id, learner_text} ->
-          process_voice_reply(session_id, turn_id, generation_id, learner_text)
+      with :dialogue <- exam_mode_turn(session_id, turn_id, text) do
+        case admit_voice_turn(session_id, turn_id, text) do
+          {:ok, generation_id, learner_text} ->
+            process_voice_reply(session_id, turn_id, generation_id, learner_text)
 
-        other ->
-          other
+          other ->
+            other
+        end
       end
     end)
   end
@@ -1444,12 +1548,18 @@ defmodule Backend.Stations do
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) and
              is_function(sink, 2) do
     Usage.track(session_id, fn ->
-      case admit_voice_turn(session_id, turn_id, text) do
-        {:ok, generation_id, learner_text} ->
-          stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
+      case exam_mode_turn(session_id, turn_id, text) do
+        :dialogue ->
+          case admit_voice_turn(session_id, turn_id, text) do
+            {:ok, generation_id, learner_text} ->
+              stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
 
-        other ->
-          {other, acc}
+            other ->
+              {other, acc}
+          end
+
+        exam_result ->
+          {exam_result, acc}
       end
     end)
   end
@@ -1585,7 +1695,7 @@ defmodule Backend.Stations do
       MediaSession.clear_rate_limit(session_id)
     end
 
-    :ok
+    ExamMode.disarm(session_id)
   end
 
   defp ensure_active(%{status: :active}), do: :ok
