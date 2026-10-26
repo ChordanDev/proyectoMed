@@ -52,10 +52,16 @@ def parse_steps(text: str) -> list[int]:
 
 
 def steady_window(turns) -> tuple[float, float] | None:
-    """From the last session's first turn to the first session's last turn, or None."""
+    """From the last session's first turn to the first session's last turn, or None.
+
+    Only real turns count: the zero-length turns padded in for a failed session
+    (`session_*` outcomes) would otherwise close the window at the failure.
+    """
     first: dict[int, float] = {}
     last: dict[int, float] = {}
     for turn in turns:
+        if turn.get("outcome", "").startswith("session_"):
+            continue
         s = turn["session"]
         first[s] = min(first.get(s, turn["started_at"]), turn["started_at"])
         last[s] = max(last.get(s, turn["ended_at"]), turn["ended_at"])

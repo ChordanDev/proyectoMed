@@ -74,9 +74,11 @@ CPU is the percent of one core, so 160 means 1.6 cores.
 The harness now takes every peak (CPU, RSS, processes) from the whole step and the CPU
 average from the steady window. The run below predates that for the CPU peak: at N=10 and
 N=25 it is the maximum inside the steady window, so the whole-step CPU peak is at least
-that. N=50 never had every session talking at once (no steady window), so its CPU
-average and peak both come from the whole step, ramp included, and are not comparable
-with the other rows.
+that. At N=50 the run recorded no steady window: the 15 sessions that failed before
+their first turn were padded with zero-length turns at the failure time, which closed the
+window. The harness now leaves those padded turns out of the window (they still count as
+failed turns), but this run predates that, so its N=50 CPU average and peak both come from
+the whole step, ramp included, and are not comparable with the other rows.
 
 | N | sessions ok | turns ok | p50 ms | p95 ms | p99 ms | worker CPU avg/peak % | worker RSS peak MB | worker processes | Phoenix CPU avg/peak % | Phoenix RSS peak MB |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -84,8 +86,8 @@ with the other rows.
 | 25 | 25/25 | 1000/1000 | 674 | 1099 | 1318 | 160/252 | 5922 | 36 | 14/46 | 245 |
 | 50 | 35/50 | 711/2000 | 944 | 1862 | 10213 | 185/555 | 7082 | 44 | 17/85 | 220 |
 
-- **Idle worker**: 11 processes and 2,920 MB (the main process and 8 warm job processes,
-  about 290 MB each).
+- **Idle worker**: 11 processes and 2,920 MB (the main process, 8 warm job processes and
+  2 helper processes).
 - **N=10** ran with 5 GB still available: (6,519 − 2,920) / 10 ≈ **360 MB per session**.
   Each job takes a warm process and the pool starts a replacement, so every session adds
   one process.
@@ -107,8 +109,8 @@ Assumptions, not measurements:
 - A Fly performance vCPU does **half the work of an M3 performance core**, so one session
   takes about 12.8 % of a Fly vCPU.
 - In production (`start`), the worker stops taking jobs at a CPU load of 0.7.
-- Per-machine memory is the main process plus 8 warm processes (about 2.6 GB) plus
-  360 MB per session. On Linux, RSS counts the shared library pages of each process, as
+- Per-machine memory is the measured idle worker (2,920 MB) plus 360 MB per session:
+  floor((GB × 1,024 − 2,920) / 360). On Linux, RSS counts the shared library pages of each process, as
   on macOS, so this is conservative.
 
 Prices: Ashburn performance-4x (8 GB) $132.01/month, performance-8x (16 GB)
@@ -118,14 +120,14 @@ drain one.
 
 | Machine (gru) | $/month | CPU limit | Memory limit | Sessions | Machines for 200 | $/month for 200 |
 |---|---|---|---|---|---|---|
-| performance-4x · 8 GB | 213.20 | 21 | 15 | 15 | 14 + 1 | 3,198 |
+| performance-4x · 8 GB | 213.20 | 21 | 14 | 14 | 15 + 1 | 3,411 |
 | **performance-4x · 12 GB** | **251.96** | **21** | **26** | **21** | **10 + 1** | **2,772** |
-| performance-8x · 16 GB | 426.38 | 43 | 38 | 38 | 6 + 1 | 2,985 |
-| performance-8x · 20 GB | 465.14 | 43 | 49 | 43 | 5 + 1 | 2,791 |
+| performance-8x · 16 GB | 426.38 | 43 | 37 | 37 | 6 + 1 | 2,985 |
+| performance-8x · 20 GB | 465.14 | 43 | 48 | 43 | 5 + 1 | 2,791 |
 
 **Recommendation:** performance-4x with 12 GB, planned at **20 sessions per machine**,
 11 machines for 200 sessions, about **$2,772/month** in `gru`. The default 8 GB
-performance-4x is memory-bound at about 15 sessions. This replaces the 8 to 20 machines
+performance-4x is memory-bound at about 14 sessions. This replaces the 8 to 20 machines
 ($1,706 to $4,264/month) that `production-infrastructure.md` (A11) estimated from an
 assumed 10 to 25 sessions per machine.
 

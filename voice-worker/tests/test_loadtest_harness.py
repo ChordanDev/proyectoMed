@@ -155,6 +155,19 @@ class RunTest(unittest.TestCase):
         ]
         self.assertEqual(steady_window(turns), (30.0, 90.0))
 
+    def test_steady_window_ignores_sessions_that_failed_before_a_turn(self):
+        turns = [
+            {"session": 0, "outcome": "ok", "started_at": 10.0, "ended_at": 20.0},
+            {"session": 0, "outcome": "ok", "started_at": 20.0, "ended_at": 30.0},
+            {
+                "session": 1,
+                "outcome": "session_worker_not_joined",
+                "started_at": 25.0,
+                "ended_at": 25.0,
+            },
+        ]
+        self.assertEqual(steady_window(turns), (10.0, 30.0))
+
     def test_max_gap_flags_a_stalled_machine(self):
         self.assertEqual(max_gap([1.0, 2.0, 3.1, 20.1, 21.0]), 17.0)
         self.assertEqual(max_gap([5.0]), 0.0)
