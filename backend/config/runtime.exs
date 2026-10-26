@@ -654,7 +654,7 @@ if config_env() != :test do
   end
 end
 
-# Fly deploy (#344, docs/operations/deploy.md). `FLY_MACHINE_ID`, set by Fly on
+# Fly deploy and session admission (#344, docs/operations/deploy.md). `FLY_MACHINE_ID`, set by Fly on
 # every machine, names the machine that owns each session it starts: session
 # ids become `<machine id>.<random>`, and a request for a session of another
 # machine is answered with `fly-replay: instance=<owner>`. Unset outside Fly.
@@ -672,6 +672,25 @@ if config_env() != :test do
       end
 
       config :backend, :machine_id, machine_id
+  end
+
+  # `MAX_CONCURRENT_SESSIONS` caps the running sessions of one node (default
+  # 200, config.exs): at the cap `POST /sessions` answers `503
+  # capacity_exhausted`, and from 80% a warning is logged. Anything but a
+  # positive integer refuses to boot.
+  case System.get_env("MAX_CONCURRENT_SESSIONS", "") |> String.trim() do
+    "" ->
+      :ok
+
+    raw ->
+      case Integer.parse(raw) do
+        {limit, ""} when limit > 0 ->
+          config :backend, :max_concurrent_sessions, limit
+
+        _invalid ->
+          raise ArgumentError,
+                "MAX_CONCURRENT_SESSIONS must be a positive integer, got: " <> inspect(raw)
+      end
   end
 end
 

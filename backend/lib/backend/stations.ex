@@ -14,6 +14,7 @@ defmodule Backend.Stations do
 
   alias Backend.Stations.Actors
   alias Backend.Stations.CandidateGate
+  alias Backend.Stations.Capacity
   alias Backend.Stations.CaseFormat
   alias Backend.Stations.Conversation
   alias Backend.Stations.Drain
@@ -189,12 +190,15 @@ defmodule Backend.Stations do
   session holds one slot until it is graded or expires.
 
   A node draining for a deploy (`start_draining/0`, #344) answers
-  `{:error, :draining}` before any other check.
+  `{:error, :draining}` before any other check, and a node at its
+  concurrent-session cap (`MAX_CONCURRENT_SESSIONS`, `Backend.Stations.Capacity`)
+  answers `{:error, :capacity_exhausted}`.
   """
   @spec start_station_session({:station, integer()} | {:random, String.t() | nil}, map()) ::
           {:ok, Conversation.session()}
           | {:error,
              :draining
+             | :capacity_exhausted
              | :subscription_required
              | {:daily_quota_exhausted, DateTime.t()}
              | :station_not_found
@@ -227,7 +231,9 @@ defmodule Backend.Stations do
   # The node-level gates come first (#344): a draining node or a full one
   # refuses before any entitlement, quota or station work.
   defp admit_new_session do
-    if Drain.draining?(), do: {:error, :draining}, else: :ok
+    if Drain.draining?(),
+      do: {:error, :draining},
+      else: Capacity.admit(active_session_count())
   end
 
   # ============================================================================

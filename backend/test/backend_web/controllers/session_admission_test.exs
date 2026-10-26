@@ -67,4 +67,35 @@ defmodule BackendWeb.SessionAdmissionTest do
       assert %{"status" => "active"} = conn |> start(kase) |> json_response(201)
     end
   end
+
+  describe "at the concurrent-session cap" do
+    setup do
+      previous = Application.fetch_env(:backend, :max_concurrent_sessions)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:backend, :max_concurrent_sessions, value)
+          :error -> Application.delete_env(:backend, :max_concurrent_sessions)
+        end
+      end)
+    end
+
+    test "POST /sessions answers 503 capacity_exhausted with Retry-After",
+         %{conn: conn, kase: kase} do
+      Application.put_env(:backend, :max_concurrent_sessions, Stations.active_session_count())
+
+      conn = start(conn, kase)
+
+      assert %{"error" => "capacity_exhausted", "message" => message} = json_response(conn, 503)
+      assert message =~ "ocupadas"
+      assert [retry_after] = get_resp_header(conn, "retry-after")
+      assert String.to_integer(retry_after) > 0
+    end
+
+    test "the last free slot still starts a session", %{conn: conn, kase: kase} do
+      Application.put_env(:backend, :max_concurrent_sessions, Stations.active_session_count() + 1)
+
+      assert %{"status" => "active"} = conn |> start(kase) |> json_response(201)
+    end
+  end
 end

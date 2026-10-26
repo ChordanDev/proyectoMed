@@ -55,4 +55,24 @@ defmodule Backend.Config.FlyConfigTest do
       refute Keyword.has_key?(backend_config(:test), :machine_id)
     end
   end
+
+  describe "MAX_CONCURRENT_SESSIONS" do
+    test "sets the concurrent-session cap" do
+      System.put_env("MAX_CONCURRENT_SESSIONS", " 150 ")
+      assert backend_config()[:max_concurrent_sessions] == 150
+    end
+
+    test "unset keeps the default of config.exs" do
+      refute Keyword.has_key?(backend_config(), :max_concurrent_sessions)
+    end
+
+    test "refuses to boot on anything but a positive integer" do
+      for value <- ["0", "-1", "lots", "1.5"] do
+        System.put_env("MAX_CONCURRENT_SESSIONS", value)
+
+        error = assert_raise ArgumentError, fn -> backend_config() end
+        assert error.message =~ "MAX_CONCURRENT_SESSIONS"
+      end
+    end
+  end
 end
