@@ -21,11 +21,11 @@ Constraints: keep both sides of every conflict; Unreal code is only textually me
 | ID | Specs | Route | Status | Commit / evidence |
 |---|---|---|---|---|
 | T1 | S1 | inline | done | 23bebb5 merge; worker 189 tests, 4 errors (#341 tests on `worker.elevenlabs`, fixed by T2); backend 2432 passed |
-| T2 | S3 | inline | todo | |
-| T3 | S4 | inline | todo | |
-| T4 | S2, S5 | inline | todo | |
-| T5 | S2, S5, S6 | inline | todo | |
-| T6 | S1 | inline | todo | local CI |
+| T2 | S3 | inline | done | a889e63; RED 4 of 8 BuildVoiceTTSTest failed (3 F, 1 E); GREEN worker 193 OK |
+| T3 | S4 | inline | done | 29931f9; RED worker 5 F 2 E, backend KeyError `:cartesia_characters`; GREEN worker OK, backend 2432 passed |
+| T4 | S2, S5 | inline | done | e08cca9; RED 9 failures (notice, transcription, TTS); GREEN backend 2432 passed |
+| T5 | S2, S5, S6 | inline | done | 593ca77; docs only, structural check: `rg -i eleven` leaves history (SPEC_MVP, jev-prototype, spike-189, migrations, odd) and regression tests |
+| T6 | S1 | inline | done | LOCAL CI PASSED: web 342, backend 2432, e2e 4; worker 193 OK; `git rev-list HEAD..origin/develop` = 0 |
 
 - T2: worker `build_voice_tts` builds Cartesia voices from `CARTESIA_VOICE_IDS`.
 - T3: worker reports `cartesia_characters`; backend usage column rename migration, price `cartesia_1k_characters`.
@@ -38,3 +38,6 @@ Constraints: keep both sides of every conflict; Unreal code is only textually me
 - L1 (2026-10-25, user): "creo que lo de carthesia ya mi hermano lo metió en una issue ya, en algún PR. Issue 360, PR 362"
 - L2: Cartesia pricing, https://cartesia.ai/pricing, read 2026-10-25: "1 credit equals 1 character"; Scale $299/month with 8M credits, overage $38 per 1M credits (Startup $45, Pro $65). Price table uses the Scale overage, $0.038 per 1,000 characters.
 - L3: merge conflicts in README.md, backend/config/runtime.exs, docs/unreal-station-client.md and voice-worker/worker.py resolved keeping both sides; develop's Voice link section replaces the "lands with #191" paragraph.
+- L4: Cartesia `/tts/bytes`, https://docs.cartesia.ai/api-reference/tts/bytes, read 2026-10-25: Bearer key, `Cartesia-Version: 2026-08-14`, mp3 needs `sample_rate` and `bit_rate`. Concurrency, https://docs.cartesia.ai/use-the-api/concurrency-limits-and-timeouts: Scale 15.
+- L5: `session_usages.elevenlabs_characters` is renamed by a new migration (20261025190000) instead of editing the create migration, so databases that already ran it follow. The worker and Phoenix must deploy together: Phoenix now refuses a report without `cartesia_characters`.
+- L6: Next step: PR to `feat/326-production-launch`; live checks pending (a real Cartesia key for the turn-based adapter and a companion station with `CARTESIA_VOICE_IDS`).
