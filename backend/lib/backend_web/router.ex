@@ -82,6 +82,8 @@ defmodule BackendWeb.Router do
     pipe_through :api
 
     get "/", HealthController, :index
+    # Fly health checks (#344): plain HTTP, outside force_ssl (config/prod.exs).
+    get "/health", HealthController, :index
   end
 
   scope "/", BackendWeb do
