@@ -28,6 +28,7 @@ It adds no clinical, product, or `#12` behavior.
 | Elixir     | `1.20.2-otp-29`  | `backend/.tool-versions`                    |
 | OTP        | `29.0.5`         | `backend/.tool-versions`                    |
 | Phoenix    | `~> 1.8.13`      | `backend/mix.exs`                           |
+| PostgreSQL | `17`             | `.github/workflows/pr-validation.yml` service |
 
 The web SPA is managed under `web/` with `npm --prefix web`. The backend was
 generated with:
@@ -42,16 +43,23 @@ version pin, and partial-output policy are testable and reproducible.
 
 ## Prerequisites and install
 
-Install the pinned Node/npm and Elixir/OTP versions listed above, then install
-both runtime dependency sets:
+Install the pinned Node/npm and Elixir/OTP versions listed above and a local
+PostgreSQL 17 (for example `brew install postgresql@17` and
+`brew services start postgresql@17`), then install both runtime dependency sets:
 
 ```sh
 # Web SPA (Vite + React + TypeScript).
 npm --prefix web install
 
-# Backend (Phoenix / Elixir).
-( cd backend && mix deps.get )
+# Backend (Phoenix / Elixir): fetches dependencies and creates and migrates the
+# local `backend_dev` database.
+( cd backend && mix setup )
 ```
+
+The backend reaches the local Postgres on `localhost:5432` as the operating
+system user with no password, which is what a Homebrew install provides. Set
+`PGHOST`, `PGUSER` or `PGPASSWORD` when your local server differs. See
+["Database"](#database) for `DATABASE_URL` and the other database variables.
 
 The process-level E2E suite also requires `mix` on `PATH` and permission to
 bind ephemeral localhost ports. It starts a real Phoenix server and a local,
@@ -70,12 +78,20 @@ The repository commits both lockfiles (`web/package-lock.json` and
 # Web SPA — boots Vite dev server on http://localhost:5173.
 npm --prefix web run dev
 
-# Backend — boots the JSON API on http://localhost:4000.
+# Backend — boots the JSON API and the LiveView pages on http://localhost:4000.
 ( cd backend && mix phx.server )
 
 # Backend with another active station (see "Active station" below).
 ( cd backend && ACTIVE_STATION_ID=acute-appendicitis mix phx.server )
 ```
+
+In `dev`, `mix phx.server` also runs the esbuild and Tailwind watchers that build
+the LiveView assets from `backend/assets` (`mix setup` installs both binaries;
+`mix assets.build` builds once). http://localhost:4000/admin is the admin case
+panel (pt-BR, ADR-015 #347, #331): the cases n8n inserted, with number, area,
+theme and status, filtered by status and area; `/admin/cases/<number>` shows a
+case with its located format errors first. Only a logged-in admin opens it (see
+["Accounts"](#accounts)).
 
 The backend exposes health and Station HTTP routes. Representative responses:
 
@@ -473,7 +489,8 @@ through the subscribed audio track.
 | Variable              | Required | Purpose                                                                 |
 | --------------------- | -------- | ----------------------------------------------------------------------- |
 | `CARTESIA_API_KEY`    | yes      | Cartesia API key.                                                       |
-| `CARTESIA_VOICE_ID`   | yes      | Cartesia voice id used for the patient.                                 |
+| `CARTESIA_VOICE_ID`   | yes      | Cartesia voice id used for the patient, and for any actor whose voice key `CARTESIA_VOICE_IDS` does not map. |
+| `CARTESIA_VOICE_IDS`  | no       | Companion stations (#341): `voice-key=voice-id,...` for the keys `infantil`, `masculina-adulta`, `feminina-adulta`, `masculina-idosa` and `feminina-idosa`. Malformed pairs are skipped with a warning naming only the variable. |
 | `CARTESIA_MODEL`      | no       | TTS model. Default `sonic-3` (low latency, supports Portuguese).        |
 | `PHOENIX_TURN_TIMEOUT_S` | no    | Seconds each transcript POST waits for Phoenix. Default `35` (see below). |
 | `PHOENIX_TURN_RETRIES`   | no    | Retries of a transcript POST after a timeout or disconnect. Default `1`.  |
@@ -495,9 +512,9 @@ reply as text followed by a `synthesis_failed` event. The worker asks Cartesia f
 16-bit PCM at 24 kHz in Portuguese (the session language `pt-BR` is sent as `pt`).
 It speaks over Cartesia's websocket and opens that connection when it publishes the
 patient track and again after every reply, so no reply waits for a connection (a cold
-one delayed the first audio by 0.5-1 s in local tests). The `ELEVENLABS_*` variables are no longer read by the worker; they only configure
-turn-based voice in Phoenix (see
-["Turn-based voice providers"](#turn-based-voice-providers-deepgram-and-elevenlabs)).
+one delayed the first audio by 0.5-1 s in local tests). Phoenix's turn-based voice reads
+the same `CARTESIA_*` variables (see
+["Turn-based voice providers"](#turn-based-voice-providers-deepgram-and-cartesia)).
 
 **Room events** (all on data topic `transcript`, reliable, JSON):
 
@@ -656,7 +673,7 @@ prove the result contract, not the quality of any assessment.
 ### Voice worker fake speech providers
 
 The Unreal spoken-turn test (#191) runs the real voice worker without Deepgram
-or ElevenLabs. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
+or Cartesia. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
 
 - Every learner utterance becomes one final transcript,
   `VOICE_WORKER_FAKE_TRANSCRIPT` (default `Qual é o seu nome?`). An utterance
@@ -694,21 +711,176 @@ scripts/run-voice-stack.sh -- \
   uv run --project voice-worker python scripts/voice-stack/probe_spoken_turn.py
 ```
 
-### Active station
+### Database
 
-The backend serves one active station, chosen at boot. No code edit is needed to
-switch it.
+The backend stores data in Postgres through Ecto (`Backend.Repo`, ADR-014 #346).
+`dev` and `test` use a local database by default (`backend_dev` and
+`backend_test`); `mix test`, and so `scripts/test.sh`, creates and migrates the
+test database before running, and every test runs inside the Ecto SQL sandbox.
+Migrations live in `backend/priv/repo/migrations`: run `mix ecto.migrate` in
+`dev`; a release runs pending migrations on boot.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `ACTIVE_STATION_ID` | Station directory under `backend/priv/stations` to load at boot, for example `acute-appendicitis` (`dev` and `prod`; ignored in `test`). Unset or blank keeps the default. | `chest-pain-initial-assessment` |
+| `DATABASE_URL` | `ecto://USER:PASS@HOST/DATABASE`. Required in `prod`; in `dev` it replaces the local `backend_dev`, for example with a Neon branch. Ignored in `test`. Never commit it. An `ssl` query parameter refuses to boot (use `DATABASE_SSL`); Neon's `sslmode` and `channel_binding` parameters are allowed. | unset (local `backend_dev`) |
+| `DATABASE_SSL` | `true`, `1`, `yes` or `on` turns on TLS with peer and hostname verification against the system CA store (Neon requires it); `false`, `0`, `no` or `off` turns it off. Case-insensitive; any other value, including an empty one, refuses to boot. Read only with `DATABASE_URL`. | `true` in `prod`, `false` in `dev` |
+| `POOL_SIZE` | Connection pool size. Read only with `DATABASE_URL`. | `10` |
+| `ECTO_IPV6` | `true` or `1` connects over IPv6. Read only with `DATABASE_URL`. | unset |
+| `PGHOST`, `PGUSER`, `PGPASSWORD` | Local server, user and password for `dev` and `test` when `DATABASE_URL` is unset (read by Postgrex). | `localhost`, the operating system user, no password |
+
+`backend/config/runtime.exs` reads the `DATABASE_*`, `POOL_SIZE` and `ECTO_IPV6`
+variables once, at boot.
+
+### Accounts
+
+Accounts (`Backend.Accounts`, generated by `mix phx.gen.auth`) have the role
+`admin` or `student` (ADR-014 #346).
+
+**Learners** manage their own account (#336), with pt-BR pages:
+
+- Sign-up at http://localhost:4000/users/register asks for the email and the
+  acceptance of the terms of use (`/termos`) and of the privacy policy
+  (`/privacidade`). The user stores the accepted version of each document and
+  when it was accepted (`terms_version`, `terms_accepted_at`, `privacy_version`,
+  `privacy_accepted_at`). The account is always a `student`, whatever the form
+  sends, and is confirmed through the emailed link; a password can then be set
+  in the account settings.
+- Login at `/users/log-in` by emailed link or by password.
+- Password recovery at `/users/reset-password` emails a link valid for 24 hours;
+  setting the new password confirms the account and ends every session.
+- Account deletion in the account settings (`/users/settings`): typing the
+  account email deletes the user and all their data, then logs out. Admin
+  accounts cannot be deleted there.
+
+The legal texts are placeholders in `backend/lib/backend/accounts/legal_documents.ex`:
+replace them and bump their `version` when a text changes.
+
+Deletion hook for later contexts (results #338, billing #339): every table that
+holds a user's data references `users` with `on_delete: :delete_all`, so
+`Backend.Accounts.delete_user/1` erases it in the same transaction without
+`Backend.Accounts` calling another context.
+`backend/test/backend/accounts/account_deletion_test.exs` fails for any foreign
+key to `users` that does not cascade, unless the test lists it as an admin-only
+reference (for example the editor of a case revision, #332): admins are never
+deleted there, and their edits must survive them. Data kept outside Postgres needs its own
+cleanup, added with the context that introduces it.
+
+**Admins** are never created by public sign-up: an operator provisions one with
+the seeds (idempotent; the password is never printed):
+
+```sh
+( cd backend && ADMIN_EMAIL=medica@example.com ADMIN_PASSWORD='at least 12 chars' \
+    mix run priv/repo/seeds.exs )
+```
+
+The admin logs in at http://localhost:4000/users/log-in with the password and
+lands on `/admin`. A visitor who is not logged in is sent to the login page and
+a student to the account settings.
+
+#### Account emails
+
+Login links, account confirmation, password reset and email change are sent by
+`Backend.Accounts.Mailer` (Swoosh). In `dev`, without `MAILER_PROVIDER`, they
+stay in the local in-memory adapter (at http://localhost:4000/dev/mailbox) and
+are never delivered. `prod` refuses to boot without `MAILER_PROVIDER`, so a
+forgotten setting fails clearly instead of silently dropping every email; naming
+`local` on purpose boots with a warning. Tests always use the Swoosh test
+adapter.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MAILER_PROVIDER` | `resend`, `postmark`, `sendgrid`, `brevo` or `mailgun` sends through that provider's HTTP API; `local` keeps the in-memory adapter. Unset means `local` in `dev` and refuses to boot in `prod`; `local` in `prod` boots with a warning. Case and surrounding whitespace are ignored; any other value refuses to boot (`dev` and `prod`; ignored in `test`). | unset (`local` in `dev`; required in `prod`) |
+| `MAILER_API_KEY` | The provider's API key. Required with a provider; never commit it. | unset |
+| `MAILER_DOMAIN` | Sending domain, required with `mailgun` only. | unset |
+| `MAILER_FROM_EMAIL` | Sender address, on a domain verified with the provider. Required with a provider. | unset |
+| `MAILER_FROM_NAME` | Sender name. | `proyectoMed` |
+
+`backend/config/runtime.exs` reads them once, at boot; a provider without its
+key, domain or sender refuses to boot, naming the missing variable.
+
+#### Rate limits
+
+The public authentication and device-login endpoints are throttled (#380) by
+`BackendWeb.RateLimit`, which counts requests in memory (an ETS table; one
+Phoenix node at launch, ADR-014 #346, so a restart forgets the counters). A
+window opens on a key's first request; beyond the limit every request of that
+key is refused until the window ends.
+
+| Endpoint | Action | Key: default limit |
+|---|---|---|
+| `POST /device/start` | `device_start` | IP: 10 per minute |
+| User-code lookups on `/device` (form and verification link) | `device_lookup` | IP: 30 per minute; learner: 10 per minute |
+| `POST /users/log-in` (password and emailed link) | `login` | IP: 20 per 5 minutes; email: 10 per 5 minutes |
+| Login-link email (`/users/log-in`) | `magic_link_email` | IP: 20 per hour; email: 5 per hour |
+| Password-reset email (`/users/reset-password`) | `reset_password_email` | IP: 20 per hour; email: 5 per hour |
+| Sign-up (`/users/register`) | `sign_up` | IP: 10 per hour |
+
+The learner session routes that call paid providers are throttled per
+session and per learner (#395) by `BackendWeb.Plugs.SessionRateLimit`, on the
+same limiter. The deprecated `/api/stations/active/sessions/:id/...` and
+`/api/v2/...` aliases share the counters of their `/sessions/:id/...` route.
+
+| Endpoint | Action | Key: default limit |
+|---|---|---|
+| `POST /sessions/:id/messages` (Claude, Jev) | `session_message` | session: 40 per minute; learner: 80 per minute |
+| `POST /sessions/:id/transcribe` (OpenAI) | `session_transcribe` | session: 40 per minute; learner: 80 per minute |
+| `POST /sessions/:id/synthesize` (OpenAI) | `session_synthesize` | session: 30 per minute; learner: 60 per minute |
+| `POST /sessions/:id/voice` (LiveKit credential) | `session_voice` | session: 10 per minute; learner: 20 per minute |
+| `POST /sessions/:id/impressos/request` (Jev) | `session_impresso` | session: 15 per minute; learner: 30 per minute |
+| `POST` and `DELETE /sessions/:id/exam-mode` | `session_exam_mode` | session: 20 per minute; learner: 40 per minute |
+| `GET /sessions/:id/result` (grading) | `session_result` | session: 20 per minute; learner: 40 per minute |
+
+A human-paced 10-minute station (a turn every few seconds, a handful of
+impresso requests, finish, result) stays well below them (tested). The
+voice-worker routes (`/api/internal/voice/...`) are not throttled: a refused
+transcript would drop a spoken turn. Realtime voice cost is bounded at the
+learner's entry points instead: the LiveKit credential (`session_voice`, plus
+its existing 5 per minute per session), the exam mode (`session_exam_mode`)
+and the station deadline, which ends the voice session.
+
+`POST /device/start` answers `429` with a `retry-after` header (seconds) and
+`{"error": "rate_limited", "message": "Muitas tentativas. Aguarde N s e tente novamente."}`;
+a session route answers the same with the message "Muitas solicitações nesta
+sessão. Aguarde N s e tente novamente.". A refused request counts toward none
+of its limits.
+The pages show the flash "Muitas tentativas. Aguarde alguns minutos e tente
+novamente." and send no email, create no account and log nobody in. A throttled
+request logs `rate limited action=<action> keys=<kinds>`: never an IP, email,
+code or token. Device-login polling (`POST /device/token`) is not throttled; it
+already answers `slow_down`.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `RATE_LIMIT_ENABLED` | `false` (or `0`) turns every limit off. Any value other than `true`, `1`, `false` or `0` refuses to boot. | `true` |
+| `RATE_LIMIT_<ACTION>_<KIND>` | One limit as `<count>/<seconds>`, for example `RATE_LIMIT_LOGIN_IP=20/300` or `RATE_LIMIT_DEVICE_LOOKUP_USER=10/60`. `<ACTION>` and `<KIND>` (`IP`, `EMAIL`, `USER`, `SESSION`, `LEARNER`) come from the tables above, for example `RATE_LIMIT_SESSION_MESSAGE_SESSION=20/60`. A malformed value refuses to boot, naming the variable. | the tables above |
+| `TRUSTED_CLIENT_IP_HEADER` | The request header that carries the client IP, set by a trusted proxy: `fly-client-ip` on Fly. Unset, the client IP is the socket peer, which behind Fly's proxy is the proxy itself. Set it only when every request goes through that proxy, since a client that reaches the app directly can send the header itself. `X-Forwarded-For` is never read. | unset |
+
+`backend/config/runtime.exs` reads them at boot (not in `test`, where the
+limits are off unless a test turns them on with
+`BackendWeb.RateLimitHelpers.enable_rate_limit/1`).
+
+### Active station
+
+In local development the backend also serves one active station from
+`backend/priv/stations`, chosen at boot, for the deprecated
+`/api/stations/active` routes of the frozen web harness. No code edit is needed
+to switch it.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `ACTIVE_STATION_ID` | Station directory under `backend/priv/stations` to load at boot, for example `acute-appendicitis` (`dev` only; ignored in `test`; refused in `prod`). Unset or blank keeps the default. | `chest-pain-initial-assessment` |
 
 `backend/config/runtime.exs` reads it once, at boot. Only a plain directory name
 (`[a-z0-9-]+`) is accepted. A malformed id, an unknown id, or a package that
 fails validation stops the boot with an error that names the id. Check the
 result with `curl http://localhost:4000/api/stations/active`.
 
-### Turn-based voice providers (Deepgram and ElevenLabs)
+Production never boots from `priv/stations` (issue #334): the file loader is
+off, setting `ACTIVE_STATION_ID` stops the boot, and the active-station routes
+answer `404 no_active_station`. Learners start sessions on published stations
+from the database with `POST /sessions` (see `docs/unreal-station-client.md`).
+
+### Turn-based voice providers (Deepgram and Cartesia)
 
 The station's turn-based voice ("Usar voz" / "Ouvir resposta") transcribes the
 learner through `POST /api/stations/active/sessions/:id/transcribe` and speaks the
@@ -716,21 +888,21 @@ patient reply through `POST /api/stations/active/sessions/:id/synthesize`. By
 default both use OpenAI (`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`,
 `OPENAI_TRANSCRIPTION_MODEL` = `whisper-1`, `OPENAI_TTS_MODEL` = `tts-1`,
 `OPENAI_TTS_VOICE` = `alloy`); that path is unchanged. `VOICE_PROVIDER` switches
-both endpoints to Deepgram (speech-to-text, pt-BR) and ElevenLabs (patient voice).
+both endpoints to Deepgram (speech-to-text, pt-BR) and Cartesia (patient voice, #398).
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `VOICE_PROVIDER` | `deepgram_elevenlabs` selects Deepgram and ElevenLabs for voice (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps OpenAI. | unset |
+| `VOICE_PROVIDER` | `deepgram_cartesia` selects Deepgram and Cartesia for voice (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps OpenAI. | unset |
 | `DEEPGRAM_API_KEY` | Deepgram key, sent as `Authorization: Token <key>` to the pre-recorded `/v1/listen` API with `language=pt-BR`. | unset |
 | `DEEPGRAM_MODEL` | Deepgram model. | `nova-3` |
-| `ELEVENLABS_API_KEY` | ElevenLabs key, sent as `xi-api-key`. | unset |
-| `ELEVENLABS_VOICE_ID` | Voice used for the patient. It must be a voice the key may use. | unset |
-| `ELEVENLABS_MODEL` | Multilingual text-to-speech model. | `eleven_flash_v2_5` (low latency, pt-BR) |
+| `CARTESIA_API_KEY` | Cartesia key, sent as `Authorization: Bearer <key>` to `POST /tts/bytes` (`Cartesia-Version: 2026-08-14`). | unset |
+| `CARTESIA_VOICE_ID` | Voice used for the patient. It must be a voice the key may use. | unset |
+| `CARTESIA_MODEL` | Text-to-speech model. | `sonic-3` (low latency, Portuguese) |
 
 `backend/config/runtime.exs` reads these variables once, at boot. The web is
-unchanged: transcription returns the same JSON, and ElevenLabs is asked for mp3
-(`output_format=mp3_44100_128`), served as `audio/mpeg` like the OpenAI audio.
-The patient always speaks with `ELEVENLABS_VOICE_ID`; an OpenAI voice name sent by
+unchanged: transcription returns the same JSON, and Cartesia is asked for mp3 in
+Portuguese (44.1 kHz, 128 kbps), served as `audio/mpeg` like the OpenAI audio.
+The patient always speaks with `CARTESIA_VOICE_ID`; an OpenAI voice name sent by
 a client is still validated but not used. Without the selected provider's key (or
 without the voice id), voice is unavailable exactly as it is without an OpenAI
 key: the endpoints answer `502` and the learner continues by text. Neither
@@ -749,8 +921,8 @@ endpoint answers `400` (nothing to synthesize). The rule lives in
 Check it with the acute-appendicitis station:
 
 ```sh
-cd backend && ACTIVE_STATION_ID=acute-appendicitis VOICE_PROVIDER=deepgram_elevenlabs \
-  DEEPGRAM_API_KEY=<key> ELEVENLABS_API_KEY=<key> ELEVENLABS_VOICE_ID=<voice-id> \
+cd backend && ACTIVE_STATION_ID=acute-appendicitis VOICE_PROVIDER=deepgram_cartesia \
+  DEEPGRAM_API_KEY=<key> CARTESIA_API_KEY=<key> CARTESIA_VOICE_ID=<voice-id> \
   mix phx.server
 ```
 
@@ -818,14 +990,15 @@ voice is not affected.
 |---|---|---|
 | `LLM_PROVIDER` | `anthropic` serves the three text seams from Claude (`dev` and `prod`; ignored in `test`). Unset, or any other value, keeps OpenAI unchanged. | unset |
 | `ANTHROPIC_API_KEY` | Claude API key. Without it every Claude call is a technical failure: the patient turn takes its existing technical-failure path, the resolver leaves actions uncertain and feedback keeps the authored texts. | unset |
-| `ANTHROPIC_MODEL` | Model for the rubric resolver and learner feedback (effort `medium`, model-default thinking). | `claude-opus-5-5` |
+| `ANTHROPIC_MODEL` | Model for learner feedback (effort `medium`, model-default thinking). | `claude-opus-5-5` |
+| `ANTHROPIC_RESOLVER_MODEL` | Model for the rubric resolver (issue #343, chosen by measured agreement and cost, see `docs/research/resolver-model-comparison.md`). Effort `medium`, model-default thinking; no server-side fallback on Haiku 5.5 (it has none). | `claude-haiku-5-5` |
 | `ANTHROPIC_PATIENT_MODEL` | Model for the simulated patient (issues #256 and #308, chosen for latency). Effort `low`; on Haiku 5.5 thinking is sent as `disabled` and requests carry no server-side fallbacks; on Sonnet 5.5 thinking is turned off with `between_tools`; any other model gets no thinking field. | `claude-haiku-5-5` |
 | `ANTHROPIC_ADJUDICATOR_MODEL` | Model of the undecided-verdict adjudicator (issue #290): one call when Jev leaves a patient reply `low_confidence`. Effort `low`; thinking off on Haiku 5.5; no server-side fallback (Haiku 5.5 has none). | `claude-haiku-5-5` |
 | `PATIENT_ADJUDICATOR` | `off` keeps a `low_confidence` verdict on its refusal path. Otherwise the adjudicator runs whenever `LLM_PROVIDER=anthropic`. | unset (on with Claude) |
 | `PATIENT_ADJUDICATOR_DEADLINE_MS` | The adjudicator's own deadline, always capped by the 3 s verification budget of the turn. Anything but a positive integer keeps the default. | `2000` |
 | `ANTHROPIC_BASE_URL` | API base URL. | `https://api.anthropic.com` |
 | `RUBRIC_RESOLVER` | `on` (or `openai`, kept for compatibility) turns the rubric resolver on; `LLM_PROVIDER` picks who serves it. Unset keeps it off. | unset |
-| `RUBRIC_RESOLVER_MODEL` | OpenAI model of the resolver; ignored on Claude, where `ANTHROPIC_MODEL` applies. | `OPENAI_MODEL` |
+| `RUBRIC_RESOLVER_MODEL` | OpenAI model of the resolver; ignored on Claude, where `ANTHROPIC_RESOLVER_MODEL` applies. | `OPENAI_MODEL` |
 
 With Claude selected, a patient reply Jev leaves undecided (`low_confidence`) is
 adjudicated once by `ANTHROPIC_ADJUDICATOR_MODEL` instead of being refused: it
@@ -861,6 +1034,40 @@ input_tokens=... cache_read_input_tokens=... cache_creation_input_tokens=...
 latency_ms=...`, never the prompt, the output or the key. From the second
 patient turn of a station, `cache_read_input_tokens` should be above 0.
 
+### Session usage and cost
+
+Each finished session gets one content-free row in `session_usages` (issue
+#342): Claude tokens per model, Jev calls, and the Deepgram seconds, Cartesia
+characters and LiveKit participant minutes the voice worker reports to
+`POST /api/internal/voice/sessions/:id/usage`, with an estimated USD cost.
+`Backend.Stations.session_cost_report/2` gives the median cost per station over
+a period. See `docs/operations/session-usage-cost.md`.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `USAGE_PRICES_JSON` | JSON object overriding entries of the price table in `config/runtime.exs` (`claude` per model, `jev_call`, `deepgram_minute`, `cartesia_1k_characters`, `livekit_participant_minute`). Invalid JSON stops the boot; ignored in `test`. | unset (public list prices of 2026-10-25) |
+
+### Subscription (RevenueCat)
+
+Starting a session needs an active subscription (issue #339): without one,
+`POST /sessions` answers `402` with `error: "subscription_required"`. Learners
+buy a plan on `/planos` (a RevenueCat Web Purchase Link carrying a random
+`app_user_id`, never the email) and see it on `/conta`. RevenueCat reports
+purchases, renewals, cancellations and expirations to
+`POST /webhooks/revenuecat`, which verifies the `Authorization` header and the
+`X-RevenueCat-Webhook-Signature` HMAC over the raw body before applying the
+event. Configure `REVENUECAT_WEBHOOK_AUTHORIZATION`,
+`REVENUECAT_WEBHOOK_SECRET`, `REVENUECAT_CARD_PURCHASE_LINK` and
+`REVENUECAT_PIX_PURCHASE_LINK`; without both webhook secrets the webhook answers
+`503`. See `docs/operations/revenuecat.md`.
+
+Each plan has a daily simulation quota (issue #340), stored per RevenueCat
+`product_id` in the `billing_plan_quotas` table so it changes without a deploy.
+Only graded sessions and sessions in flight count; a technical failure never
+consumes quota. Past the quota, `POST /sessions` answers `429` with
+`error: "daily_quota_exhausted"` and `resets_at` (midnight in
+`America/Sao_Paulo`). `/conta` shows today's remaining simulations.
+
 The runner is fail-fast. A failed phase exits with that phase's exact non-zero
 status and prevents all later phases from running, so an E2E failure can occur
 only after the web unit and backend phases have passed.
@@ -870,8 +1077,9 @@ only after the web unit and backend phases have passed.
 ## Pull-request CI
 
 Every pull request runs the `Pull Request Validation` GitHub Actions workflow.
-It installs the web dependencies with `npm ci`, fetches the Phoenix
-dependencies with `mix deps.get`, and then runs the single root command:
+It starts a PostgreSQL 17 service for the backend test database, installs the
+web dependencies with `npm ci`, fetches the Phoenix dependencies with
+`mix deps.get`, and then runs the single root command:
 
 ```sh
 bash scripts/test.sh
@@ -928,10 +1136,13 @@ above for how to exercise it locally.
 
 ### Other known limitations
 
-- **No persistence layer.** `--no-ecto` was chosen so the database adapter
-  is a deliberate downstream decision (see `#13` evaluation). The router
-  currently exposes health, active station, transcription, and synthesis endpoints.
-- **No view layer.** The backend serves only JSON responses.
+- **Little stored data yet.** Postgres and Ecto store accounts (see
+  ["Accounts"](#accounts)); billing and the rest of content arrive
+  with the #326 slices.
+- **Few LiveView pages.** Besides the JSON API, the backend serves the learner
+  account pages (sign-up, login, password recovery, settings with account
+  deletion), the placeholder legal texts and the admin pages; billing screens
+  arrive with the #326 slices.
 
 - **No strict TDD.** `openspec/config.yaml` keeps `strict_tdd: false`. The
   harness is available, but test-first discipline is left to the change that

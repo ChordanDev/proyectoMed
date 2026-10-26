@@ -212,6 +212,33 @@ class SpeechPlayerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sources[0].frames, ["a1", "a2"])
         self.assertEqual(self.tts.streams[0].closed, 1)
 
+    # Issue #341: each actor speaks with its own voice on the one track.
+    async def test_a_reply_with_a_mapped_voice_is_spoken_by_that_voice(self):
+        companion_tts = FakeTTS()
+        self.player.voices = {"feminina-adulta": companion_tts}
+
+        reply = accepted(self.tracker, 1)
+        reply.voice = "feminina-adulta"
+        task = await self.start(reply)
+        companion_tts.streams[0].queue.put_nowait(chunk("c1"))
+        companion_tts.streams[0].queue.put_nowait(None)
+        self.assertIsNone(await task)
+
+        self.assertEqual(companion_tts.texts, [reply.reply_text])
+        self.assertEqual(self.tts.texts, [])
+        self.assertEqual(self.sources[0].frames, ["c1"])
+        self.assertEqual(len(self.room.local_participant.published), 1)
+
+        other = accepted(self.tracker, 2)
+        other.voice = "masculina-idosa"  # not mapped: the default voice
+        task = await self.start(other)
+        self.tts.streams[0].queue.put_nowait(None)
+        await task
+        self.assertEqual(self.tts.texts, [other.reply_text])
+
+        await self.player.aclose()
+        self.assertEqual((self.tts.closed, companion_tts.closed), (1, 1))
+
     async def test_playback_is_correlated_to_session_turn_and_generation(self):
         reply = accepted(self.tracker, 3)
         self.assertIsNone(self.player.speaking)

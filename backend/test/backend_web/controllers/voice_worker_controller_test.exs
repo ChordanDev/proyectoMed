@@ -949,6 +949,14 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       def next_reply(_package, _context), do: {:ok, %{text: "[EXAMINADOR]"}}
     end
 
+    # An exam request to the examiner (#351).
+    defmodule ExamMarkerAdapter do
+      @behaviour Backend.Stations.StationAI
+
+      @impl true
+      def next_reply(_package, _context), do: {:ok, %{text: "[EXAMINADOR:EXAME]"}}
+    end
+
     defmodule ExaminerJevAdapter do
       @behaviour Backend.Stations.JevDecision.Adapter
 
@@ -979,12 +987,200 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
                  "turn_id" => 1,
                  "status" => "kept",
                  "generation_id" => 1,
-                 "addressee" => "examiner"
+                 "addressee" => "examiner",
+                 "exam_request" => false
                }
 
         {:ok, stored} = Stations.get_session(id)
         assert [%{role: :learner, text: "Blumberg positivo."}] = stored.messages
       end
+
+      test "an exam request is kept with exam_request and releases nothing (streamed: #{stream?}, #351)",
+           %{conn: conn} do
+        Application.put_env(:backend, :jev_decision_adapter, ExaminerJevAdapter)
+        id = Stations.create_session(%{audio_consent: true}).session_id
+
+        conn =
+          if unquote(stream?),
+            do: put_req_header(conn, "accept", "application/x-ndjson, application/json"),
+            else: conn
+
+        for {adapter, turn_id, text} <- [
+              {ExamMarkerAdapter, 1, "Quero ver a tomografia."},
+              {ExaminerMarkerAdapter, 2, "Solicito hemograma e PCR"}
+            ] do
+          Application.put_env(:backend, :station_ai_adapter, adapter)
+
+          assert %{"status" => "kept", "addressee" => "examiner", "exam_request" => true} =
+                   conn
+                   |> recycle()
+                   |> post(transcripts_path(id), %{turn_id: turn_id, text: text})
+                   |> json_response(201)
+        end
+
+        {:ok, stored} = Stations.get_session(id)
+        assert stored.released_impressos == []
+        assert stored.impresso_requests == []
+      end
+    end
+  end
+
+  describe "spoken exam requests in exam mode (#364)" do
+    defmodule NoGenerationAdapter do
+      @behaviour Backend.Stations.StationAI
+
+      @impl true
+      def next_reply(_package, _context), do: raise("an exam-mode turn never reaches the patient")
+    end
+
+    for stream? <- [false, true] do
+      test "answers 201 impresso_requested with the request outcome (streamed: #{stream?})",
+           %{conn: conn} do
+        Application.put_env(:backend, :station_ai_adapter, NoGenerationAdapter)
+        id = Stations.create_session(%{audio_consent: true}).session_id
+        {:ok, _} = Stations.arm_exam_mode(id)
+
+        conn =
+          if unquote(stream?),
+            do: put_req_header(conn, "accept", "application/x-ndjson, application/json"),
+            else: conn
+
+        resp =
+          conn
+          |> post(transcripts_path(id), %{turn_id: 1, text: "Solicito hemograma e PCR"})
+          |> json_response(201)
+
+        assert %{
+                 "turn_id" => 1,
+                 "status" => "impresso_requested",
+                 "request_id" => "voice-exam-1",
+                 "decision" => "released",
+                 "newly_released" => [
+                   %{"id" => "laboratorio-sangue-enzimas", "title" => _, "category" => _} =
+                     released
+                 ],
+                 "feedback_message" => "Impresso liberado: " <> _
+               } = resp
+
+        refute Map.has_key?(released, "content")
+        refute Map.has_key?(resp, "generation_id")
+
+        {:ok, stored} = Stations.get_session(id)
+        assert stored.messages == []
+        assert [%{request_id: "voice-exam-1"}] = stored.impresso_requests
+      end
+    end
+
+    test "an unauthored exam answers decision unavailable with Jev disabled", %{conn: conn} do
+      id = Stations.create_session(%{audio_consent: true}).session_id
+      {:ok, _} = Stations.arm_exam_mode(id)
+
+      assert %{
+               "status" => "impresso_requested",
+               "decision" => "unavailable",
+               "newly_released" => [],
+               "feedback_message" => "Não consta no script."
+             } =
+               conn
+               |> post(transcripts_path(id), %{turn_id: 1, text: "Solicito uma tomografia"})
+               |> json_response(201)
+    end
+  end
+
+  describe "POST usage (#342)" do
+    defp usage_path(id), do: ~p"/api/internal/voice/sessions/#{id}/usage"
+
+    @report %{
+      "report_id" => "AJ_job-1",
+      "deepgram_audio_seconds" => 312.5,
+      "cartesia_characters" => 1830,
+      "livekit_participant_minutes" => 21.25
+    }
+
+    setup do
+      previous = Application.get_env(:backend, Backend.Stations.Usage.Store)
+      Application.put_env(:backend, Backend.Stations.Usage.Store, enabled: true, async: false)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:backend, Backend.Stations.Usage.Store, previous),
+          else: Application.delete_env(:backend, Backend.Stations.Usage.Store)
+      end)
+    end
+
+    test "accepts the worker's audio usage and writes it into the finished session's row", %{
+      conn: conn
+    } do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+      {:ok, _} = Stations.complete_session(id, :user)
+
+      assert %{"status" => "recorded"} = json_response(post(conn, usage_path(id), @report), 202)
+
+      row = Backend.Repo.get!(Backend.Stations.Usage.SessionUsage, id)
+      assert row.deepgram_audio_seconds == 312.5
+      assert row.cartesia_characters == 1830
+      assert row.livekit_participant_minutes == 21.25
+      assert row.cost_by_provider["deepgram"] > 0
+      assert row.cost_by_provider["cartesia"] > 0
+      assert row.cost_by_provider["livekit"] > 0
+    end
+
+    test "a retried report replaces itself; reports of different jobs add up", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      assert json_response(post(conn, usage_path(id), @report), 202)
+      assert json_response(post(conn, usage_path(id), @report), 202)
+
+      second_job = %{@report | "report_id" => "AJ_job-2", "cartesia_characters" => 170}
+      assert json_response(post(conn, usage_path(id), second_job), 202)
+
+      voice = Backend.Stations.Usage.snapshot(id).voice
+      assert voice.deepgram_audio_seconds == 625.0
+      assert voice.cartesia_characters == 2000
+      assert voice.livekit_participant_minutes == 42.5
+    end
+
+    test "an active session keeps the report until it is finished", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      assert json_response(post(conn, usage_path(id), @report), 202)
+      assert Backend.Repo.get(Backend.Stations.Usage.SessionUsage, id) == nil
+
+      {:ok, _} = Stations.complete_session(id, :user)
+
+      assert Backend.Repo.get!(Backend.Stations.Usage.SessionUsage, id).cartesia_characters ==
+               1830
+    end
+
+    test "rejects a malformed report without recording it", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true})
+      id = session.session_id
+
+      for bad <- [
+            %{},
+            Map.delete(@report, "report_id"),
+            %{@report | "report_id" => ""},
+            %{@report | "report_id" => String.duplicate("a", 129)},
+            %{@report | "deepgram_audio_seconds" => -1},
+            %{@report | "cartesia_characters" => 1.5},
+            %{@report | "livekit_participant_minutes" => "many"},
+            Map.delete(@report, "cartesia_characters")
+          ] do
+        assert %{"error" => "invalid_usage"} = json_response(post(conn, usage_path(id), bad), 400)
+      end
+
+      assert Backend.Stations.Usage.snapshot(id).voice.cartesia_characters == 0
+    end
+
+    test "answers 404 for an unknown session and 401 without the worker secret", %{conn: conn} do
+      assert %{"error" => "session_not_found"} =
+               json_response(post(conn, usage_path("missing"), @report), 404)
+
+      assert %{"error" => "unauthorized"} =
+               json_response(post(build_conn(), usage_path("missing"), @report), 401)
     end
   end
 end

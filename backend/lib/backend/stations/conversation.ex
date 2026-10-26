@@ -19,10 +19,21 @@ defmodule Backend.Stations.Conversation do
 
   use GenServer
 
+  alias Backend.Stations.Usage
+
   @default_timeout_ms :timer.minutes(30)
   @default_purge_interval_ms :timer.minutes(1)
   @default_station_duration_ms :timer.minutes(10)
   @default_turn_grace_ms :timer.seconds(30)
+  # `user_id` is the learner that started the session (#337).
+  @pinned_station_keys [
+    :user_id,
+    :package,
+    :station_version_id,
+    :station_slug,
+    :station_area,
+    :station_theme
+  ]
 
   @type session :: %{
           optional(:completed_at) => DateTime.t(),
@@ -44,9 +55,15 @@ defmodule Backend.Stations.Conversation do
               reason: :station_ai_unavailable
             }
             | nil,
+          optional(:package) => map(),
+          optional(:user_id) => pos_integer(),
+          optional(:station_version_id) => pos_integer(),
+          optional(:station_slug) => String.t(),
+          optional(:station_area) => String.t(),
+          optional(:station_theme) => String.t(),
           session_id: String.t(),
-          station_id: String.t(),
-          station_version: String.t(),
+          station_id: String.t() | pos_integer(),
+          station_version: String.t() | pos_integer(),
           audio_consent: boolean(),
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
@@ -61,20 +78,23 @@ defmodule Backend.Stations.Conversation do
   A transcript message. A patient message may carry `verified_fact_ids`: the
   authored ids of the facts the Jev verdict that verified it found stated
   (issue #286). The session's disclosed facts are derived from them, see
-  `disclosed_fact_ids/1`.
+  `disclosed_fact_ids/1`. In a station with a companion (issue #341) a patient
+  message carries the `speaker` of the actor who said it.
   """
   @type message :: %{
           required(:role) => term(),
           required(:modality) => term(),
           required(:text) => String.t(),
           required(:at) => DateTime.t(),
-          optional(:verified_fact_ids) => [String.t()]
+          optional(:verified_fact_ids) => [String.t()],
+          optional(:speaker) => :patient | :companion
         }
 
   @type impresso_request_event :: %{
+          optional(:classification) => :plausible | :not_plausible | :undecided | :unclassified,
           request_id: String.t(),
-          station_id: String.t(),
-          station_version: String.t(),
+          station_id: String.t() | pos_integer(),
+          station_version: String.t() | pos_integer(),
           order: pos_integer(),
           text: String.t(),
           matched_ids: [String.t()],
@@ -118,6 +138,10 @@ defmodule Backend.Stations.Conversation do
   @doc """
   Starts a session. `:audio_consent` defaults to `false`: audio transcription is
   refused until the learner explicitly grants it.
+
+  A session started on a published Station version (issue #334) also carries
+  its pinned `:package` and the version's `:station_version_id`,
+  `:station_slug`, `:station_area` and `:station_theme`.
   """
   @spec start(map() | keyword()) :: session()
   def start(attrs \\ %{}) do
@@ -190,16 +214,22 @@ defmodule Backend.Stations.Conversation do
   event, and updates `released_impressos` — all within a single GenServer
   call, so concurrent requests for the same session never race.
 
+  `opts` accepts `:classification`, the Jev classification of an unavailable
+  request (#357), stored on the new event; without it the event has no
+  `:classification` key. The classification is never graded.
+
   A repeated `request_id` is idempotent: it returns the originally stored
-  event and does not append a new one or change `released_impressos`.
+  event untouched (its classification included) and does not append a new one
+  or change `released_impressos`.
   """
-  @spec record_impresso_request(String.t(), String.t(), [String.t()], String.t()) ::
+  @spec record_impresso_request(String.t(), String.t(), [String.t()], String.t(), keyword()) ::
           {:ok, %{event: impresso_request_event(), session: session()}}
           | {:error, :not_found | :expired | :completed}
-  def record_impresso_request(session_id, request_id, matched_ids, text) do
+  def record_impresso_request(session_id, request_id, matched_ids, text, opts \\ []) do
     GenServer.call(
       __MODULE__,
-      {:record_impresso_request, session_id, request_id, matched_ids, text}
+      {:record_impresso_request, session_id, request_id, matched_ids, text,
+       Keyword.take(opts, [:classification])}
     )
   end
 
@@ -290,12 +320,17 @@ defmodule Backend.Stations.Conversation do
   `verified_fact_ids` are stored on the appended patient message (issue #286);
   they are recorded only when the reply is, never for a stale, cancelled or
   kept generation.
+
+  `speaker` (issue #341) is `:companion` for a reply of a station's companion,
+  stored on the message as `speaker`; `nil` (the default) stores none, as for
+  every single-actor station.
   """
   @spec resolve_patient_reply(
           String.t(),
           pos_integer(),
           String.t() | :keep_learner_turn,
-          [String.t()]
+          [String.t()],
+          :patient | :companion | nil
         ) ::
           {:ok, session()}
           | {:error,
@@ -305,10 +340,16 @@ defmodule Backend.Stations.Conversation do
              | :stale_generation
              | :invalid_reply
              | :station_time_elapsed}
-  def resolve_patient_reply(session_id, generation_id, reply_text, verified_fact_ids \\ []) do
+  def resolve_patient_reply(
+        session_id,
+        generation_id,
+        reply_text,
+        verified_fact_ids \\ [],
+        speaker \\ nil
+      ) do
     GenServer.call(
       __MODULE__,
-      {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids}
+      {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids, speaker}
     )
   end
 
@@ -479,6 +520,8 @@ defmodule Backend.Stations.Conversation do
   @impl true
   def init(_options) do
     :ets.new(__MODULE__, [:named_table, :set, :public, read_concurrency: true])
+    # Per-session provider usage counters (issue #342) live as long as sessions.
+    :ok = Usage.create_table()
     schedule_purge()
     {:ok, %{turns: %{}, voice_graces: %{}, feedback_flights: %{}}}
   end
@@ -522,6 +565,8 @@ defmodule Backend.Stations.Conversation do
       next_generation_id: 1,
       failed_voice_turn: nil
     }
+
+    session = Map.merge(session, Map.take(attrs, @pinned_station_keys))
 
     true = :ets.insert(__MODULE__, {session.session_id, session})
     Process.send_after(self(), {:deadline, session.session_id}, station_duration_ms())
@@ -644,7 +689,8 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_call(
-        {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids},
+        {:resolve_patient_reply, session_id, generation_id, reply_text, verified_fact_ids,
+         speaker},
         _from,
         state
       ) do
@@ -667,7 +713,7 @@ defmodule Backend.Stations.Conversation do
               session
               |> Map.put(
                 :messages,
-                session.messages ++ patient_messages(reply_text, verified_fact_ids)
+                session.messages ++ patient_messages(reply_text, verified_fact_ids, speaker)
               )
               |> Map.put(:active_generation_id, nil)
               |> Map.put(:active_voice_turn_id, nil)
@@ -816,13 +862,13 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_call(
-        {:record_impresso_request, session_id, request_id, matched_ids, text},
+        {:record_impresso_request, session_id, request_id, matched_ids, text, opts},
         _from,
         state
       ) do
     case active_session(session_id) do
       {:ok, %{status: :active} = session} ->
-        {:reply, do_record_impresso_request(session, request_id, matched_ids, text), state}
+        {:reply, do_record_impresso_request(session, request_id, matched_ids, text, opts), state}
 
       {:ok, %{status: :completed}} ->
         {:reply, {:error, :completed}, state}
@@ -918,6 +964,7 @@ defmodule Backend.Stations.Conversation do
 
   def handle_call({:discard, session_id}, _from, state) do
     :ets.delete(__MODULE__, session_id)
+    Usage.forget(session_id)
 
     state =
       case Map.pop(state.turns, session_id) do
@@ -941,6 +988,7 @@ defmodule Backend.Stations.Conversation do
 
     for {session_id, session} <- :ets.tab2list(__MODULE__), expired?(session, now) do
       :ets.delete(__MODULE__, session_id)
+      Usage.forget(session_id)
     end
 
     schedule_purge()
@@ -1118,6 +1166,7 @@ defmodule Backend.Stations.Conversation do
       [{^session_id, session}] ->
         if expired?(session, DateTime.utc_now()) do
           :ets.delete(__MODULE__, session_id)
+          Usage.forget(session_id)
           {:error, :expired}
         else
           {:ok, session}
@@ -1133,18 +1182,18 @@ defmodule Backend.Stations.Conversation do
     Process.send_after(self(), :purge_expired, purge_interval_ms())
   end
 
-  defp patient_messages(:keep_learner_turn, _verified_fact_ids), do: []
+  defp patient_messages(:keep_learner_turn, _verified_fact_ids, _speaker), do: []
 
-  defp patient_messages(reply_text, verified_fact_ids) do
-    [
-      %{
-        role: :patient,
-        modality: :voice,
-        text: reply_text,
-        at: DateTime.utc_now(),
-        verified_fact_ids: Enum.filter(List.wrap(verified_fact_ids), &is_binary/1)
-      }
-    ]
+  defp patient_messages(reply_text, verified_fact_ids, speaker) do
+    message = %{
+      role: :patient,
+      modality: :voice,
+      text: reply_text,
+      at: DateTime.utc_now(),
+      verified_fact_ids: Enum.filter(List.wrap(verified_fact_ids), &is_binary/1)
+    }
+
+    [if(speaker, do: Map.put(message, :speaker, speaker), else: message)]
   end
 
   defp valid_reply_text?(:keep_learner_turn), do: true
@@ -1444,7 +1493,7 @@ defmodule Backend.Stations.Conversation do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
 
-  defp do_record_impresso_request(session, request_id, matched_ids, text) do
+  defp do_record_impresso_request(session, request_id, matched_ids, text, opts) do
     case Enum.find(session.impresso_requests, &(&1.request_id == request_id)) do
       %{} = existing_event ->
         {:ok, %{event: existing_event, session: session}}
@@ -1464,6 +1513,15 @@ defmodule Backend.Stations.Conversation do
           released_ids: newly_released,
           at: DateTime.utc_now()
         }
+
+        event =
+          case Keyword.fetch(opts, :classification) do
+            {:ok, classification} when not is_nil(classification) ->
+              Map.put(event, :classification, classification)
+
+            _none ->
+              event
+          end
 
         updated_session = %{
           session

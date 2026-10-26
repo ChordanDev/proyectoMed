@@ -86,11 +86,12 @@ defmodule Backend.ActiveStationConfigTest do
       :ok
     end
 
-    test "sets the active station id outside test" do
+    # Production refuses ACTIVE_STATION_ID (issue #334): see
+    # Backend.Config.StationSourceConfigTest.
+    test "sets the active station id in dev" do
       System.put_env("ACTIVE_STATION_ID", "acute-appendicitis")
 
       assert runtime_station_id(:dev) == "acute-appendicitis"
-      assert runtime_station_id(:prod) == "acute-appendicitis"
     end
 
     test "trims surrounding whitespace" do
@@ -115,9 +116,14 @@ defmodule Backend.ActiveStationConfigTest do
   end
 
   defp runtime_station_id(env) do
-    # `:prod` requires a secret; give it one only for the duration of the read.
+    # `:prod` requires a secret, a database URL and a mail provider; give them
+    # only for the duration of the read.
     secret = System.get_env("SECRET_KEY_BASE")
+    database_url = System.get_env("DATABASE_URL")
+    mailer_provider = System.get_env("MAILER_PROVIDER")
     System.put_env("SECRET_KEY_BASE", String.duplicate("a", 64))
+    System.put_env("DATABASE_URL", "ecto://app:example@db.example.test/proyectomed")
+    System.put_env("MAILER_PROVIDER", "local")
 
     try do
       @runtime_config
@@ -128,6 +134,14 @@ defmodule Backend.ActiveStationConfigTest do
       if secret,
         do: System.put_env("SECRET_KEY_BASE", secret),
         else: System.delete_env("SECRET_KEY_BASE")
+
+      if database_url,
+        do: System.put_env("DATABASE_URL", database_url),
+        else: System.delete_env("DATABASE_URL")
+
+      if mailer_provider,
+        do: System.put_env("MAILER_PROVIDER", mailer_provider),
+        else: System.delete_env("MAILER_PROVIDER")
     end
   end
 

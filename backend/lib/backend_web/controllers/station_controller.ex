@@ -3,14 +3,41 @@ defmodule BackendWeb.StationController do
 
   alias Backend.Stations
 
+  @doc """
+  Lists published stations for the catalog API (`GET /stations` and `GET /api/stations`).
+  """
+  def index(conn, _params) do
+    json(conn, Stations.list_catalog_stations())
+  end
+
   # `voice_mode` (#270) tells the web which single voice experience to offer:
   # "realtime", "turn" or "off" (config/runtime.exs resolves VOICE_MODE).
   def active(conn, _params) do
-    voice_mode = Application.get_env(:backend, :voice_mode, "turn")
-    json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
+    if Stations.active_station_available?() do
+      voice_mode = Application.get_env(:backend, :voice_mode, "turn")
+      json(conn, Map.put(Stations.get_active_station(), "voice_mode", voice_mode))
+    else
+      no_active_station(conn)
+    end
   end
 
+  # Deprecated (issue #334): production has no boot-time active station.
   def create_session(conn, params) do
+    if Stations.active_station_available?(),
+      do: create_active_session(conn, params),
+      else: no_active_station(conn)
+  end
+
+  defp no_active_station(conn) do
+    conn
+    |> put_status(:not_found)
+    |> json(%{
+      error: "no_active_station",
+      message: "Nenhuma estação ativa: inicie a sessão por POST /sessions."
+    })
+  end
+
+  defp create_active_session(conn, params) do
     audio_consent =
       case params do
         %{"audio_consent" => val} -> val
@@ -166,8 +193,9 @@ defmodule BackendWeb.StationController do
   end
 
   # An examiner-addressed turn (#274) is acknowledged with the kept learner
-  # turn and no reply, plus any impressos it released (#302); a patient reply
-  # carries `outcome: "patient_reply"`.
+  # turn and no reply. It releases nothing (`newly_released` stays `[]`, #351)
+  # and carries the display-only `exam_request` flag; a patient reply carries
+  # `outcome: "patient_reply"` and no flag.
   defp message_reply_json(%{outcome: :examiner_acknowledged, learner_turn: learner_turn} = reply) do
     %{
       outcome: "examiner_acknowledged",
@@ -175,6 +203,7 @@ defmodule BackendWeb.StationController do
       reply_audio_url: nil,
       learner_turn: message_to_json(learner_turn),
       newly_released: Map.get(reply, :newly_released, []),
+      exam_request: Map.get(reply, :exam_request, false),
       server_now: DateTime.to_iso8601(DateTime.utc_now())
     }
   end
@@ -184,6 +213,7 @@ defmodule BackendWeb.StationController do
       outcome: "patient_reply",
       reply_text: reply.reply_text,
       reply_audio_url: reply.reply_audio_url,
+      speaker: speaker_json(reply),
       server_now: DateTime.to_iso8601(DateTime.utc_now())
     }
   end
@@ -249,7 +279,7 @@ defmodule BackendWeb.StationController do
   def show_session(conn, %{"id" => session_id}) do
     case Stations.get_session(session_id) do
       {:ok, session} ->
-        json(conn, %{
+        %{
           session_id: session.session_id,
           station_id: session.station_id,
           station_version: session.station_version,
@@ -262,7 +292,9 @@ defmodule BackendWeb.StationController do
             session |> Map.get(:completion_reason) |> completion_reason_to_string(),
           messages: Enum.map(session.messages, &message_to_json/1),
           server_now: DateTime.to_iso8601(DateTime.utc_now())
-        })
+        }
+        |> put_station(Stations.session_station(session))
+        |> then(&json(conn, &1))
 
       {:error, :not_found} ->
         conn
@@ -424,6 +456,10 @@ defmodule BackendWeb.StationController do
     end
   end
 
+  # A session started on a published station (issue #334) also shows it.
+  defp put_station(body, nil), do: body
+  defp put_station(body, station), do: Map.put(body, :station, station)
+
   defp parse_finish_reason("user"), do: {:ok, :user}
   defp parse_finish_reason("timer"), do: {:ok, :timer}
   defp parse_finish_reason(_), do: {:error, :invalid_reason}
@@ -444,11 +480,17 @@ defmodule BackendWeb.StationController do
   defp completion_reason_to_string(reason), do: to_string(reason)
 
   defp message_to_json(msg) do
-    %{
+    json = %{
       role: to_string(msg.role),
       modality: to_string(msg.modality),
       text: msg.text,
       at: DateTime.to_iso8601(msg.at)
     }
+
+    if msg.role == :patient, do: Map.put(json, :speaker, speaker_json(msg)), else: json
   end
+
+  # The actor who replied (#341): `"patient"` or `"companion"`; a reply with no
+  # stored speaker (a single-actor station) is the patient's.
+  defp speaker_json(reply), do: reply |> Map.get(:speaker, :patient) |> to_string()
 end

@@ -1,6 +1,7 @@
 defmodule BackendWeb.StationControllerTest do
   use BackendWeb.ConnCase, async: false
 
+  alias Backend.AppEnvHelpers
   alias Backend.Stations
   alias Backend.Stations.Conversation
   alias Backend.Stations.StationLoader
@@ -74,6 +75,7 @@ defmodule BackendWeb.StationControllerTest do
     def next_reply(_package, _context) do
       case Application.fetch_env!(:backend, :controller_test_addressee) do
         :examiner -> {:ok, %{text: "[EXAMINADOR]"}}
+        :exam -> {:ok, %{text: "[EXAMINADOR:EXAME]"}}
         :patient -> {:ok, %{text: "[PACIENTE] Estou com um aperto forte no peito há duas horas."}}
       end
     end
@@ -124,8 +126,8 @@ defmodule BackendWeb.StationControllerTest do
     end
 
     test "serves the configured voice mode (#270)", %{conn: conn} do
-      previous = Application.get_env(:backend, :voice_mode)
-      on_exit(fn -> Application.put_env(:backend, :voice_mode, previous) end)
+      previous = AppEnvHelpers.snapshot(:voice_mode)
+      on_exit(fn -> AppEnvHelpers.restore(:voice_mode, previous) end)
 
       for mode <- ["realtime", "turn", "off"] do
         Application.put_env(:backend, :voice_mode, mode)
@@ -834,12 +836,12 @@ defmodule BackendWeb.StationControllerTest do
 
   describe "POST /api/stations/active/sessions/:id/messages addressee (#274, #309)" do
     setup do
-      prev_adapter = Application.get_env(:backend, :station_ai_adapter)
+      prev_adapter = AppEnvHelpers.snapshot(:station_ai_adapter)
       Application.put_env(:backend, :station_ai_adapter, MarkedAddresseeAdapter)
       Application.put_env(:backend, :jev_decision_adapter, AddresseeJevAdapter)
 
       on_exit(fn ->
-        Application.put_env(:backend, :station_ai_adapter, prev_adapter)
+        AppEnvHelpers.restore(:station_ai_adapter, prev_adapter)
         Application.delete_env(:backend, :controller_test_addressee)
       end)
 
@@ -870,9 +872,10 @@ defmodule BackendWeb.StationControllerTest do
 
       assert {:ok, %{messages: [%{role: :learner}]}} = Conversation.fetch(session.session_id)
       assert body["newly_released"] == []
+      assert body["exam_request"] == false
     end
 
-    test "an examiner-addressed exam request answers with the newly released impressos (#302)",
+    test "an exam request naming an authored impresso releases nothing and is flagged (#351)",
          %{conn: conn, session: session} do
       Application.put_env(:backend, :controller_test_addressee, :examiner)
 
@@ -881,15 +884,27 @@ defmodule BackendWeb.StationControllerTest do
 
       assert %{
                "outcome" => "examiner_acknowledged",
-               "newly_released" => [
-                 %{
-                   "id" => "laboratorio-sangue-enzimas",
-                   "title" => "IMPRESSO" <> _,
-                   "category" => _,
-                   "content" => _
-                 }
-               ]
+               "reply_text" => nil,
+               "newly_released" => [],
+               "exam_request" => true
              } = body
+
+      assert {:ok, %{released_impressos: [], impresso_requests: []}} =
+               Conversation.fetch(session.session_id)
+    end
+
+    test "an exam marker answers exam_request true and never shows the marker (#351)",
+         %{conn: conn, session: session} do
+      Application.put_env(:backend, :controller_test_addressee, :exam)
+
+      body =
+        conn
+        |> post_learner_text(session, "Solicito uma tomografia de crânio")
+        |> json_response(200)
+
+      assert %{"outcome" => "examiner_acknowledged", "exam_request" => true} = body
+      refute Jason.encode!(body) =~ "EXAMINADOR"
+      assert {:ok, %{released_impressos: []}} = Conversation.fetch(session.session_id)
     end
 
     test "a patient-addressed turn answers 200 patient_reply with the reply",
@@ -899,7 +914,9 @@ defmodule BackendWeb.StationControllerTest do
       assert %{
                "outcome" => "patient_reply",
                "reply_text" => "Estou com um aperto forte no peito há duas horas."
-             } = conn |> post_learner_text(session, "Bom dia.") |> json_response(200)
+             } = body = conn |> post_learner_text(session, "Bom dia.") |> json_response(200)
+
+      refute body["exam_request"]
     end
   end
 
@@ -1292,7 +1309,7 @@ defmodule BackendWeb.StationControllerTest do
       assert unchanged.impresso_requests == []
     end
 
-    test "an unavailable exam returns the exact required message", %{
+    test "an unavailable exam with Jev disabled answers Não consta no script.", %{
       conn: conn,
       session: session
     } do
@@ -1305,7 +1322,7 @@ defmodule BackendWeb.StationControllerTest do
                "decision" => "unavailable",
                "newly_released" => [],
                "released_impressos" => [],
-               "feedback_message" => "Exame não disponível nesta estação"
+               "feedback_message" => "Não consta no script."
              } = json_response(conn, 200)
     end
 
@@ -1684,6 +1701,126 @@ defmodule BackendWeb.StationControllerTest do
                "error" => "session_not_found",
                "message" => "Sessão não encontrada."
              }
+    end
+  end
+
+  describe "GET /stations and GET /api/stations catalog (issue #333)" do
+    # `GET /stations` requires a learner's device access token (#337).
+    setup :register_and_log_in_device
+
+    test "returns empty list when no approved cases exist", %{conn: conn} do
+      for path <- ["/stations", "/api/stations"] do
+        conn = get(conn, path)
+        assert json_response(conn, 200) == []
+      end
+    end
+
+    test "returns approved cases with id, area, theme, actors (without examiner secrets)", %{
+      conn: conn
+    } do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      case_markdown = File.read!("priv/stations/acute-appendicitis/case.md")
+      {:ok, package} = Backend.Stations.parse_case(case_markdown)
+
+      # Insert case and approve it
+      kase =
+        Backend.Content.get_case_by_number(1) ||
+          (
+            %{rows: [[num]]} =
+              Backend.Repo.query!(
+                "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING number",
+                ["Cirurgia Geral", "Apendicite aguda", case_markdown]
+              )
+
+            Backend.Content.get_case_by_number(num)
+          )
+
+      {:ok, _approved} = Backend.Content.approve_case(kase, package, admin)
+
+      for path <- ["/stations", "/api/stations"] do
+        conn = get(conn, path)
+        [station] = json_response(conn, 200)
+
+        assert station["id"] == kase.number
+        assert station["version"] == 1
+        assert station["slug"] == "acute-appendicitis"
+
+        assert Map.keys(station) |> Enum.sort() == [
+                 "actors",
+                 "area",
+                 "id",
+                 "slug",
+                 "theme",
+                 "version"
+               ]
+
+        assert station["area"] == package["area"]
+        assert station["theme"] == package["theme"]
+        assert is_list(station["actors"])
+        assert length(station["actors"]) == length(package["actors"])
+
+        for actor <- station["actors"] do
+          assert Map.keys(actor) |> Enum.sort() == ["age", "id", "name", "role", "voice"]
+          refute Map.has_key?(actor, "fact_ids")
+          refute Map.has_key?(actor, "explicit_fact_ids")
+          refute Map.has_key?(actor, "mandatory_question_ids")
+          refute Map.has_key?(actor, "persona")
+          refute Map.has_key?(actor, "tone")
+          refute Map.has_key?(actor, "presenting_context")
+        end
+      end
+    end
+
+    test "two approved cases sharing one [ESTAÇÃO] slug are two entries with distinct ids", %{
+      conn: conn
+    } do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      case_markdown = File.read!("priv/stations/acute-appendicitis/case.md")
+      {:ok, package} = Backend.Stations.parse_case(case_markdown)
+
+      [num1, num2] =
+        for theme <- ["Apendicite aguda", "Apendicite aguda (variante)"] do
+          %{rows: [[num]]} =
+            Backend.Repo.query!(
+              "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING number",
+              ["Cirurgia Geral", theme, case_markdown]
+            )
+
+          {:ok, _} =
+            Backend.Content.approve_case(Backend.Content.get_case_by_number(num), package, admin)
+
+          num
+        end
+
+      for path <- ["/stations", "/api/stations"] do
+        stations = json_response(get(conn, path), 200)
+
+        assert Enum.map(stations, & &1["id"]) == [num1, num2]
+        assert Enum.map(stations, & &1["slug"]) == ["acute-appendicitis", "acute-appendicitis"]
+        assert Enum.map(stations, & &1["version"]) == [1, 1]
+      end
+    end
+
+    test "disapproving hides the case from the catalog", %{conn: conn} do
+      admin = Backend.AccountsFixtures.admin_fixture()
+      case_markdown = File.read!("priv/stations/acute-appendicitis/case.md")
+      {:ok, package} = Backend.Stations.parse_case(case_markdown)
+
+      %{rows: [[num]]} =
+        Backend.Repo.query!(
+          "INSERT INTO cases (area, theme, markdown) VALUES ($1, $2, $3) RETURNING number",
+          ["Cirurgia Geral", "Apendicite aguda", case_markdown]
+        )
+
+      kase = Backend.Content.get_case_by_number(num)
+      {:ok, approved} = Backend.Content.approve_case(kase, package, admin)
+
+      assert length(json_response(get(conn, "/stations"), 200)) == 1
+
+      {:ok, _disapproved} = Backend.Content.disapprove_case(approved)
+
+      assert json_response(get(conn, "/stations"), 200) == []
+      assert json_response(get(conn, "/api/stations"), 200) == []
     end
   end
 

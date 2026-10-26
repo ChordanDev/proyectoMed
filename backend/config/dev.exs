@@ -1,5 +1,16 @@
 import Config
 
+# Local Postgres (ADR-014 #346). Without a host, username or password,
+# Postgrex uses `PGHOST`, `PGUSER` and `PGPASSWORD` when set, otherwise
+# localhost and the operating system user with no password, which matches a
+# Homebrew Postgres. `DATABASE_URL` overrides all of it (runtime.exs), for
+# example to develop against a Neon branch.
+config :backend, Backend.Repo,
+  database: "backend_dev",
+  stacktrace: true,
+  show_sensitive_data_on_connection_error: true,
+  pool_size: 10
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #
@@ -14,7 +25,10 @@ config :backend, BackendWeb.Endpoint,
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "6WHk+TwuD9rsnRjTqqi2BWK2ugpda4qmVKVqOqQffgyHXsq6yjLLQ0BUDJ+NKudQ",
-  watchers: []
+  watchers: [
+    esbuild: {Esbuild, :install_and_run, [:backend, ~w(--sourcemap=inline --watch)]},
+    tailwind: {Tailwind, :install_and_run, [:backend, ~w(--watch)]}
+  ]
 
 # ## SSL Support
 #
@@ -51,3 +65,15 @@ config :phoenix, :stacktrace_depth, 20
 
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
+
+config :phoenix_live_view,
+  # Include debug annotations and locations in rendered markup.
+  # Changing this configuration will require mix clean and a full recompile.
+  debug_heex_annotations: true,
+  debug_attributes: true,
+  # Enable helpful, but potentially expensive runtime checks
+  enable_expensive_runtime_checks: true
+
+# The frozen web harness and the E2E suite call the deprecated
+# `/api/stations/...` routes without a device access token (#337).
+config :backend, :legacy_station_api_unauthenticated, true

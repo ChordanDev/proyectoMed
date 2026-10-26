@@ -5,16 +5,18 @@
 This repository follows mandatory architectural invariants:
 
 - **Frontend feature-first (`web/src`)**:
-  - Vite Single Page Application (SPA).
+  - Vite Single Page Application (SPA), frozen as the internal station harness (ADR-013 #209, ADR-015 #347): no account, billing or admin features.
   - Unidirectional dependency flow: `app -> features -> shared` (e.g. `web/src/features/station/`).
   - Keep `web/src/App.tsx` thin, delegating views and state to features.
   - Colocated tests next to code or in immediate `__tests__` directories; run via `npm --prefix web test`.
   - Share only after real reuse: keep code inside the feature until 2+ distinct features require identical behavior to maximize Locality and avoid premature abstraction.
-- **Backend modular monolith (`backend/`)**:
+- **Backend modular monolith (`backend/`)** (ADR-007 #92 and its amendment):
   - Structured around Phoenix Contexts as deep modules providing high Leverage.
-  - One domain context interface: `Backend.Stations` is the public interface module.
-  - Internal implementation modules reside under `backend/lib/backend/stations/` (Conversation, Station Package loader, Evaluator, Station AI).
-  - Thin `BackendWeb`: only handles HTTP decoding, validation, delegating to the public context interface, and JSON serialization.
+  - Four public context interfaces, one module each: `Backend.Stations` (sessions, conversation, Station AI, grading, Educational Results, usage), `Backend.Accounts` (users, roles, terms, deletion, device-login tokens), `Backend.Billing` (RevenueCat webhook, entitlement, quota) and `Backend.Content` (cases, revisions, case format, published Station versions).
+  - Internal implementation modules reside under `backend/lib/backend/<context>/`; callers outside a context use only its public module.
+  - Dependencies point one way, with no cycles: `Stations` may call `Content`, `Billing` and `Accounts`; `Billing` may call `Accounts`; `Content` and `Accounts` call no other context.
+  - Data lives in Postgres through Ecto (`Backend.Repo`, ADR-014 #346); only contexts use the Repo.
+  - Thin `BackendWeb`: controllers and LiveViews (ADR-015 #347) only decode and validate input, delegate to a public context interface, and render HTML or serialize JSON.
   - Behaviours and adapters only for real variable seams (e.g. external provider integration); no speculative abstractions.
   - No umbrella apps or full hexagonal architecture without a new ADR.
 

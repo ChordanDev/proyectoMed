@@ -29,7 +29,9 @@ class SpeechPlayer:
     """Speaks accepted replies through an injected TTS provider, one generation at a time.
 
     Owns one audio source and one published local audio track per room, and closes the
-    provider it was given. The tracker stays the authority on which generation is
+    providers it was given. `voices` maps a voice key (`voz=`, #341) to its own
+    provider: a reply whose `voice` is mapped is spoken by it on the same track, any
+    other reply by `tts`. Every provider must share `tts`'s sample rate and channels. The tracker stays the authority on which generation is
     current: a reply is spoken only while it is the tracker's active, non-cancelled
     generation, and that fence is checked again before every frame is pushed.
     """
@@ -41,11 +43,16 @@ class SpeechPlayer:
         tts,
         source_factory=None,
         track_factory=None,
+        voices: dict | None = None,
+        meter=None,
     ):
         self.room = room
+        # Counts the characters sent to Cartesia (#342); optional.
+        self.meter = meter
         self.tracker = tracker
         self.session_id = tracker.session_id
         self.tts = tts
+        self.voices = dict(voices or {})
         self._source_factory = source_factory or rtc.AudioSource
         self._track_factory = track_factory or _audio_track
         self._source = None
@@ -93,27 +100,29 @@ class SpeechPlayer:
         self._prewarm()
 
     def _prewarm(self) -> None:
-        """Open the provider connection ahead of the next reply, without waiting for it.
+        """Open each provider's connection ahead of the next reply, without waiting.
 
         A cold Cartesia connection delayed the first audio of a reply by 0.5-1 s in
         local tests; a reply that ends early (cancelled or failed) drops its connection,
-        so this runs again after every reply. Best effort: a failure only costs the next
-        reply time.
+        so this runs again after every reply. A provider that already holds a connection
+        keeps it. Best effort: a failure only costs the next reply time.
         """
-        prewarm = getattr(self.tts, "prewarm", None)
-        if prewarm is None:
-            return
-        try:
-            prewarm()
-        except Exception:
-            logger.warning("speech prewarm failed for session %s", self.session_id)
+        for tts in (self.tts, *self.voices.values()):
+            prewarm = getattr(tts, "prewarm", None)
+            if prewarm is None:
+                continue
+            try:
+                prewarm()
+            except Exception:
+                logger.warning("speech prewarm failed for session %s", self.session_id)
 
-    def _open_stream(self, text: str):
-        """One provider stream for `text`: the streaming input when the provider has one."""
-        capabilities = getattr(self.tts, "capabilities", None)
+    @staticmethod
+    def _open_stream(tts, text: str):
+        """One `tts` stream for `text`: the streaming input when the provider has one."""
+        capabilities = getattr(tts, "capabilities", None)
         if not getattr(capabilities, "streaming", False):
-            return self.tts.synthesize(text, conn_options=SYNTHESIS_OPTIONS)
-        stream = self.tts.stream(conn_options=SYNTHESIS_OPTIONS)
+            return tts.synthesize(text, conn_options=SYNTHESIS_OPTIONS)
+        stream = tts.stream(conn_options=SYNTHESIS_OPTIONS)
         stream.push_text(text)
         stream.end_input()
         return stream
@@ -179,6 +188,8 @@ class SpeechPlayer:
         if source is not None:
             await self._release(source.aclose())
         await self._release(self.tts.aclose())
+        for voice in self.voices.values():
+            await self._release(voice.aclose())
 
     async def _release(self, closing) -> None:
         try:
@@ -228,7 +239,10 @@ class SpeechPlayer:
             await self.start()
             if self._speaking is not reply or not self._is_current(reply):
                 return None
-            stream = self._open_stream(reply.reply_text)
+            tts = self.voices.get(getattr(reply, "voice", None), self.tts)
+            stream = self._open_stream(tts, reply.reply_text)
+            if self.meter is not None:
+                self.meter.add_characters(reply.reply_text)
             async for audio in stream:
                 if self._speaking is not reply:
                     return None

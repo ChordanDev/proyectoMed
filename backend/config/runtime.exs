@@ -23,6 +23,21 @@ end
 config :backend, BackendWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+if config_env() == :dev do
+  # Reload browser tabs when matching files change.
+  config :backend, BackendWeb.Endpoint,
+    live_reload: [
+      web_console_logger: true,
+      patterns: [
+        # Static assets, except user uploads
+        ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$"E,
+        # Router, Controllers, LiveViews and LiveComponents
+        ~r"lib/backend_web/router\.ex$"E,
+        ~r"lib/backend_web/(controllers|live|components)/.*\.(ex|heex)$"E
+      ]
+    ]
+end
+
 if api_key = System.get_env("OPENAI_API_KEY") do
   config :backend, Backend.StationAI.OpenAIAdapter, api_key: api_key
 end
@@ -174,8 +189,9 @@ end
 # seams (simulated patient, rubric resolver, learner feedback) from Claude's
 # Messages API. Unset, or any other value, keeps OpenAI exactly as before. Jev
 # (TypeSafe) and voice are not affected. `ANTHROPIC_API_KEY`,
-# `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (resolver and feedback, default
-# `claude-opus-5-5`) and `ANTHROPIC_PATIENT_MODEL` (patient, default
+# `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` (learner feedback, default
+# `claude-opus-5-5`), `ANTHROPIC_RESOLVER_MODEL` (rubric resolver, default
+# `claude-haiku-5-5`, issue #343) and `ANTHROPIC_PATIENT_MODEL` (patient, default
 # `claude-haiku-5-5`, issues #256 and #308) and `ANTHROPIC_ADJUDICATOR_MODEL`
 # (undecided-verdict adjudicator, default `claude-haiku-5-5`, issue #290) are
 # written to `Backend.Stations.StationAI.AnthropicClient`; the adapters never
@@ -189,6 +205,7 @@ if config_env() != :test do
         {"ANTHROPIC_API_KEY", :api_key},
         {"ANTHROPIC_BASE_URL", :base_url},
         {"ANTHROPIC_MODEL", :model},
+        {"ANTHROPIC_RESOLVER_MODEL", :resolver_model},
         {"ANTHROPIC_PATIENT_MODEL", :patient_model},
         {"ANTHROPIC_ADJUDICATOR_MODEL", :adjudicator_model}
       ],
@@ -232,6 +249,46 @@ if config_env() != :test do
   end
 end
 
+# Provider price table (issue #342), in USD: it turns each finished session's
+# usage into an estimated cost (`Backend.Stations.Usage.Prices`). Defaults are
+# public list prices read on 2026-10-25:
+#   * Claude, per million tokens (input, output, cache read, 5-minute cache
+#     write): https://platform.claude.com/docs/en/about-claude/pricing. Claude
+#     Haiku 5.5 is priced for prompts up to 100,000 tokens (a station prompt
+#     is far below that).
+#   * Deepgram Nova-3 monolingual streaming, Pay As You Go, per audio minute:
+#     https://deepgram.com/pricing.
+#   * Cartesia Sonic, per 1,000 characters (1 credit is 1 character): the Scale
+#     plan overage, $38 per million credits, https://cartesia.ai/pricing.
+#   * LiveKit Cloud WebRTC participant minute (Ship overage):
+#     https://docs.livekit.io/home/cloud/quotas-and-limits/.
+#   * Jev (TypeSafe System One), per request: no public price page was found,
+#     so it is 0 until the contract price is set.
+# `USAGE_PRICES_JSON` overrides entries with a JSON object of the same shape,
+# for example `{"jev_call": 0.001, "claude": {"claude-haiku-5-5": {"input":
+# 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125}}}`; a model
+# entry replaces that model's four prices. Invalid JSON stops the boot; an
+# invalid entry raises when a cost is estimated. `:test` reads none of it.
+config :backend, Backend.Stations.Usage.Prices,
+  table: %{
+    claude: %{
+      "claude-haiku-5-5" => %{input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125},
+      "claude-sonnet-5-5" => %{input: 2.0, output: 10.0, cache_read: 0.10, cache_write: 2.50},
+      "claude-opus-5-5" => %{input: 4.0, output: 20.0, cache_read: 0.20, cache_write: 5.0}
+    },
+    jev_call: 0.0,
+    deepgram_minute: 0.0048,
+    cartesia_1k_characters: 0.038,
+    livekit_participant_minute: 0.0005
+  }
+
+if config_env() != :test do
+  with raw when is_binary(raw) <- System.get_env("USAGE_PRICES_JSON"),
+       trimmed when trimmed != "" <- String.trim(raw) do
+    config :backend, Backend.Stations.Usage.Prices, override: JSON.decode!(trimmed)
+  end
+end
+
 # Rubric resolver (issue #214): an LLM that decides only the rubric actions Jev
 # left undecided. Off unless `RUBRIC_RESOLVER` turns it on (`openai`, kept for
 # compatibility, or `on`): without the variable the default `DisabledAdapter`
@@ -239,7 +296,7 @@ end
 # with `LLM_PROVIDER=anthropic` (configured above), OpenAI otherwise. On OpenAI
 # it reuses the OpenAI key and base URL configured above, and
 # `RUBRIC_RESOLVER_MODEL` picks its model, which otherwise falls back to
-# `OPENAI_MODEL`; on Claude `ANTHROPIC_MODEL` applies. `:test` reads none of it.
+# `OPENAI_MODEL`; on Claude `ANTHROPIC_RESOLVER_MODEL` applies. `:test` reads none of it.
 if config_env() != :test do
   resolver_adapter = Backend.Stations.RubricAssessment.Resolver.OpenAIAdapter
 
@@ -295,30 +352,70 @@ end
 # directory name (`[a-z0-9-]+`) and fails the boot, naming the id, when the id is
 # malformed, unknown, or its package is invalid. `:test` reads none of it, so the
 # suite always starts from the default station.
-if config_env() != :test do
+#
+# Production never boots from `priv/stations` (issue #334): stations come only
+# from the database (`POST /sessions`), so the file loader is off and
+# `ACTIVE_STATION_ID` refuses the boot.
+if config_env() == :prod do
+  if String.trim(System.get_env("ACTIVE_STATION_ID", "")) != "" do
+    raise "ACTIVE_STATION_ID is not supported in production: stations are served only " <>
+            "from the database, never from priv/stations. Unset ACTIVE_STATION_ID."
+  end
+
+  config :backend, :file_station_loader, false
+end
+
+if config_env() == :dev do
   case System.get_env("ACTIVE_STATION_ID", "") |> String.trim() do
     "" -> :ok
     station_id -> config :backend, :active_station_id, station_id
   end
 end
 
-# Turn-based voice providers (issue #253). Off unless
-# `VOICE_PROVIDER=deepgram_elevenlabs` asks for it: without the variable both voice
-# endpoints keep the OpenAI configuration above. Deepgram transcribes the learner
-# (pt-BR) and ElevenLabs speaks the patient. Without the selected provider's key, or
-# without `ELEVENLABS_VOICE_ID`, voice is unavailable, as it is without an OpenAI
-# key. `:test` reads none of it.
+# RevenueCat billing (#339, docs/operations/revenuecat.md). The webhook needs
+# both `REVENUECAT_WEBHOOK_AUTHORIZATION` (the dashboard's Authorization header
+# value) and `REVENUECAT_WEBHOOK_SECRET` (the HMAC signing secret); without
+# them it answers 503. `REVENUECAT_CARD_PURCHASE_LINK` and
+# `REVENUECAT_PIX_PURCHASE_LINK` are the Web Purchase Links
+# (`https://pay.rev.cat/<token>`) of the card and Pix plans. Production ignores
+# `SANDBOX` events unless `REVENUECAT_ACCEPT_SANDBOX=true`. `:test` reads none
+# of it.
 if config_env() != :test do
-  if System.get_env("VOICE_PROVIDER") == "deepgram_elevenlabs" do
-    config :backend, :voice_provider, :deepgram_elevenlabs
+  env = fn name ->
+    System.get_env(name, "") |> String.trim() |> then(&if(&1 == "", do: nil, else: &1))
+  end
+
+  purchase_links =
+    %{card: env.("REVENUECAT_CARD_PURCHASE_LINK"), pix: env.("REVENUECAT_PIX_PURCHASE_LINK")}
+    |> Enum.reject(fn {_payment, url} -> is_nil(url) end)
+    |> Map.new()
+
+  # Keyword configuration deep-merges with the plans of config.exs.
+  config :backend, Backend.Billing,
+    purchase_links: purchase_links,
+    webhook_authorization: env.("REVENUECAT_WEBHOOK_AUTHORIZATION"),
+    webhook_secret: env.("REVENUECAT_WEBHOOK_SECRET"),
+    accept_sandbox: config_env() != :prod or env.("REVENUECAT_ACCEPT_SANDBOX") == "true"
+end
+
+# Turn-based voice providers (issues #253, #398). Off unless
+# `VOICE_PROVIDER=deepgram_cartesia` asks for it: without the variable both voice
+# endpoints keep the OpenAI configuration above. Deepgram transcribes the learner
+# (pt-BR) and Cartesia speaks the patient, with the same `CARTESIA_*` variables as
+# the real-time voice worker. Without the selected provider's key, or without
+# `CARTESIA_VOICE_ID`, voice is unavailable, as it is without an OpenAI key. `:test`
+# reads none of it.
+if config_env() != :test do
+  if System.get_env("VOICE_PROVIDER") == "deepgram_cartesia" do
+    config :backend, :voice_provider, :deepgram_cartesia
   end
 
   for {variable, key} <- [
         {"DEEPGRAM_API_KEY", :deepgram_api_key},
         {"DEEPGRAM_MODEL", :deepgram_model},
-        {"ELEVENLABS_API_KEY", :elevenlabs_api_key},
-        {"ELEVENLABS_VOICE_ID", :elevenlabs_voice_id},
-        {"ELEVENLABS_MODEL", :elevenlabs_model}
+        {"CARTESIA_API_KEY", :cartesia_api_key},
+        {"CARTESIA_VOICE_ID", :cartesia_voice_id},
+        {"CARTESIA_MODEL", :cartesia_model}
       ],
       value = System.get_env(variable),
       String.trim(value) != "" do
@@ -340,6 +437,221 @@ end
 # live `LLM_PROVIDER` selection when both are set.
 if config_env() == :dev and System.get_env("STATION_AI_E2E_SCRIPTED_ADAPTER") == "true" do
   config :backend, :station_ai_adapter, Backend.E2ESupport.ScriptedStationAIAdapter
+end
+
+# Database (ADR-014 #346, issue #329). `DATABASE_URL`
+# (`ecto://USER:PASS@HOST/DATABASE`) is required in `:prod` and optional in
+# `:dev`, where it replaces the local `backend_dev` database (config/dev.exs),
+# for example with a Neon branch. Never commit a URL with credentials.
+# `DATABASE_SSL` turns on TLS with peer and hostname verification against the
+# system CA store; it defaults to `true` in `:prod` and `false` in `:dev`. Neon
+# requires it. It accepts true/1/yes/on or false/0/no/off (any case) and refuses
+# to boot on anything else. It is the only TLS switch: an `ssl` query parameter
+# in `DATABASE_URL` would override it inside Ecto, so it refuses to boot too
+# (Neon's `sslmode` and `channel_binding` parameters are inert and allowed).
+# `POOL_SIZE` (default 10) and `ECTO_IPV6` (`true` or `1`) tune the
+# connection pool. `:test` reads none of it and always uses the local database.
+if config_env() != :test do
+  database_url = System.get_env("DATABASE_URL", "") |> String.trim()
+
+  if config_env() == :prod and database_url == "" do
+    raise """
+    environment variable DATABASE_URL is missing.
+    For example: ecto://USER:PASS@HOST/DATABASE
+    """
+  end
+
+  if database_url != "" do
+    url_query = URI.parse(database_url).query || ""
+
+    # Never echo the URL: it carries the database password.
+    if url_query |> URI.decode_query() |> Map.has_key?("ssl") do
+      raise """
+      environment variable DATABASE_URL must not carry an `ssl` query parameter.
+      It would override DATABASE_SSL; remove it and set DATABASE_SSL instead.
+      """
+    end
+
+    default_ssl = if config_env() == :prod, do: "true", else: "false"
+    raw_ssl = System.get_env("DATABASE_SSL", default_ssl)
+
+    # Case- and whitespace-insensitive. An unrecognized value refuses to boot
+    # instead of silently disabling TLS.
+    ssl? =
+      case raw_ssl |> String.trim() |> String.downcase() do
+        value when value in ~w(true 1 yes on) ->
+          true
+
+        value when value in ~w(false 0 no off) ->
+          false
+
+        _other ->
+          raise """
+          environment variable DATABASE_SSL has an unrecognized value: #{inspect(raw_ssl)}.
+          Use true/1/yes/on to enable TLS or false/0/no/off to disable it.
+          """
+      end
+
+    ssl =
+      if ssl? do
+        host = database_url |> URI.parse() |> Map.fetch!(:host) |> to_charlist()
+
+        [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          server_name_indication: host,
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+      else
+        false
+      end
+
+    config :backend, Backend.Repo,
+      url: database_url,
+      ssl: ssl,
+      pool_size: String.to_integer(System.get_env("POOL_SIZE", "10")),
+      socket_options: if(System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: [])
+  end
+end
+
+# Account emails (#336): login links, confirmation, password reset and email
+# change. `MAILER_PROVIDER` picks the provider: `resend`, `postmark`,
+# `sendgrid`, `brevo` or `mailgun` send through the provider's HTTP API with
+# `MAILER_API_KEY` (mailgun also needs `MAILER_DOMAIN`) from `MAILER_FROM_EMAIL`
+# (required) and `MAILER_FROM_NAME` (default `proyectoMed`). `local` keeps the
+# in-memory adapter of config.exs, which never delivers an email; it is the
+# default in `:dev`, while `:prod` refuses to boot without MAILER_PROVIDER and
+# only warns when `local` is named on purpose. Case and surrounding whitespace
+# are ignored. An unknown provider or a missing key, domain or sender refuses to
+# boot, never echoing the key. `:test` reads none of it and keeps the test
+# adapter.
+if config_env() != :test do
+  mailer_env = fn name -> System.get_env(name, "") |> String.trim() end
+
+  mailer_adapters = %{
+    "resend" => Swoosh.Adapters.Resend,
+    "postmark" => Swoosh.Adapters.Postmark,
+    "sendgrid" => Swoosh.Adapters.Sendgrid,
+    "brevo" => Swoosh.Adapters.Brevo,
+    "mailgun" => Swoosh.Adapters.Mailgun
+  }
+
+  require_mailer_env! = fn name, provider ->
+    case mailer_env.(name) do
+      "" ->
+        raise ArgumentError,
+              "environment variable #{name} is required when MAILER_PROVIDER is #{provider}"
+
+      value ->
+        value
+    end
+  end
+
+  mailer_prod? = config_env() == :prod
+
+  case String.downcase(mailer_env.("MAILER_PROVIDER")) do
+    "" when mailer_prod? ->
+      raise ArgumentError,
+            "environment variable MAILER_PROVIDER is required in production: set resend, " <>
+              "postmark, sendgrid, brevo or mailgun, or local to deliberately keep the " <>
+              "in-memory adapter that never delivers an email"
+
+    "local" when mailer_prod? ->
+      IO.warn("MAILER_PROVIDER is local in production: account emails are never delivered")
+
+    provider when provider in ["", "local"] ->
+      :ok
+
+    provider when is_map_key(mailer_adapters, provider) ->
+      api_key = require_mailer_env!.("MAILER_API_KEY", provider)
+      from_email = require_mailer_env!.("MAILER_FROM_EMAIL", provider)
+
+      domain =
+        if provider == "mailgun",
+          do: [domain: require_mailer_env!.("MAILER_DOMAIN", provider)],
+          else: []
+
+      config :backend,
+             Backend.Accounts.Mailer,
+             [adapter: Map.fetch!(mailer_adapters, provider), api_key: api_key] ++ domain
+
+      from_name =
+        case mailer_env.("MAILER_FROM_NAME") do
+          "" -> "proyectoMed"
+          name -> name
+        end
+
+      config :backend, :mailer_from, {from_name, from_email}
+      config :swoosh, api_client: Swoosh.ApiClient.Req, local: false
+
+    _unknown ->
+      raise ArgumentError,
+            "MAILER_PROVIDER must be resend, postmark, sendgrid, brevo, mailgun or local, got: " <>
+              inspect(System.get_env("MAILER_PROVIDER"))
+  end
+end
+
+# Rate limits of the public authentication and device-login endpoints (#380)
+# and of the learner session routes that call paid providers (#395).
+# `RATE_LIMIT_ENABLED=false` turns them off; `RATE_LIMIT_<ACTION>_<KIND>` sets
+# one limit as `<count>/<seconds>` (for example `RATE_LIMIT_LOGIN_IP=20/300`).
+# `TRUSTED_CLIENT_IP_HEADER` names the proxy header that carries the client IP
+# (`fly-client-ip` behind Fly); unset, the socket peer is the client IP. The
+# test config keeps its own settings.
+if config_env() != :test do
+  rate_limit_kinds = [
+    device_start: [:ip],
+    device_lookup: [:ip, :user],
+    login: [:ip, :email],
+    magic_link_email: [:ip, :email],
+    reset_password_email: [:ip, :email],
+    sign_up: [:ip],
+    session_message: [:session, :learner],
+    session_transcribe: [:session, :learner],
+    session_synthesize: [:session, :learner],
+    session_voice: [:session, :learner],
+    session_impresso: [:session, :learner],
+    session_exam_mode: [:session, :learner],
+    session_result: [:session, :learner]
+  ]
+
+  parse_rate_limit = fn name, value ->
+    case Regex.run(~r/^\s*(\d+)\s*\/\s*(\d+)\s*$/, value) do
+      [_, count, seconds] when seconds != "0" ->
+        {String.to_integer(count), String.to_integer(seconds) * 1000}
+
+      _ ->
+        raise "#{name} must be <count>/<seconds>, for example 20/300; got: #{inspect(value)}"
+    end
+  end
+
+  rate_limits =
+    for {action, kinds} <- rate_limit_kinds do
+      limits =
+        for kind <- kinds,
+            name = "RATE_LIMIT_" <> String.upcase("#{action}_#{kind}"),
+            value = System.get_env(name, ""),
+            String.trim(value) != "",
+            do: {kind, parse_rate_limit.(name, value)}
+
+      {action, limits}
+    end
+
+  rate_limit_enabled =
+    case System.get_env("RATE_LIMIT_ENABLED", "") |> String.trim() |> String.downcase() do
+      value when value in ["", "true", "1"] -> true
+      value when value in ["false", "0"] -> false
+      other -> raise "RATE_LIMIT_ENABLED must be true or false; got: #{inspect(other)}"
+    end
+
+  config :backend, BackendWeb.RateLimit, enabled: rate_limit_enabled, limits: rate_limits
+
+  case System.get_env("TRUSTED_CLIENT_IP_HEADER", "") |> String.trim() |> String.downcase() do
+    "" -> :ok
+    header -> config :backend, BackendWeb.Plugs.ClientIP, header: header
+  end
 end
 
 if config_env() == :prod do
