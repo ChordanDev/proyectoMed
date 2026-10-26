@@ -24,7 +24,14 @@ import os
 import sys
 
 from livekit import rtc
-from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, cli
+from livekit.agents import (
+    AgentServer,
+    AutoSubscribe,
+    JobContext,
+    JobExecutorType,
+    JobRequest,
+    cli,
+)
 from livekit.plugins import cartesia, deepgram
 
 from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
@@ -50,8 +57,30 @@ DEFAULT_TTS_MODEL = "sonic-3"
 # Raw 16-bit PCM at 24 kHz: frames reach the room as they arrive, with no decoder.
 TTS_ENCODING = "pcm_s16le"
 TTS_SAMPLE_RATE = 24000
+# How each job (one learner session) runs: `process` (default, one Python process per
+# job) or `thread` (one thread per job in the worker process). See
+# docs/research/voice-worker-threads.md (#405).
+EXECUTORS = {"process": JobExecutorType.PROCESS, "thread": JobExecutorType.THREAD}
 logger = logging.getLogger("voice-worker")
 server = AgentServer()
+
+
+def job_executor_from_env(environ) -> JobExecutorType:
+    """The job executor named by `VOICE_WORKER_EXECUTOR`; process per job when unset."""
+    raw = environ.get("VOICE_WORKER_EXECUTOR", "").strip().lower()
+    if not raw:
+        return JobExecutorType.PROCESS
+    if raw not in EXECUTORS:
+        raise ValueError(
+            f"VOICE_WORKER_EXECUTOR must be process or thread, got {raw!r}"
+        )
+    return EXECUTORS[raw]
+
+
+def configure_server(environ) -> AgentServer:
+    """The worker's server with the executor of `VOICE_WORKER_EXECUTOR` applied."""
+    server.update_options(job_executor_type=job_executor_from_env(environ))
+    return server
 
 
 async def on_request(req: JobRequest) -> None:
@@ -610,6 +639,7 @@ if __name__ == "__main__":
     try:
         if fake_providers_from_env(os.environ) is not None:
             logger.warning("fake speech providers on: local testing only")
+        configured = configure_server(os.environ)
     except ValueError as error:
         sys.exit(str(error))
-    cli.run_app(server)
+    cli.run_app(configured)
