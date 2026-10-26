@@ -708,6 +708,19 @@ scripts/run-voice-stack.sh -- \
   uv run --project voice-worker python scripts/voice-stack/probe_spoken_turn.py
 ```
 
+### Production deploy (Fly)
+
+Production runs on Fly.io São Paulo with Neon; `docs/operations/deploy.md` is
+the runbook (secrets, first deploy, routine deploy behind the drain gate,
+rollback, admin creation, smoke checks). Routine deploys go through
+`backend/rel/deploy.sh`, which stops new sessions and waits for running ones
+before `fly deploy`.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MAX_CONCURRENT_SESSIONS` | Running sessions one node admits. At the cap `POST /sessions` answers `503 capacity_exhausted` with `Retry-After`; from 80% a warning is logged. Anything but a positive integer refuses to boot (`dev` and `prod`; ignored in `test`). | `200` |
+| `FLY_MACHINE_ID` | Set by Fly. Session ids become `<machine id>.<random>`, and a request for a session of another machine is answered with `fly-replay: instance=<owner>`. Lowercase letters and digits only, or the boot is refused. | unset (ids carry no owner) |
+
 ### Database
 
 The backend stores data in Postgres through Ecto (`Backend.Repo`, ADR-014 #346).
