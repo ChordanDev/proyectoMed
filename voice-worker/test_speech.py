@@ -696,6 +696,13 @@ def socket_closed():
     )
 
 
+def provider_timeout():
+    def raise_timeout(_context_id):
+        raise asyncio.TimeoutError
+
+    return raise_timeout
+
+
 def provider_audio(milliseconds: int = 200):
     pcm = bytes(24000 * milliseconds // 1000 * 2)
     return [
@@ -742,7 +749,13 @@ class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
         self.sockets: list[FakeCartesiaSocket] = []
         self.answers: list = []
 
+        self.handshake_errors: list[Exception] = []
+        self.handshakes = 0
+
         async def connect(_tts, _timeout):
+            self.handshakes += 1
+            if self.handshake_errors:
+                raise self.handshake_errors.pop(0)
             script = self.answers.pop(0) if self.answers else []
             self.sockets.append(FakeCartesiaSocket(script))
             return self.sockets[-1]
@@ -837,6 +850,47 @@ class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
         heard = sum(f.samples_per_channel for f in self.player._source.frames)
         self.assertEqual(heard, 24000 * 200 // 1000)  # the whole 200 ms reply
         self.assertEqual(len(self.sockets[1].sent), 2)  # the reply, then its end
+        await self.player.aclose()
+
+    async def test_a_rejected_handshake_is_not_retried(self):
+        # Cartesia refusing the request itself (J400-4): a bad key, an unpaid account
+        # or a rate limit fails the same way on a second try.
+        for status in (401, 429):
+            with self.subTest(status=status):
+                self.tts.prewarm = lambda: None  # count only the reply's handshakes
+                self.handshakes = 0
+                self.handshake_errors = [
+                    APIStatusError("rejected", status_code=status),
+                    APIStatusError("rejected", status_code=status),
+                ]
+                reply = accepted(self.tracker, self.tracker.last_accepted_turn_id + 1)
+
+                failure = await self.player.speak(reply)
+
+                self.assertEqual(failure.kind, "synthesis_failed")
+                self.assertEqual(self.handshakes, 1)
+        await self.player.aclose()
+
+    async def test_a_second_dead_socket_is_not_replaced_again(self):
+        self.answers.extend([[socket_closed()], [socket_closed()], provider_audio()])
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+        await settle()
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual([len(s.sent) for s in self.sockets], [2, 2, 0])
+        await self.player.aclose()
+
+    async def test_a_timeout_before_audio_is_not_retried(self):
+        self.answers.extend([[provider_timeout()], provider_audio()])
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+        await settle()
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual([len(s.sent) for s in self.sockets], [2, 0])
         await self.player.aclose()
 
     async def test_a_provider_cut_after_audio_is_not_retried(self):

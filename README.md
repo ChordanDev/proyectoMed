@@ -511,10 +511,12 @@ If the key or the voice id is missing the worker keeps transcribing and delivers
 reply as text followed by a `synthesis_failed` event. The worker asks Cartesia for raw
 16-bit PCM at 24 kHz in Portuguese (the session language `pt-BR` is sent as `pt`).
 It speaks over Cartesia's websocket and opens that connection when it publishes the
-patient track and again after every reply, so no reply waits for a connection (a cold
-one delayed the first audio by 0.5-1 s in local tests). A connection that died while it
-waited is replaced once, before any audio of the reply; a provider error, a timeout or a
-cut after audio started is `synthesis_failed`. Phoenix's turn-based voice reads
+patient track and again after every reply, so the connection is warm between replies (a
+cold one delayed the first audio by 0.5-1 s in local tests). A pause of more than about
+5 minutes still reconnects on the next reply, which pays that delay once. A connection
+that died while it waited is replaced once, before any audio of the reply; a provider
+error, a refused request (a bad key, an unpaid account, a rate limit), a timeout or a cut
+after audio started is `synthesis_failed`. Phoenix's turn-based voice reads
 the same `CARTESIA_*` variables (see
 ["Turn-based voice providers"](#turn-based-voice-providers-deepgram-and-cartesia)).
 

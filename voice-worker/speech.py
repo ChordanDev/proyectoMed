@@ -283,12 +283,16 @@ class SpeechPlayer:
                     break
                 except (APIStatusError, APIConnectionError) as error:
                     # A pooled websocket can die while it waits for the reply (J400-2):
-                    # one fresh stream, only before any audio and never after a
-                    # timeout, which would make the reply late.
+                    # one fresh stream, only before any audio, never after a timeout,
+                    # which would make the reply late, and never when the provider
+                    # refused the request (a bad key, an unpaid account, a rate
+                    # limit), which a second try only repeats.
                     if (
                         heard
                         or retried
                         or isinstance(error, APITimeoutError)
+                        or not error.retryable
+                        or getattr(error, "status_code", None) == 429
                         or not self._streams(tts)
                     ):
                         raise
