@@ -149,7 +149,7 @@ class Learner:
         await asyncio.sleep(delay_s)
         try:
             await self._session()
-        except Exception as error:  # noqa: BLE001 - every failure is a measured outcome
+        except Exception as error:  # every failure is a measured outcome
             self.failed = self.failed or type(error).__name__
         if self.failed:
             done = len(self.turns)
