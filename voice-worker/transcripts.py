@@ -627,9 +627,8 @@ class TurnManager:
             supersedes = bool(self.tracker._text(speech_event))
         if not supersedes:
             return None
-        if (
-            self.pending_turn_id is not None
-            and not self.tracker.is_turn_stale(self.pending_turn_id)
+        if self.pending_turn_id is not None and not self.tracker.is_turn_stale(
+            self.pending_turn_id
         ):
             turn_to_cancel = self.pending_turn_id
             self.tracker.mark_turn_stale(turn_to_cancel)

@@ -224,7 +224,9 @@ class TranscribeAudioSecondsTest(unittest.IsolatedAsyncioTestCase):
                 tracker=TurnTracker("s1", last_turn_id=0),
                 phoenix=SimpleNamespace(eof_timeout=1.0),
                 stt=MockSTT(stream),
-                audio=FrameAudio([audio_frame(8000), audio_frame(8000), audio_frame(16000)]),
+                audio=FrameAudio(
+                    [audio_frame(8000), audio_frame(8000), audio_frame(16000)]
+                ),
                 meter=meter,
             )
 

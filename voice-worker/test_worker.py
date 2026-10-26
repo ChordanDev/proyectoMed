@@ -6,10 +6,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import worker
 from livekit.agents import APIConnectionError
 from livekit.agents.stt import SpeechEvent
 
+import worker
 from speech import SpeechPlayer
 from test_speech import FakeSource, FakeTTS, chunk, settle
 from test_transcripts import (
@@ -19,8 +19,8 @@ from test_transcripts import (
     ControllablePhoenixClient,
     MockAudioStream,
     MockRoom,
-    MockSTT,
     MockStream,
+    MockSTT,
     event,
 )
 from transcripts import TurnTracker, VoiceTurnReply
@@ -193,7 +193,9 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         )
         await self.voice.stop()
 
-    async def test_first_streamed_sentence_is_spoken_while_the_reply_still_streams(self):
+    async def test_first_streamed_sentence_is_spoken_while_the_reply_still_streams(
+        self,
+    ):
         more = asyncio.Event()
         self.client.streams[1] = ["Começou ontem.", more, "Ainda dói."]
         task = self.connect()
@@ -219,7 +221,11 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.sources[0].frames, ["s1", "s2"])
         self.assertEqual(
-            [(e["turn_id"], e["segment"], e["text"]) for e in self.room.patient_events() if "segment" in e],
+            [
+                (e["turn_id"], e["segment"], e["text"])
+                for e in self.room.patient_events()
+                if "segment" in e
+            ],
             [(1, 0, "Começou ontem."), (1, 1, "Ainda dói.")],
         )
         # Each sentence's text event precedes its audio.
@@ -296,9 +302,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PROVIDER_SECRET, output)
         self.assertNotIn("Começou", output)
         # Not a failure event: the web keeps the streamed sentences it has.
-        self.assertEqual(
-            [e for e in self.room.patient_events() if "failure" in e], []
-        )
+        self.assertEqual([e for e in self.room.patient_events() if "failure" in e], [])
 
     async def test_barge_in_mid_stream_stops_the_reply_and_its_later_sentences(self):
         more = asyncio.Event()
@@ -569,7 +573,9 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
     ):
         # Issue #269: a refused reply kept the learner turn. It is an examiner
         # acknowledgement on the data channel, never a failure or patient speech.
-        self.client.replies[1] = VoiceTurnReply(turn_id=1, status="kept", generation_id=1)
+        self.client.replies[1] = VoiceTurnReply(
+            turn_id=1, status="kept", generation_id=1
+        )
         task = self.connect()
         with self.assertNoLogs("voice-worker", level="WARNING"):
             await self.say("abdome flácido")
@@ -756,7 +762,10 @@ class BuildVoiceTTSTest(unittest.TestCase):
         tts.assert_not_called()
 
     def test_malformed_entries_are_skipped_without_leaking_them(self):
-        env = {**self.BASE, "CARTESIA_VOICE_IDS": "feminina-adulta=voice-f,broken,=x,y="}
+        env = {
+            **self.BASE,
+            "CARTESIA_VOICE_IDS": "feminina-adulta=voice-f,broken,=x,y=",
+        }
         with (
             patch.dict(os.environ, env, clear=True),
             patch.object(worker.cartesia, "TTS"),
