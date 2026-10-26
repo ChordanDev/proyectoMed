@@ -70,6 +70,7 @@ export default function App(): React.JSX.Element {
           <NoticeScreen
             onStart={setPendingConsent}
             voiceSupport={voiceMode !== "off"}
+            realtimeVoice={voiceMode === "realtime"}
           />
         ) : (
           <BriefScreen

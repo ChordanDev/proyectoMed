@@ -740,60 +740,63 @@ class BuildVoiceTTSTest(unittest.TestCase):
 class BuildTTSTest(unittest.TestCase):
     CONTEXT = {"language": "pt-BR", "keyterms": []}
 
-    def test_reads_elevenlabs_settings_from_the_worker_environment(self):
-        env = {"ELEVENLABS_API_KEY": PROVIDER_SECRET, "ELEVENLABS_VOICE_ID": "voice-1"}
+    def test_reads_cartesia_settings_from_the_worker_environment(self):
+        env = {"CARTESIA_API_KEY": PROVIDER_SECRET, "CARTESIA_VOICE_ID": "voice-1"}
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(worker.elevenlabs, "TTS") as tts,
+            patch.object(worker.cartesia, "TTS") as tts,
         ):
             self.assertIs(build_tts("s1", self.CONTEXT), tts.return_value)
 
         tts.assert_called_once_with(
             api_key=PROVIDER_SECRET,
-            voice_id="voice-1",
-            model="eleven_flash_v2_5",
-            encoding="pcm_24000",
+            voice="voice-1",
+            model="sonic-3",
+            encoding="pcm_s16le",
+            sample_rate=24000,
+            word_timestamps=False,
             language="pt-BR",
         )
 
     def test_model_can_be_overridden(self):
         env = {
-            "ELEVENLABS_API_KEY": PROVIDER_SECRET,
-            "ELEVENLABS_VOICE_ID": "voice-1",
-            "ELEVENLABS_MODEL": "eleven_multilingual_v2",
+            "CARTESIA_API_KEY": PROVIDER_SECRET,
+            "CARTESIA_VOICE_ID": "voice-1",
+            "CARTESIA_MODEL": "sonic-turbo",
         }
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(worker.elevenlabs, "TTS") as tts,
+            patch.object(worker.cartesia, "TTS") as tts,
         ):
             build_tts("s1", self.CONTEXT)
 
-        self.assertEqual(tts.call_args.kwargs["model"], "eleven_multilingual_v2")
+        self.assertEqual(tts.call_args.kwargs["model"], "sonic-turbo")
 
     def test_missing_configuration_disables_speech_without_leaking_it(self):
-        env = {"ELEVENLABS_API_KEY": PROVIDER_SECRET}
+        env = {"CARTESIA_API_KEY": PROVIDER_SECRET}
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(worker.elevenlabs, "TTS") as tts,
+            patch.object(worker.cartesia, "TTS") as tts,
             self.assertLogs("voice-worker", level="WARNING") as logs,
         ):
             self.assertIsNone(build_tts("s1", self.CONTEXT))
 
         tts.assert_not_called()
         self.assertIn("session s1", "\n".join(logs.output))
+        self.assertIn("synthesis_failed", "\n".join(logs.output))
         self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
 
     def test_blank_required_setting_disables_speech_like_a_missing_one(self):
-        for blank in ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"):
+        for blank in ("CARTESIA_API_KEY", "CARTESIA_VOICE_ID"):
             env = {
-                "ELEVENLABS_API_KEY": PROVIDER_SECRET,
-                "ELEVENLABS_VOICE_ID": "voice-1",
+                "CARTESIA_API_KEY": PROVIDER_SECRET,
+                "CARTESIA_VOICE_ID": "voice-1",
                 blank: "  ",
             }
             with (
                 self.subTest(blank=blank),
                 patch.dict(os.environ, env, clear=True),
-                patch.object(worker.elevenlabs, "TTS") as tts,
+                patch.object(worker.cartesia, "TTS") as tts,
                 self.assertLogs("voice-worker", level="WARNING") as logs,
             ):
                 self.assertIsNone(build_tts("s1", self.CONTEXT))
@@ -803,17 +806,45 @@ class BuildTTSTest(unittest.TestCase):
 
     def test_blank_model_falls_back_to_the_default(self):
         env = {
-            "ELEVENLABS_API_KEY": PROVIDER_SECRET,
-            "ELEVENLABS_VOICE_ID": "voice-1",
-            "ELEVENLABS_MODEL": "",
+            "CARTESIA_API_KEY": PROVIDER_SECRET,
+            "CARTESIA_VOICE_ID": "voice-1",
+            "CARTESIA_MODEL": "",
         }
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(worker.elevenlabs, "TTS") as tts,
+            patch.object(worker.cartesia, "TTS") as tts,
         ):
             build_tts("s1", self.CONTEXT)
 
-        self.assertEqual(tts.call_args.kwargs["model"], "eleven_flash_v2_5")
+        self.assertEqual(tts.call_args.kwargs["model"], "sonic-3")
+
+    def test_elevenlabs_settings_no_longer_enable_speech(self):
+        env = {"ELEVENLABS_API_KEY": PROVIDER_SECRET, "ELEVENLABS_VOICE_ID": "voice-1"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS") as tts,
+            self.assertLogs("voice-worker", level="WARNING"),
+        ):
+            self.assertIsNone(build_tts("s1", self.CONTEXT))
+
+        tts.assert_not_called()
+
+    def test_real_provider_speaks_pt_br_as_raw_24khz_pcm(self):
+        env = {"CARTESIA_API_KEY": PROVIDER_SECRET, "CARTESIA_VOICE_ID": "voice-1"}
+        with patch.dict(os.environ, env, clear=True):
+            tts = build_tts("s1", self.CONTEXT)
+
+        self.assertEqual((tts.sample_rate, tts.num_channels), (24000, 1))
+        self.assertEqual(tts._opts.language.language, "pt")
+        self.assertEqual(tts._opts.encoding, "pcm_s16le")
+
+    def test_real_provider_builds_without_a_word_timestamps_warning(self):
+        env = {"CARTESIA_API_KEY": PROVIDER_SECRET, "CARTESIA_VOICE_ID": "voice-1"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            self.assertNoLogs(level="WARNING"),
+        ):
+            self.assertIsNotNone(build_tts("s1", self.CONTEXT))
 
 
 if __name__ == "__main__":

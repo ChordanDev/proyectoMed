@@ -430,6 +430,14 @@ if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true
   config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
 end
 
+# E2E-only: a fixed patient reply instead of a text provider, so a process-level
+# client (the Unreal station tests, #192) can run a full turn against local
+# Phoenix. Same rules as above: honored only under `:dev`, and it wins over the
+# live `LLM_PROVIDER` selection when both are set.
+if config_env() == :dev and System.get_env("STATION_AI_E2E_SCRIPTED_ADAPTER") == "true" do
+  config :backend, :station_ai_adapter, Backend.E2ESupport.ScriptedStationAIAdapter
+end
+
 # Database (ADR-014 #346, issue #329). `DATABASE_URL`
 # (`ecto://USER:PASS@HOST/DATABASE`) is required in `:prod` and optional in
 # `:dev`, where it replaces the local `backend_dev` database (config/dev.exs),

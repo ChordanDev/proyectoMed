@@ -1,7 +1,7 @@
 # Unreal station client module
 
 `StationClient` (`unreal/Source/StationClient/`) is the one module in the Unreal
-client that talks to Phoenix, and from #191 to LiveKit. Scene and interface code
+client that talks to Phoenix and, from #191, to LiveKit. Scene and interface code
 depend on it and never call the network directly. It was introduced by #190; the
 parallel slices #191, #192, #194, #195 and #196 consume this interface.
 
@@ -801,10 +801,58 @@ authenticated routes in production.
 The [results history](#results-history-get-meresults-issue-338) (`GET /me/results`,
 `GET /me/results/:id`) has no `UStationClient` method yet either.
 
-Joining the LiveKit room (publishing the microphone, receiving the patient voice
-track and driving lip sync) lands with #191 as an addition owned by the
-ChordanDev track; the #189 spike (`unreal/Source/PatientVoiceSpike/`) shows the
-pieces. Typed and exam slices (#192, #194, #195) do not depend on it.
+## Voice link (LiveKit)
+
+From #191 the module also joins the run's LiveKit room. `UStationClient::ConnectVoice`
+takes a credential from `RequestVoiceCredential` and returns an `FStationVoiceLink`
+(`StationVoice.h`):
+
+```cpp
+Client->RequestVoiceCredential([WeakClient](const TStationResult<FStationVoiceCredential>& Credential)
+{
+	if (!WeakClient.IsValid() || !Credential.HasValue())
+	{
+		return;
+	}
+	FStationVoiceHandlers Handlers;
+	Handlers.OnEvent = [](const FStationVoiceEvent& Event) { /* show captions and replies */ };
+	Handlers.OnStateChanged = [](EStationVoiceState State) { /* mic indicator */ };
+	Handlers.OnPatientPcm = [](TConstArrayView<int16> Pcm, int32 Rate, int32 Channels) { /* play, lip sync */ };
+
+	// The link exists only from here, and ConnectVoice returns nullptr without a session.
+	// Keep the shared reference it returns as a weak one: GetVoice() is a raw pointer the
+	// game thread may free when it replaces or drops the link, so the capture thread must
+	// not use it (the game's UStationMicrophone::Start takes this weak reference).
+	if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakClient->ConnectVoice(Credential.GetValue(), MoveTemp(Handlers)))
+	{
+		Microphone->Start(Voice);  // takes a TWeakPtr<FStationVoiceLink, ESPMode::ThreadSafe>; pins it on the capture thread
+	}
+});
+
+// Then, from the capture thread (WeakVoice is the weak reference the microphone holds):
+if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.Pin())
+{
+	Voice->PushMicrophonePcm(Samples, Rate, Channels);
+}
+```
+
+| Topic | Rule |
+| --- | --- |
+| Microphone | Whatever the caller pushes with `PushMicrophonePcm`: float samples, any rate and channel count. The link resamples to 48 kHz mono, cancels the echo of the patient's voice, then publishes a microphone-source track as `learner-<session>`, which is the only track the voice worker reads. Audio pushed while the state is not `WaitingForWorker` or `Ready` is dropped. |
+| States | `Connecting`, then `WaitingForWorker` once the microphone is published, then `Ready` when the `voice-worker` participant is in the room. `Reconnecting` while LiveKit retries the room connection, or once the worker that joined has left; the link returns to `Ready` if both come back. `Failed` (with `GetFailure()`, English, for logs) when joining or publishing fails, when LiveKit drops the room, when the worker has not joined 20 seconds after the microphone was published, or after 10 seconds of `Reconnecting`. `Failed` is final: the link leaves the room at once, so nothing more is heard or sent. |
+| Events | `OnEvent` gets the worker's `transcript` data messages, parsed as strictly as the web client does. Messages for another session, or from anyone but `voice-worker`, are dropped. The kinds are `Learner` (`bFinal` false for an interim caption), `PatientText` (one sentence, `Segment`), `PatientComplete`, `ExaminerAcknowledged`, `PatientUnanswered`, `TurnFailure` and `Fatal`. |
+| Patient voice | `OnPatientPcm` runs on a LiveKit thread every 10 ms of the worker's `patient-voice` track. It must not block. |
+| Same reply | The worker sends a reply's text before its audio, and both are the text Phoenix approved and stored for the run. |
+| Run end | The link leaves the room when `FinishSession` succeeds, when `DiscardSession` is called, when `RefreshSession` sees the run completed, on `DisconnectVoice`, and when the client is destroyed. Leaving returns at once and finishes in the background, even while a join still hangs on an unreachable server (about 30 s). No game-thread handler runs after that; an `OnPatientPcm` call already under way may finish, so its target must outlive it or cut itself off. A refused finish (`deadline_not_reached`) keeps the link. The link does not notice a run that ended on Phoenix's side until `RefreshSession` or `FinishSession` reports it. |
+| LiveKit SDK | The module initialises the SDK on first use, or reuses it when another module (the #189 spike) did. On quit it waits up to 2 s for each room still being left. |
+| Privacy | The module logs no transcript or reply text and keeps none: events go straight to the handlers. |
+| Threading | `ConnectVoice`, `DisconnectVoice` and the state run on the game thread, as do `OnEvent` and `OnStateChanged`. |
+
+Known limits:
+
+- One link at a time: `ConnectVoice` replaces the open one.
+- The credential lasts 120 s. That is enough to join, and a joined room stays joined. A link that fails is not retried: ask for a new credential and connect again.
+- The echo canceller uses the patient's voice as LiveKit delivers it. The delay of the game's own playback is left to the canceller to estimate.
 
 ## Tests
 
@@ -829,9 +877,67 @@ scripts/run-unreal-tests.sh ProyectoMed.StationClient
 Set `STATION_PHOENIX_URL` to test against another Phoenix. The runner fails when
 no test matches the filter.
 
+`ProyectoMed.StationVoice.Unit` needs nothing else. `ProyectoMed.StationVoice.Stack`
+drives a full spoken turn through LiveKit and the real voice worker. It needs the
+local voice stack, which brings its own Phoenix (see README, "Voice worker fake
+speech providers"):
+
+```bash
+scripts/run-voice-stack.sh -- scripts/run-unreal-tests.sh "ProyectoMed.StationVoice+ProyectoMed.StationRun.Voice+ProyectoMed.PatientVoice"
+```
+
+The stack's Phoenix answers with the mock patient ("Meu nome é Carlos."), not the
+scripted one ("Bom dia, doutor."), so the whole suite takes two runs: the voice
+specs above inside the stack, and the rest against the scripted Phoenix of the
+previous section:
+
+```bash
+scripts/run-unreal-tests.sh "ProyectoMed.StationClient+ProyectoMed.StationRun.Phoenix+ProyectoMed.StationRun.Unit"
+```
+
+The stack test checks four things:
+
+- The worker transcribes the pushed speech.
+- The patient's sentence and the end of the reply belong to that turn.
+- The patient's voice arrives.
+- The sentence equals the reply Phoenix stored for the run.
+
+It also checks that the room is left on finish and on discard. The neutral refusal
+("Não consta no script.") is Phoenix's job and its tests cover it
+(`backend/test/backend/station_ai_test.exs`). The client shows any approved reply
+verbatim.
+
 The Phoenix tests cover the deterministic paths: station, session lifecycle,
-voice credential, impressos, finish and the errors above. A patient reply and an
-educational result need Phoenix's text provider (`LLM_PROVIDER` and its key), so
-their parsing is covered by unit tests on Phoenix's real response shapes. A slice
-that needs a full turn or result against local Phoenix in CI adds that seam to
-Phoenix first, as #190 asks.
+voice credential, impressos, finish and the errors above. An educational result
+needs Phoenix's text provider (`LLM_PROVIDER` and its key), so its parsing is
+covered by unit tests on Phoenix's real response shapes. The E2E approving Jev
+adapter below is the seam that grades a run without one (#195).
+
+A full patient turn has that seam (#192). `ProyectoMed.StationRun.Phoenix` sends
+typed turns and expects Phoenix's scripted patient, a dev-only adapter that
+answers every turn with "Bom dia, doutor." Start Phoenix with it and with the
+E2E approving Jev adapter:
+
+```bash
+( cd backend && VOICE_MODE=realtime LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret JEV_E2E_APPROVING_ADAPTER=true STATION_AI_E2E_SCRIPTED_ADAPTER=true mix phx.server )
+```
+
+Both variables are honored only under `MIX_ENV=dev`. Never set them for a
+clinician or a learner session: the patient then says nothing from the case.
+
+The same spec covers exam and impresso requests (#194) through
+`UStationRunFlow::RequestExam`, which needs no adapter: Phoenix's impresso route
+matches keywords without a model. Those tests expect the default station
+(`chest-pain-initial-assessment`), so leave `ACTIVE_STATION_ID` unset: it authors
+the physical exam and an ECG, and no tomography, which the tests ask for to see
+a declined request.
+
+Finishing a run and its feedback (#195) are covered through
+`UStationRunFlow::Finish`, `ExpireTimer` and `Discard`. They read the result the
+E2E approving Jev adapter grades: it cites the learner's first line for every
+criterion it can ground, so the tests check that a criterion cites the typed
+turn. A timer finish is tested before Phoenix's deadline, where Phoenix refuses
+it and the run goes on, and on a run Phoenix already ended, which is what Phoenix
+does itself at the deadline: the tests end it through `FinishSession` instead of
+waiting ten minutes. A turn or exam request Phoenix refuses with
+`station_time_elapsed` or `session_completed` ends the run the same way.
