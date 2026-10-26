@@ -17,6 +17,11 @@ config :backend, Backend.Repo,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
+# No concurrent-session cap in tests (#344): the Conversation table outlives
+# every test, so the sessions the suite leaves running would reach the
+# production default (200, config.exs) mid-run. Capacity tests set their own.
+config :backend, max_concurrent_sessions: nil
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :backend, BackendWeb.Endpoint,

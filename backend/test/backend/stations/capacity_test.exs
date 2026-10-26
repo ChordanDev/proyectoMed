@@ -45,8 +45,17 @@ defmodule Backend.Stations.CapacityTest do
 
   defp start, do: Stations.start_station_session({:station, 999_999_999}, %{audio_consent: false})
 
+  @config Path.expand("../../../config/config.exs", __DIR__)
+
   test "the default cap is 200 sessions per node" do
-    assert Application.get_env(:backend, :max_concurrent_sessions) == 200
+    config = Config.Reader.read!(@config, env: :prod)
+    assert config[:backend][:max_concurrent_sessions] == 200
+  end
+
+  # The Conversation table outlives every test, so the sessions the suite
+  # leaves running would otherwise reach the production cap mid-run.
+  test "the test environment sets no cap, so sessions other tests leave running never refuse one" do
+    assert :ok = Stations.Capacity.admit(10_000)
   end
 
   test "a full node refuses new sessions with capacity_exhausted, logging and alerting" do
