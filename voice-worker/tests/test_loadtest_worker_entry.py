@@ -12,9 +12,13 @@ FAKE_ENV = {
 
 
 class ConfigureTest(unittest.TestCase):
+    def setUp(self):
+        self.threshold = worker_entry.worker.server._load_threshold
+
     def tearDown(self):
         worker_entry.worker.server.update_options(
-            job_executor_type=JobExecutorType.PROCESS
+            job_executor_type=JobExecutorType.PROCESS,
+            load_threshold=self.threshold,
         )
 
     def test_runs_each_job_in_a_process_by_default(self):
@@ -24,6 +28,19 @@ class ConfigureTest(unittest.TestCase):
     def test_takes_the_executor_from_the_environment(self):
         server = configure({**FAKE_ENV, "VOICE_WORKER_EXECUTOR": "thread"})
         self.assertIs(server._job_executor_type, JobExecutorType.THREAD)
+
+    def test_no_job_cap_by_default(self):
+        threshold = worker_entry.worker.server._load_threshold
+        server = configure(FAKE_ENV)
+        self.assertIsInstance(server.load_fnc, worker_entry.OwnTreeLoad)
+        self.assertIs(server._load_threshold, threshold)
+
+    def test_a_job_cap_wraps_its_own_load_and_refuses_jobs_at_the_cap(self):
+        server = configure({**FAKE_ENV, "VOICE_WORKER_JOBS_PER_PROCESS": "6"})
+        self.assertIsInstance(server.load_fnc, worker_entry.worker.JobCapLoad)
+        self.assertIsInstance(server.load_fnc.base, worker_entry.OwnTreeLoad)
+        self.assertEqual(server.load_fnc.cap, 6)
+        self.assertEqual(server._load_threshold, 1.0)
 
     def test_refuses_an_unknown_executor(self):
         with self.assertRaisesRegex(SystemExit, "VOICE_WORKER_EXECUTOR"):

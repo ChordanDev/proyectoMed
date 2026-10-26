@@ -1,7 +1,9 @@
 import asyncio
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,7 +12,7 @@ from livekit.agents import JobExecutorType
 
 from loadtest import faults, worker_entry
 from loadtest.faults import Fault, claim, fault_from_env, fault_impact
-from loadtest.run import build_parser, fault_env
+from loadtest.run import build_parser, fault_env, worker_extra_env
 
 FAKE_ENV = {
     "VOICE_WORKER_FAKE_PROVIDERS": "true",
@@ -159,6 +161,32 @@ class FaultOptionsTest(unittest.TestCase):
                 "LOADTEST_FAULT_MARKER": "/out/fault.json",
             },
         )
+
+
+class JobsPerWorkerOptionTest(unittest.TestCase):
+    def test_no_cap_by_default(self):
+        self.assertIsNone(build_parser().parse_args([]).jobs_per_worker)
+        self.assertEqual(
+            worker_extra_env(build_parser().parse_args([]), Path("/o")), {}
+        )
+
+    def test_cap_and_fault_reach_the_workers(self):
+        args = build_parser().parse_args(
+            ["--jobs-per-worker", "10", "--fault", "hang", "--fault-after-s", "5"]
+        )
+        self.assertEqual(
+            worker_extra_env(args, Path("/o")),
+            {
+                "VOICE_WORKER_JOBS_PER_PROCESS": "10",
+                "LOADTEST_FAULT": "hang",
+                "LOADTEST_FAULT_AFTER_S": "5.0",
+                "LOADTEST_FAULT_MARKER": "/o/fault.json",
+            },
+        )
+
+    def test_refuses_a_cap_under_one(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            build_parser().parse_args(["--jobs-per-worker", "0"])
 
 
 class ConfigureFaultTest(unittest.TestCase):

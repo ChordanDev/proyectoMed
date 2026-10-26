@@ -224,6 +224,7 @@ openssl rand -hex 32   # paste as VOICE_WORKER_SECRET
 | `CARTESIA_MODEL` | Optional, default `sonic-3`. |
 | `PHOENIX_TURN_TIMEOUT_S` / `PHOENIX_TURN_RETRIES` | Optional, defaults `35` and `1`. |
 | `VOICE_WORKER_EXECUTOR` | Optional, how each session runs: `process` (default, one process per session) or `thread` (one thread per session in the worker process). Any other value stops the worker at start. See `docs/research/voice-worker-threads.md`. |
+| `VOICE_WORKER_JOBS_PER_PROCESS` | Optional, unset by default (no cap). The most sessions one worker process takes in `start`; past it, LiveKit offers the session to another worker process. For several `thread` workers on one machine. Not a positive integer stops the worker at start. |
 | `VOICE_WORKER_FAKE_PROVIDERS` | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on; the worker refuses it unless `LIVEKIT_URL` is on loopback. |
 | `VOICE_WORKER_FAKE_TRANSCRIPT` | Optional. The fixed phrase the fake speech-to-text returns. Default `Qual é o seu nome?`. |
 

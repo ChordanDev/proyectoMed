@@ -17,11 +17,13 @@ participant minutes, #342) to Phoenix. Never logs transcript text, reply text or
 
 # pyright: reportMissingImports=false
 import asyncio
+import inspect
 import json
 import logging
 import math
 import os
 import sys
+from collections.abc import Callable
 
 from livekit import rtc
 from livekit.agents import (
@@ -32,6 +34,7 @@ from livekit.agents import (
     JobRequest,
     cli,
 )
+from livekit.agents.worker import _DefaultLoadCalc
 from livekit.plugins import cartesia, deepgram
 
 from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
@@ -77,9 +80,49 @@ def job_executor_from_env(environ) -> JobExecutorType:
     return EXECUTORS[raw]
 
 
-def configure_server(environ) -> AgentServer:
-    """The worker's server with the executor of `VOICE_WORKER_EXECUTOR` applied."""
+def jobs_per_process_from_env(environ) -> int | None:
+    """The most jobs one worker process runs (`VOICE_WORKER_JOBS_PER_PROCESS`), or None."""
+    raw = environ.get("VOICE_WORKER_JOBS_PER_PROCESS", "").strip()
+    if not raw:
+        return None
+    # isascii(): str.isdigit() also accepts digits such as "²" that int() rejects.
+    if not (raw.isascii() and raw.isdigit()) or int(raw) < 1:
+        raise ValueError(
+            f"VOICE_WORKER_JOBS_PER_PROCESS must be a positive integer, got {raw!r}"
+        )
+    return int(raw)
+
+
+class JobCapLoad:
+    """The worker's load: `base` (LiveKit's CPU load by default), or full (1.0) once the
+    process runs `cap` jobs, so LiveKit offers further jobs to another worker process.
+
+    For several thread-mode worker processes on one machine (#405): one process holds
+    one Python interpreter, so it serves only so many sessions. LiveKit refuses jobs at
+    a load of 0.7 in `start`; `dev` never refuses, so the cap has no effect there.
+    """
+
+    def __init__(self, cap: int, base: Callable[..., float] | None = None):
+        self.cap = cap
+        self.base: Callable[..., float] = base or _DefaultLoadCalc.get_load
+
+    def __call__(self, agent_server) -> float:
+        if len(agent_server.active_jobs) >= self.cap:
+            return 1.0
+        if inspect.signature(self.base).parameters:
+            return self.base(agent_server)
+        return self.base()
+
+
+def configure_server(environ, base_load=None) -> AgentServer:
+    """The worker's server with `VOICE_WORKER_EXECUTOR` and
+    `VOICE_WORKER_JOBS_PER_PROCESS` applied; `base_load` replaces LiveKit's CPU load."""
     server.update_options(job_executor_type=job_executor_from_env(environ))
+    cap = jobs_per_process_from_env(environ)
+    if cap is not None:
+        server.load_fnc = JobCapLoad(cap, base_load)
+    elif base_load is not None:
+        server.load_fnc = base_load
     return server
 
 

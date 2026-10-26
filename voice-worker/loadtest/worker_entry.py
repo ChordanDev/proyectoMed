@@ -50,14 +50,17 @@ def configure(environ):
     if transcript is None:
         raise SystemExit("the load test worker runs only with fake speech providers")
     try:
-        server = worker.configure_server(environ)  # VOICE_WORKER_EXECUTOR (#405)
+        # VOICE_WORKER_EXECUTOR and VOICE_WORKER_JOBS_PER_PROCESS (#405)
+        server = worker.configure_server(environ, OwnTreeLoad())
+        capped = worker.jobs_per_process_from_env(environ) is not None
         fault = faults.fault_from_env(environ)
     except ValueError as error:
         raise SystemExit(str(error)) from None
     if fault is not None:  # one session crashes or hangs (#405)
         server._entrypoint_fnc = faults.entrypoint
     server.update_options(num_idle_processes=WARM_PROCESSES)
-    server.load_fnc = OwnTreeLoad()
+    if capped:  # `dev` never refuses a job; a full (1.0) capped worker must
+        server.update_options(load_threshold=1.0)
     return server
 
 

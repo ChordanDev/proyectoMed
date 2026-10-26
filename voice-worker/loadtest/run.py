@@ -225,6 +225,14 @@ def fault_env(args, out: Path) -> dict:
     }
 
 
+def worker_extra_env(args, out: Path) -> dict:
+    """What `--jobs-per-worker` and `--fault` add to every worker's environment."""
+    cap = {}
+    if args.jobs_per_worker:
+        cap = {"VOICE_WORKER_JOBS_PER_PROCESS": str(args.jobs_per_worker)}
+    return {**cap, **fault_env(args, out)}
+
+
 def positive_int(text: str) -> int:
     value = int(text)
     if value < 1:
@@ -239,6 +247,8 @@ def build_parser() -> argparse.ArgumentParser:
     # by side on the machine (several in thread mode is the hybrid setup).
     parser.add_argument("--executor", choices=("process", "thread"), default="process")
     parser.add_argument("--workers", type=positive_int, default=1)
+    # Each worker process refuses jobs past this many (VOICE_WORKER_JOBS_PER_PROCESS).
+    parser.add_argument("--jobs-per-worker", type=positive_int, default=None)
     # #405: the first session of the run crashes its process or hangs its event loop
     # this many seconds in. Run one step: the fault fires once per run.
     parser.add_argument("--fault", choices=FAULT_KINDS, default=None)
@@ -272,7 +282,7 @@ def main(argv=None) -> int:
         out,
         executor=args.executor,
         workers=args.workers,
-        worker_extra_env=fault_env(args, out),
+        worker_extra_env=worker_extra_env(args, out),
     )
     steps: list[dict] = []
     idle: dict = {}
@@ -309,6 +319,7 @@ def _write(out: Path, args, script: Script, steps, idle) -> None:
         "script": asdict(script),
         "executor": args.executor,
         "workers": args.workers,
+        "jobs_per_worker": args.jobs_per_worker,
         "fault": args.fault,
         "fault_after_s": args.fault_after_s if args.fault else None,
         "worker_idle": idle,
