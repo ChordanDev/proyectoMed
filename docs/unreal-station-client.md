@@ -46,7 +46,8 @@ Build-file dependency: add `"StationClient"` to the consuming module's
 | Timeouts | A request Phoenix does not answer within 15 s fails with `network_error`. `FetchResult` waits 95 s, as the web client does, because the first fetch assesses the run before answering. |
 | One run at a time | The client holds at most one session. `StartSession` fails with `session_in_progress` until `DiscardSession` succeeds. |
 | Content | The client holds no clinical rules and no Station Package content. Everything it returns is what Phoenix served for this run. |
-| Secrets | `FStationVoiceCredential::Token` is a secret: never log or display it. The session id is the run's only credential. |
+| Secrets | `FStationVoiceCredential::Token`, the device login's `device_code` and its `access_token` and `refresh_token` are secrets: never log or display them (the `user_code` is shown to the learner, but not logged). |
+| Authentication | `GET /stations`, `GET /pre-station-notice`, `POST /sessions` and every `/sessions/:id/...` route need `Authorization: Bearer <access_token>` from the [device login](#learner-login-device-flow). A session belongs to the learner that started it. |
 | Configuration | Phoenix's origin comes from `[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config (default `http://127.0.0.1:4000`), or `-PhoenixUrl=<origin>` on the command line. |
 
 ## Station Timer
@@ -77,7 +78,7 @@ All operations are methods of `UStationClient`. Each one takes a
 | `StartSession(bAudioConsent)` | `POST /api/stations/active/sessions` | `FStationSession`; starts the Station Timer | #190 |
 | `RefreshSession` | `GET .../sessions/:id` | `FStationSession` with status and transcript (`Messages`) | #195, #196 |
 | `RequestVoiceCredential` | `POST .../sessions/:id/voice` | `FStationVoiceCredential` for one LiveKit room | #190, #191 |
-| `SendTurn(Text, Modality)` | `POST .../sessions/:id/messages` | `FStationTurnReply`: the approved patient reply, or an examiner acknowledgement with released impressos | #191, #192, #194 |
+| `SendTurn(Text, Modality)` | `POST .../sessions/:id/messages` | `FStationTurnReply`: the approved patient reply, or an examiner acknowledgement (it releases nothing; see [exam requests in the dialogue](#exam-requests-in-the-dialogue-issue-351)) | #191, #192, #194 |
 | `RequestImpresso(Text, RequestId)` | `POST .../sessions/:id/impressos/request` | `FStationImpressoReply`: the decision and what was released | #194 |
 | `ListImpressos` | `GET .../sessions/:id/impressos` | Every impresso released so far | #194 |
 | `FinishSession(Reason)` | `POST .../sessions/:id/finish` | `FStationSession` marked completed | #195 |
@@ -136,17 +137,669 @@ can come with different statuses from different routes.
 
 | Code | Status | Raised by |
 | --- | --- | --- |
-| `session_not_found` | 404 | every session route |
+| `missing_token` | 401 | every authenticated route without `Authorization: Bearer` |
+| `invalid_token` | 401 | every authenticated route with an unknown, expired or revoked access token: refresh, or log in again |
+| `session_not_found` | 404 | every session route, also for another learner's session |
 | `session_expired` | 410 | every session route |
-| `session_completed` | 422, 409 | `SendTurn` and `RequestVoiceCredential` (422); `RequestImpresso` (409) |
+| `session_completed` | 422, 409 | `SendTurn` and `RequestVoiceCredential` (422); `RequestImpresso` and `POST .../exam-mode` (409) |
 | `station_time_elapsed` | 409 | `SendTurn` after the deadline |
 | `deadline_not_reached` | 409 | `FinishSession(Timer)` called early |
-| `no_consent` | 403 | `RequestVoiceCredential` on a run without audio consent |
+| `no_consent` | 403 | `RequestVoiceCredential` and `POST .../exam-mode` on a run without audio consent |
 | `voice_unavailable` | 503 | `RequestVoiceCredential` when Phoenix has no LiveKit set up |
-| `rate_limited` | 429 | `RequestVoiceCredential` more than 5 times a minute |
+| `rate_limited` | 429 | every session route that calls a paid provider, past its per-session or per-learner limit (see [Rate limits](#rate-limits-issue-395)); `RequestVoiceCredential` also more than 5 times a minute |
 | `reply_verification_failed`, `station_ai_unavailable`, `timeout` | 502, 504 | `SendTurn` |
 | `session_not_finished` | 422 | `FetchResult` before `FinishSession` |
 | `invalid_attempt` | 502 | `FetchResult` when the run could not be assessed |
+
+## Learner login (device flow)
+
+The client acts for a learner account (#337). It never asks for a password:
+the learner logs in in a browser, as with a TV app (shaped after OAuth 2.0
+Device Authorization, RFC 8628). Admin accounts cannot use it.
+
+1. **Start.** `POST /device/start` (no body, no token):
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/start"
+   ```
+
+   ```json
+   {
+     "device_code": "Gq8…(43 characters)",
+     "user_code": "BCDF-GHJK",
+     "verification_uri": "https://<phoenix>/device",
+     "verification_uri_complete": "https://<phoenix>/device?user_code=BCDF-GHJK",
+     "interval": 5,
+     "expires_in": 600
+   }
+   ```
+
+   Show the `user_code` and `verification_uri` (or a QR code of
+   `verification_uri_complete`). Keep `device_code` secret.
+
+2. **The learner confirms.** At `/device` the learner logs in (or signs up),
+   checks that the code matches the one in the game, and chooses
+   **Autorizar** or **Negar**.
+
+3. **Poll.** Every `interval` seconds, until `expires_in` runs out:
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/token" \
+     -H 'content-type: application/json' -d '{"device_code": "'"$DEVICE_CODE"'"}'
+   ```
+
+   While waiting, Phoenix answers `400` with an `error` code and a pt-BR
+   `message`:
+
+   | `error` | Meaning | What to do |
+   | --- | --- | --- |
+   | `authorization_pending` | Not confirmed yet. | Poll again after `interval`. |
+   | `slow_down` | Polled faster than `interval`. | Add 5 s to the interval for every later poll. |
+   | `access_denied` | The learner chose **Negar**. | Stop; offer to start again. |
+   | `expired_token` | The 10 minutes ran out, even if the learner approved in time. | Stop; start again. |
+   | `invalid_grant` | Unknown or already used `device_code`. | Stop; start again. |
+
+   Once the learner approves, the next poll answers `200` once:
+
+   ```json
+   {
+     "access_token": "…",
+     "refresh_token": "…",
+     "token_type": "Bearer",
+     "expires_in": 900,
+     "refresh_expires_in": 2592000
+   }
+   ```
+
+4. **Call the API** with `Authorization: Bearer <access_token>`:
+
+   ```sh
+   curl -s "$PHOENIX/stations" -H "authorization: Bearer $ACCESS_TOKEN"
+   ```
+
+5. **Refresh.** The access token lasts 15 minutes. On `401 invalid_token` (or
+   shortly before `expires_in`), exchange the refresh token for a new pair:
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/refresh" \
+     -H 'content-type: application/json' -d '{"refresh_token": "'"$REFRESH_TOKEN"'"}'
+   ```
+
+   The answer has the body of step 3. Both old tokens stop working: store the
+   new pair before using it. A refresh token lasts 30 days from its last use.
+   Presenting any refresh token this login already rotated away, however many
+   refreshes ago, revokes the whole login. Send one refresh at a time and do
+   not retry it with the old token: a retry after the first refresh succeeded
+   counts as reuse. On `400 invalid_grant`, start the login again from step 1.
+
+6. **Log out.** `POST /device/logout` with the access token revokes this
+   device's tokens; `{"everywhere": true}` revokes every device login of the
+   learner. It answers `204`.
+
+   ```sh
+   curl -s -X POST "$PHOENIX/device/logout" -H "authorization: Bearer $ACCESS_TOKEN"
+   curl -s -X POST "$PHOENIX/device/logout" -H "authorization: Bearer $ACCESS_TOKEN" \
+     -H 'content-type: application/json' -d '{"everywhere": true}'
+   ```
+
+Changing or resetting the password and deleting the account also revoke every
+device login: the next call answers `401 invalid_token`, and the refresh
+`400 invalid_grant`. These account changes and logout everywhere also revoke
+a login the learner approved but the client has not polled yet: its poll
+answers `400 invalid_grant`. Phoenix stores only hashes of codes and tokens and never
+logs them.
+
+## Station catalog (`GET /stations`)
+
+Phoenix lists the published stations a learner can pick (issue #333). There is
+no `UStationClient` method for it yet; a client calls the route directly.
+
+- **Routes:** `GET /stations` and `GET /api/stations` return the same body.
+- **Auth:** none today. Both routes sit on the public `:api` pipeline; they will
+  require the device token once #337 (Unreal device login) lands.
+- **Response:** `200` with a JSON array, `[]` when nothing is published.
+- **What is listed:** only cases whose status is approved, and for each case
+  only its latest approved version. Pending and disapproved cases never appear;
+  disapproving a case removes it at once.
+- **Ordering:** by case number, ascending.
+
+```json
+[
+  {
+    "id": 1,
+    "version": 2,
+    "slug": "acute-appendicitis",
+    "area": "Cirurgia Geral",
+    "theme": "Abdome agudo inflamatório — apendicite aguda",
+    "actors": [
+      {
+        "id": "paciente",
+        "role": "patient",
+        "name": "Rafael Nogueira",
+        "age": 27,
+        "voice": "masculina-adulta"
+      }
+    ]
+  }
+]
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | The case number: the station's identity in the catalog. Unique per entry. |
+| `version` | integer | The published version of that case, starting at 1; it grows each time an edited case is approved again. |
+| `slug` | string | The case's `[ESTAÇÃO]` id. For display only: two cases may share one slug, so never key on it. |
+| `area` | string | `[ÁREA]` of the published version. |
+| `theme` | string | `[TEMA]` of the published version. |
+| `actors[].id` | string | The `[ATOR]` id. |
+| `actors[].role` | string | `patient` or `companion`. |
+| `actors[].name` | string | The actor's display name. |
+| `actors[].age` | integer | The actor's age in years. |
+| `actors[].voice` | string | The voice key (`voz=`) the voice worker maps to a TTS voice. |
+
+Examiner-only data (facts, persona, tone, mandatory questions, presenting
+context, rubric, impressos) is never in the catalog.
+
+## Sessions on a published station (`POST /sessions`)
+
+Phoenix starts a session on a station of the catalog (issue #334, ADR-013
+amendment on #209). There is no `UStationClient` method for it yet; until the
+client moves, `StartSession` keeps using the deprecated active-station routes
+below.
+
+- **Auth:** none today, like the catalog; the device token arrives with #337.
+- **Request:** a JSON body with exactly one station choice and the audio consent.
+
+| Body | Starts |
+| --- | --- |
+| `{"station_id": 12, "audio_consent": true}` | The latest published version of catalog entry `12` (the case number; a numeric string such as `"12"` is accepted too). |
+| `{"random": true, "area": "Pediatria", "audio_consent": false}` | A random published station of that `area` (the catalog's `area`). |
+| `{"random": true, "audio_consent": false}` | A random published station of any area. A blank `area` means any area. |
+
+- **Response:** `201` with the session. `station_id` is the catalog id and
+  `station_version` the published version (both integers, as in the catalog);
+  `station` carries what the learner sees before the first turn.
+
+```json
+{
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "station_id": 12,
+  "station_version": 2,
+  "station": {
+    "id": 12,
+    "version": 2,
+    "slug": "acute-appendicitis",
+    "area": "Cirurgia Geral",
+    "theme": "Abdome agudo inflamatório — apendicite aguda",
+    "display_title": "Abdome agudo inflamatório — apendicite aguda",
+    "language": "pt-BR",
+    "candidate_brief": { "scenario": "…", "tasks": ["…"] },
+    "actors": [
+      { "id": "paciente", "role": "patient", "name": "Rafael Nogueira", "age": 27, "voice": "masculina-adulta" }
+    ]
+  },
+  "audio_consent": true,
+  "status": "active",
+  "voice_mode": "realtime",
+  "started_at": "2026-10-25T15:00:00Z",
+  "expires_at": "2026-10-25T15:30:00Z",
+  "deadline_at": "2026-10-25T15:10:00Z",
+  "server_now": "2026-10-25T15:00:00Z"
+}
+```
+
+- **Pinned version:** the session plays the version published when it
+  started. Approving an edited case later publishes a new version for new
+  sessions only; a running session, its turns, impressos and result never
+  change.
+- **Errors:**
+
+| Code | Status | When |
+| --- | --- | --- |
+| `invalid_parameters` | 400 | No station choice, both `station_id` and `random`, a `station_id` that is not a positive integer, a non-string `area`, or a missing or non-boolean `audio_consent`. |
+| `subscription_required` | 402 | The learner has no active subscription (#339). |
+| `station_not_found` | 404 | No published station has that `station_id` (unknown, pending or disapproved case). |
+| `no_published_station` | 404 | Nothing is published in that `area` (or at all, without one). |
+| `daily_quota_exhausted` | 429 | The learner has used today's simulations (#340). See [Daily quota](#daily-quota). |
+| `station_unavailable` | 503 | The published package could not be loaded; the run cannot start. |
+
+### Daily quota
+
+Each plan allows a number of simulations per day (#340). Past it, `POST
+/sessions` answers `429` with a `Retry-After` header (seconds until the reset)
+and this body:
+
+```json
+{
+  "error": "daily_quota_exhausted",
+  "message": "Você usou todas as simulações de hoje. A cota renova à meia-noite (horário de Brasília).",
+  "daily_quota": 10,
+  "resets_at": "2026-10-26T03:00:00.000000Z"
+}
+```
+
+- **Day boundary:** the quota resets at local midnight in `America/Sao_Paulo`,
+  which is 03:00 UTC (Brazil has no daylight saving time). `resets_at` is that
+  moment, in UTC.
+- **What counts:** sessions that reached a graded result that day, plus
+  sessions in flight. A session holds its slot from its start until it is
+  graded or until its `expires_at`. A session that is abandoned or fails
+  technically is never graded, so it releases its slot at `expires_at` and
+  never consumes quota. A graded session counts on the day it finished.
+- **Two starts at once:** starts of one learner are serialized. At one
+  simulation left, two `POST /sessions` sent at the same moment start one
+  session; the other answers `429`. Counting only graded results at start
+  would let both through.
+- Show the `message` and offer a retry after `resets_at`. The remaining count
+  is shown on the web account page (`/conta`).
+
+### Pre-Station Notice (`GET /pre-station-notice`)
+
+Show it before a station, before asking for audio consent (ADR-003 #36). Phoenix
+derives `providers` from its running configuration, so it names every provider
+the station will actually call, and only those. All texts are pt-BR and can be
+shown as they are.
+
+```json
+{
+  "title": "Ferramenta Educacional",
+  "body": "Ferramenta educacional independente para treino de habilidades clínicas. Não insira dados de pacientes reais.",
+  "educational_disclaimer": "Estimativa educacional gerada por IA. Não é nota oficial do Revalida. …",
+  "audio_consent": "Ao ativar a voz, você aceita que o áudio da conversa seja processado pelos provedores de áudio listados. …",
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic (Claude)",
+      "processes": "text",
+      "roles": [
+        { "id": "simulated_patient", "processes": "text", "description": "Gera as falas do paciente simulado a partir do texto da conversa." }
+      ]
+    },
+    {
+      "id": "deepgram",
+      "name": "Deepgram",
+      "processes": "audio",
+      "roles": [
+        { "id": "speech_to_text", "processes": "audio", "description": "Transcreve a sua fala." }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `providers[].id` | `anthropic`, `openai`, `typesafe`, `livekit`, `deepgram` or `cartesia`. |
+| `providers[].processes` | `audio` when any of its roles receives audio, otherwise `text`. |
+| `providers[].roles[].id` | `simulated_patient`, `patient_adjudicator`, `jev_verification`, `rubric_resolver`, `learner_feedback`, `audio_transport`, `speech_to_text` or `text_to_speech`. |
+| `providers[].roles[].description` | What that provider does in the station, in pt-BR. |
+
+With voice off (`voice_mode` `off`) no audio provider is listed.
+
+### Session routes
+
+Every operation is addressed by the session id; request and response bodies are
+the ones of the operations table above.
+
+| Route | Operation |
+| --- | --- |
+| `GET /sessions/:id` | Refresh: status, transcript, timer (`RefreshSession`); a session started here also returns `station`. |
+| `POST /sessions/:id/messages` | A learner turn (`SendTurn`). |
+| `POST /sessions/:id/impressos/request` | An impresso request (`RequestImpresso`). |
+| `GET /sessions/:id/impressos` | Released impressos (`ListImpressos`). |
+| `POST /sessions/:id/exam-mode`, `DELETE /sessions/:id/exam-mode` | Arm or cancel the [spoken exam request](#spoken-exam-requests-issue-364) (no `UStationClient` method yet). |
+| `POST /sessions/:id/voice` | LiveKit credential (`RequestVoiceCredential`). |
+| `POST /sessions/:id/transcribe`, `POST /sessions/:id/synthesize` | Turn-based voice (legacy HTTP audio). |
+| `POST /sessions/:id/finish` | Finish (`FinishSession`). |
+| `GET /sessions/:id/result` | The v2 educational result (`FetchResult`). |
+| `POST /sessions/:id/discard` | Discard (`DiscardSession`). |
+
+### Rate limits (issue #395)
+
+The routes that call paid providers are throttled per session and per
+learner: `POST .../messages` (`SendTurn`), `.../transcribe`, `.../synthesize`,
+`.../voice` (`RequestVoiceCredential`), `.../impressos/request`
+(`RequestImpresso`), `POST`/`DELETE .../exam-mode` and `GET .../result`
+(`FetchResult`). The defaults (per minute, per session: 40 turns, 40
+transcriptions, 30 syntheses, 10 voice credentials, 15 impresso requests, 20
+exam-mode changes, 20 result fetches; per learner, twice that) sit well above
+a human-paced station, so a client that waits for each answer before the next
+request never meets them. Operators can change them (`RATE_LIMIT_<ACTION>_<KIND>`,
+see the README).
+
+Past a limit the route answers `429` with a `Retry-After` header (seconds)
+and this body; the request did nothing and counts toward neither limit, so the client may resend it after
+`Retry-After`, but never in a loop:
+
+```json
+{
+  "error": "rate_limited",
+  "message": "Muitas solicitações nesta sessão. Aguarde 12 s e tente novamente."
+}
+```
+
+The voice worker's routes are never throttled, so a spoken turn is never
+dropped by a limit.
+
+### Deprecated active-station routes
+
+`GET /api/stations/active`, `POST /api/stations/active/sessions` and the
+`/api/stations/active/sessions/:id/...` and `/api/v2/stations/active/sessions/:id/result`
+routes keep working until this client and the frozen web harness move to the
+routes above. They are unauthenticated only in dev and test (for the frozen web
+harness and the E2E suite); in production they need the access token, and the
+per-session aliases serve only the learner's own sessions. In production there is no active station (stations come
+only from the database), so `GET /api/stations/active` and
+`POST /api/stations/active/sessions` answer `404 no_active_station` there.
+
+The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
+which serves the language and speech-to-text keyterms of the session's own
+pinned station.
+
+## Results history (`GET /me/results`, issue #338)
+
+Phoenix keeps the learner's Educational Results (ADR-014 #346, ADR-013
+amendment on #209). There is no `UStationClient` method for it yet; a client
+calls the routes directly.
+
+- **What is stored:** the first time `GET /sessions/:id/result` serves a graded
+  result for a learner's session, Phoenix stores that exact body with the
+  station version and the finish date. Fetching the result again stores
+  nothing new. A technical failure (`502 invalid_attempt`) stores nothing, so
+  the attempt never appears. No audio and no transcript are stored: only the
+  criteria, points, recommendations and the learner phrases cited as evidence.
+- **Auth:** the device access token (`Authorization: Bearer <access_token>`),
+  as on every station route; a missing or invalid token is `401`.
+- **Scope:** only the learner's own results. Another learner's result is
+  `404 result_not_found`, exactly like an unknown id.
+- **No aggregate:** there is no total, average, trend, pass/fail or readiness
+  signal across sessions. Each result keeps its own `estimates.total`, `null`
+  when any active criterion is unresolved (ADR-012 #124). Show
+  `educational_disclaimer` with the history and with every result.
+- **Account deletion** deletes the history.
+
+### List (`GET /me/results`)
+
+Newest first (by `finished_at`). Query parameters, all optional:
+
+| Parameter | Meaning |
+| --- | --- |
+| `area` | Only results of that `[ÁREA]` (the catalog's `area`, exact match). Blank means every area. |
+| `page` | 1-based page, default `1` (at most `100000`). |
+| `page_size` | Results per page, `1` to `100`, default `20`. |
+
+`GET /me/results?area=Cirurgia%20Geral&page=1&page_size=20`
+
+```json
+{
+  "results": [
+    {
+      "id": 41,
+      "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+      "finished_at": "2026-10-25T15:09:12.482113Z",
+      "station": {
+        "id": 12,
+        "version": 2,
+        "slug": "acute-appendicitis",
+        "area": "Cirurgia Geral",
+        "theme": "Abdome agudo inflamatório — apendicite aguda",
+        "display_title": "Abdome agudo inflamatório — apendicite aguda"
+      }
+    }
+  ],
+  "page": 1,
+  "page_size": 20,
+  "has_more": false,
+  "educational_disclaimer": "Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame."
+}
+```
+
+`has_more` is `true` when a next page exists. An invalid `page` or
+`page_size` (not an integer, or out of range) is `400 invalid_parameters`.
+
+### Detail (`GET /me/results/:id`)
+
+The list entry's fields plus `result`, which is byte for byte the body
+`GET /sessions/:id/result` served at the end of that session (see the v2
+result of `FetchResult`), so the client can render it with the same view.
+
+```json
+{
+  "id": 41,
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "finished_at": "2026-10-25T15:09:12.482113Z",
+  "station": {
+    "id": 12,
+    "version": 2,
+    "slug": "acute-appendicitis",
+    "area": "Cirurgia Geral",
+    "theme": "Abdome agudo inflamatório — apendicite aguda",
+    "display_title": "Abdome agudo inflamatório — apendicite aguda"
+  },
+  "result": {
+    "schema_version": "2",
+    "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+    "status": "completed",
+    "placeholder": false,
+    "criteria": [
+      {
+        "id": "item-01",
+        "description": "Apresenta-se ao paciente.",
+        "status": "assessed",
+        "level": "adequado",
+        "level_description": "Apresentou-se e cumprimentou o paciente.",
+        "max_points": "0.5",
+        "points": "0.5",
+        "evidence_ids": ["turn-1"],
+        "evidence": [{ "id": "turn-1", "role": "learner", "text": "Bom dia, sou o doutor Pedro." }],
+        "reason": null,
+        "recommendation": "…"
+      },
+      {
+        "id": "item-02",
+        "description": "Caracteriza a dor abdominal.",
+        "status": "uncertain",
+        "max_points": "1.5",
+        "evidence_ids": [],
+        "evidence": [],
+        "reason": "assessment_unresolved",
+        "recommendation": "…"
+      }
+    ],
+    "coverage": { "assessed": 1, "uncertain": 1, "not_observable": 0, "not_applicable": 0 },
+    "estimates": {
+      "total": null,
+      "scored_subtotal": "0.5",
+      "scored_max": "0.5",
+      "eligible_max": "2",
+      "unresolved": [{ "id": "item-02", "status": "uncertain" }]
+    }
+  },
+  "educational_disclaimer": "Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame."
+}
+```
+
+| Code | Status | When |
+| --- | --- | --- |
+| `result_not_found` | 404 | Unknown id, a non-numeric id, or another learner's result. |
+
+## Who speaks in the voice room (`speaker`, issue #341)
+
+A station may have a companion besides the patient (the catalog's `actors`,
+`role: companion`). Both speak on the one patient voice track
+(`patient-voice`); the voice worker publishes each reply sentence on the
+room's `transcript` data topic, before its audio, and labels it with its
+speaker. This is the field the Unreal client (#322) reads to drive the right
+MetaHuman's lip sync and to name the speaker on screen.
+
+```json
+{
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "turn_id": 3,
+  "generation_id": 3,
+  "role": "patient",
+  "speaker": "companion",
+  "segment": 0,
+  "text": "A febre começou há dois dias."
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `role` | string | Always `patient` for a spoken reply (kept for older clients); `examiner` for the acknowledgement events, which speak nothing. |
+| `speaker` | string | `patient` or `companion`: the actor whose reply this is. Match it to the catalog `actors[].role`; a station has one actor of each role at most. Single-actor stations always send `patient`. |
+| `segment` | integer | The sentence index within the reply, when Phoenix streams it sentence by sentence. |
+| `text` | string | The verified sentence, without stage directions. |
+
+- The audio that follows the event, until the next reply event, is that
+  speaker's: each actor speaks with the Cartesia voice its voice key
+  (`actors[].voice`) maps to in the worker's `CARTESIA_VOICE_IDS`
+  (`voice-key=voice-id,...`); an unmapped key uses `CARTESIA_VOICE_ID`.
+- The `status: "complete"` end event of a streamed reply carries no `speaker`.
+- A worker built before #341 sends no `speaker`: read it as `patient`.
+- The HTTP responses name the speaker too, as `"patient"` or `"companion"`; a
+  reply with no stored speaker (any single-actor station) reads as `"patient"`:
+  - the text reply of `POST /sessions/:id/messages` (`outcome: "patient_reply"`)
+    carries `speaker`;
+  - each `role: "patient"` message of the session transcript
+    (`GET /sessions/:id`, `RefreshSession`) carries `speaker`; learner messages
+    carry none;
+  - the voice worker's non-streamed receipt (`status: "committed"` from
+    `POST /api/internal/voice/sessions/:id/transcripts`) carries `speaker`. The
+    streamed (`application/x-ndjson`) result line does not: its sentences
+    already carry the speaker.
+
+## Unavailable exam answers (issue #357)
+
+When `RequestImpresso` names an exam the station has no impresso for, the
+reply keeps `decision: "unavailable"`, releases nothing, and carries one of the
+two answers the Revalida examiner gives in `feedback_message`. Show it as is:
+
+| `feedback_message` | When |
+| --- | --- |
+| `Considere solicitado.` | The exam makes clinical sense for the case but is not in the checklist. It earns no points. |
+| `Não consta no script.` | The exam makes no sense for the case, or Phoenix could not decide. |
+
+No new decision value exists, so the parser in `StationJson.cpp` needs no
+change. Retrying with the same `RequestId` returns the same text.
+
+## Exam requests in the dialogue (issue #351)
+
+Exam findings and impressos are released only by the exam button, which calls
+`POST /sessions/:id/impressos/request` (`RequestImpresso`). A dialogue turn
+(`SendTurn`, or a voice turn) never releases an impresso nor records an
+impresso request, even when it names an exam. When the learner asks the
+examiner for an exam in the dialogue, Phoenix says so, so the client can show
+a hint pointing to the button.
+
+An examiner-addressed text reply of `POST /sessions/:id/messages`:
+
+```json
+{
+  "outcome": "examiner_acknowledged",
+  "reply_text": null,
+  "reply_audio_url": null,
+  "learner_turn": {"role": "learner", "modality": "text", "text": "Solicito hemograma e PCR"},
+  "newly_released": [],
+  "exam_request": true,
+  "server_now": "2026-10-25T14:03:11.204Z"
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `exam_request` | boolean | `true` when the learner asked for a physical exam, a maneuver, a complementary exam or a result, authored by the station or not; `false` when the learner only told the examiner what was done, found, concluded or planned. Display-only: show a hint pointing to the exam button. It releases nothing and is not graded; a wrong flag only shows or hides the hint. |
+| `newly_released` | array | Always empty for a dialogue turn; kept for older clients. |
+
+- A `patient_reply` response carries no `exam_request`; read it as `false`.
+- The voice worker's receipt of an examiner-addressed voice turn
+  (`status: "kept"`, `addressee: "examiner"`, from
+  `POST /api/internal/voice/sessions/:id/transcripts`, streamed or not) carries
+  the same `exam_request`. The worker does not forward it yet: its room event
+  stays `{role: "examiner", status: "acknowledged"}` (#191/#194 open question).
+- `FStationTurnReply` (`StationJson.cpp`) does not parse `exam_request` yet;
+  the field is an addition, so the current parser keeps working.
+
+## Spoken exam requests (issue #364)
+
+In a voice run the exam button asks for the exam aloud: the learner presses
+it, then says the request ("Solicito hemograma e PCR"). The spoken request goes
+to the same impresso request as `RequestImpresso`, never to the patient.
+
+1. On the press, call `POST /sessions/:id/exam-mode` (bearer token; no body).
+   Phoenix arms an exam mode for the learner's next utterance:
+
+   ```json
+   {"status": "armed", "expires_at": "2026-10-25T14:03:31.204Z", "server_now": "2026-10-25T14:03:11.204Z"}
+   ```
+
+2. The learner speaks. The voice worker posts the final transcript to Phoenix
+   as for any turn; Phoenix sees the armed mode and sends the text through the
+   impresso request (the same keyword matcher and negation handling as a typed
+   request), records an `impresso_requests` event with request id
+   `voice-exam-<turn_id>` and records no dialogue turn. The patient
+   generation never sees the request, now or later, and nothing is spoken.
+3. The worker publishes the outcome on the room's `transcript` data topic (see
+   the event below); read the released impressos with `ListImpressos`, as
+   after a typed request.
+
+The mode disarms after that one utterance, at `expires_at` (20 seconds after
+the press by default) or on `DELETE /sessions/:id/exam-mode` (`200`,
+`{"status": "disarmed"}`; also when nothing was armed), e.g. when the learner
+closes the exam prompt without speaking. Pressing again re-arms it and
+restarts the expiry. An utterance the learner finishes after `expires_at` is a
+dialogue turn: an exam it names releases nothing ([#351](#exam-requests-in-the-dialogue-issue-351)).
+
+The room event of a spoken exam request (`transcript` topic, published by the
+worker, nothing spoken):
+
+```json
+{
+  "session_id": "Jp0qJouf20BUkSvGHbDCgA",
+  "turn_id": 4,
+  "role": "examiner",
+  "status": "impresso_requested",
+  "request_id": "voice-exam-4",
+  "decision": "released",
+  "newly_released": [
+    {"id": "laboratorio-sangue-enzimas", "title": "IMPRESSO — EXAMES LABORATORIAIS", "category": "laboratory"}
+  ],
+  "feedback_message": "Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS"
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `status` | string | `impresso_requested`: the utterance was the exam request, not a dialogue turn. |
+| `request_id` | string | `voice-exam-<turn_id>`, the id of the recorded `impresso_requests` event. |
+| `decision` | string | As `RequestImpresso`: `released`, `already_released` or `unavailable` (an exam the station does not author, or a declined request). |
+| `newly_released` | array | The impressos this request released: `id`, `title`, `category`, without `content`; read the content with `ListImpressos`. |
+| `feedback_message` | string | The pt-BR line a typed request shows ("Impresso liberado: ...", "Considere solicitado.", "Não consta no script."). |
+
+- Show the outcome as after a typed request: `feedback_message`, then
+  `ListImpressos` for what was released.
+- The event carries no `generation_id` and no `text`; no audio follows it.
+- When the room event is lost (a publish error or a barge-in that dropped the
+  receipt), the request is still recorded: `ListImpressos` shows it.
+
+- Errors: `403 no_consent` on a run without audio consent (a typed request
+  needs no exam mode), `409 session_completed`, `404 session_not_found`,
+  `410 session_expired`.
+- Typed requests (`RequestImpresso`) are unchanged and do not touch the mode.
+- The learner's LiveKit token still has no data-publishing grant: the mode is
+  set over HTTP and only the worker publishes room events.
+- An utterance the learner was already speaking when the button was pressed
+  may be the one that consumes the mode; arm it before the learner starts the
+  request.
+
+## Not in the interface yet
+
+The [device login](#learner-login-device-flow) and the bearer header (#337) have
+no `UStationClient` method yet: the module must add them before it can call the
+authenticated routes in production.
+
+The [results history](#results-history-get-meresults-issue-338) (`GET /me/results`,
+`GET /me/results/:id`) has no `UStationClient` method yet either.
 
 ## Voice link (LiveKit)
 

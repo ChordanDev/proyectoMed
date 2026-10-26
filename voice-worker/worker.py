@@ -6,7 +6,13 @@ transcript to Phoenix, which owns the transcript. Each reply Phoenix approves is
 to the room as patient text and then spoken through Cartesia (#120, #360). A learner turn
 Phoenix kept without a reply is never spoken: a turn addressed to the examiner is
 published as an examiner acknowledgement (`status: acknowledged`, #274) and a refused
-patient reply as `status: kept` (#269). Never logs transcript text, reply text or audio.
+patient reply as `status: kept` (#269). A turn Phoenix sent to the impresso request
+because the learner armed the exam mode (#364) is published as `status:
+impresso_requested` with its outcome, and nothing is spoken. Every reply event names its `speaker` (`patient`
+or `companion`, #341), and each actor speaks with the Cartesia voice its voice key maps
+to in `CARTESIA_VOICE_IDS` (#398), on the one patient track. When the job ends it reports
+its provider usage (Deepgram audio seconds, Cartesia characters, LiveKit
+participant minutes, #342) to Phoenix. Never logs transcript text, reply text or audio.
 """
 
 # pyright: reportMissingImports=false
@@ -32,6 +38,7 @@ from transcripts import (
     classify_provider_error,
     process_speech_stream,
 )
+from usage import UsageMeter, report_usage
 
 ROOM_PREFIX = "station-session-"
 # Silence that closes an utterance. Deepgram's plugin default (25 ms) split one sentence
@@ -65,11 +72,16 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_retries=turn_retries,
     )
     voice = None
+    # Deepgram seconds, Cartesia characters and room minutes of this job (#342).
+    meter = UsageMeter()
+    connected = False
     async with phoenix:
         try:
             # Consent/active check happens before any audio reaches Deepgram.
             context = await phoenix.context()
             await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+            connected = True
+            meter.join("voice-worker")
             # Older Phoenix contexts expose only the committed cursor. Deploy the
             # additive server floor before relying on restart-safe allocation.
             tracker = TurnTracker(
@@ -78,7 +90,17 @@ async def entrypoint(ctx: JobContext) -> None:
                 turn_id_floor=context.get("turn_id_floor"),
             )
             tts = build_tts(session_id, context)
-            player = SpeechPlayer(ctx.room, tracker, tts) if tts is not None else None
+            player = (
+                SpeechPlayer(
+                    ctx.room,
+                    tracker,
+                    tts,
+                    voices=build_voice_tts(session_id, context),
+                    meter=meter,
+                )
+                if tts is not None
+                else None
+            )
             voice = PatientVoice(ctx.room, player, session_id)
             await voice.start()
             # The job lives as long as the room; a reconnecting learner is a new participant.
@@ -87,9 +109,19 @@ async def entrypoint(ctx: JobContext) -> None:
                     identity=f"learner-{session_id}"
                 )
                 tracker.segments = []  # never glue a half utterance onto the next connection
-                await transcribe(
-                    ctx.room, learner, context, tracker, phoenix, voice=voice
-                )
+                meter.join(learner.identity)
+                try:
+                    await transcribe(
+                        ctx.room,
+                        learner,
+                        context,
+                        tracker,
+                        phoenix,
+                        voice=voice,
+                        meter=meter,
+                    )
+                finally:
+                    meter.leave(learner.identity)
         except VoiceFailure as failure:
             logger.warning(
                 "voice worker stopped for session %s: %s", session_id, failure.kind
@@ -98,7 +130,17 @@ async def entrypoint(ctx: JobContext) -> None:
         finally:
             if voice is not None:
                 await voice.aclose()
+            if connected:
+                meter.leave("voice-worker")
+                await report_usage(phoenix, meter, job_id(ctx), session_id)
             ctx.shutdown()
+
+
+def job_id(ctx) -> str:
+    """The LiveKit job id names the usage report, so a retried report replaces itself."""
+    job = getattr(ctx, "job", None)
+    value = getattr(job, "id", None)
+    return value if isinstance(value, str) and value else f"job-{id(ctx)}"
 
 
 def phoenix_turn_settings(environ) -> tuple[float, int]:
@@ -140,6 +182,51 @@ def _required_setting(name: str) -> str:
     return value
 
 
+def build_voice_tts(session_id: str, context) -> dict:
+    """Cartesia providers per voice key (#341, #398), from `CARTESIA_VOICE_IDS`.
+
+    The variable is a comma-separated list of `voice-key=voice-id` pairs, for example
+    `feminina-adulta=<id>,infantil=<id>`; a reply whose voice key is not listed is
+    spoken with `CARTESIA_VOICE_ID`. Malformed pairs are skipped and only the
+    variable name is logged. Without an API key, or with the fake providers on,
+    nothing is mapped.
+    """
+    raw = os.environ.get("CARTESIA_VOICE_IDS", "").strip()
+    api_key = os.environ.get("CARTESIA_API_KEY", "").strip()
+    if not raw or not api_key or _fake_transcript() is not None:
+        return {}
+    voices = {}
+    malformed = False
+    for pair in raw.split(","):
+        key, sep, voice_id = (part.strip() for part in pair.partition("="))
+        if not sep or not key or not voice_id:
+            malformed = True
+            continue
+        try:
+            voices[key] = _cartesia_tts(api_key, voice_id, context)
+        except ValueError:
+            malformed = True
+    if malformed:
+        logger.warning(
+            "malformed CARTESIA_VOICE_IDS entries skipped for session %s", session_id
+        )
+    return voices
+
+
+def _cartesia_tts(api_key: str, voice_id: str, context):
+    """One Cartesia provider speaking `voice_id` in the session language."""
+    return cartesia.TTS(
+        api_key=api_key,
+        voice=voice_id,
+        model=os.environ.get("CARTESIA_MODEL", "").strip() or DEFAULT_TTS_MODEL,
+        encoding=TTS_ENCODING,
+        sample_rate=TTS_SAMPLE_RATE,
+        # Unused (speech plays whole sentences) and unsupported for Portuguese.
+        word_timestamps=False,
+        language=context["language"],
+    )
+
+
 def _fake_transcript() -> str | None:
     """The fixed fake transcript, None when the fake providers are off.
 
@@ -179,15 +266,10 @@ def build_tts(session_id: str, context):
     if _fake_transcript() is not None:
         return FakeTTS()
     try:
-        return cartesia.TTS(
-            api_key=_required_setting("CARTESIA_API_KEY"),
-            voice=_required_setting("CARTESIA_VOICE_ID"),
-            model=os.environ.get("CARTESIA_MODEL", "").strip() or DEFAULT_TTS_MODEL,
-            encoding=TTS_ENCODING,
-            sample_rate=TTS_SAMPLE_RATE,
-            # Unused (speech plays whole sentences) and unsupported for Portuguese.
-            word_timestamps=False,
-            language=context["language"],
+        return _cartesia_tts(
+            _required_setting("CARTESIA_API_KEY"),
+            _required_setting("CARTESIA_VOICE_ID"),
+            context,
         )
     except (KeyError, ValueError):
         logger.warning(
@@ -233,6 +315,9 @@ class PatientVoice:
             )
 
     async def on_reply(self, reply: VoiceTurnReply) -> None:
+        if reply.is_impresso_receipt():
+            await self._publish_impresso(reply)
+            return
         if reply.is_kept_receipt():
             await self._acknowledge(reply)
             return
@@ -241,6 +326,8 @@ class PatientVoice:
             "turn_id": reply.turn_id,
             "generation_id": reply.generation_id,
             "role": "patient",
+            # Who says it (#341); Phoenix labels only a station with a companion.
+            "speaker": reply.speaker if reply.speaker == "companion" else "patient",
             "text": reply.reply_text,
         }
         if reply.index is not None:
@@ -281,6 +368,32 @@ class PatientVoice:
             )
         except Exception:
             await self._publish_failure(reply, "text_delivery_failed")
+
+    async def _publish_impresso(self, reply: VoiceTurnReply) -> None:
+        """Phoenix sent the utterance to the impresso request (exam mode, #364).
+
+        The outcome goes to the learner's screen as an examiner event; nothing is
+        spoken. A room publish error is logged content-free and never stops the
+        job: the request is recorded, and the client can read it with
+        `GET /sessions/:id/impressos`.
+        """
+        try:
+            await publish(
+                self.room,
+                {
+                    "session_id": self.session_id,
+                    "turn_id": reply.turn_id,
+                    "role": "examiner",
+                    "status": "impresso_requested",
+                    **reply.impresso,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "impresso outcome not published for session %s turn %d",
+                self.session_id,
+                reply.turn_id,
+            )
 
     async def on_turn_end(self, reply: VoiceTurnReply) -> None:
         """Phoenix settled a reply streamed sentence by sentence (#281).
@@ -402,6 +515,7 @@ async def transcribe(
     on_reply=None,
     cleanup_timeout: float = 1.0,
     voice: PatientVoice | None = None,
+    meter: UsageMeter | None = None,
 ) -> None:
     if voice is not None and on_reply is None:
         on_reply = voice.on_reply
@@ -419,6 +533,8 @@ async def transcribe(
     async def pump() -> None:
         async for frame_event in audio:
             stream.push_frame(frame_event.frame)
+            if meter is not None:
+                meter.add_audio(frame_event.frame)
         stream.end_input()
 
     pump_task = asyncio.create_task(pump())

@@ -29,7 +29,9 @@ class SpeechPlayer:
     """Speaks accepted replies through an injected TTS provider, one generation at a time.
 
     Owns one audio source and one published local audio track per room, and closes the
-    provider it was given. The tracker stays the authority on which generation is
+    providers it was given. `voices` maps a voice key (`voz=`, #341) to its own
+    provider: a reply whose `voice` is mapped is spoken by it on the same track, any
+    other reply by `tts`. Every provider must share `tts`'s sample rate and channels. The tracker stays the authority on which generation is
     current: a reply is spoken only while it is the tracker's active, non-cancelled
     generation, and that fence is checked again before every frame is pushed.
     """
@@ -41,11 +43,16 @@ class SpeechPlayer:
         tts,
         source_factory=None,
         track_factory=None,
+        voices: dict | None = None,
+        meter=None,
     ):
         self.room = room
+        # Counts the characters sent to Cartesia (#342); optional.
+        self.meter = meter
         self.tracker = tracker
         self.session_id = tracker.session_id
         self.tts = tts
+        self.voices = dict(voices or {})
         self._source_factory = source_factory or rtc.AudioSource
         self._track_factory = track_factory or _audio_track
         self._source = None
@@ -152,6 +159,8 @@ class SpeechPlayer:
         if source is not None:
             await self._release(source.aclose())
         await self._release(self.tts.aclose())
+        for voice in self.voices.values():
+            await self._release(voice.aclose())
 
     async def _release(self, closing) -> None:
         try:
@@ -201,9 +210,10 @@ class SpeechPlayer:
             await self.start()
             if self._speaking is not reply or not self._is_current(reply):
                 return None
-            stream = self.tts.synthesize(
-                reply.reply_text, conn_options=SYNTHESIS_OPTIONS
-            )
+            tts = self.voices.get(getattr(reply, "voice", None), self.tts)
+            stream = tts.synthesize(reply.reply_text, conn_options=SYNTHESIS_OPTIONS)
+            if self.meter is not None:
+                self.meter.add_characters(reply.reply_text)
             async for audio in stream:
                 if self._speaking is not reply:
                     return None

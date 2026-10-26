@@ -1,7 +1,7 @@
 # Turn addressee: patient or examiner
 
 Status: **Implemented for #274, decided by the patient generation since #309** (parent
-#237). This note adds to ADR-011 (#123, the Jev verification gate) and ADR-008 (the
+#237). **Since #351 a dialogue turn releases no impresso and flags exam requests.** This note adds to ADR-011 (#123, the Jev verification gate) and ADR-008 (the
 station conversation). #235 recorded that deciding who a learner turn is addressed to
 deserves its own decision once real-time voice landed. It does not change ADR-011's
 gate, the grading contract (ADR-012) or any claim boundary in
@@ -28,11 +28,12 @@ addressee request on any path (text, voice, streamed voice).
 
 | Item | Decision |
 |---|---|
-| Marker | The patient prompt ends with `MARCAÇÃO DO DESTINATÁRIO`: every reply starts with exactly `[PACIENTE]` or `[EXAMINADOR]`. Examiner = the learner addresses the examiner or the station: asks for an exam, a maneuver, the physical exam or a result, or tells the examiner what was done, found, concluded or planned. Nothing follows `[EXAMINADOR]`. In doubt, `[PACIENTE]`. |
-| Parsing | `Backend.Stations.StationAI.Addressee`, in code, from the first characters: case and spaces inside the brackets are ignored. The marker is stripped before BoundedReply, Jev, the transcript, the client or TTS see the text; it is never spoken, shown or stored. |
+| Marker | The patient prompt ends with `MARCAÇÃO DO DESTINATÁRIO`: every reply starts with exactly `[PACIENTE]`, `[EXAMINADOR:EXAME]` or `[EXAMINADOR]`. `[EXAMINADOR:EXAME]` (#351) = the learner asks the examiner for a physical exam, a maneuver, a complementary exam or a result, including one the station does not author ("solicito uma tomografia"). `[EXAMINADOR]` = any other turn to the examiner or the station: the learner tells the examiner what was done, found, concluded or planned. Nothing follows either examiner marker. A patient question that names an exam ("o senhor já fez tomografia?") is `[PACIENTE]`. In doubt, `[PACIENTE]`. |
+| Parsing | `Backend.Stations.StationAI.Addressee`, in code, from the first characters: case and spaces inside the brackets (and around the `:` of `[EXAMINADOR:EXAME]`) are ignored. Both examiner markers are examiner-addressed; `[EXAMINADOR:EXAME]` has source `exam_marker`. The marker is stripped before BoundedReply, Jev, the transcript, the client or TTS see the text; it is never spoken, shown or stored. |
 | Missing or unknown marker | Patient-addressed, the text kept whole (an unknown bracket such as a stage direction is not lost), and logged with `source=missing_marker`. |
 | Impresso request | A learner text in which `Impressos.match` finds an authored impresso (#302, with the #305 negation rules) is examiner-addressed before any generation, without the model. |
-| Logging | One line per turn: `[Stations] turn_addressee decision=<examiner\|patient> source=<marker\|missing_marker\|impresso> channel=<text\|voice> latency_ms=<n>`, the time from the start of the turn to the decision. No learner or patient text. |
+| Exam request flag (#351) | An examiner-addressed turn carries the boolean `exam_request`: `true` for an impresso request (deterministic, below) or `[EXAMINADOR:EXAME]`, `false` for `[EXAMINADOR]`. Display-only: it releases nothing, records no event and is not graded. A patient-addressed turn never carries `exam_request: true`. No extra model call. |
+| Logging | One line per turn: `[Stations] turn_addressee decision=<examiner\|patient> source=<marker\|exam_marker\|missing_marker\|impresso> channel=<text\|voice> latency_ms=<n>`, the time from the start of the turn to the decision. No learner or patient text. |
 
 ### Paths
 
@@ -51,11 +52,32 @@ addressee request on any path (text, voice, streamed voice).
 - The verification of an examiner turn is never spent, and no `verified_fact_ids` are
   recorded for it (#286).
 
+## A station with a companion (#341)
+
+A package whose `actors` include a companion (`role: companion`, at most one)
+plays both actors in the same generation.
+
+| Item | Decision |
+|---|---|
+| Marker | The prompt asks for `[PACIENTE]`, `[ACOMPANHANTE]` or `[EXAMINADOR]`. `[ACOMPANHANTE]` = the learner addresses the companion, or asks for a fact only the companion's list has. In doubt, whoever has the fact in its list; if nobody has it, `[PACIENTE]`. `Addressee` reads `[ACOMPANHANTE]` only for such a package (`companion: true`); without a companion it stays an unknown marker, as before. |
+| Profiles and facts | The prompt (`StationAI`, `companion_prompt`) shows each actor's profile and its own fact list (`Backend.Stations.Actors.facts/2`). A companion reply is checked and audited against the companion's own profile and facts (`Actors.speaker_package/2`). |
+| Speaker | The reply, the stored patient message and the generator history carry the speaker: `speaker: :companion` and `[ACOMPANHANTE]` before the earlier reply. Each streamed sentence carries `speaker` and `voice` (the voice key) to the voice worker, which labels the room event and picks the voice (see `docs/unreal-station-client.md`). |
+| Mandatory questions | In the last `:mandatory_questions_window_ms` (default 3 minutes) the per-turn part of the prompt lists the actors' mandatory questions no stored reply contains yet, each with its marker; the speaker asks the next one on a learner turn that asks for no fact. |
+| Grading | Unchanged: evidence is the learner turns, whoever they were addressed to, so a question to the companion counts like one to the patient (`companion_turn_test.exs`). |
+
+A single-actor package is unchanged on every path: same prompt, markers,
+messages, results and sentence events (no `speaker` or `voice` key).
+
+Limitations: the text API response and the session transcript are serialized by
+controllers this issue does not change, so they do not show the speaker yet;
+the non-streamed voice receipt carries no speaker either, and the worker reads
+it as `patient`.
+
 ## What each outcome shows
 
 | Outcome | Stored | Text API | Voice | Web |
 |---|---|---|---|---|
-| Examiner-addressed | Learner turn, no reply | `200` with `outcome: "examiner_acknowledged"`, `reply_text: null`, `learner_turn` | Receipt `status: "kept"`, `addressee: "examiner"`; the worker speaks nothing and publishes `{role: "examiner", status: "acknowledged"}` | "Examinador: Anotado." |
+| Examiner-addressed | Learner turn, no reply, no impresso event | `200` with `outcome: "examiner_acknowledged"`, `reply_text: null`, `learner_turn`, `newly_released: []`, `exam_request` | Receipt `status: "kept"`, `addressee: "examiner"`, `exam_request`; the worker speaks nothing and publishes `{role: "examiner", status: "acknowledged"}` | "Examinador: Anotado." |
 | Patient-addressed, verified | Learner turn and reply | `200` with `outcome: "patient_reply"` and `reply_text` | Sentences as in #271 | Patient reply |
 | Patient-addressed, refused (#235, #269) | Learner turn, no reply | `502 reply_verification_failed` with `learner_turn` (unchanged) | Receipt `status: "kept"`, `addressee: "patient"`; the worker publishes `{role: "examiner", status: "kept"}` | Neutral notice "O paciente não respondeu a essa mensagem. Você pode reformulá-la." — never "Anotado." |
 | Technical failure | Turn rolled back (unchanged) | Unchanged | Unchanged | Unchanged retry notice |
@@ -67,36 +89,43 @@ and the input stays empty for a rephrased message. Neither entry is stored or gr
 Compatibility: a response without `outcome` is read as `patient_reply`. A worker
 event `status: "kept"` from a worker built before #274 now shows the neutral notice.
 
-## Exam requests to the examiner (#302)
+## Exam requests to the examiner (#302, #351)
 
-A turn (text or voice) whose text names at least one authored impresso is an
-impresso request, and since #309 examiner-addressed without the model: the backend matches it with `Impressos.match`
-over `Impressos.normalize(text)` (deterministic, no model) and, when anything
-matches, records it through `Stations.request_impresso/2`, the path of the impressos
-modal. The release and its `impresso_requests` event are therefore those of a modal
-request, and the rubric counts them the same way. A voice turn uses the request id
-`voice-turn-<turn_id>`, so a retried turn is not recorded twice.
+Since #351 (the #194 decision of 2026-10-21, confirmed 2026-10-25) exam findings and
+impressos are requested only with the exam button, which calls
+`POST /sessions/:id/impressos/request` (`Stations.request_impresso/2`). That route is
+the only one that releases an impresso and records an `impresso_requests` event; it
+is unchanged, and an exam the station does not author is still `unavailable` there.
+This supersedes the dialogue release of #302/#305.
 
-A remark that matches nothing records nothing: unlike a modal request, it is not an
-`unavailable` request. A repeated request is recorded as `already_released`, as from
-the modal. A patient-addressed turn never releases impressos.
+A dialogue turn (text, voice or streamed voice) never releases an impresso nor records
+an impresso request. A turn whose text names at least one authored impresso is still
+an exam request to the examiner without the model (#309): the backend matches it with
+`Impressos.match` over `Impressos.normalize(text)` (deterministic), acknowledges it
+like any examiner turn and sets `exam_request: true`. Nothing is released and no
+`voice-turn-<turn_id>` request is recorded. Any other turn is decided by the
+generation's marker; `[EXAMINADOR:EXAME]` sets `exam_request: true`.
 
 An exam named only to decline it is not a request (#305). `Impressos.match` splits
 the text into clauses (sentence punctuation, `;`, `,`, "mas", "porém", "e solicito",
 "e peço") and ignores a keyword occurrence preceded in its clause by a negation cue
 ("não", "nem", "sem", "dispenso", "dispensa") or followed by a clause-ending "não" /
 "não é necessário(a)" / "não precisa". So "não preciso do ECG, mas solicito hemograma"
-releases only the hemograma, and an examiner turn whose every exam mention is declined
-releases and records nothing; from the modal it is an `unavailable` request.
+from the exam button releases only the hemograma; in the dialogue a turn whose every
+exam mention is declined goes to the generation, and from the button it is an
+`unavailable` request.
 
-- Text API: the `examiner_acknowledged` response carries `newly_released` (impresso
-  objects, empty when nothing was released).
-- Voice: the receipt and the worker event are unchanged; the web learns of the release
-  by listing the session impressos after the examiner acknowledgement.
-- Web: after an examiner acknowledgement (text reply or voice event) `useStation`
-  re-reads the released impressos (`getImpressos`). When new ones appear, the examiner's
-  existing hand-over entry ("Entrega: <títulos>") follows "Anotado." and the impressos
-  drawer opens; with none, only "Anotado." shows. The impressos modal is unchanged.
+- Text API: the `examiner_acknowledged` response carries `newly_released: []` (kept
+  for older clients) and `exam_request`.
+- Voice: the receipt of an examiner-addressed turn carries `exam_request`; the worker
+  event stays `{role: "examiner", status: "acknowledged"}`. Whether the worker forwards
+  the flag to the Unreal client is the open #191/#194 question.
+- Web (frozen harness, #186): it ignores `exam_request`. After an acknowledgement it
+  still re-reads the released impressos; with nothing new, only "Anotado." shows. The
+  hand-over entry ("Entrega: <títulos>") and the drawer still follow a request made
+  from the impressos modal.
+- The Unreal client contract is in
+  [unreal-station-client.md](../unreal-station-client.md#exam-requests-in-the-dialogue-issue-351).
 
 ## Grading
 
@@ -105,8 +134,10 @@ patient-addressed turn is stored since #235: one learner message with the same r
 modality and text, and no patient message. The evidence pool and rubric assessment
 read learner turns without any addressee, so the same learner turns give the same
 evidence and the same grade (tested in
-`backend/test/backend/stations/turn_addressee_evidence_test.exs`). Since #302 the only
-addition is the impresso events of exam requests made to the examiner.
+`backend/test/backend/stations/turn_addressee_evidence_test.exs`). Since #351 asking for
+an exam in the dialogue earns no credit for requesting it: that credit comes only from
+the `impresso_requests` event an exam-button request records. The turn's text still
+enters the evidence pool like any other learner turn.
 
 ## Open points
 
@@ -115,4 +146,7 @@ addition is the impresso events of exam requests made to the examiner.
 - A turn that mixes both addressees ("o abdome está doloroso; o senhor tem febre?") is
   expected to be marked `[PACIENTE]` (the doubt rule), as before #274.
 - A patient question that names an authored exam ("o senhor já fez hemograma?") is an
-  exam request to the examiner by the impresso rule.
+  exam request to the examiner by the impresso rule: it is acknowledged, flagged
+  `exam_request: true`, and the patient does not answer it.
+- The `[EXAMINADOR:EXAME]` marking is not calibrated on live pt-BR turns yet (#351 live
+  check pending).

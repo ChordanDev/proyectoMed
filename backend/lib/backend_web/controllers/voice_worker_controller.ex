@@ -10,7 +10,14 @@ defmodule BackendWeb.VoiceWorkerController do
       A refused patient reply keeps the learner turn and answers `201` with
       `status: "kept"`, `addressee: "patient"` and no text (#269). A turn Jev
       decides is addressed to the examiner (#274) is kept before any generation
-      and answers `201` with `status: "kept"` and `addressee: "examiner"`.
+      and answers `201` with `status: "kept"`, `addressee: "examiner"` and the
+      display-only boolean `exam_request` (#351): an exam request to the
+      examiner. A dialogue turn never releases an impresso.
+      While the learner's exam mode is armed (#364, `POST /sessions/:id/exam-mode`)
+      the next fresh turn is an impresso request instead: `201` with
+      `status: "impresso_requested"`, `request_id` (`voice-exam-<turn_id>`),
+      `decision`, `newly_released` (`id`, `title`, `category`) and
+      `feedback_message`, never streamed and without a generation.
       With `application/x-ndjson` in `Accept` (#271; the worker sends `application/x-ndjson, application/json`, since the API pipeline accepts JSON) the reply is streamed: the
       first verified sentence opens a `200` chunked NDJSON body, one line per
       verified sentence (`{"type":"sentence","turn_id","generation_id","index","text"}`,
@@ -25,6 +32,11 @@ defmodule BackendWeb.VoiceWorkerController do
       drops one superseded turn, this ends the voice session and must not be retried.
     * `POST /api/internal/voice/sessions/:id/cancel` — cancels a pending voice
       generation via `Backend.Stations.cancel_voice_turn/2`.
+    * `POST /api/internal/voice/sessions/:id/usage` — the worker's audio usage
+      for the session (#342): `report_id`, `deepgram_audio_seconds`,
+      `cartesia_characters`, `livekit_participant_minutes`, cumulative per
+      job, via `Backend.Stations.record_voice_usage/2`. `202` with
+      `status: "recorded"`; `400 invalid_usage` for a malformed report.
 
   Authenticated with a shared bearer secret (`VOICE_WORKER_SECRET`). With no
   secret configured every request is refused. Transcript and reply text are never logged.
@@ -98,13 +110,16 @@ defmodule BackendWeb.VoiceWorkerController do
           }
 
         {:ok, {:kept, %{generation_id: generation_id} = kept}} ->
-          %{
-            type: "result",
-            turn_id: turn_id,
-            status: "kept",
-            generation_id: generation_id,
-            addressee: kept_addressee(kept)
-          }
+          Map.merge(
+            %{
+              type: "result",
+              turn_id: turn_id,
+              status: "kept",
+              generation_id: generation_id,
+              addressee: kept_addressee(kept)
+            },
+            kept_exam_request(kept)
+          )
 
         {:ok, :duplicate} ->
           %{type: "result", turn_id: turn_id, status: "duplicate"}
@@ -129,25 +144,45 @@ defmodule BackendWeb.VoiceWorkerController do
         |> put_status(:ok)
         |> json(%{turn_id: turn_id, status: "duplicate"})
 
-      %{reply_text: reply_text, turn_id: ^turn_id, generation_id: generation_id} ->
+      %{reply_text: reply_text, turn_id: ^turn_id, generation_id: generation_id} = reply ->
         conn
         |> put_status(:created)
         |> json(%{
           turn_id: turn_id,
           status: "committed",
           generation_id: generation_id,
-          reply_text: reply_text
+          reply_text: reply_text,
+          speaker: reply |> Map.get(:speaker, :patient) |> to_string()
         })
 
       # A refused reply kept the learner turn (#269): no text to speak.
       {:kept, %{turn_id: ^turn_id, generation_id: generation_id} = kept} ->
         conn
         |> put_status(:created)
+        |> json(
+          Map.merge(
+            %{
+              turn_id: turn_id,
+              status: "kept",
+              generation_id: generation_id,
+              addressee: kept_addressee(kept)
+            },
+            kept_exam_request(kept)
+          )
+        )
+
+      # A spoken exam request in exam mode (#364): nothing to speak, no generation.
+      {:impresso, %{turn_id: ^turn_id} = request} ->
+        conn
+        |> put_status(:created)
         |> json(%{
           turn_id: turn_id,
-          status: "kept",
-          generation_id: generation_id,
-          addressee: kept_addressee(kept)
+          status: "impresso_requested",
+          request_id: request.request_id,
+          decision: request.decision,
+          newly_released:
+            Enum.map(request.newly_released, &Map.take(&1, [:id, :title, :category])),
+          feedback_message: request.feedback_message
         })
     end
   end
@@ -158,6 +193,19 @@ defmodule BackendWeb.VoiceWorkerController do
   # sent to the patient) or `patient` (the patient reply was refused).
   defp kept_addressee(%{addressee: :examiner}), do: "examiner"
   defp kept_addressee(_kept), do: "patient"
+
+  # Only an examiner-addressed receipt carries the display-only flag (#351).
+  defp kept_exam_request(%{addressee: :examiner} = kept),
+    do: %{exam_request: Map.get(kept, :exam_request, false)}
+
+  defp kept_exam_request(_kept), do: %{}
+
+  def report_usage(conn, %{"id" => session_id} = params) do
+    case Stations.record_voice_usage(session_id, Map.delete(params, "id")) do
+      :ok -> conn |> put_status(:accepted) |> json(%{status: "recorded"})
+      {:error, reason} -> send_error(conn, reason)
+    end
+  end
 
   def cancel(conn, %{"id" => session_id} = params) do
     with {:ok, cancel_target} <- validate_cancel_params(params),
@@ -231,6 +279,7 @@ defmodule BackendWeb.VoiceWorkerController do
   defp error_details(:invalid_transcript), do: {400, "invalid_transcript"}
   defp error_details(:invalid_generation_id), do: {400, "invalid_generation_id"}
   defp error_details(:invalid_turn_id), do: {400, "invalid_turn_id"}
+  defp error_details(:invalid_usage), do: {400, "invalid_usage"}
   defp error_details(:not_found), do: {404, "session_not_found"}
   defp error_details(:no_consent), do: {403, "no_consent"}
   defp error_details(:stale_generation), do: {409, "stale_generation"}

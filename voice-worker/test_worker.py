@@ -24,7 +24,13 @@ from test_transcripts import (
     event,
 )
 from transcripts import TurnTracker, VoiceTurnReply
-from worker import PatientVoice, build_tts, phoenix_turn_settings, transcribe
+from worker import (
+    PatientVoice,
+    build_tts,
+    build_voice_tts,
+    phoenix_turn_settings,
+    transcribe,
+)
 
 REPLY_TEXT = "Resposta clinica confidencial"
 PROVIDER_SECRET = "sk-provider-secret"
@@ -155,6 +161,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
                         "turn_id": 1,
                         "generation_id": 1,
                         "role": "patient",
+                        "speaker": "patient",
                         "text": f"{REPLY_TEXT} 1",
                     },
                 ),
@@ -168,6 +175,24 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         await self.disconnect(task)
 
     # Issue #271: Phoenix streams the verified sentences of a reply.
+    # Issue #341: every spoken reply names its speaker; Phoenix sends one only
+    # for a station with a companion, and a reply without one is the patient's.
+    async def test_each_reply_event_names_its_speaker(self):
+        companion = VoiceTurnReply(1, "committed", 1, "Começou ontem.", index=0)
+        companion.speaker = "companion"
+        assert self.tracker.accept_sentence(companion) is companion
+        await self.voice.on_reply(companion)
+        unlabelled = VoiceTurnReply(1, "committed", 1, "Ainda dói.", index=1)
+        assert self.tracker.accept_sentence(unlabelled) is unlabelled
+        await self.voice.on_reply(unlabelled)
+        await settle()
+
+        self.assertEqual(
+            [(e["speaker"], e["text"]) for e in self.room.patient_events()],
+            [("companion", "Começou ontem."), ("patient", "Ainda dói.")],
+        )
+        await self.voice.stop()
+
     async def test_first_streamed_sentence_is_spoken_while_the_reply_still_streams(self):
         more = asyncio.Event()
         self.client.streams[1] = ["Começou ontem.", more, "Ainda dói."]
@@ -426,6 +451,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
                         "turn_id": 1,
                         "generation_id": 1,
                         "role": "patient",
+                        "speaker": "patient",
                         "text": f"{REPLY_TEXT} 1",
                     },
                     {
@@ -499,6 +525,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
                     "turn_id": 2,
                     "generation_id": 2,
                     "role": "patient",
+                    "speaker": "patient",
                     "text": f"{REPLY_TEXT} 2",
                 },
             ],
@@ -531,7 +558,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [sorted(payload) for payload in self.room.patient_events()],
             [
-                ["generation_id", "role", "session_id", "text", "turn_id"],
+                ["generation_id", "role", "session_id", "speaker", "text", "turn_id"],
                 ["failure", "generation_id", "session_id", "turn_id"],
             ],
         )
@@ -593,6 +620,43 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tts.texts, [])
         self.assertEqual(self.client.cancel_calls, [])
 
+    async def test_spoken_exam_request_publishes_its_outcome_and_speaks_nothing(self):
+        # Issue #364: in exam mode Phoenix routed the utterance to the impresso
+        # request. The outcome goes to the learner's screen; nothing is spoken.
+        outcome = {
+            "request_id": "voice-exam-1",
+            "decision": "released",
+            "newly_released": [
+                {"id": "lab", "title": "Laboratório", "category": "laboratory"}
+            ],
+            "feedback_message": "Impresso liberado: Laboratório",
+        }
+        self.client.replies[1] = VoiceTurnReply(
+            turn_id=1, status="impresso_requested", impresso=outcome
+        )
+        task = self.connect()
+        with self.assertNoLogs("voice-worker", level="WARNING"):
+            await self.say("solicito hemograma")
+            await self.say("onde dói")
+            self.tts.streams[0].queue.put_nowait(chunk("a2"))
+            await settle()
+            await self.disconnect(task)
+
+        self.assertEqual(
+            self.room.patient_events()[0],
+            {
+                "session_id": "s1",
+                "turn_id": 1,
+                "role": "examiner",
+                "status": "impresso_requested",
+                **outcome,
+            },
+        )
+        # The next utterance is a dialogue turn again.
+        self.assertEqual(self.room.patient_events()[1]["role"], "patient")
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 2"])
+        self.assertEqual(self.client.cancel_calls, [])
+
     async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
         self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
         task = self.connect()
@@ -614,6 +678,128 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         output = "\n".join(logs.output)
         self.assertIn("synthesis_failed", output)
         self.assertNotIn(PROVIDER_SECRET, output)
+
+
+class BuildVoiceTTSTest(unittest.TestCase):
+    """Issues #341, #398: voice keys (`voz=`) map to Cartesia voices by environment."""
+
+    CONTEXT = {"language": "pt-BR", "keyterms": []}
+    BASE = {"CARTESIA_API_KEY": PROVIDER_SECRET, "CARTESIA_VOICE_ID": "voice-1"}
+
+    def test_maps_each_voice_key_to_its_cartesia_voice(self):
+        env = {
+            **self.BASE,
+            "CARTESIA_VOICE_IDS": "feminina-adulta=voice-f, infantil=voice-c",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS") as tts,
+        ):
+            voices = build_voice_tts("s1", self.CONTEXT)
+
+        self.assertEqual(sorted(voices), ["feminina-adulta", "infantil"])
+        self.assertEqual(
+            sorted(call.kwargs["voice"] for call in tts.call_args_list),
+            ["voice-c", "voice-f"],
+        )
+        for call in tts.call_args_list:
+            self.assertEqual(
+                call.kwargs,
+                {
+                    **call.kwargs,
+                    "api_key": PROVIDER_SECRET,
+                    "model": "sonic-3",
+                    "encoding": "pcm_s16le",
+                    "sample_rate": 24000,
+                    "word_timestamps": False,
+                    "language": "pt-BR",
+                },
+            )
+
+    def test_every_voice_key_of_the_case_format_can_be_mapped(self):
+        keys = [
+            "infantil",
+            "masculina-adulta",
+            "feminina-adulta",
+            "masculina-idosa",
+            "feminina-idosa",
+        ]
+        env = {
+            **self.BASE,
+            "CARTESIA_VOICE_IDS": ",".join(f"{key}=id-{key}" for key in keys),
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS"),
+        ):
+            self.assertEqual(sorted(build_voice_tts("s1", self.CONTEXT)), sorted(keys))
+
+    def test_uses_the_cartesia_model_override(self):
+        env = {
+            **self.BASE,
+            "CARTESIA_MODEL": "sonic-turbo",
+            "CARTESIA_VOICE_IDS": "infantil=voice-c",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS") as tts,
+        ):
+            build_voice_tts("s1", self.CONTEXT)
+        self.assertEqual(tts.call_args.kwargs["model"], "sonic-turbo")
+
+    def test_no_mapping_means_the_default_voice_only(self):
+        with (
+            patch.dict(os.environ, self.BASE, clear=True),
+            patch.object(worker.cartesia, "TTS") as tts,
+        ):
+            self.assertEqual(build_voice_tts("s1", self.CONTEXT), {})
+        tts.assert_not_called()
+
+    def test_malformed_entries_are_skipped_without_leaking_them(self):
+        env = {**self.BASE, "CARTESIA_VOICE_IDS": "feminina-adulta=voice-f,broken,=x,y="}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS"),
+            self.assertLogs("voice-worker", level="WARNING") as logs,
+        ):
+            voices = build_voice_tts("s1", self.CONTEXT)
+
+        self.assertEqual(list(voices), ["feminina-adulta"])
+        self.assertIn("CARTESIA_VOICE_IDS", "\n".join(logs.output))
+        self.assertNotIn("voice-f", "\n".join(logs.output))
+        self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+
+    def test_missing_api_key_maps_nothing(self):
+        env = {"CARTESIA_VOICE_IDS": "feminina-adulta=voice-f"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS") as tts,
+        ):
+            self.assertEqual(build_voice_tts("s1", self.CONTEXT), {})
+        tts.assert_not_called()
+
+    def test_elevenlabs_voice_map_is_no_longer_read(self):
+        env = {**self.BASE, "ELEVENLABS_VOICE_IDS": "feminina-adulta=voice-f"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS") as tts,
+        ):
+            self.assertEqual(build_voice_tts("s1", self.CONTEXT), {})
+        tts.assert_not_called()
+
+    def test_fake_providers_map_no_cartesia_voice(self):
+        env = {
+            **self.BASE,
+            "CARTESIA_VOICE_IDS": "feminina-adulta=voice-f",
+            "VOICE_WORKER_FAKE_PROVIDERS": "true",
+            "LIVEKIT_URL": "ws://127.0.0.1:7880",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(worker.cartesia, "TTS") as tts,
+        ):
+            self.assertEqual(build_voice_tts("s1", self.CONTEXT), {})
+        tts.assert_not_called()
 
 
 class BuildTTSTest(unittest.TestCase):

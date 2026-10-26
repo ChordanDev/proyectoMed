@@ -48,11 +48,21 @@ defmodule Backend.Stations.StationLoader do
     end
   end
 
+  # Production turns the file loader off (`:file_station_loader`, issue #334):
+  # it then never starts, and stations come only from the database.
   @impl true
-  @spec init(keyword()) :: {:ok, map()}
+  @spec init(keyword()) :: {:ok, map()} | :ignore
   def init(_options) do
-    {:ok, load_active()}
+    if Application.get_env(:backend, :file_station_loader, true) do
+      {:ok, load_active()}
+    else
+      :ignore
+    end
   end
+
+  @doc "Whether the file loader is running and serves an active station."
+  @spec running?(GenServer.server()) :: boolean()
+  def running?(server \\ __MODULE__), do: GenServer.whereis(server) != nil
 
   @impl true
   def handle_call(:active_package, _from, package), do: {:reply, package, package}

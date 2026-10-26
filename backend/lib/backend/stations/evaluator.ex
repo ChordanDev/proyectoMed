@@ -17,7 +17,8 @@ defmodule Backend.Stations.Evaluator do
   present, the transcript argument may be the full session map (as returned
   by `Backend.Stations.Conversation`) so its `impresso_requests` events are
   available: an event whose `station_version` matches the package version
-  and whose `released_ids` include one of the criterion's `impresso_ids` (and
+  (or, for a session pinned to a published Station version that is graded
+  against its own pinned package, the session's `station_version`) and whose `released_ids` include one of the criterion's `impresso_ids` (and
   is authored in the package) upgrades the criterion to `:met`, adding one
   evidence entry per contributing event (`"impresso:<id> (request
   <request_id>)"`). Impresso evidence only ever upgrades a criterion; it
@@ -210,7 +211,7 @@ defmodule Backend.Stations.Evaluator do
     normalized_messages = normalize_transcript(transcript)
     impresso_requests = extract_impresso_requests(transcript)
     authored_impresso_ids = extract_authored_impresso_ids(package)
-    package_version = get_field(package, "version")
+    package_version = impresso_event_version(package, transcript)
 
     criteria =
       Enum.map(rubric, fn criterion ->
@@ -330,6 +331,19 @@ defmodule Backend.Stations.Evaluator do
   defp event_field(event, key) when is_map(event) do
     Map.get(event, key) || Map.get(event, Atom.to_string(key))
   end
+
+  # The `station_version` an impresso event must carry to count. A session
+  # pinned to a published Station version (issue #334) stamps its events with
+  # that version's integer `version_number`, not the package schema version,
+  # so when the package being graded is the session's own pinned package the
+  # session's version is the one to match. Otherwise (a legacy session or a
+  # bare transcript) events must match the package version.
+  defp impresso_event_version(package, %{station_version_id: id, package: package} = session)
+       when not is_nil(id) and is_map(package) do
+    session.station_version
+  end
+
+  defp impresso_event_version(package, _transcript), do: get_field(package, "version")
 
   defp extract_impresso_requests(transcript) when is_map(transcript) do
     transcript[:impresso_requests] || transcript["impresso_requests"] || []

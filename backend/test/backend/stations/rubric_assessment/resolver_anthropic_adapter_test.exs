@@ -67,7 +67,8 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
              }
 
       assert_receive {:req, "/v1/messages", ["sk-ant-test"], payload}
-      assert payload["model"] == "claude-opus-5-5"
+      # Issue #343: the resolver defaults to Claude Haiku 5.5.
+      assert payload["model"] == "claude-haiku-5-5"
       # Issue #272: the fixed system prompt is the cached prefix; the
       # per-request user content stays after the breakpoint.
       assert payload["system"] == [
@@ -78,7 +79,9 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
                }
              ]
 
-      assert payload["fallbacks"] == "default"
+      # Haiku 5.5 has no server-side fallback (issue #290).
+      refute Map.has_key?(payload, "fallbacks")
+      assert payload["max_tokens"] == 8_192
 
       assert payload["output_config"] == %{
                "effort" => "medium",
@@ -93,7 +96,7 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
       end
     end
 
-    test "uses the shared model setting, never the patient model (issue #256)" do
+    test "uses its own model setting, never the shared or patient model (issues #256, #343)" do
       previous = Application.fetch_env(:backend, Backend.Stations.StationAI.AnthropicClient)
 
       on_exit(fn ->
@@ -108,7 +111,9 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
 
       Application.put_env(:backend, Backend.Stations.StationAI.AnthropicClient,
         model: "claude-opus-5-5",
-        patient_model: "claude-haiku-5-5"
+        patient_model: "claude-haiku-5-5",
+        adjudicator_model: "claude-haiku-5-5",
+        resolver_model: "claude-sonnet-5-5"
       )
 
       test_pid = self()
@@ -121,7 +126,8 @@ defmodule Backend.Stations.RubricAssessment.Resolver.AnthropicAdapterTest do
 
       assert {:ok, _} = resolve(ClaudeResolverModelStub)
       assert_receive {:payload, payload}
-      assert payload["model"] == "claude-opus-5-5"
+      assert payload["model"] == "claude-sonnet-5-5"
+      assert payload["fallbacks"] == "default"
       assert payload["output_config"]["effort"] == "medium"
       refute Map.has_key?(payload, "thinking")
     end

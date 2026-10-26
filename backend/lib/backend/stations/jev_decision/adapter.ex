@@ -9,6 +9,8 @@ defmodule Backend.Stations.JevDecision.Adapter do
        allowed classes and evidence IDs (Rubric Decision).
     3. Optionally, classifying several independent rubric questions over one shared
        evidence pool in a single call (Rubric Batch Decision).
+    4. Optionally, classifying an impresso request that matched no authored impresso
+       as plausible or not for the case (Impresso Request Decision, issue #357).
 
   Concrete adapters must implement this behaviour. The default adapter is
   `Backend.Stations.JevDecision.DisabledAdapter`, reflecting that live provider
@@ -130,5 +132,28 @@ defmodule Backend.Stations.JevDecision.Adapter do
   @callback decide_rubric_batch(request :: rubric_batch_request()) ::
               {:ok, rubric_batch_response() | map()} | {:error, technical_failure() | term()}
 
-  @optional_callbacks decide_rubric_batch: 1
+  @type impresso_request :: %{
+          required(:text) => String.t(),
+          required(:case) => map(),
+          required(:deadline_ms) => pos_integer(),
+          optional(:deadline_at_monotonic_ms) => integer()
+        }
+
+  @doc """
+  Classifies a learner impresso request that matched no authored impresso
+  (issue #357): does the requested exam make clinical sense for the case?
+
+  `case` carries only the package `candidate_brief` and `patient_profile`.
+  Returns `{:ok, %{classification: label}}` with `label` one of
+  `"plausible"`, `"not_plausible"` or `"undecided"`, or `{:error, reason}` on
+  technical failure. The adapter never writes learner-facing text.
+
+  This callback is optional: an adapter that does not implement it yields a
+  typed technical failure.
+  """
+  @callback decide_impresso_request(request :: impresso_request()) ::
+              {:ok, %{required(:classification) => String.t()} | map()}
+              | {:error, technical_failure() | term()}
+
+  @optional_callbacks decide_rubric_batch: 1, decide_impresso_request: 1
 end

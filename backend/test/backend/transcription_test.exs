@@ -142,7 +142,7 @@ defmodule Backend.TranscriptionTest do
 
   describe "with the Deepgram voice provider" do
     setup do
-      Application.put_env(:backend, :voice_provider, :deepgram_elevenlabs)
+      Application.put_env(:backend, :voice_provider, :deepgram_cartesia)
       Application.put_env(:backend, :deepgram_api_key, "dg-test-secret-key")
 
       on_exit(fn ->

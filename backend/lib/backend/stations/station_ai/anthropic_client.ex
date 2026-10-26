@@ -52,12 +52,13 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
 
   `config :backend, Backend.Stations.StationAI.AnthropicClient` holds
   `:api_key`, `:base_url` (default `https://api.anthropic.com`), `:model`
-  (default `claude-opus-5-5`, the resolver and feedback), `:patient_model`
+  (default `claude-opus-5-5`, learner feedback), `:resolver_model` (default
+  `claude-haiku-5-5`, the rubric resolver, issue #343), `:patient_model`
   (default `claude-haiku-5-5`, the patient, issue #308), `:adjudicator_model` (default
   `claude-haiku-5-5`, the undecided-verdict adjudicator, issue #290) and
   `:req_options`; `config/runtime.exs` writes them from `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_PATIENT_MODEL` and
-  `ANTHROPIC_ADJUDICATOR_MODEL`.
+  `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_RESOLVER_MODEL`,
+  `ANTHROPIC_PATIENT_MODEL` and `ANTHROPIC_ADJUDICATOR_MODEL`.
   A seam picks its model setting with the `:model_key` default. Call options
   (`:api_key`, `:base_url`, `:model`, `:effort`, `:plug`, `:retry`,
   `:req_options`) override it. The operating system environment is never
@@ -86,13 +87,21 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   `cache_read_input_tokens`, `cache_creation_input_tokens` and the request
   latency in milliseconds (missing usage fields are logged as 0), so a live run
   shows whether the cache hits. It carries no prompt, output or key.
+
+  The same 2xx response adds `input_tokens`, `output_tokens`,
+  `cache_read_input_tokens` and `cache_creation_input_tokens` to the tracked
+  session's counters for the model (`Backend.Stations.Usage`, issue #342). A
+  stream takes them from `message_start` and the last `message_delta` usage.
   """
 
   require Logger
 
+  alias Backend.Stations.Usage
+
   @default_base_url "https://api.anthropic.com"
   @default_models %{
     model: "claude-opus-5-5",
+    resolver_model: "claude-haiku-5-5",
     patient_model: "claude-haiku-5-5",
     adjudicator_model: "claude-haiku-5-5"
   }
@@ -136,7 +145,8 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
   configuration, then the defaults.
 
   `defaults` carries a seam's own `:effort`, `:receive_timeout`, `:model_key`
-  (`:model`, the default, `:patient_model` or `:adjudicator_model`) and `:thinking` (`:default`,
+  (`:model`, the default, `:resolver_model`, `:patient_model` or
+  `:adjudicator_model`) and `:thinking` (`:default`,
   or `:lowest`); the call options and the configured `:req_options` still win
   over them.
   """
@@ -280,6 +290,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
     case Req.post(url, req_opts) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         log_usage(config.model, body, started)
+        record_usage(config.model, body)
         {:ok, body}
 
       {:ok, %Req.Response{}} ->
@@ -321,6 +332,7 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
       {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
         state = Req.Response.get_private(resp, @stream_key, new_stream_state())
         log_usage(config.model, %{"usage" => state.usage}, started)
+        record_usage(config.model, %{"usage" => state.usage})
         stream_result(state)
 
       {:ok, %Req.Response{}} ->
@@ -373,9 +385,18 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
        when is_map(usage),
        do: %{state | usage: Map.merge(state.usage, usage)}
 
-  defp apply_decoded(%{"type" => "message_delta", "delta" => %{"stop_reason" => stop}}, state, _)
-       when is_binary(stop),
-       do: %{state | stop_reason: stop}
+  defp apply_decoded(%{"type" => "message_delta"} = event, state, _) do
+    state =
+      case event["usage"] do
+        usage when is_map(usage) -> %{state | usage: Map.merge(state.usage, usage)}
+        _none -> state
+      end
+
+    case event["delta"] do
+      %{"stop_reason" => stop} when is_binary(stop) -> %{state | stop_reason: stop}
+      _other -> state
+    end
+  end
 
   defp apply_decoded(%{"type" => "error"}, state, _), do: %{state | error?: true}
   defp apply_decoded(_event, state, _), do: state
@@ -402,6 +423,12 @@ defmodule Backend.Stations.StationAI.AnthropicClient do
         " cache_creation_input_tokens=#{usage_count(usage, "cache_creation_input_tokens")}" <>
         " latency_ms=#{latency_ms}"
     end)
+  end
+
+  defp record_usage(model, body) do
+    if is_map(body) and is_map(body["usage"]),
+      do: Usage.record_claude(model, body["usage"]),
+      else: :ok
   end
 
   defp usage_count(usage, key) do

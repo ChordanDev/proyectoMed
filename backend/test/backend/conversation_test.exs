@@ -1111,6 +1111,58 @@ defmodule Backend.ConversationTest do
                )
     end
 
+    test "stores an optional classification on a new event (#357)" do
+      session = Conversation.start()
+
+      assert {:ok, %{event: event, session: updated}} =
+               Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-1",
+                 [],
+                 "tomografia de crânio",
+                 classification: :plausible
+               )
+
+      assert event.decision == :unavailable
+      assert event.classification == :plausible
+      assert updated.impresso_requests == [event]
+    end
+
+    test "an event recorded without a classification carries none (#357)" do
+      session = Conversation.start()
+
+      assert {:ok, %{event: event}} =
+               Conversation.record_impresso_request(session.session_id, "req-1", ["ecg"], "ecg")
+
+      refute Map.has_key?(event, :classification)
+    end
+
+    test "a repeated request_id returns its stored classification untouched (#357)" do
+      session = Conversation.start()
+
+      {:ok, %{event: first_event}} =
+        Conversation.record_impresso_request(
+          session.session_id,
+          "req-1",
+          [],
+          "tomografia de crânio",
+          classification: :plausible
+        )
+
+      assert {:ok, %{event: replayed_event, session: updated}} =
+               Conversation.record_impresso_request(
+                 session.session_id,
+                 "req-1",
+                 [],
+                 "tomografia de crânio",
+                 classification: :not_plausible
+               )
+
+      assert replayed_event == first_event
+      assert replayed_event.classification == :plausible
+      assert length(updated.impresso_requests) == 1
+    end
+
     test "discard removes released impressos and requests along with the session" do
       session = Conversation.start()
 

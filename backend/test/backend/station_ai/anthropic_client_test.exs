@@ -70,6 +70,15 @@ defmodule Backend.Stations.StationAI.AnthropicClientTest do
       assert config.model == "claude-haiku-5-5"
     end
 
+    test "the resolver model key defaults to Claude Haiku 5.5 (issue #343)" do
+      config = AnthropicClient.config([api_key: "k"], model_key: :resolver_model)
+      assert config.model == "claude-haiku-5-5"
+    end
+
+    test "the shared model key still defaults to Claude Opus 5.5 (issue #343)" do
+      assert AnthropicClient.config(api_key: "k").model == "claude-opus-5-5"
+    end
+
     test "sends no server-side fallback and turns thinking off at the lowest setting" do
       config =
         AnthropicClient.config([api_key: "k", model: "claude-haiku-5-5"],

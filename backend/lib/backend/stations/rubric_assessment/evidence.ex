@@ -102,7 +102,7 @@ defmodule Backend.Stations.RubricAssessment.Evidence do
   @spec build(map(), map()) :: pool()
   def build(session, package) when is_map(session) and is_map(package) do
     authored = authored_categories(package)
-    version = Map.get(package, "version")
+    version = event_version(session, package)
 
     turns = session |> list_field(:messages) |> indexed(&turn/2)
 
@@ -279,11 +279,25 @@ defmodule Backend.Stations.RubricAssessment.Evidence do
 
   defp event_provenance(event, request_id, released_ids, version, authored) do
     verified? =
-      is_binary(request_id) and is_binary(version) and
+      is_binary(request_id) and not is_nil(version) and
         field(event, :station_version) == version and
         Enum.all?(released_ids, &is_map_key(authored, &1))
 
     if verified?, do: :impressos, else: :unverified
+  end
+
+  # The `station_version` an impresso event must carry to count, by the same
+  # rule as `Backend.Stations.Evaluator`. A session pinned to a published
+  # Station version (issue #334) stamps its events with that version's integer
+  # `version_number`, so when the package being graded is the session's own
+  # pinned package the session's version is the one to match. Otherwise (a
+  # legacy session or a bare transcript) events must match the package version.
+  defp event_version(session, package) do
+    if not is_nil(field(session, :station_version_id)) and field(session, :package) == package do
+      field(session, :station_version)
+    else
+      Map.get(package, "version")
+    end
   end
 
   defp event_order(event, index) do
