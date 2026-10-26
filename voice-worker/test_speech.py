@@ -1,9 +1,15 @@
 # pyright: reportMissingImports=false
 import asyncio
+import json
+import logging
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import aiohttp
 from livekit.agents import APIConnectionError, APIStatusError
+from livekit.agents.cli.log import ColoredFormatter, JsonFormatter
+from livekit.plugins import cartesia
 
 from speech import SYNTHESIS_OPTIONS, SpeechPlayer
 from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
@@ -653,6 +659,132 @@ class StreamingProviderTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.sources[0].frames, ["a1"])
         self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+
+
+class FakeCartesiaSocket:
+    """A Cartesia websocket that answers the first request with `answer(context_id)`."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.sent: list[dict] = []
+        self._context = asyncio.Event()
+        self.closed = False
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+        self._context.set()
+
+    async def receive(self, timeout=None):
+        await self._context.wait()
+        message, self.answer = self.answer, None
+        if message is None:
+            await asyncio.Event().wait()  # nothing more from the provider
+        payload = message(self.sent[0]["context_id"])
+        return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload))
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
+    """The real Cartesia plugin behind the player, over a fake websocket."""
+
+    def setUp(self):
+        self.tracker = TurnTracker("s1", last_turn_id=0)
+        self.room = FakeRoom()
+        self.sockets: list[FakeCartesiaSocket] = []
+        self.answers: list = []
+
+        async def connect(_tts, _timeout):
+            answer = self.answers.pop(0) if self.answers else None
+            self.sockets.append(FakeCartesiaSocket(answer))
+            return self.sockets[-1]
+
+        async def close(_tts, ws):
+            await ws.close()
+
+        patches = (
+            patch.object(cartesia.TTS, "_connect_ws", connect),
+            patch.object(cartesia.TTS, "_close_ws", close),
+        )
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.tts = cartesia.TTS(
+            api_key="test-key",
+            voice="test-voice",
+            model="sonic-3",
+            encoding="pcm_s16le",
+            sample_rate=24000,
+            word_timestamps=False,
+            language="pt",
+        )
+        self.player = SpeechPlayer(
+            self.room,
+            self.tracker,
+            self.tts,
+            source_factory=FakeSource,
+            track_factory=lambda source: SimpleNamespace(source=source),
+        )
+
+    def capture_logs(self) -> list[str]:
+        """Every log line, as both livekit console formatters would print it."""
+        lines: list[str] = []
+        formatters = (
+            ColoredFormatter(
+                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s"
+                " %(name)s - %(message)s %(esc_gray)s%(extra)s"
+            ),
+            JsonFormatter(),
+        )
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                lines.extend(f.format(record) for f in formatters)
+
+        handler = Capture(level=logging.DEBUG)
+        root = logging.getLogger()
+        previous_level = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+
+        def restore():
+            root.removeHandler(handler)
+            root.setLevel(previous_level)
+
+        self.addCleanup(restore)
+        return lines
+
+    async def test_a_provider_error_reaches_the_logs_without_its_payload(self):
+        self.answers.append(
+            lambda context_id: {
+                "type": "error",
+                "context_id": context_id,
+                "error": f"PROVIDER_MARKER {REPLY_TEXT}",
+            }
+        )
+        lines = self.capture_logs()
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1, REPLY_TEXT))
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        output = "\n".join(lines)
+        self.assertIn("Cartesia returned error", output)
+        self.assertNotIn("PROVIDER_MARKER", output)
+        self.assertNotIn(REPLY_TEXT, output)
+        await self.player.aclose()
+
+    async def test_an_unexpected_provider_message_is_logged_without_its_payload(self):
+        lines = self.capture_logs()
+        # The plugin's own call for a message type it does not know.
+        logging.getLogger("livekit.plugins.cartesia").warning(
+            "unexpected message", extra={"lk.pii.data": {"transcript": REPLY_TEXT}}
+        )
+
+        output = "\n".join(lines)
+        self.assertIn("unexpected message", output)
+        self.assertNotIn(REPLY_TEXT, output)
 
 
 if __name__ == "__main__":

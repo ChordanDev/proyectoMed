@@ -19,6 +19,20 @@ TRACK_NAME = "patient-voice"
 # warning echoes the provider error, which can carry the reply text.
 SYNTHESIS_OPTIONS = APIConnectOptions(max_retry=0)
 logger = logging.getLogger("voice-worker.speech")
+# Log fields where the Cartesia plugin puts a provider message, which can echo the
+# reply text: kept as a field, never printed.
+PROVIDER_PAYLOAD_FIELDS = ("error", "lk.pii.data")
+REDACTED = "[redacted]"
+
+
+def _redact_provider_payload(record: logging.LogRecord) -> bool:
+    for field in PROVIDER_PAYLOAD_FIELDS:
+        if field in record.__dict__:
+            record.__dict__[field] = REDACTED
+    return True
+
+
+logging.getLogger("livekit.plugins.cartesia").addFilter(_redact_provider_payload)
 
 
 def _audio_track(source):
