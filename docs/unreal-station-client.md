@@ -429,7 +429,7 @@ shown as they are.
 
 | Field | Meaning |
 | --- | --- |
-| `providers[].id` | `anthropic`, `openai`, `typesafe`, `livekit`, `deepgram` or `elevenlabs`. |
+| `providers[].id` | `anthropic`, `openai`, `typesafe`, `livekit`, `deepgram` or `cartesia`. |
 | `providers[].processes` | `audio` when any of its roles receives audio, otherwise `text`. |
 | `providers[].roles[].id` | `simulated_patient`, `patient_adjudicator`, `jev_verification`, `rubric_resolver`, `learner_feedback`, `audio_transport`, `speech_to_text` or `text_to_speech`. |
 | `providers[].roles[].description` | What that provider does in the station, in pt-BR. |
@@ -652,9 +652,9 @@ MetaHuman's lip sync and to name the speaker on screen.
 | `text` | string | The verified sentence, without stage directions. |
 
 - The audio that follows the event, until the next reply event, is that
-  speaker's: each actor speaks with the ElevenLabs voice its voice key
-  (`actors[].voice`) maps to in the worker's `ELEVENLABS_VOICE_IDS`
-  (`voice-key=voice-id,...`); an unmapped key uses `ELEVENLABS_VOICE_ID`.
+  speaker's: each actor speaks with the Cartesia voice its voice key
+  (`actors[].voice`) maps to in the worker's `CARTESIA_VOICE_IDS`
+  (`voice-key=voice-id,...`); an unmapped key uses `CARTESIA_VOICE_ID`.
 - The `status: "complete"` end event of a streamed reply carries no `speaker`.
 - A worker built before #341 sends no `speaker`: read it as `patient`.
 - The HTTP responses name the speaker too, as `"patient"` or `"companion"`; a

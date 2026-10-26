@@ -489,7 +489,8 @@ through the subscribed audio track.
 | Variable              | Required | Purpose                                                                 |
 | --------------------- | -------- | ----------------------------------------------------------------------- |
 | `CARTESIA_API_KEY`    | yes      | Cartesia API key.                                                       |
-| `CARTESIA_VOICE_ID`   | yes      | Cartesia voice id used for the patient.                                 |
+| `CARTESIA_VOICE_ID`   | yes      | Cartesia voice id used for the patient, and for any actor whose voice key `CARTESIA_VOICE_IDS` does not map. |
+| `CARTESIA_VOICE_IDS`  | no       | Companion stations (#341): `voice-key=voice-id,...` for the keys `infantil`, `masculina-adulta`, `feminina-adulta`, `masculina-idosa` and `feminina-idosa`. Malformed pairs are skipped with a warning naming only the variable. |
 | `CARTESIA_MODEL`      | no       | TTS model. Default `sonic-3` (low latency, supports Portuguese).        |
 | `PHOENIX_TURN_TIMEOUT_S` | no    | Seconds each transcript POST waits for Phoenix. Default `35` (see below). |
 | `PHOENIX_TURN_RETRIES`   | no    | Retries of a transcript POST after a timeout or disconnect. Default `1`.  |
@@ -509,9 +510,8 @@ invalid value keeps the default.
 If the key or the voice id is missing the worker keeps transcribing and delivers every
 reply as text followed by a `synthesis_failed` event. The worker asks Cartesia for raw
 16-bit PCM at 24 kHz in Portuguese (the session language `pt-BR` is sent as `pt`).
-The `ELEVENLABS_*` variables are no longer read by the worker; they only configure
-turn-based voice in Phoenix (see
-["Turn-based voice providers"](#turn-based-voice-providers-deepgram-and-elevenlabs)).
+Phoenix's turn-based voice reads the same `CARTESIA_*` variables (see
+["Turn-based voice providers"](#turn-based-voice-providers-deepgram-and-cartesia)).
 
 **Room events** (all on data topic `transcript`, reliable, JSON):
 
@@ -670,7 +670,7 @@ prove the result contract, not the quality of any assessment.
 ### Voice worker fake speech providers
 
 The Unreal spoken-turn test (#191) runs the real voice worker without Deepgram
-or ElevenLabs. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
+or Cartesia. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
 
 - Every learner utterance becomes one final transcript,
   `VOICE_WORKER_FAKE_TRANSCRIPT` (default `Qual é o seu nome?`). An utterance
@@ -877,7 +877,7 @@ off, setting `ACTIVE_STATION_ID` stops the boot, and the active-station routes
 answer `404 no_active_station`. Learners start sessions on published stations
 from the database with `POST /sessions` (see `docs/unreal-station-client.md`).
 
-### Turn-based voice providers (Deepgram and ElevenLabs)
+### Turn-based voice providers (Deepgram and Cartesia)
 
 The station's turn-based voice ("Usar voz" / "Ouvir resposta") transcribes the
 learner through `POST /api/stations/active/sessions/:id/transcribe` and speaks the
@@ -885,21 +885,21 @@ patient reply through `POST /api/stations/active/sessions/:id/synthesize`. By
 default both use OpenAI (`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`,
 `OPENAI_TRANSCRIPTION_MODEL` = `whisper-1`, `OPENAI_TTS_MODEL` = `tts-1`,
 `OPENAI_TTS_VOICE` = `alloy`); that path is unchanged. `VOICE_PROVIDER` switches
-both endpoints to Deepgram (speech-to-text, pt-BR) and ElevenLabs (patient voice).
+both endpoints to Deepgram (speech-to-text, pt-BR) and Cartesia (patient voice, #398).
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `VOICE_PROVIDER` | `deepgram_elevenlabs` selects Deepgram and ElevenLabs for voice (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps OpenAI. | unset |
+| `VOICE_PROVIDER` | `deepgram_cartesia` selects Deepgram and Cartesia for voice (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps OpenAI. | unset |
 | `DEEPGRAM_API_KEY` | Deepgram key, sent as `Authorization: Token <key>` to the pre-recorded `/v1/listen` API with `language=pt-BR`. | unset |
 | `DEEPGRAM_MODEL` | Deepgram model. | `nova-3` |
-| `ELEVENLABS_API_KEY` | ElevenLabs key, sent as `xi-api-key`. | unset |
-| `ELEVENLABS_VOICE_ID` | Voice used for the patient. It must be a voice the key may use. | unset |
-| `ELEVENLABS_MODEL` | Multilingual text-to-speech model. | `eleven_flash_v2_5` (low latency, pt-BR) |
+| `CARTESIA_API_KEY` | Cartesia key, sent as `Authorization: Bearer <key>` to `POST /tts/bytes` (`Cartesia-Version: 2026-08-14`). | unset |
+| `CARTESIA_VOICE_ID` | Voice used for the patient. It must be a voice the key may use. | unset |
+| `CARTESIA_MODEL` | Text-to-speech model. | `sonic-3` (low latency, Portuguese) |
 
 `backend/config/runtime.exs` reads these variables once, at boot. The web is
-unchanged: transcription returns the same JSON, and ElevenLabs is asked for mp3
-(`output_format=mp3_44100_128`), served as `audio/mpeg` like the OpenAI audio.
-The patient always speaks with `ELEVENLABS_VOICE_ID`; an OpenAI voice name sent by
+unchanged: transcription returns the same JSON, and Cartesia is asked for mp3 in
+Portuguese (44.1 kHz, 128 kbps), served as `audio/mpeg` like the OpenAI audio.
+The patient always speaks with `CARTESIA_VOICE_ID`; an OpenAI voice name sent by
 a client is still validated but not used. Without the selected provider's key (or
 without the voice id), voice is unavailable exactly as it is without an OpenAI
 key: the endpoints answer `502` and the learner continues by text. Neither
@@ -918,8 +918,8 @@ endpoint answers `400` (nothing to synthesize). The rule lives in
 Check it with the acute-appendicitis station:
 
 ```sh
-cd backend && ACTIVE_STATION_ID=acute-appendicitis VOICE_PROVIDER=deepgram_elevenlabs \
-  DEEPGRAM_API_KEY=<key> ELEVENLABS_API_KEY=<key> ELEVENLABS_VOICE_ID=<voice-id> \
+cd backend && ACTIVE_STATION_ID=acute-appendicitis VOICE_PROVIDER=deepgram_cartesia \
+  DEEPGRAM_API_KEY=<key> CARTESIA_API_KEY=<key> CARTESIA_VOICE_ID=<voice-id> \
   mix phx.server
 ```
 
