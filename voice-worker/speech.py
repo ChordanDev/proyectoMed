@@ -90,6 +90,33 @@ class SpeechPlayer:
             self._track_factory(self._source),
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         )
+        self._prewarm()
+
+    def _prewarm(self) -> None:
+        """Open the provider connection ahead of the next reply, without waiting for it.
+
+        A cold Cartesia connection delayed the first audio of a reply by 0.5-1 s in
+        local tests; a reply that ends early (cancelled or failed) drops its connection,
+        so this runs again after every reply. Best effort: a failure only costs the next
+        reply time.
+        """
+        prewarm = getattr(self.tts, "prewarm", None)
+        if prewarm is None:
+            return
+        try:
+            prewarm()
+        except Exception:
+            logger.warning("speech prewarm failed for session %s", self.session_id)
+
+    def _open_stream(self, text: str):
+        """One provider stream for `text`: the streaming input when the provider has one."""
+        capabilities = getattr(self.tts, "capabilities", None)
+        if not getattr(capabilities, "streaming", False):
+            return self.tts.synthesize(text, conn_options=SYNTHESIS_OPTIONS)
+        stream = self.tts.stream(conn_options=SYNTHESIS_OPTIONS)
+        stream.push_text(text)
+        stream.end_input()
+        return stream
 
     async def speak(self, reply: VoiceTurnReply) -> VoiceFailure | None:
         """Stream one accepted reply into the room; frames are pushed as they arrive.
@@ -201,9 +228,7 @@ class SpeechPlayer:
             await self.start()
             if self._speaking is not reply or not self._is_current(reply):
                 return None
-            stream = self.tts.synthesize(
-                reply.reply_text, conn_options=SYNTHESIS_OPTIONS
-            )
+            stream = self._open_stream(reply.reply_text)
             async for audio in stream:
                 if self._speaking is not reply:
                     return None
@@ -233,3 +258,5 @@ class SpeechPlayer:
         finally:
             if stream is not None:
                 await self._release(stream.aclose())
+                if not self._closed:
+                    self._prewarm()

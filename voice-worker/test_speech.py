@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from livekit.agents import APIConnectionError, APIStatusError
 
-from speech import SpeechPlayer
+from speech import SYNTHESIS_OPTIONS, SpeechPlayer
 from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 
 REPLY_TEXT = "Resposta clinica confidencial"
@@ -126,6 +126,43 @@ class FakeTTS:
 
     async def aclose(self) -> None:
         self.closed += 1
+
+
+class FakeStreamingSynthesis(FakeSynthesis):
+    """A provider input stream: the text pushed into it and whether input ended."""
+
+    def __init__(self):
+        super().__init__()
+        self.pushed: list[str] = []
+        self.input_ended = False
+
+    def push_text(self, text: str) -> None:
+        self.pushed.append(text)
+
+    def end_input(self) -> None:
+        self.input_ended = True
+
+
+class FakeStreamingTTS(FakeTTS):
+    """A streaming provider with a connection pool, like Cartesia's websocket."""
+
+    capabilities = SimpleNamespace(streaming=True)
+
+    def __init__(self):
+        super().__init__()
+        self.prewarms = 0
+        self.prewarm_error: Exception | None = None
+        self.stream_options: list[dict] = []
+
+    def prewarm(self) -> None:
+        self.prewarms += 1
+        if self.prewarm_error is not None:
+            raise self.prewarm_error
+
+    def stream(self, **options):
+        self.stream_options.append(options)
+        self.streams.append(FakeStreamingSynthesis())
+        return self.streams[-1]
 
 
 async def settle() -> None:
@@ -492,6 +529,84 @@ class SpeechPlayerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
         self.assertNotIn(REPLY_TEXT, repr(self.player))
+
+
+class StreamingProviderTest(unittest.IsolatedAsyncioTestCase):
+    """A streaming provider is warmed ahead of each reply, so none waits for a connection."""
+
+    def setUp(self):
+        self.tracker = TurnTracker("s1", last_turn_id=0)
+        self.room = FakeRoom()
+        self.tts = FakeStreamingTTS()
+        self.sources: list[FakeSource] = []
+
+        def source_factory(sample_rate: int, num_channels: int) -> FakeSource:
+            self.sources.append(FakeSource(sample_rate, num_channels))
+            return self.sources[-1]
+
+        self.player = SpeechPlayer(
+            self.room,
+            self.tracker,
+            self.tts,
+            source_factory=source_factory,
+            track_factory=lambda source: SimpleNamespace(source=source),
+        )
+
+    async def start(self, reply: VoiceTurnReply) -> asyncio.Task:
+        task = asyncio.create_task(self.player.speak(reply))
+        await settle()
+        return task
+
+    async def test_start_prewarms_the_provider_connection(self):
+        await self.player.start()
+
+        self.assertEqual(self.tts.prewarms, 1)
+        self.assertEqual(len(self.room.local_participant.published), 1)
+
+    async def test_reply_is_spoken_through_one_provider_stream_with_one_attempt(self):
+        reply = accepted(self.tracker, 1)
+        task = await self.start(reply)
+        stream = self.tts.streams[0]
+
+        self.assertEqual(stream.pushed, [reply.reply_text])
+        self.assertTrue(stream.input_ended)
+        self.assertEqual(self.tts.stream_options, [{"conn_options": SYNTHESIS_OPTIONS}])
+        self.assertEqual(self.tts.texts, [])
+
+        stream.queue.put_nowait(chunk("a1"))
+        stream.queue.put_nowait(None)
+        self.assertIsNone(await task)
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        self.assertEqual(stream.closed, 1)
+
+    async def test_provider_is_prewarmed_again_after_a_finished_reply(self):
+        task = await self.start(accepted(self.tracker, 1))
+        warmed_before_reply_ended = self.tts.prewarms
+        self.tts.streams[0].queue.put_nowait(None)
+        await task
+
+        self.assertEqual(self.tts.prewarms, warmed_before_reply_ended + 1)
+
+    async def test_provider_is_prewarmed_again_after_a_cancelled_reply(self):
+        reply = accepted(self.tracker, 1)
+        task = await self.start(reply)
+        warmed_before_cancel = self.tts.prewarms
+        self.player.cancel(reply.generation_id)
+        self.assertIsNone(await task)
+
+        self.assertEqual(self.tts.prewarms, warmed_before_cancel + 1)
+
+    async def test_prewarm_failure_never_stops_the_reply(self):
+        self.tts.prewarm_error = RuntimeError(PROVIDER_SECRET)
+        with self.assertLogs("voice-worker.speech", level="WARNING") as logs:
+            await self.player.start()
+            task = await self.start(accepted(self.tracker, 1))
+            self.tts.streams[0].queue.put_nowait(chunk("a1"))
+            self.tts.streams[0].queue.put_nowait(None)
+            self.assertIsNone(await task)
+
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
 
 
 if __name__ == "__main__":

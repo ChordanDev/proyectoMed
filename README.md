@@ -493,7 +493,9 @@ invalid value keeps the default.
 If the key or the voice id is missing the worker keeps transcribing and delivers every
 reply as text followed by a `synthesis_failed` event. The worker asks Cartesia for raw
 16-bit PCM at 24 kHz in Portuguese (the session language `pt-BR` is sent as `pt`).
-The `ELEVENLABS_*` variables are no longer read by the worker; they only configure
+It speaks over Cartesia's websocket and opens that connection when it publishes the
+patient track and again after every reply, so no reply waits for a connection (a cold
+one delayed the first audio by 0.5-1 s in local tests). The `ELEVENLABS_*` variables are no longer read by the worker; they only configure
 turn-based voice in Phoenix (see
 ["Turn-based voice providers"](#turn-based-voice-providers-deepgram-and-elevenlabs)).
 
@@ -533,8 +535,8 @@ id, generation id and failure kind only.
 - `LIVEKIT_URL` must be `ws://127.0.0.1:7880` for the local `livekit-server --dev`, in
   both the backend and the worker.
 - `CARTESIA_VOICE_ID` must be a voice the API key may use. Check the key and the voice
-  before starting the worker with the same request the worker sends (expects
-  `http 200`):
+  before starting the worker with this HTTP request, which carries the same settings
+  the worker sends over the websocket (expects `http 200`):
 
   ```sh
   curl -s -o /dev/null -w 'http %{http_code}\n' -X POST https://api.cartesia.ai/tts/bytes \
