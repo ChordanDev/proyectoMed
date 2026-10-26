@@ -770,6 +770,22 @@ class PhoenixClientSentenceStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.kind, "stale_generation")
         on_sentence.assert_awaited_once()
 
+    async def test_an_error_line_with_a_non_string_error_is_malformed(self):
+        for error in (["stale_generation"], {"kind": "auth"}, None, 409):
+            with self.subTest(error=error):
+
+                def handler(request):
+                    return httpx.Response(
+                        200,
+                        headers={"content-type": "application/x-ndjson"},
+                        content=ndjson({"type": "error", "error": error}),
+                    )
+
+                async with self.client(handler) as client:
+                    with self.assertRaises(VoiceFailure) as ctx:
+                        await client.commit(1, "Quando?", on_sentence=AsyncMock())
+                self.assertEqual(ctx.exception.kind, "malformed")
+
     async def test_a_stream_cut_after_a_sentence_is_not_retried(self):
         calls = 0
 

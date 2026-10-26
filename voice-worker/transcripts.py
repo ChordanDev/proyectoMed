@@ -462,8 +462,11 @@ class PhoenixClient:
                     elif kind == "result" and isinstance(item.get("status"), str):
                         return item
                     elif kind == "error":
+                        error = item.get("error")
                         raise VoiceFailure(
-                            _STREAM_ERROR_KINDS.get(item.get("error"), "malformed")
+                            _STREAM_ERROR_KINDS.get(error, "malformed")
+                            if isinstance(error, str)
+                            else "malformed"
                         )
                     else:
                         raise VoiceFailure("malformed")
