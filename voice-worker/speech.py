@@ -10,13 +10,19 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+)
 
 from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 
 TRACK_NAME = "patient-voice"
-# One attempt per generation: a retried reply would be late, and the framework's retry
-# warning echoes the provider error, which can carry the reply text.
+# No framework retries: a retried reply would be late, and the framework's retry
+# warning echoes the provider error, which can carry the reply text. The player itself
+# replaces a dead pooled websocket once, before any audio (`_synthesize`).
 SYNTHESIS_OPTIONS = APIConnectOptions(max_retry=0)
 logger = logging.getLogger("voice-worker.speech")
 # Log fields where the Cartesia plugin puts a provider message, which can echo the
@@ -131,10 +137,13 @@ class SpeechPlayer:
                 logger.warning("speech prewarm failed for session %s", self.session_id)
 
     @staticmethod
-    def _open_stream(tts, text: str):
+    def _streams(tts) -> bool:
+        return getattr(getattr(tts, "capabilities", None), "streaming", False)
+
+    @classmethod
+    def _open_stream(cls, tts, text: str):
         """One `tts` stream for `text`: the streaming input when the provider has one."""
-        capabilities = getattr(tts, "capabilities", None)
-        if not getattr(capabilities, "streaming", False):
+        if not cls._streams(tts):
             return tts.synthesize(text, conn_options=SYNTHESIS_OPTIONS)
         stream = tts.stream(conn_options=SYNTHESIS_OPTIONS)
         stream.push_text(text)
@@ -257,15 +266,38 @@ class SpeechPlayer:
             stream = self._open_stream(tts, reply.reply_text)
             if self.meter is not None:
                 self.meter.add_characters(reply.reply_text)
-            async for audio in stream:
-                if self._speaking is not reply:
-                    return None
-                if not self._is_current(reply):
-                    # Fenced by the tracker alone: drop this frame and every later one.
-                    self._source.clear_queue()
-                    return None
-                self._log_first_audio(reply)
-                await self._source.capture_frame(audio.frame)
+            heard = retried = False
+            while True:
+                try:
+                    async for audio in stream:
+                        if self._speaking is not reply:
+                            return None
+                        if not self._is_current(reply):
+                            # Fenced by the tracker alone: drop this frame and every
+                            # later one.
+                            self._source.clear_queue()
+                            return None
+                        heard = True
+                        self._log_first_audio(reply)
+                        await self._source.capture_frame(audio.frame)
+                    break
+                except (APIStatusError, APIConnectionError) as error:
+                    # A pooled websocket can die while it waits for the reply (J400-2):
+                    # one fresh stream, only before any audio and never after a
+                    # timeout, which would make the reply late.
+                    if (
+                        heard
+                        or retried
+                        or isinstance(error, APITimeoutError)
+                        or not self._streams(tts)
+                    ):
+                        raise
+                    retried = True
+                    closing, stream = stream, None
+                    await self._release(closing.aclose())
+                    if self._speaking is not reply or not self._is_current(reply):
+                        return None
+                    stream = self._open_stream(tts, reply.reply_text)
             # Still this generation until the buffered tail is heard, so a cancel in
             # that window clears it instead of being a finished-generation no-op.
             await self._source.wait_for_playout()

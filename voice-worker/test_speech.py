@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 import asyncio
+import base64
 import json
 import logging
 import unittest
@@ -661,14 +662,40 @@ class StreamingProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
 
 
-class FakeCartesiaSocket:
-    """A Cartesia websocket that answers the first request with `answer(context_id)`."""
+def provider_text(payload):
+    return lambda context_id: SimpleNamespace(
+        type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload(context_id))
+    )
 
-    def __init__(self, answer):
-        self.answer = answer
+
+def socket_closed():
+    return lambda _context_id: SimpleNamespace(
+        type=aiohttp.WSMsgType.CLOSED, data=None, extra=None
+    )
+
+
+def provider_audio(milliseconds: int = 200):
+    pcm = bytes(24000 * milliseconds // 1000 * 2)
+    return [
+        provider_text(
+            lambda c: {"context_id": c, "data": base64.b64encode(pcm).decode()}
+        ),
+        provider_text(lambda c: {"context_id": c, "done": True}),
+    ]
+
+
+class FakeCartesiaSocket:
+    """A Cartesia websocket that answers the first request with its `script`, in order.
+
+    Each script item takes the request's context id and returns the message.
+    """
+
+    def __init__(self, script):
+        self.script = list(script)
         self.sent: list[dict] = []
         self._context = asyncio.Event()
         self.closed = False
+        self.close_code = None
 
     async def send_str(self, data: str) -> None:
         self.sent.append(json.loads(data))
@@ -676,11 +703,9 @@ class FakeCartesiaSocket:
 
     async def receive(self, timeout=None):
         await self._context.wait()
-        message, self.answer = self.answer, None
-        if message is None:
+        if not self.script:
             await asyncio.Event().wait()  # nothing more from the provider
-        payload = message(self.sent[0]["context_id"])
-        return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload))
+        return self.script.pop(0)(self.sent[0]["context_id"])
 
     async def close(self) -> None:
         self.closed = True
@@ -696,8 +721,8 @@ class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
         self.answers: list = []
 
         async def connect(_tts, _timeout):
-            answer = self.answers.pop(0) if self.answers else None
-            self.sockets.append(FakeCartesiaSocket(answer))
+            script = self.answers.pop(0) if self.answers else []
+            self.sockets.append(FakeCartesiaSocket(script))
             return self.sockets[-1]
 
         async def close(_tts, ws):
@@ -757,11 +782,15 @@ class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_provider_error_reaches_the_logs_without_its_payload(self):
         self.answers.append(
-            lambda context_id: {
-                "type": "error",
-                "context_id": context_id,
-                "error": f"PROVIDER_MARKER {REPLY_TEXT}",
-            }
+            [
+                provider_text(
+                    lambda c: {
+                        "type": "error",
+                        "context_id": c,
+                        "error": f"PROVIDER_MARKER {REPLY_TEXT}",
+                    }
+                )
+            ]
         )
         lines = self.capture_logs()
         await self.player.start()
@@ -773,6 +802,44 @@ class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Cartesia returned error", output)
         self.assertNotIn("PROVIDER_MARKER", output)
         self.assertNotIn(REPLY_TEXT, output)
+        await self.player.aclose()
+
+    async def test_a_dead_prewarmed_socket_is_replaced_and_the_reply_is_heard(self):
+        # The socket opened ahead of the reply died while it waited (#400, J400-2).
+        self.answers.extend([[socket_closed()], provider_audio()])
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+
+        self.assertIsNone(failure)
+        heard = sum(f.samples_per_channel for f in self.player._source.frames)
+        self.assertEqual(heard, 24000 * 200 // 1000)  # the whole 200 ms reply
+        self.assertEqual(len(self.sockets[1].sent), 2)  # the reply, then its end
+        await self.player.aclose()
+
+    async def test_a_provider_cut_after_audio_is_not_retried(self):
+        self.answers.extend([[*provider_audio()[:1], socket_closed()], provider_audio()])
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual(len(self.sockets[1].sent), 0)  # only prewarmed, never asked
+        await self.player.aclose()
+
+    async def test_a_provider_error_is_not_retried(self):
+        self.answers.extend(
+            [
+                [provider_text(lambda c: {"type": "error", "context_id": c})],
+                provider_audio(),
+            ]
+        )
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual(len(self.sockets[1].sent), 0)
         await self.player.aclose()
 
     async def test_an_unexpected_provider_message_is_logged_without_its_payload(self):
