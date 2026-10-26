@@ -63,7 +63,7 @@ Defaults live in `backend/config/runtime.exs` with their sources (read on
 | `claude-sonnet-5-5` per MTok | 2.00 / 10.00 / 0.10 / 2.50 | same |
 | `claude-opus-5-5` per MTok | 4.00 / 20.00 / 0.20 / 5.00 | same |
 | `deepgram_minute` (Nova-3 streaming, Pay As You Go) | 0.0048 | <https://deepgram.com/pricing> |
-| `cartesia_1k_characters` (Sonic, 1 credit per character, Scale overage of  per 1M credits) | 0.038 | <https://cartesia.ai/pricing> (read 2026-10-25; Startup overage  and Pro  per 1M credits) |
+| `cartesia_1k_characters` (Sonic, 1 credit per character, Scale overage of $38 per 1M credits) | 0.038 | <https://cartesia.ai/pricing> (read 2026-10-25; Startup overage $45 and Pro $65 per 1M credits) |
 | `livekit_participant_minute` (WebRTC, Ship overage) | 0.0005 | <https://docs.livekit.io/home/cloud/quotas-and-limits/> |
 | `jev_call` | 0 | no public price page; set it from the contract |
 
