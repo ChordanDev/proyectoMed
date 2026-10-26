@@ -1462,18 +1462,22 @@ defmodule Backend.Stations do
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
     Usage.track(session_id, fn ->
       with :dialogue <- exam_mode_turn(session_id, turn_id, text) do
-        case admit_voice_turn(session_id, turn_id, text) do
-          {:ok, generation_id, learner_text} ->
-            process_voice_reply(session_id, turn_id, generation_id, learner_text)
-
-          other ->
-            other
-        end
+        process_dialogue_voice_turn(session_id, turn_id, text)
       end
     end)
   end
 
   def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
+
+  defp process_dialogue_voice_turn(session_id, turn_id, text) do
+    case admit_voice_turn(session_id, turn_id, text) do
+      {:ok, generation_id, learner_text} ->
+        process_voice_reply(session_id, turn_id, generation_id, learner_text)
+
+      other ->
+        other
+    end
+  end
 
   @typedoc "One verified sentence handed to the voice worker (#271)."
   @type voice_sentence ::
@@ -1549,23 +1553,24 @@ defmodule Backend.Stations do
              is_function(sink, 2) do
     Usage.track(session_id, fn ->
       case exam_mode_turn(session_id, turn_id, text) do
-        :dialogue ->
-          case admit_voice_turn(session_id, turn_id, text) do
-            {:ok, generation_id, learner_text} ->
-              stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
-
-            other ->
-              {other, acc}
-          end
-
-        exam_result ->
-          {exam_result, acc}
+        :dialogue -> stream_dialogue_voice_turn(session_id, turn_id, text, acc, sink)
+        exam_result -> {exam_result, acc}
       end
     end)
   end
 
   def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink),
     do: {{:error, :invalid_transcript}, acc}
+
+  defp stream_dialogue_voice_turn(session_id, turn_id, text, acc, sink) do
+    case admit_voice_turn(session_id, turn_id, text) do
+      {:ok, generation_id, learner_text} ->
+        stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
+
+      other ->
+        {other, acc}
+    end
+  end
 
   @doc """
   Explicitly cancels a pending voice turn generation (#119).
