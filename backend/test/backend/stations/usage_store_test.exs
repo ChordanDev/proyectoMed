@@ -110,11 +110,11 @@ defmodule Backend.Stations.UsageStoreTest do
       assert input >= 100 and output >= 40
       assert row.jev_calls >= 1
       assert row.deepgram_audio_seconds == 0.0
-      assert row.elevenlabs_characters == 0
+      assert row.cartesia_characters == 0
       assert row.livekit_participant_minutes == 0.0
 
       assert Map.keys(row.cost_by_provider) |> Enum.sort() ==
-               ["claude", "deepgram", "elevenlabs", "jev", "livekit"]
+               ["cartesia", "claude", "deepgram", "jev", "livekit"]
 
       assert row.cost_by_provider["claude"] > 0
       assert Decimal.gt?(row.estimated_cost_usd, 0)
@@ -192,7 +192,7 @@ defmodule Backend.Stations.UsageStoreTest do
                  "claude_usage",
                  "jev_calls",
                  "deepgram_audio_seconds",
-                 "elevenlabs_characters",
+                 "cartesia_characters",
                  "livekit_participant_minutes",
                  "cost_by_provider",
                  "unpriced_models",
@@ -228,7 +228,7 @@ defmodule Backend.Stations.UsageStoreTest do
         claude_usage: %{},
         jev_calls: 0,
         deepgram_audio_seconds: 0.0,
-        elevenlabs_characters: 0,
+        cartesia_characters: 0,
         livekit_participant_minutes: 0.0,
         cost_by_provider: %{},
         unpriced_models: [],

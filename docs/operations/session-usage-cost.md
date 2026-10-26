@@ -11,7 +11,7 @@ the median cost per station from it.
 | Claude (patient, rubric resolver, learner feedback, undecided-verdict adjudicator) | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, per model | Phoenix, from each 2xx Messages response (`usage`; for a stream, `message_start` plus the last `message_delta`) |
 | Jev (TypeSafe System One) | requests that got an HTTP response | Phoenix |
 | Deepgram | seconds of learner audio pushed to the STT stream | the voice worker |
-| ElevenLabs | characters of reply text sent to synthesis | the voice worker |
+| Cartesia (#360, #398) | characters of reply text sent to synthesis (Cartesia bills 1 credit per character) | the voice worker |
 | LiveKit | participant minutes in the room (the worker plus each learner connection) | the voice worker |
 
 Audio never passes through Phoenix (ADR-013 #209), so the worker reports its
@@ -22,7 +22,7 @@ POST /api/internal/voice/sessions/:id/usage
 Authorization: Bearer $VOICE_WORKER_SECRET
 
 {"report_id": "<LiveKit job id>", "deepgram_audio_seconds": 312.5,
- "elevenlabs_characters": 1830, "livekit_participant_minutes": 21.25}
+ "cartesia_characters": 1830, "livekit_participant_minutes": 21.25}
 ```
 
 `202 {"status": "recorded"}` on success, `400 invalid_usage` for a malformed
@@ -63,7 +63,7 @@ Defaults live in `backend/config/runtime.exs` with their sources (read on
 | `claude-sonnet-5-5` per MTok | 2.00 / 10.00 / 0.10 / 2.50 | same |
 | `claude-opus-5-5` per MTok | 4.00 / 20.00 / 0.20 / 5.00 | same |
 | `deepgram_minute` (Nova-3 streaming, Pay As You Go) | 0.0048 | <https://deepgram.com/pricing> |
-| `elevenlabs_1k_characters` (Flash) | 0.04 | <https://elevenlabs.io/pricing/api> (not labeled as the overage rate) |
+| `cartesia_1k_characters` (Sonic, 1 credit per character, Scale overage of  per 1M credits) | 0.038 | <https://cartesia.ai/pricing> (read 2026-10-25; Startup overage  and Pro  per 1M credits) |
 | `livekit_participant_minute` (WebRTC, Ship overage) | 0.0005 | <https://docs.livekit.io/home/cloud/quotas-and-limits/> |
 | `jev_call` | 0 | no public price page; set it from the contract |
 

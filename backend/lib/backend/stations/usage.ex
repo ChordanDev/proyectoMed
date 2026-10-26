@@ -44,7 +44,7 @@ defmodule Backend.Stations.Usage do
   @typedoc "Audio usage the voice worker reports (ADR-013 #209)."
   @type voice :: %{
           deepgram_audio_seconds: float(),
-          elevenlabs_characters: non_neg_integer(),
+          cartesia_characters: non_neg_integer(),
           livekit_participant_minutes: float()
         }
 
@@ -138,14 +138,14 @@ defmodule Backend.Stations.Usage do
   Validates one voice worker report (string keys): `report_id` (1 to 128 of
   `A-Z a-z 0-9 _ . : -`, the worker job), `deepgram_audio_seconds` and
   `livekit_participant_minutes` (non-negative numbers) and
-  `elevenlabs_characters` (a non-negative integer), each bounded. Other keys
+  `cartesia_characters` (a non-negative integer), each bounded. Other keys
   are ignored.
   """
   @spec voice_report(map()) :: {:ok, String.t(), voice()} | {:error, :invalid_usage}
   def voice_report(%{
         "report_id" => report_id,
         "deepgram_audio_seconds" => seconds,
-        "elevenlabs_characters" => characters,
+        "cartesia_characters" => characters,
         "livekit_participant_minutes" => minutes
       })
       when is_binary(report_id) and is_number(seconds) and seconds >= 0 and
@@ -156,7 +156,7 @@ defmodule Backend.Stations.Usage do
       {:ok, report_id,
        %{
          deepgram_audio_seconds: seconds * 1.0,
-         elevenlabs_characters: characters,
+         cartesia_characters: characters,
          livekit_participant_minutes: minutes * 1.0
        }}
     else
@@ -232,7 +232,7 @@ defmodule Backend.Stations.Usage do
       jev_calls: 0,
       voice: %{
         deepgram_audio_seconds: 0.0,
-        elevenlabs_characters: 0,
+        cartesia_characters: 0,
         livekit_participant_minutes: 0.0
       }
     }

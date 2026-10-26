@@ -2,7 +2,7 @@
 
 Audio never passes through Phoenix (ADR-013 #209), so the worker meters what it
 sends to the audio providers: the seconds of learner audio pushed to Deepgram, the
-characters of reply text sent to ElevenLabs, and the participant minutes in the
+characters of reply text sent to Cartesia, and the participant minutes in the
 LiveKit room (the worker and each learner connection). The report holds counts
 only: no transcript, reply text or audio, and nothing here logs any of them.
 """
@@ -51,7 +51,7 @@ class UsageMeter:
         return {
             "report_id": report_id,
             "deepgram_audio_seconds": round(self._audio_seconds, 3),
-            "elevenlabs_characters": self._characters,
+            "cartesia_characters": self._characters,
             "livekit_participant_minutes": round(
                 (self._participant_seconds + connected) / 60, 4
             ),

@@ -24,7 +24,7 @@ defmodule Backend.Stations.Usage.SessionUsage do
     field :claude_usage, :map, default: %{}
     field :jev_calls, :integer, default: 0
     field :deepgram_audio_seconds, :float, default: 0.0
-    field :elevenlabs_characters, :integer, default: 0
+    field :cartesia_characters, :integer, default: 0
     field :livekit_participant_minutes, :float, default: 0.0
     field :cost_by_provider, :map, default: %{}
     field :unpriced_models, {:array, :string}, default: []

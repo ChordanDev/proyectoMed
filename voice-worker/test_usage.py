@@ -53,7 +53,7 @@ class UsageMeterTest(unittest.TestCase):
             {
                 "report_id": "AJ_1",
                 "deepgram_audio_seconds": 1.5,
-                "elevenlabs_characters": 23,
+                "cartesia_characters": 23,
                 "livekit_participant_minutes": 7.0,
             },
         )
@@ -75,7 +75,7 @@ class UsageMeterTest(unittest.TestCase):
         meter.add_audio(object())
         meter.add_characters(None)
         self.assertEqual(meter.report("AJ_1")["deepgram_audio_seconds"], 0.0)
-        self.assertEqual(meter.report("AJ_1")["elevenlabs_characters"], 0)
+        self.assertEqual(meter.report("AJ_1")["cartesia_characters"], 0)
 
 
 class PhoenixUsageReportTest(unittest.IsolatedAsyncioTestCase):
@@ -92,7 +92,7 @@ class PhoenixUsageReportTest(unittest.IsolatedAsyncioTestCase):
         report = {
             "report_id": "AJ_1",
             "deepgram_audio_seconds": 1.5,
-            "elevenlabs_characters": 23,
+            "cartesia_characters": 23,
             "livekit_participant_minutes": 7.0,
         }
         async with PhoenixClient(
@@ -172,7 +172,7 @@ class SpeechCharactersTest(unittest.IsolatedAsyncioTestCase):
         companion.streams[0].queue.put_nowait(None)
         await task
 
-        self.assertEqual(meter.report("AJ_1")["elevenlabs_characters"], 23)
+        self.assertEqual(meter.report("AJ_1")["cartesia_characters"], 23)
 
 
 class PushStream:

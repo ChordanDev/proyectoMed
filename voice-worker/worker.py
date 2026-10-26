@@ -11,7 +11,7 @@ because the learner armed the exam mode (#364) is published as `status:
 impresso_requested` with its outcome, and nothing is spoken. Every reply event names its `speaker` (`patient`
 or `companion`, #341), and each actor speaks with the Cartesia voice its voice key maps
 to in `CARTESIA_VOICE_IDS` (#398), on the one patient track. When the job ends it reports
-its provider usage (Deepgram audio seconds, ElevenLabs characters, LiveKit
+its provider usage (Deepgram audio seconds, Cartesia characters, LiveKit
 participant minutes, #342) to Phoenix. Never logs transcript text, reply text or audio.
 """
 
@@ -72,7 +72,7 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_retries=turn_retries,
     )
     voice = None
-    # Deepgram seconds, ElevenLabs characters and room minutes of this job (#342).
+    # Deepgram seconds, Cartesia characters and room minutes of this job (#342).
     meter = UsageMeter()
     connected = False
     async with phoenix:

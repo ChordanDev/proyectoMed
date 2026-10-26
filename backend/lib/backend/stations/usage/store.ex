@@ -75,7 +75,7 @@ defmodule Backend.Stations.Usage.Store do
         Map.new(snapshot.claude, fn {model, tokens} -> {model, stringify(tokens)} end),
       jev_calls: snapshot.jev_calls,
       deepgram_audio_seconds: snapshot.voice.deepgram_audio_seconds * 1.0,
-      elevenlabs_characters: snapshot.voice.elevenlabs_characters,
+      cartesia_characters: snapshot.voice.cartesia_characters,
       livekit_participant_minutes: snapshot.voice.livekit_participant_minutes * 1.0,
       cost_by_provider: Map.new(estimate.by_provider, fn {k, v} -> {k, Float.round(v, 8)} end),
       unpriced_models: estimate.unpriced_models,

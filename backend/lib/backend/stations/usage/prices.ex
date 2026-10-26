@@ -11,7 +11,7 @@ defmodule Backend.Stations.Usage.Prices do
       `:cache_write` (5-minute) prices per million tokens;
     * `:jev_call` - per Jev (TypeSafe) request;
     * `:deepgram_minute` - per streamed audio minute;
-    * `:elevenlabs_1k_characters` - per 1,000 synthesized characters;
+    * `:cartesia_1k_characters` - per 1,000 synthesized characters;
     * `:livekit_participant_minute` - per participant minute in the room.
 
   A Claude model without a price is reported in `unpriced_models` and adds
@@ -19,7 +19,7 @@ defmodule Backend.Stations.Usage.Prices do
   priced as another one.
   """
 
-  @rates [:jev_call, :deepgram_minute, :elevenlabs_1k_characters, :livekit_participant_minute]
+  @rates [:jev_call, :deepgram_minute, :cartesia_1k_characters, :livekit_participant_minute]
   @claude_prices [:input, :output, :cache_read, :cache_write]
   @token_prices %{
     input_tokens: :input,
@@ -39,7 +39,7 @@ defmodule Backend.Stations.Usage.Prices do
           claude: %{optional(String.t()) => model_prices()},
           jev_call: number(),
           deepgram_minute: number(),
-          elevenlabs_1k_characters: number(),
+          cartesia_1k_characters: number(),
           livekit_participant_minute: number()
         }
 
@@ -65,7 +65,7 @@ defmodule Backend.Stations.Usage.Prices do
       claude: Map.get(base, :claude, %{}),
       jev_call: Map.get(base, :jev_call, 0.0),
       deepgram_minute: Map.get(base, :deepgram_minute, 0.0),
-      elevenlabs_1k_characters: Map.get(base, :elevenlabs_1k_characters, 0.0),
+      cartesia_1k_characters: Map.get(base, :cartesia_1k_characters, 0.0),
       livekit_participant_minute: Map.get(base, :livekit_participant_minute, 0.0)
     }
 
@@ -120,7 +120,7 @@ defmodule Backend.Stations.Usage.Prices do
       "claude" => claude,
       "jev" => snapshot.jev_calls * table.jev_call,
       "deepgram" => voice.deepgram_audio_seconds / 60 * table.deepgram_minute,
-      "elevenlabs" => voice.elevenlabs_characters / 1_000 * table.elevenlabs_1k_characters,
+      "cartesia" => voice.cartesia_characters / 1_000 * table.cartesia_1k_characters,
       "livekit" => voice.livekit_participant_minutes * table.livekit_participant_minute
     }
 

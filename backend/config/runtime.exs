@@ -258,8 +258,8 @@ end
 #     is far below that).
 #   * Deepgram Nova-3 monolingual streaming, Pay As You Go, per audio minute:
 #     https://deepgram.com/pricing.
-#   * ElevenLabs Flash, per 1,000 characters: https://elevenlabs.io/pricing/api
-#     (the page does not say whether it is the overage rate).
+#   * Cartesia Sonic, per 1,000 characters (1 credit is 1 character): the Scale
+#     plan overage, $38 per million credits, https://cartesia.ai/pricing.
 #   * LiveKit Cloud WebRTC participant minute (Ship overage):
 #     https://docs.livekit.io/home/cloud/quotas-and-limits/.
 #   * Jev (TypeSafe System One), per request: no public price page was found,
@@ -278,7 +278,7 @@ config :backend, Backend.Stations.Usage.Prices,
     },
     jev_call: 0.0,
     deepgram_minute: 0.0048,
-    elevenlabs_1k_characters: 0.04,
+    cartesia_1k_characters: 0.038,
     livekit_participant_minute: 0.0005
   }
 
