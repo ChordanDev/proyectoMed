@@ -1,7 +1,8 @@
 #!/bin/sh
 # Provisions an admin from ADMIN_EMAIL and ADMIN_PASSWORD (#331, #344).
-# Idempotent; never prints the password. See docs/operations/deploy.md.
+# Idempotent; never prints the password; exits 1 when no admin results.
+# See docs/operations/deploy.md.
 set -eu
 
 cd -P -- "$(dirname -- "$0")"
-exec ./backend eval Backend.Release.create_admin
+exec ./backend eval "Backend.Release.create_admin() |> Backend.Release.exit_code() |> System.halt()"

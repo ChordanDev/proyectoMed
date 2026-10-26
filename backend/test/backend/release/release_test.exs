@@ -27,10 +27,21 @@ defmodule Backend.ReleaseTest do
       assert admin.confirmed_at
     end
 
-    test "leaves an existing account unchanged" do
-      user = user_fixture()
+    test "leaves an existing admin unchanged" do
+      email = unique_user_email()
+      env = %{"ADMIN_EMAIL" => email, "ADMIN_PASSWORD" => @password}
+      assert {:ok, :created} = Release.provision_admin(env)
 
       assert {:ok, :exists} =
+               Release.provision_admin(%{env | "ADMIN_PASSWORD" => "another admin password"})
+
+      assert Accounts.get_user_by_email_and_password(email, @password).role == :admin
+    end
+
+    test "refuses an email that belongs to a non-admin account, leaving it unchanged" do
+      user = user_fixture()
+
+      assert {:error, :not_admin} =
                Release.provision_admin(%{
                  "ADMIN_EMAIL" => user.email,
                  "ADMIN_PASSWORD" => @password
@@ -75,6 +86,23 @@ defmodule Backend.ReleaseTest do
       refute exists =~ @password
     end
 
+    test "says an existing non-admin account was not made an admin" do
+      user = user_fixture()
+
+      output =
+        capture_io(fn ->
+          assert {:error, :not_admin} =
+                   Release.create_admin(%{
+                     "ADMIN_EMAIL" => user.email,
+                     "ADMIN_PASSWORD" => @password
+                   })
+        end)
+
+      assert output =~ "#{user.email} belongs to a non-admin account"
+      refute output =~ "already exists"
+      refute output =~ @password
+    end
+
     test "never prints a rejected password" do
       output =
         capture_io(fn ->
@@ -87,6 +115,24 @@ defmodule Backend.ReleaseTest do
 
       assert output =~ "not created"
       refute output =~ "tiny-pw"
+    end
+  end
+
+  describe "exit_code/1" do
+    test "is 0 for a created or existing admin and 1 for every error" do
+      assert Release.exit_code({:ok, :created}) == 0
+      assert Release.exit_code({:ok, :exists}) == 0
+      assert Release.exit_code({:error, :missing_env}) == 1
+      assert Release.exit_code({:error, :not_admin}) == 1
+      assert Release.exit_code({:error, {:invalid, %{}}}) == 1
+      assert Release.exit_code({:error, {:repo, :econnrefused}}) == 1
+    end
+
+    test "bin/create_admin exits with it, so a failure is never reported as success" do
+      script = File.read!(Path.expand("../../../rel/overlays/bin/create_admin", __DIR__))
+
+      assert script =~
+               "Backend.Release.create_admin() |> Backend.Release.exit_code() |> System.halt()"
     end
   end
 end

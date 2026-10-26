@@ -38,8 +38,9 @@ defmodule Backend.Release do
 
   @doc """
   Provisions an admin from `ADMIN_EMAIL` and `ADMIN_PASSWORD` (issue #331) and
-  prints the outcome by email. Idempotent: an existing account with that email
-  is left unchanged. The password is never printed.
+  prints the outcome by email. Idempotent: an existing admin with that email
+  is left unchanged; an existing non-admin account is refused, never promoted.
+  The password is never printed. `bin/create_admin` exits with `exit_code/1`.
   """
   def create_admin(env \\ System.get_env()) do
     load_app()
@@ -56,8 +57,9 @@ defmodule Backend.Release do
 
   @doc """
   Creates the admin `env` names (`ADMIN_EMAIL`, `ADMIN_PASSWORD`), with the
-  repo already started: `{:ok, :created}`, `{:ok, :exists}` when the email is
-  taken, `{:error, :missing_env}` or `{:error, {:invalid, errors}}`.
+  repo already started: `{:ok, :created}`, `{:ok, :exists}` when an admin has
+  the email, `{:error, :not_admin}` when a non-admin account has it,
+  `{:error, :missing_env}` or `{:error, {:invalid, errors}}`.
   """
   def provision_admin(env) do
     email = String.trim(env["ADMIN_EMAIL"] || "")
@@ -67,8 +69,8 @@ defmodule Backend.Release do
       email == "" or password == "" ->
         {:error, :missing_env}
 
-      Accounts.get_user_by_email(email) ->
-        {:ok, :exists}
+      user = Accounts.get_user_by_email(email) ->
+        if user.role == :admin, do: {:ok, :exists}, else: {:error, :not_admin}
 
       true ->
         case Accounts.create_admin(%{email: email, password: password}) do
@@ -81,6 +83,13 @@ defmodule Backend.Release do
     end
   end
 
+  @doc """
+  The process exit status for a `create_admin/1` result: 0 when the admin
+  exists afterwards, 1 otherwise, so scripts never read a failure as success.
+  """
+  def exit_code({:ok, _outcome}), do: 0
+  def exit_code({:error, _reason}), do: 1
+
   # The message template only, never the interpolated values: a password
   # error must not echo the password.
   defp error_message({message, _opts}), do: message
@@ -89,6 +98,9 @@ defmodule Backend.Release do
 
   defp report_admin({:ok, :exists}, email),
     do: IO.puts("admin #{email} already exists, left unchanged")
+
+  defp report_admin({:error, :not_admin}, email),
+    do: IO.puts("no admin created: #{email} belongs to a non-admin account, left unchanged")
 
   defp report_admin({:error, :missing_env}, _email),
     do: IO.puts("ADMIN_EMAIL and ADMIN_PASSWORD must both be set; no admin created")

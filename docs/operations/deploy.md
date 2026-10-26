@@ -39,8 +39,14 @@ stations, so every routine deploy goes through `backend/rel/deploy.sh`:
    `fly-replay: instance=<old machine id>`, and Fly's proxy replays it to the
    old machine. A session id names its machine: `<FLY_MACHINE_ID>.<random>`.
 
-If the drain status cannot be read or `fly deploy` fails, the script runs
+If the machine list cannot be read, the script stops before draining or
+deploying. If the drain status cannot be read, `fly deploy` fails, or the
+script is interrupted (Ctrl-C, a closed terminal, a cancelled job), it runs
 `/app/bin/drain stop` on every machine it drained and exits non-zero.
+
+Each machine's LiveKit orphan sweep only deletes rooms of its own sessions, so
+the new machine never ends the old machine's voice rooms during the overlap.
+A room whose machine is gone is closed by LiveKit's empty-room timeout.
 
 With one machine, new sessions are refused for the length of the drain (up to
 12 minutes): learners see "O simulador está sendo atualizado" and can retry.
@@ -195,7 +201,9 @@ fly ssh console --app <phoenix app> --command \
 ```
 
 It prints `admin <email> created`, or `already exists, left unchanged` (it is
-idempotent), and never prints the password. The password reaches the remote
+idempotent), and exits 0. If the email belongs to a non-admin account it
+leaves that account unchanged, says so, and exits 1; so do a missing variable,
+a rejected password and an unreachable database. It never prints the password. The password reaches the remote
 shell's command line: change it at `/users/settings` after the first login.
 
 ## Smoke checks
@@ -219,6 +227,9 @@ These need the accounts and the owner's authorization:
 
 - The first deploy itself, and a deploy during a running station (drain,
   bluegreen and `fly-replay` end to end).
+- What Fly's proxy answers for `fly-replay: instance=<id>` once that machine
+  is gone, and for a replayed request body above 1 MB (a large `/transcribe`
+  upload to an old machine's session).
 - That `fly machines list --quiet` lists only machine ids and that
   `fly ssh console --command` returns the command's exit status, as
   `rel/deploy.sh` assumes.
