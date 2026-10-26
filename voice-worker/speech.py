@@ -47,7 +47,7 @@ class SpeechPlayer:
         meter=None,
     ):
         self.room = room
-        # Counts the characters sent to ElevenLabs (#342); optional.
+        # Counts the characters sent to Cartesia (#342); optional.
         self.meter = meter
         self.tracker = tracker
         self.session_id = tracker.session_id

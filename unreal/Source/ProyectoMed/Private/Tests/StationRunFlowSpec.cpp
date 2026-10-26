@@ -1,10 +1,14 @@
 // Run flow tests. `ProyectoMed.StationRun.Unit` needs nothing else;
-// `ProyectoMed.StationRun.Phoenix` needs a local Phoenix with realtime voice
-// (see docs/unreal-station-client.md).
+// `ProyectoMed.StationRun.Phoenix` needs a local Phoenix with realtime voice, the
+// scripted patient and the default station, and `ProyectoMed.StationRun.Voice`
+// the local voice stack (see docs/unreal-station-client.md).
 
+#include "Containers/Ticker.h"
 #include "Misc/AutomationTest.h"
 #include "Station/StationRunFlow.h"
 #include "StationClient.h"
+
+#include <atomic>
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -14,6 +18,30 @@ namespace StationRunTests
 	{
 		const FString FromEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("STATION_PHOENIX_URL"));
 		return FromEnv.IsEmpty() ? TEXT("http://127.0.0.1:4000") : FromEnv;
+	}
+
+	/** A microphone setup that never touches the system or the user's settings. */
+	struct FFakeMicrophone
+	{
+		bool bDisclosureShown = true;
+		EStationMicPermission Permission = EStationMicPermission::Granted;
+		EStationMicPermission Answer = EStationMicPermission::Granted;
+		int32 Requests = 0;
+	};
+
+	FStationMicrophoneSetup MicrophoneSetup(const TSharedRef<FFakeMicrophone>& Fake)
+	{
+		FStationMicrophoneSetup Setup;
+		Setup.GetPermission = [Fake]() { return Fake->Permission; };
+		Setup.RequestPermission = [Fake](TFunction<void(EStationMicPermission)> OnDone)
+		{
+			++Fake->Requests;
+			Fake->Permission = Fake->Answer;
+			OnDone(Fake->Answer);
+		};
+		Setup.WasDisclosureShown = [Fake]() { return Fake->bDisclosureShown; };
+		Setup.RememberDisclosureShown = [Fake]() { Fake->bDisclosureShown = true; };
+		return Setup;
 	}
 
 	/** Calls `Then` once, the first time `Condition` holds after a flow change (or right away). */
@@ -45,6 +73,8 @@ END_DEFINE_SPEC(FStationRunUnitSpec)
 
 void FStationRunUnitSpec::Define()
 {
+	using namespace StationRunTests;
+
 	It("formats the Station Timer as minutes and seconds", [this]()
 	{
 		TestEqual("start", FormatStationTimer(FTimespan::FromMinutes(10)).ToString(), TEXT("10:00"));
@@ -81,12 +111,56 @@ void FStationRunUnitSpec::Define()
 		TestFalse("off", IsVoiceTrainingAvailable(Station));
 	});
 
+	It("asks for the microphone once, on first launch, before the notice", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		const TSharedRef<FFakeMicrophone> Fake = MakeShared<FFakeMicrophone>();
+		Fake->bDisclosureShown = false;
+		Fake->Permission = EStationMicPermission::NotDetermined;
+
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(Fake));
+		TestEqual("disclosure first", Flow->GetStep(), EStationRunStep::Microphone);
+		TestEqual("not asked before the learner answers", Fake->Requests, 0);
+		Flow->AcknowledgeNotice();
+		TestEqual("notice waits for the disclosure", Flow->GetStep(), EStationRunStep::Microphone);
+
+		Flow->AnswerMicrophone(true);
+		TestEqual("system asked", Fake->Requests, 1);
+		TestEqual("then the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestTrue("remembered", Fake->bDisclosureShown);
+		TestEqual("granted", Flow->GetMicrophonePermission(), EStationMicPermission::Granted);
+
+		UStationRunFlow* NextLaunch = NewObject<UStationRunFlow>();
+		NextLaunch->Begin(Client, MicrophoneSetup(Fake));
+		TestEqual("next launch starts on the notice", NextLaunch->GetStep(), EStationRunStep::Notice);
+		TestEqual("not asked again", Fake->Requests, 1);
+	});
+
+	It("lets the learner skip the microphone", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		const TSharedRef<FFakeMicrophone> Fake = MakeShared<FFakeMicrophone>();
+		Fake->bDisclosureShown = false;
+		Fake->Permission = EStationMicPermission::NotDetermined;
+
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(Fake));
+		Flow->AnswerMicrophone(false);
+		TestEqual("notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("system not asked", Fake->Requests, 0);
+		TestTrue("disclosure shown, not shown again", Fake->bDisclosureShown);
+		TestEqual("still undecided", Flow->GetMicrophonePermission(), EStationMicPermission::NotDetermined);
+	});
+
 	It("does not start a run before the notice is acknowledged", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
-		Flow->Begin(Client);
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
 
 		TestEqual("starts on the notice", Flow->GetStep(), EStationRunStep::Notice);
 		TestFalse("cannot enter", Flow->CanEnter(EStationTrainingMode::Text));
@@ -94,12 +168,77 @@ void FStationRunUnitSpec::Define()
 		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
 		TestNull("no session", Client->GetSession());
 	});
+
+	It("takes no typed turn before the run is running", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+
+		TestFalse("cannot send", Flow->CanSendTurn());
+		TestFalse("refused", Flow->SendTypedTurn(TEXT("Bom dia")));
+		TestFalse("nothing in flight", Flow->IsTurnInFlight());
+		TestEqual("empty transcript", Flow->GetTranscript().Num(), 0);
+	});
+
+	It("takes no exam request before the run is running", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+
+		TestFalse("cannot request", Flow->CanRequestExam());
+		TestFalse("refused", Flow->RequestExam(TEXT("Exame físico")));
+		TestFalse("nothing in flight", Flow->IsExamRequestInFlight());
+		TestEqual("no requests", Flow->GetExamRequests().Num(), 0);
+		TestEqual("nothing released", Flow->GetReleasedImpressos().Num(), 0);
+	});
+
+	It("shows the examiner's note only until another line joins the conversation", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		FStationVoiceEvent Spoken;
+		Spoken.Kind = EStationVoiceEventKind::Learner;
+		Spoken.TurnId = 1;
+		Spoken.bFinal = true;
+		Spoken.Text = TEXT("Vou examinar o abdome.");
+		Flow->HandleVoiceEvent(Spoken);
+		FStationVoiceEvent Noted;
+		Noted.Kind = EStationVoiceEventKind::ExaminerAcknowledged;
+		Noted.TurnId = 1;
+		Flow->HandleVoiceEvent(Noted);
+		TestTrue("shown right after its own spoken turn", Flow->GetVoice().bExaminerNoted);
+
+		Flow->AddLine(EStationSpeaker::Learner, TEXT("Sente alguma dor?"));
+		TestFalse("gone once a later line joins", Flow->GetVoice().bExaminerNoted);
+	});
+
+	It("neither finishes nor discards before the run is running", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+
+		TestFalse("cannot finish", Flow->CanFinish());
+		Flow->Finish();
+		Flow->ExpireTimer();
+		Flow->CheckStationTimer();
+		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestFalse("cannot discard", Flow->CanDiscard());
+		Flow->Discard();
+		TestFalse("no discard", Flow->IsDiscarding());
+		TestNull("no result", Flow->GetResult());
+	});
 }
 
 BEGIN_DEFINE_SPEC(FStationRunPhoenixSpec, "ProyectoMed.StationRun.Phoenix",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	UStationClient* Client = nullptr;
 	UStationRunFlow* Flow = nullptr;
+	TSharedPtr<StationRunTests::FFakeMicrophone> Microphone;
 END_DEFINE_SPEC(FStationRunPhoenixSpec)
 
 void FStationRunPhoenixSpec::Define()
@@ -115,7 +254,8 @@ void FStationRunPhoenixSpec::Define()
 		Client->SetPhoenixBaseUrl(PhoenixUrl());
 		Flow = NewObject<UStationRunFlow>();
 		Flow->AddToRoot();
-		Flow->Begin(Client);
+		Microphone = MakeShared<FFakeMicrophone>();
+		Flow->Begin(Client, MicrophoneSetup(Microphone.ToSharedRef()));
 	});
 
 	LatentAfterEach(Timeout, [this](const FDoneDelegate& Done)
@@ -167,8 +307,24 @@ void FStationRunPhoenixSpec::Define()
 					}
 					TestTrue("timer counting", Client->GetRemainingTime() > FTimespan::FromMinutes(9.5));
 					TestNull("no credential", Flow->GetVoiceCredential());
+					TestNull("no microphone in a text training", Client->GetVoice());
 					Done.Execute();
 				});
+		});
+	});
+
+	LatentIt("offers no voice training when the system blocks the microphone", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Microphone->Permission = EStationMicPermission::Denied;
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			TestTrue("text still offered", Flow->CanEnter(EStationTrainingMode::Text));
+			TestFalse("voice blocked", Flow->CanEnter(EStationTrainingMode::Voice));
+			Flow->Enter(EStationTrainingMode::Voice);
+			TestEqual("stays on the brief", Flow->GetStep(), EStationRunStep::Brief);
+			TestNull("no session", Client->GetSession());
+			Done.Execute();
 		});
 	});
 
@@ -194,6 +350,639 @@ void FStationRunPhoenixSpec::Define()
 						TestEqual("room", Flow->GetVoiceCredential()->Room, TEXT("station-session-") + Client->GetSession()->SessionId);
 					}
 					Done.Execute();
+				});
+		});
+	});
+
+	// The typed-turn tests need Phoenix's scripted patient (STATION_AI_E2E_SCRIPTED_ADAPTER).
+	auto ExpectTypedTurn = [this](EStationTrainingMode Mode, const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Mode, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			if (!TestTrue(TEXT("can enter (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnter(Mode)))
+			{
+				Done.Execute();
+				return;
+			}
+			Flow->Enter(Mode);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+				[this, Done]()
+				{
+					if (!TestTrue("can send a typed turn", Flow->CanSendTurn()))
+					{
+						Done.Execute();
+						return;
+					}
+					TestFalse("blank text refused", Flow->SendTypedTurn(TEXT("   ")));
+					TestTrue("accepted", Flow->SendTypedTurn(TEXT("  Bom dia, como o senhor está?  ")));
+					TestTrue("in flight", Flow->IsTurnInFlight());
+					TestFalse("one turn at a time", Flow->SendTypedTurn(TEXT("Mais uma")));
+					WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done]()
+					{
+						TestTrue(TEXT("no error (is Phoenix on STATION_AI_E2E_SCRIPTED_ADAPTER=true?)"),
+							Flow->GetErrorText().IsEmpty());
+						const TArray<FStationMessage>& Transcript = Flow->GetTranscript();
+						if (TestEqual("learner and patient lines", Transcript.Num(), 2))
+						{
+							TestEqual("learner speaker", Transcript[0].Speaker, EStationSpeaker::Learner);
+							TestEqual("learner text, trimmed", Transcript[0].Text, TEXT("Bom dia, como o senhor está?"));
+							TestEqual("patient speaker", Transcript[1].Speaker, EStationSpeaker::Patient);
+							TestEqual("approved reply", Transcript[1].Text, TEXT("Bom dia, doutor."));
+						}
+						// Phoenix kept the same turn: the transcript is its record, not a local guess.
+						Client->RefreshSession([this, Done](const TStationResult<FStationSession>& Refreshed)
+						{
+							if (TestFalse("refreshed", Refreshed.HasError()))
+							{
+								const TArray<FStationMessage>& Kept = Refreshed.GetValue().Messages;
+								if (TestEqual("Phoenix transcript", Kept.Num(), 2))
+								{
+									TestEqual("kept learner turn", Kept[0].Text, TEXT("Bom dia, como o senhor está?"));
+									TestEqual("kept patient reply", Kept[1].Text, TEXT("Bom dia, doutor."));
+								}
+							}
+							Done.Execute();
+						});
+					});
+				});
+		});
+	};
+
+	LatentIt("answers a typed turn in a text training, without audio consent", Timeout, [this, ExpectTypedTurn](const FDoneDelegate& Done)
+	{
+		ExpectTypedTurn(EStationTrainingMode::Text, Done);
+	});
+
+	LatentIt("answers a typed turn in a voice training too", Timeout, [this, ExpectTypedTurn](const FDoneDelegate& Done)
+	{
+		ExpectTypedTurn(EStationTrainingMode::Voice, Done);
+	});
+
+	/** Enters a text training and calls `Then` once it runs. */
+	auto WhenRunning = [this](const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done, Then]()
+		{
+			Flow->AcknowledgeNotice();
+			Flow->Enter(EStationTrainingMode::Text);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+				[this, Done, Then]()
+				{
+					if (TestEqual("running", Flow->GetStep(), EStationRunStep::Running))
+					{
+						Then();
+						return;
+					}
+					Done.Execute();
+				});
+		});
+	};
+
+	LatentIt("gives a turn Phoenix refused back to the learner", Timeout, [this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			// Phoenix refuses turns over 2,000 characters with `message_too_long`.
+			const FString TooLong = FString::ChrN(2001, TEXT('a'));
+			TestTrue("accepted locally", Flow->SendTypedTurn(TooLong));
+			WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done, TooLong]()
+			{
+				TestFalse("Phoenix's message is shown", Flow->GetErrorText().IsEmpty());
+				TestEqual("nothing joined the transcript", Flow->GetTranscript().Num(), 0);
+				TestTrue("can send again", Flow->CanSendTurn());
+				TestEqual("the turn comes back", Flow->TakeUnsentTurn(), TooLong);
+				TestEqual("only once", Flow->TakeUnsentTurn(), FString());
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("waits for Phoenix's record before the next turn after a lost answer", Timeout, [this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			// The run exists in Phoenix; only this client stops hearing back.
+			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+			TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Bom dia")));
+			WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done]()
+			{
+				TestTrue("reloading the transcript", Flow->IsReloadingTranscript());
+				TestFalse("no new turn meanwhile", Flow->CanSendTurn());
+				TestFalse("refused meanwhile", Flow->SendTypedTurn(TEXT("Outra pergunta")));
+				TestEqual("the turn is held until Phoenix's record is known", Flow->TakeUnsentTurn(), FString());
+				WhenFlow(Flow, [this]() { return !Flow->IsReloadingTranscript(); }, [this, Done]()
+				{
+					TestTrue("can send again", Flow->CanSendTurn());
+					TestFalse("error shown", Flow->GetErrorText().IsEmpty());
+					// The record could not be read either, so the learner may resend.
+					TestEqual("the turn comes back", Flow->TakeUnsentTurn(), TEXT("Bom dia"));
+					Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	// The exam tests read the default station (chest-pain-initial-assessment),
+	// which authors the physical exam and an ECG and no tomography.
+
+	/** Checks that Phoenix's own transcript of the run is still empty. */
+	auto ExpectNoDialogue = [this](const FDoneDelegate& Done)
+	{
+		TestEqual("no line in the conversation", Flow->GetTranscript().Num(), 0);
+		Client->RefreshSession([this, Done](const TStationResult<FStationSession>& Refreshed)
+		{
+			if (TestFalse("refreshed", Refreshed.HasError()))
+			{
+				TestEqual("no line in Phoenix's transcript", Refreshed.GetValue().Messages.Num(), 0);
+			}
+			Done.Execute();
+		});
+	};
+
+	LatentIt("shows the physical exam findings Phoenix releases, without addressing the patient", Timeout,
+		[this, WhenRunning, ExpectNoDialogue](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, ExpectNoDialogue]()
+		{
+			TestTrue("can request an exam", Flow->CanRequestExam());
+			TestFalse("blank text refused", Flow->RequestExam(TEXT("   ")));
+			TestTrue("accepted", Flow->RequestExam(TEXT("  Vou realizar o exame físico  ")));
+			TestTrue("in flight", Flow->IsExamRequestInFlight());
+			TestFalse("one request at a time", Flow->RequestExam(TEXT("Sinais vitais")));
+			TestTrue("the dialogue stays open", Flow->CanSendTurn());
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue]()
+			{
+				TestTrue("no error", Flow->GetExamErrorText().IsEmpty());
+				const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+				if (TestEqual("one request", Requests.Num(), 1))
+				{
+					TestEqual("request text, trimmed", Requests[0].Text, TEXT("Vou realizar o exame físico"));
+					TestEqual("released", Requests[0].Reply.Decision, EStationImpressoDecision::Released);
+					TestFalse("Phoenix's feedback", Requests[0].Reply.FeedbackMessage.IsEmpty());
+				}
+				const TArray<FStationImpresso>& Released = Flow->GetReleasedImpressos();
+				if (TestEqual("one document", Released.Num(), 1))
+				{
+					TestEqual("physical exam", Released[0].Category, TEXT("physical_exam"));
+					TestFalse("findings", Released[0].Content.IsEmpty());
+				}
+				ExpectNoDialogue(Done);
+			});
+		});
+	});
+
+	LatentIt("shows an impresso Phoenix releases, and releases it once", Timeout,
+		[this, WhenRunning, ExpectNoDialogue](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, ExpectNoDialogue]()
+		{
+			TestTrue("accepted", Flow->RequestExam(TEXT("Gostaria de ver o eletrocardiograma")));
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue]()
+			{
+				if (!TestEqual("one document", Flow->GetReleasedImpressos().Num(), 1))
+				{
+					Done.Execute();
+					return;
+				}
+				const FString Id = Flow->GetReleasedImpressos()[0].Id;
+				TestFalse("content", Flow->GetReleasedImpressos()[0].Content.IsEmpty());
+				TestTrue("asked again", Flow->RequestExam(TEXT("Gostaria de ver o eletrocardiograma")));
+				WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue, Id]()
+				{
+					const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+					if (TestEqual("two requests", Requests.Num(), 2))
+					{
+						TestEqual("first released", Requests[0].Reply.Decision, EStationImpressoDecision::Released);
+						TestEqual("then already released", Requests[1].Reply.Decision, EStationImpressoDecision::AlreadyReleased);
+						TestEqual("nothing new", Requests[1].Reply.NewlyReleased.Num(), 0);
+					}
+					if (TestEqual("still one document", Flow->GetReleasedImpressos().Num(), 1))
+					{
+						TestEqual("same document", Flow->GetReleasedImpressos()[0].Id, Id);
+					}
+					ExpectNoDialogue(Done);
+				});
+			});
+		});
+	});
+
+	LatentIt("shows a request Phoenix declines as declined, with nothing released", Timeout,
+		[this, WhenRunning, ExpectNoDialogue](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, ExpectNoDialogue]()
+		{
+			TestTrue("accepted", Flow->RequestExam(TEXT("Solicito uma tomografia de crânio")));
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done, ExpectNoDialogue]()
+			{
+				TestTrue("a decline is no error", Flow->GetExamErrorText().IsEmpty());
+				const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+				if (TestEqual("one request", Requests.Num(), 1))
+				{
+					TestEqual("declined", Requests[0].Reply.Decision, EStationImpressoDecision::Unavailable);
+					TestEqual("nothing new", Requests[0].Reply.NewlyReleased.Num(), 0);
+					TestFalse("Phoenix's feedback", Requests[0].Reply.FeedbackMessage.IsEmpty());
+				}
+				TestEqual("no document", Flow->GetReleasedImpressos().Num(), 0);
+				ExpectNoDialogue(Done);
+			});
+		});
+	});
+
+	// The finish tests read the educational result, which Phoenix grades with
+	// the E2E approving Jev adapter (JEV_E2E_APPROVING_ADAPTER): it cites the
+	// first learner line for every criterion it can ground.
+	const FTimespan ResultTimeout = FTimespan::FromSeconds(60);
+	const FString Turn = TEXT("Bom dia, quando começou a dor?");
+
+	/** Ends the running run early and calls `Then` on the feedback. */
+	auto WhenFeedback = [this](const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		Flow->Finish();
+		WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done, Then]()
+		{
+			if (TestNotNull(TEXT("result (is Phoenix on JEV_E2E_APPROVING_ADAPTER=true?)"), Flow->GetResult()))
+			{
+				Then();
+				return;
+			}
+			Done.Execute();
+		});
+	};
+
+	LatentIt("finishes early, after the turn still waiting for Phoenix, and shows the feedback with its evidence", ResultTimeout,
+		[this, WhenRunning, Turn](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, Turn]()
+		{
+			TestTrue("can finish", Flow->CanFinish());
+			TestTrue("turn accepted", Flow->SendTypedTurn(Turn));
+			Flow->Finish();
+			TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
+			TestTrue("the turn still waits for Phoenix", Flow->IsTurnInFlight());
+			TestFalse("no turn after the end", Flow->CanSendTurn());
+			TestFalse("turn refused", Flow->SendTypedTurn(TEXT("Mais uma pergunta")));
+			TestFalse("exam refused", Flow->RequestExam(TEXT("Exame físico")));
+			TestFalse("finishes once", Flow->CanFinish());
+			TestFalse("no discard while grading", Flow->CanDiscard());
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done, Turn]()
+			{
+				TestTrue(TEXT("no error (is Phoenix on JEV_E2E_APPROVING_ADAPTER=true?)"), Flow->GetErrorText().IsEmpty());
+				TestEqual("the turn joined the run before it ended", Flow->GetTranscript().Num(), 2);
+				if (TestNotNull("session", Client->GetSession()))
+				{
+					TestEqual("completed", Client->GetSession()->Status, EStationSessionStatus::Completed);
+					TestEqual("ended by the learner", Client->GetSession()->CompletionReason, TEXT("user"));
+				}
+				const FStationResult* Result = Flow->GetResult();
+				if (TestNotNull("result", Result) && TestTrue("criteria", Result->Criteria.Num() > 0))
+				{
+					TestEqual("this run's result", Result->SessionId, Client->GetSession()->SessionId);
+					const bool bCited = Result->Criteria.ContainsByPredicate([&Turn](const FStationCriterionResult& Criterion)
+					{
+						return Criterion.Evidence.ContainsByPredicate([&Turn](const FStationEvidence& Excerpt)
+						{
+							return Excerpt.Speaker == EStationSpeaker::Learner && Excerpt.Text == Turn;
+						});
+					});
+					TestTrue("a criterion cites the learner's turn", bCited);
+				}
+				TestFalse("still no turn", Flow->SendTypedTurn(TEXT("Mais uma pergunta")));
+				TestTrue("can discard", Flow->CanDiscard());
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("keeps the run going when the timer ends it before Phoenix's deadline", Timeout,
+		[this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			// The local timer has not run out: Phoenix refuses a timer finish this early.
+			Flow->ExpireTimer();
+			TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+			{
+				TestEqual("running again", Flow->GetStep(), EStationRunStep::Running);
+				TestTrue("no error shown", Flow->GetErrorText().IsEmpty());
+				TestTrue("can send a turn", Flow->CanSendTurn());
+				if (TestNotNull("session", Client->GetSession()))
+				{
+					TestEqual("still active", Client->GetSession()->Status, EStationSessionStatus::Active);
+				}
+				Flow->CheckStationTimer();
+				TestEqual("the timer has time left", Flow->GetStep(), EStationRunStep::Running);
+				Done.Execute();
+			});
+		});
+	});
+
+	/**
+	 * Ends the run in Phoenix behind the flow's back, as Phoenix does itself at
+	 * the deadline, and calls `Then` with the flow still running.
+	 */
+	auto WhenPhoenixEndedRun = [this](const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		Client->FinishSession(EStationFinishReason::User, [this, Done, Then](const TStationResult<FStationSession>& Ended)
+		{
+			if (TestFalse("Phoenix ended the run", Ended.HasError()))
+			{
+				TestEqual("the flow still runs", Flow->GetStep(), EStationRunStep::Running);
+				Then();
+				return;
+			}
+			Done.Execute();
+		});
+	};
+
+	LatentIt("ends the run and shows the feedback once the Station Timer reads zero", ResultTimeout,
+		[this, WhenRunning, WhenPhoenixEndedRun](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenPhoenixEndedRun]()
+		{
+			WhenPhoenixEndedRun(Done, [this, Done]()
+			{
+				TestTrue("the timer reads zero", Client->GetRemainingTime() == FTimespan::Zero());
+				Flow->CheckStationTimer();
+				TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
+				TestFalse("no turn after the end", Flow->CanSendTurn());
+				WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+				{
+					TestTrue("no error", Flow->GetErrorText().IsEmpty());
+					TestNotNull("feedback", Flow->GetResult());
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("ends the run when a turn is refused because the run is over", ResultTimeout,
+		[this, WhenRunning, WhenPhoenixEndedRun](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenPhoenixEndedRun]()
+		{
+			WhenPhoenixEndedRun(Done, [this, Done]()
+			{
+				TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Bom dia")));
+				WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+				{
+					TestTrue("no error", Flow->GetErrorText().IsEmpty());
+					TestNotNull("feedback", Flow->GetResult());
+					TestEqual("the refused turn is not in the transcript", Flow->GetTranscript().Num(), 0);
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("discards the run only once Phoenix confirms, then offers a new run", ResultTimeout,
+		[this, WhenRunning, WhenFeedback](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done, WhenFeedback]()
+		{
+			WhenFeedback(Done, [this, Done]()
+			{
+				// Phoenix stops answering: the run stays, and so does its feedback.
+				Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+				Flow->Discard();
+				TestTrue("discarding", Flow->IsDiscarding());
+				TestFalse("one discard at a time", Flow->CanDiscard());
+				WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
+				{
+					Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+					TestEqual("still on the feedback", Flow->GetStep(), EStationRunStep::Feedback);
+					TestFalse("error shown", Flow->GetErrorText().IsEmpty());
+					TestNotNull("session kept", Client->GetSession());
+					TestNotNull("feedback kept", Flow->GetResult());
+					TestFalse("no new run", Flow->CanEnter(EStationTrainingMode::Text));
+
+					Flow->Discard();
+					TestNotNull("session kept until Phoenix confirms", Client->GetSession());
+					WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
+					{
+						TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
+						TestTrue("error cleared", Flow->GetErrorText().IsEmpty());
+						TestNull("session forgotten", Client->GetSession());
+						TestNull("feedback forgotten", Flow->GetResult());
+						TestEqual("transcript forgotten", Flow->GetTranscript().Num(), 0);
+						TestTrue("can start a new run", Flow->CanEnter(EStationTrainingMode::Text));
+						Done.Execute();
+					});
+				});
+			});
+		});
+	});
+
+	LatentIt("shows why the feedback is missing when the run cannot be closed, and still discards it", Timeout,
+		[this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+			Flow->Finish();
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+			{
+				Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+				TestFalse("error shown", Flow->GetErrorText().IsEmpty());
+				TestNull("no result", Flow->GetResult());
+				TestFalse("no turn", Flow->CanSendTurn());
+				Flow->Discard();
+				WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
+				{
+					TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
+					TestNull("session forgotten", Client->GetSession());
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("gives an exam request Phoenix did not answer back to the learner", Timeout,
+		[this, WhenRunning](const FDoneDelegate& Done)
+	{
+		WhenRunning(Done, [this, Done]()
+		{
+			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+			TestTrue("accepted locally", Flow->RequestExam(TEXT("Exame físico")));
+			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done]()
+			{
+				Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+				TestFalse("error shown", Flow->GetExamErrorText().IsEmpty());
+				TestTrue("the conversation shows no error", Flow->GetErrorText().IsEmpty());
+				TestEqual("no answered request", Flow->GetExamRequests().Num(), 0);
+				TestEqual("no document", Flow->GetReleasedImpressos().Num(), 0);
+				TestTrue("can request again", Flow->CanRequestExam());
+				TestEqual("the request comes back", Flow->TakeUnsentExamRequest(), TEXT("Exame físico"));
+				TestEqual("only once", Flow->TakeUnsentExamRequest(), FString());
+				TestTrue("resent", Flow->RequestExam(TEXT("Exame físico")));
+				WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done]()
+				{
+					TestTrue("error cleared", Flow->GetExamErrorText().IsEmpty());
+					TestEqual("released on the retry", Flow->GetReleasedImpressos().Num(), 1);
+					Done.Execute();
+				});
+			});
+		});
+	});
+}
+
+BEGIN_DEFINE_SPEC(FStationRunVoiceSpec, "ProyectoMed.StationRun.Voice",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+	UStationClient* Client = nullptr;
+	UStationRunFlow* Flow = nullptr;
+	TSharedPtr<std::atomic<int32>> PatientFrames;
+	FTSTicker::FDelegateHandle Speaker;
+END_DEFINE_SPEC(FStationRunVoiceSpec)
+
+void FStationRunVoiceSpec::Define()
+{
+	using namespace StationRunTests;
+
+	const FTimespan Timeout = FTimespan::FromSeconds(90);
+
+	BeforeEach([this]()
+	{
+		Client = NewObject<UStationClient>();
+		Client->AddToRoot();
+		Client->SetPhoenixBaseUrl(PhoenixUrl());
+		Flow = NewObject<UStationRunFlow>();
+		Flow->AddToRoot();
+		PatientFrames = MakeShared<std::atomic<int32>>(0);
+		Flow->SetPatientAudio([Frames = PatientFrames](TConstArrayView<int16> Samples, int32, int32)
+		{
+			for (const int16 Sample : Samples)
+			{
+				if (FMath::Abs(Sample) > 1000)
+				{
+					++*Frames;
+					return;
+				}
+			}
+		});
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+	});
+
+	LatentAfterEach(Timeout, [this](const FDoneDelegate& Done)
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(Speaker);
+		auto Release = [this, Done]()
+		{
+			Flow->RemoveFromRoot();
+			Client->RemoveFromRoot();
+			Done.Execute();
+		};
+		if (!Client->GetSession())
+		{
+			Release();
+			return;
+		}
+		Client->DiscardSession([Release](const TStationResult<FStationNone>&) { Release(); });
+	});
+
+	LatentIt("shows what the learner said and the patient's reply in a voice training", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			TestNull("no microphone before the learner chooses voice", Client->GetVoice());
+			Flow->Enter(EStationTrainingMode::Voice);
+			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
+				[this, Done]()
+				{
+					if (!TestEqual("voice ready (is scripts/run-voice-stack.sh running?)", Flow->GetVoice().State, EStationVoiceState::Ready))
+					{
+						Done.Execute();
+						return;
+					}
+					// One second of speech-like sound, then a second of silence, in real time.
+					const double Start = FPlatformTime::Seconds();
+					TSharedRef<int32> Sent = MakeShared<int32>(0);
+					Speaker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Start, Sent](float)
+					{
+						const int32 Due = FMath::Min(200, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
+						FStationVoiceLink* Voice = Client->GetVoice();
+						for (; *Sent < Due && Voice; ++*Sent)
+						{
+							TArray<float> Chunk;
+							Chunk.SetNumZeroed(480);
+							for (int32 i = 0; *Sent < 100 && i < Chunk.Num(); ++i)
+							{
+								const double T = (*Sent * 480 + i) / 48000.0;
+								Chunk[i] = static_cast<float>(0.3 * (0.6 + 0.4 * FMath::Sin(2.0 * PI * 4.0 * T))
+									* (FMath::Sin(2.0 * PI * 150.0 * T) + 0.5 * FMath::Sin(2.0 * PI * 300.0 * T)));
+							}
+							Voice->PushMicrophonePcm(Chunk, 48000, 1);
+						}
+						return *Sent < 200 && Voice != nullptr;
+					}));
+					// The spoken turn joins the same conversation as typed turns.
+					WhenFlow(Flow, [this]() { return Flow->GetTranscript().Num() >= 2 || Flow->GetVoice().bLost; },
+						[this, Done]()
+						{
+							TestFalse("voice kept", Flow->GetVoice().bLost);
+							const TArray<FStationMessage>& Lines = Flow->GetTranscript();
+							if (TestEqual("one turn and its reply", Lines.Num(), 2))
+							{
+								TestEqual("learner first", Lines[0].Speaker, EStationSpeaker::Learner);
+								TestEqual("learner's words", Lines[0].Text, TEXT("Qual é o seu nome?"));
+								TestEqual("then the patient", Lines[1].Speaker, EStationSpeaker::Patient);
+								TestEqual("patient's reply", Lines[1].Text, TEXT("Meu nome é Carlos."));
+							}
+							TestTrue("no live caption left", Flow->GetVoice().LearnerText.IsEmpty());
+							TestTrue("no reply in progress left", Flow->GetVoice().PatientText.IsEmpty());
+							TestFalse("not an examiner turn", Flow->GetVoice().bExaminerNoted);
+							TestTrue("listening during the run", Flow->IsListening());
+							Flow->Finish();
+							TestFalse("the microphone stops as soon as the run ends", Flow->IsListening());
+							// Nothing said in the run outlives it once the learner restarts.
+							WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+							{
+								Flow->Discard();
+								WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Brief; }, [this, Done]()
+								{
+									TestEqual("conversation gone", Flow->GetTranscript().Num(), 0);
+									TestTrue("no spoken text left", Flow->GetVoice().LearnerText.IsEmpty()
+										&& Flow->GetVoice().PatientText.IsEmpty() && !Flow->GetVoice().bExaminerNoted);
+									TestEqual("no voice link", Flow->GetVoice().State, EStationVoiceState::Disconnected);
+									Done.Execute();
+								});
+							});
+						});
+				});
+		});
+	});
+
+	LatentIt("stops capturing for the run once the microphone would not open, and tries again after a restart", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			Flow->Enter(EStationTrainingMode::Voice);
+			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
+				[this, Done]()
+				{
+					if (!TestEqual("voice ready (is scripts/run-voice-stack.sh running?)", Flow->GetVoice().State, EStationVoiceState::Ready))
+					{
+						Done.Execute();
+						return;
+					}
+					TestTrue("listening while the microphone is fine", Flow->IsListening());
+					TestFalse("not unavailable", Flow->GetVoice().bMicrophoneUnavailable);
+					Flow->ReportMicrophoneUnavailable();
+					TestFalse("no retry while the voice is in the room", Flow->IsListening());
+					TestTrue("the HUD is told", Flow->GetVoice().bMicrophoneUnavailable);
+					Flow->Finish();
+					WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
+					{
+						Flow->Discard();
+						WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Brief; }, [this, Done]()
+						{
+							TestFalse("a new run starts without the failure", Flow->GetVoice().bMicrophoneUnavailable);
+							Done.Execute();
+						});
+					});
 				});
 		});
 	});

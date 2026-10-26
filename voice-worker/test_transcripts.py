@@ -1090,7 +1090,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                     {
                         "report_id",
                         "deepgram_audio_seconds",
-                        "elevenlabs_characters",
+                        "cartesia_characters",
                         "livekit_participant_minutes",
                     },
                 )

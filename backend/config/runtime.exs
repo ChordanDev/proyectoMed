@@ -258,8 +258,8 @@ end
 #     is far below that).
 #   * Deepgram Nova-3 monolingual streaming, Pay As You Go, per audio minute:
 #     https://deepgram.com/pricing.
-#   * ElevenLabs Flash, per 1,000 characters: https://elevenlabs.io/pricing/api
-#     (the page does not say whether it is the overage rate).
+#   * Cartesia Sonic, per 1,000 characters (1 credit is 1 character): the Scale
+#     plan overage, $38 per million credits, https://cartesia.ai/pricing.
 #   * LiveKit Cloud WebRTC participant minute (Ship overage):
 #     https://docs.livekit.io/home/cloud/quotas-and-limits/.
 #   * Jev (TypeSafe System One), per request: no public price page was found,
@@ -278,7 +278,7 @@ config :backend, Backend.Stations.Usage.Prices,
     },
     jev_call: 0.0,
     deepgram_minute: 0.0048,
-    elevenlabs_1k_characters: 0.04,
+    cartesia_1k_characters: 0.038,
     livekit_participant_minute: 0.0005
   }
 
@@ -398,23 +398,24 @@ if config_env() != :test do
     accept_sandbox: config_env() != :prod or env.("REVENUECAT_ACCEPT_SANDBOX") == "true"
 end
 
-# Turn-based voice providers (issue #253). Off unless
-# `VOICE_PROVIDER=deepgram_elevenlabs` asks for it: without the variable both voice
+# Turn-based voice providers (issues #253, #398). Off unless
+# `VOICE_PROVIDER=deepgram_cartesia` asks for it: without the variable both voice
 # endpoints keep the OpenAI configuration above. Deepgram transcribes the learner
-# (pt-BR) and ElevenLabs speaks the patient. Without the selected provider's key, or
-# without `ELEVENLABS_VOICE_ID`, voice is unavailable, as it is without an OpenAI
-# key. `:test` reads none of it.
+# (pt-BR) and Cartesia speaks the patient, with the same `CARTESIA_*` variables as
+# the real-time voice worker. Without the selected provider's key, or without
+# `CARTESIA_VOICE_ID`, voice is unavailable, as it is without an OpenAI key. `:test`
+# reads none of it.
 if config_env() != :test do
-  if System.get_env("VOICE_PROVIDER") == "deepgram_elevenlabs" do
-    config :backend, :voice_provider, :deepgram_elevenlabs
+  if System.get_env("VOICE_PROVIDER") == "deepgram_cartesia" do
+    config :backend, :voice_provider, :deepgram_cartesia
   end
 
   for {variable, key} <- [
         {"DEEPGRAM_API_KEY", :deepgram_api_key},
         {"DEEPGRAM_MODEL", :deepgram_model},
-        {"ELEVENLABS_API_KEY", :elevenlabs_api_key},
-        {"ELEVENLABS_VOICE_ID", :elevenlabs_voice_id},
-        {"ELEVENLABS_MODEL", :elevenlabs_model}
+        {"CARTESIA_API_KEY", :cartesia_api_key},
+        {"CARTESIA_VOICE_ID", :cartesia_voice_id},
+        {"CARTESIA_MODEL", :cartesia_model}
       ],
       value = System.get_env(variable),
       String.trim(value) != "" do
@@ -428,6 +429,14 @@ end
 # It is evaluated after the live selection above, so it wins when both are set.
 if config_env() == :dev and System.get_env("JEV_E2E_APPROVING_ADAPTER") == "true" do
   config :backend, :jev_decision_adapter, Backend.E2ESupport.ApprovingJevAdapter
+end
+
+# E2E-only: a fixed patient reply instead of a text provider, so a process-level
+# client (the Unreal station tests, #192) can run a full turn against local
+# Phoenix. Same rules as above: honored only under `:dev`, and it wins over the
+# live `LLM_PROVIDER` selection when both are set.
+if config_env() == :dev and System.get_env("STATION_AI_E2E_SCRIPTED_ADAPTER") == "true" do
+  config :backend, :station_ai_adapter, Backend.E2ESupport.ScriptedStationAIAdapter
 end
 
 # Database (ADR-014 #346, issue #329). `DATABASE_URL`

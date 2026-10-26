@@ -69,10 +69,14 @@ defmodule Backend.Stations.PreStationNoticeTest do
              "typesafe" => ["jev_verification"],
              "livekit" => ["audio_transport"],
              "deepgram" => ["speech_to_text"],
-             "elevenlabs" => ["text_to_speech"]
+             "cartesia" => ["text_to_speech"]
            }
 
     assert Enum.map(providers(), & &1["processes"]) == ["text", "text", "audio", "audio", "audio"]
+
+    names = Map.new(providers(), &{&1["id"], &1["name"]})
+    assert names["deepgram"] == "Deepgram"
+    assert names["cartesia"] == "Cartesia"
   end
 
   test "OpenAI with the turn-based OpenAI voice names OpenAI for text and audio" do
@@ -96,17 +100,17 @@ defmodule Backend.Stations.PreStationNoticeTest do
            ]
   end
 
-  test "the turn-based Deepgram and ElevenLabs voice names both audio providers" do
+  test "the turn-based Deepgram and Cartesia voice names both audio providers" do
     configure(
       station_ai_adapter: Backend.Stations.StationAI.OpenAIAdapter,
       voice_mode: "turn",
-      voice_provider: :deepgram_elevenlabs
+      voice_provider: :deepgram_cartesia
     )
 
     assert roles_by_provider() == %{
              "openai" => ["simulated_patient"],
              "deepgram" => ["speech_to_text"],
-             "elevenlabs" => ["text_to_speech"]
+             "cartesia" => ["text_to_speech"]
            }
   end
 
@@ -118,7 +122,7 @@ defmodule Backend.Stations.PreStationNoticeTest do
       patient_adjudicator_adapter: Backend.Stations.PatientAdjudicator.DisabledAdapter,
       jev_decision_adapter: Backend.Stations.JevDecision.DisabledAdapter,
       voice_mode: "off",
-      voice_provider: :deepgram_elevenlabs
+      voice_provider: :deepgram_cartesia
     )
 
     assert roles_by_provider() == %{"anthropic" => ["simulated_patient"]}

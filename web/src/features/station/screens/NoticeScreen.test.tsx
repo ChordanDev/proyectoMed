@@ -101,6 +101,44 @@ describe("NoticeScreen", () => {
     });
   });
 
+  describe("realtimeVoice: true (#360)", () => {
+    it("names Deepgram and Cartesia instead of the turn-based OpenAI copy", () => {
+      const { getByText, queryByText } = render(
+        <NoticeScreen onStart={vi.fn()} realtimeVoice />,
+      );
+      expect(
+        getByText(
+          "Ao usar voz, o seu áudio é enviado à Deepgram, que o transcreve, e a resposta do paciente IA é gerada em voz pela Cartesia. Consulte a política de privacidade.",
+        ),
+      ).toBeTruthy();
+      expect(getByText("Aceito o envio do meu áudio à Deepgram")).toBeTruthy();
+      expect(queryByText(strings.audioDisclosure)).toBeNull();
+      expect(queryByText(strings.consentCheckboxLabel)).toBeNull();
+    });
+
+    it("still requires consent before starting", async () => {
+      const onStart = vi.fn();
+      const { getByTestId } = render(
+        <NoticeScreen onStart={onStart} realtimeVoice />,
+      );
+      expect(getByTestId("notice-button")).toBeDisabled();
+      await act(async () => {
+        fireEvent.click(getByTestId("consent-checkbox").querySelector("input")!);
+      });
+      await act(async () => {
+        fireEvent.click(getByTestId("notice-button"));
+      });
+      expect(onStart).toHaveBeenCalledWith(true);
+    });
+
+    it("shows no disclosure when voice is off", () => {
+      const { queryByTestId } = render(
+        <NoticeScreen onStart={vi.fn()} voiceSupport={false} realtimeVoice />,
+      );
+      expect(queryByTestId("consent-checkbox")).toBeNull();
+    });
+  });
+
   describe("voiceSupport: false", () => {
     it("does NOT render audio disclosure", async () => {
       const onStart = vi.fn();

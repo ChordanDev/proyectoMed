@@ -152,13 +152,13 @@ defmodule Backend.TTSTest do
 
   test "synthesize keeps the OpenAI path when the voice provider is :openai" do
     Application.put_env(:backend, :voice_provider, :openai)
-    Application.put_env(:backend, :elevenlabs_api_key, "el-test-secret-key")
-    Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+    Application.put_env(:backend, :cartesia_api_key, "car-test-secret-key")
+    Application.put_env(:backend, :cartesia_voice_id, "voice-123")
 
     on_exit(fn ->
       Application.delete_env(:backend, :voice_provider)
-      Application.delete_env(:backend, :elevenlabs_api_key)
-      Application.delete_env(:backend, :elevenlabs_voice_id)
+      Application.delete_env(:backend, :cartesia_api_key)
+      Application.delete_env(:backend, :cartesia_voice_id)
     end)
 
     session = consented_session()
@@ -182,7 +182,7 @@ defmodule Backend.TTSTest do
       Req.Test.stub(stub, fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        send(test_pid, {:spoken, decoded["input"] || decoded["text"]})
+        send(test_pid, {:spoken, decoded["input"] || decoded["transcript"]})
         Plug.Conn.send_resp(conn, 200, @audio)
       end)
 
@@ -265,15 +265,15 @@ defmodule Backend.TTSTest do
       refute_received :provider_called
     end
 
-    test "ElevenLabs receives the text without stage directions" do
-      Application.put_env(:backend, :voice_provider, :deepgram_elevenlabs)
-      Application.put_env(:backend, :elevenlabs_api_key, "el-test-secret-key")
-      Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+    test "Cartesia receives the text without stage directions" do
+      Application.put_env(:backend, :voice_provider, :deepgram_cartesia)
+      Application.put_env(:backend, :cartesia_api_key, "car-test-secret-key")
+      Application.put_env(:backend, :cartesia_voice_id, "voice-123")
 
       on_exit(fn ->
         Application.delete_env(:backend, :voice_provider)
-        Application.delete_env(:backend, :elevenlabs_api_key)
-        Application.delete_env(:backend, :elevenlabs_voice_id)
+        Application.delete_env(:backend, :cartesia_api_key)
+        Application.delete_env(:backend, :cartesia_voice_id)
       end)
 
       session = consented_session()
@@ -283,7 +283,7 @@ defmodule Backend.TTSTest do
                  session.session_id,
                  "*(curvado, com a mão na barriga)* Vim por causa de uma dor na barriga.",
                  nil,
-                 inspect_input(StageElevenStub)
+                 inspect_input(StageCartesiaStub)
                )
 
       assert_receive {:spoken, "Vim por causa de uma dor na barriga."}
@@ -293,24 +293,24 @@ defmodule Backend.TTSTest do
                  session.session_id,
                  "*(evitando mexer o tronco)*",
                  nil,
-                 refuse_calls(StageElevenOnlyStub)
+                 refuse_calls(StageCartesiaOnlyStub)
                )
 
       refute_received :provider_called
     end
   end
 
-  describe "with the ElevenLabs voice provider" do
+  describe "with the Cartesia voice provider" do
     setup do
-      Application.put_env(:backend, :voice_provider, :deepgram_elevenlabs)
-      Application.put_env(:backend, :elevenlabs_api_key, "el-test-secret-key")
-      Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
+      Application.put_env(:backend, :voice_provider, :deepgram_cartesia)
+      Application.put_env(:backend, :cartesia_api_key, "car-test-secret-key")
+      Application.put_env(:backend, :cartesia_voice_id, "voice-123")
 
       on_exit(fn ->
         Application.delete_env(:backend, :voice_provider)
-        Application.delete_env(:backend, :elevenlabs_api_key)
-        Application.delete_env(:backend, :elevenlabs_voice_id)
-        Application.delete_env(:backend, :elevenlabs_model)
+        Application.delete_env(:backend, :cartesia_api_key)
+        Application.delete_env(:backend, :cartesia_voice_id)
+        Application.delete_env(:backend, :cartesia_model)
       end)
 
       :ok
@@ -320,14 +320,13 @@ defmodule Backend.TTSTest do
       session = consented_session()
       test_pid = self()
 
-      Req.Test.stub(ElevenInspectStub, fn conn ->
+      Req.Test.stub(CartesiaInspectStub, fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
 
         send(
           test_pid,
-          {:req, conn.method, conn.request_path, URI.decode_query(conn.query_string),
-           Plug.Conn.get_req_header(conn, "xi-api-key"),
-           Plug.Conn.get_req_header(conn, "authorization"), body}
+          {:req, conn.method, conn.request_path, Plug.Conn.get_req_header(conn, "authorization"),
+           Plug.Conn.get_req_header(conn, "cartesia-version"), body}
         )
 
         conn
@@ -336,76 +335,91 @@ defmodule Backend.TTSTest do
       end)
 
       assert {:ok, result} =
-               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenInspectStub})
+               TTS.synthesize(session.session_id, @text, nil,
+                 plug: {Req.Test, CartesiaInspectStub}
+               )
 
       assert result.audio_binary == @audio
       assert result.format == "mp3"
       assert %DateTime{} = result.synthesized_at
 
-      assert_receive {:req, "POST", "/v1/text-to-speech/voice-123", query, key, auth, body}
-      assert query == %{"output_format" => "mp3_44100_128"}
-      assert key == ["el-test-secret-key"]
-      assert auth == []
-      assert Jason.decode!(body) == %{"text" => @text, "model_id" => "eleven_flash_v2_5"}
+      assert_receive {:req, "POST", "/tts/bytes", auth, version, body}
+      assert auth == ["Bearer car-test-secret-key"]
+      assert version == ["2026-08-14"]
+
+      assert Jason.decode!(body) == %{
+               "model_id" => "sonic-3",
+               "transcript" => @text,
+               "voice" => %{"mode" => "id", "id" => "voice-123"},
+               "language" => "pt",
+               "output_format" => %{
+                 "container" => "mp3",
+                 "sample_rate" => 44_100,
+                 "bit_rate" => 128_000
+               }
+             }
     end
 
     test "uses the configured model and the configured voice for any accepted voice name" do
-      Application.put_env(:backend, :elevenlabs_model, "eleven_multilingual_v2")
+      Application.put_env(:backend, :cartesia_model, "sonic-3.6")
       session = consented_session()
       test_pid = self()
 
-      Req.Test.stub(ElevenModelStub, fn conn ->
+      Req.Test.stub(CartesiaModelStub, fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:req, conn.request_path, Jason.decode!(body)["model_id"]})
+        decoded = Jason.decode!(body)
+        send(test_pid, {:req, conn.request_path, decoded["model_id"], decoded["voice"]["id"]})
         Plug.Conn.send_resp(conn, 200, @audio)
       end)
 
       assert {:ok, _} =
                TTS.synthesize(session.session_id, @text, "nova",
-                 plug: {Req.Test, ElevenModelStub}
+                 plug: {Req.Test, CartesiaModelStub}
                )
 
-      assert_receive {:req, "/v1/text-to-speech/voice-123", "eleven_multilingual_v2"}
+      assert_receive {:req, "/tts/bytes", "sonic-3.6", "voice-123"}
     end
 
     test "maps an HTTP error to :openai_unavailable" do
       session = consented_session()
 
-      Req.Test.stub(ElevenErrorStub, fn conn ->
+      Req.Test.stub(CartesiaErrorStub, fn conn ->
         conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"detail" => "invalid_api_key"})
       end)
 
       assert {:error, :openai_unavailable} =
-               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenErrorStub})
+               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, CartesiaErrorStub})
     end
 
     test "maps a timeout and an empty body to :openai_unavailable" do
       session = consented_session()
-      Req.Test.stub(ElevenTimeoutStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
-      Req.Test.stub(ElevenEmptyStub, fn conn -> Plug.Conn.send_resp(conn, 200, "") end)
+      Req.Test.stub(CartesiaTimeoutStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
+      Req.Test.stub(CartesiaEmptyStub, fn conn -> Plug.Conn.send_resp(conn, 200, "") end)
 
       assert {:error, :openai_unavailable} =
-               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenTimeoutStub})
+               TTS.synthesize(session.session_id, @text, nil,
+                 plug: {Req.Test, CartesiaTimeoutStub}
+               )
 
       assert {:error, :openai_unavailable} =
-               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, ElevenEmptyStub})
+               TTS.synthesize(session.session_id, @text, nil, plug: {Req.Test, CartesiaEmptyStub})
     end
 
-    test "is unavailable without an ElevenLabs key or voice id, even with an OpenAI key" do
+    test "is unavailable without a Cartesia key or voice id, even with an OpenAI key" do
       session = consented_session()
-      opts = stub_audio(ElevenUnusedStub)
+      opts = stub_audio(CartesiaUnusedStub)
 
-      Application.delete_env(:backend, :elevenlabs_voice_id)
+      Application.delete_env(:backend, :cartesia_voice_id)
       assert {:error, :openai_unavailable} = TTS.synthesize(session.session_id, @text, nil, opts)
 
-      Application.put_env(:backend, :elevenlabs_voice_id, "voice-123")
-      Application.delete_env(:backend, :elevenlabs_api_key)
+      Application.put_env(:backend, :cartesia_voice_id, "voice-123")
+      Application.delete_env(:backend, :cartesia_api_key)
       assert {:error, :openai_unavailable} = TTS.synthesize(session.session_id, @text, nil, opts)
     end
 
     test "keeps the text limits" do
       session = consented_session()
-      opts = stub_audio(ElevenUnusedStub2)
+      opts = stub_audio(CartesiaUnusedStub2)
 
       assert {:error, :invalid_text} = TTS.synthesize(session.session_id, "  ", nil, opts)
 

@@ -25,6 +25,8 @@
   "noticeButton": "Entendi",
   "audioDisclosure": "Ao usar voz, o áudio que você envia é transcrito pela OpenAI e a resposta do paciente IA é sintetizada pela OpenAI. A OpenAI pode reter esses dados por até 30 dias conforme sua política. Consulte a política de privacidade.",
   "consentCheckboxLabel": "Aceito o envio do meu áudio à OpenAI",
+  "audioDisclosureRealtime": "Ao usar voz, o seu áudio é enviado à Deepgram, que o transcreve, e a resposta do paciente IA é gerada em voz pela Cartesia. Consulte a política de privacidade.",
+  "consentCheckboxLabelRealtime": "Aceito o envio do meu áudio à Deepgram",
   "errorNotice": "A estação não pôde ser concluída. Você pode reiniciar.",
   "restartButton": "Reiniciar estação",
   "voiceFallbackNotice": "Voz indisponível — usando texto.",

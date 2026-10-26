@@ -17,7 +17,7 @@ defmodule Backend.Stations.Usage.PricesTest do
     jev_calls: 10,
     voice: %{
       deepgram_audio_seconds: 120.0,
-      elevenlabs_characters: 2_500,
+      cartesia_characters: 2_500,
       livekit_participant_minutes: 20.0
     }
   }
@@ -59,7 +59,7 @@ defmodule Backend.Stations.Usage.PricesTest do
            }
 
     assert table.deepgram_minute == 0.0048
-    assert table.elevenlabs_1k_characters == 0.04
+    assert table.cartesia_1k_characters == 0.038
     assert table.livekit_participant_minute == 0.0005
     assert table.jev_call == 0.0
   end
@@ -71,9 +71,9 @@ defmodule Backend.Stations.Usage.PricesTest do
     assert_in_delta estimate.by_provider["claude"], 0.0017, 1.0e-9
     assert_in_delta estimate.by_provider["jev"], 0.02, 1.0e-9
     assert_in_delta estimate.by_provider["deepgram"], 0.0096, 1.0e-9
-    assert_in_delta estimate.by_provider["elevenlabs"], 0.1, 1.0e-9
+    assert_in_delta estimate.by_provider["cartesia"], 0.095, 1.0e-9
     assert_in_delta estimate.by_provider["livekit"], 0.01, 1.0e-9
-    assert_in_delta estimate.total_usd, 0.0017 + 0.02 + 0.0096 + 0.1 + 0.01, 1.0e-9
+    assert_in_delta estimate.total_usd, 0.0017 + 0.02 + 0.0096 + 0.095 + 0.01, 1.0e-9
     assert estimate.unpriced_models == []
   end
 

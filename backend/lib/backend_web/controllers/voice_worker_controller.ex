@@ -34,7 +34,7 @@ defmodule BackendWeb.VoiceWorkerController do
       generation via `Backend.Stations.cancel_voice_turn/2`.
     * `POST /api/internal/voice/sessions/:id/usage` — the worker's audio usage
       for the session (#342): `report_id`, `deepgram_audio_seconds`,
-      `elevenlabs_characters`, `livekit_participant_minutes`, cumulative per
+      `cartesia_characters`, `livekit_participant_minutes`, cumulative per
       job, via `Backend.Stations.record_voice_usage/2`. `202` with
       `status: "recorded"`; `400 invalid_usage` for a malformed report.
 

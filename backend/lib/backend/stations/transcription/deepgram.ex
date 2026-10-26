@@ -3,7 +3,7 @@ defmodule Backend.Stations.Transcription.Deepgram do
   Deepgram pre-recorded transcription (`POST /v1/listen`) for the turn-based voice.
 
   Used by `Backend.Stations.Transcription` when `:voice_provider` is
-  `:deepgram_elevenlabs`. The raw audio bytes are posted as the request body with the
+  `:deepgram_cartesia`. The raw audio bytes are posted as the request body with the
   content type of their format and the transcript is requested in pt-BR. Neither the
   audio nor the transcript is logged or persisted.
 

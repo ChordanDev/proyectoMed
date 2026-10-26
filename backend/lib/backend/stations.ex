@@ -933,7 +933,7 @@ defmodule Backend.Stations do
   @doc """
   Records the audio usage the voice worker reports for a session (issue #342;
   audio never passes through Phoenix, ADR-013 #209): `report_id` (the worker
-  job), `deepgram_audio_seconds`, `elevenlabs_characters` and
+  job), `deepgram_audio_seconds`, `cartesia_characters` and
   `livekit_participant_minutes`, cumulative per job (see
   `Backend.Stations.Usage.voice_report/1`). An active or finished session
   accepts it; a finished session's usage row is rewritten with it.

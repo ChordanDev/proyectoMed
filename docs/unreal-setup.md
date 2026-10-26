@@ -28,6 +28,14 @@ builds the `.app` from it. Regenerate IDE files from the `.uproject` (right-clic
   becomes `Programaci  n`), and clang fails with "no such file or directory".
   Keep the repository under a path without accents or other non-ASCII
   characters.
+- **Checkout outside iCloud Drive on macOS.** When "Desktop & Documents
+  Folders" syncs to iCloud, the File Provider adds `com.apple.FinderInfo` and
+  `com.apple.fileprovider.*` extended attributes to the built `.app`, and
+  `codesign` fails with "resource fork, Finder information, or similar detritus
+  not allowed" (UBT reports "Failed to finalize the .app with Xcode").
+  `xattr -cr` does not help: iCloud adds them back during the build. Keep the
+  repository (or a `git worktree` of it) under a folder iCloud does not sync,
+  for example `~/code`.
 - **Metal Toolchain on macOS.** Xcode 26 and later ship the Metal shader
   compiler as a separate component. Without it the editor reports "cannot
   execute tool 'metal' due to missing Metal Toolchain". Install it with
@@ -112,6 +120,26 @@ only code that talks to it, and its interface is documented in
    only appears when Phoenix serves `voice_mode: realtime`.
 3. A voice training logs `LogStationRun: Voice credential received for room
    station-session-<id>`; the token itself is never logged.
+4. In either training, the conversation panel at the bottom takes typed turns
+   (Enter or "Enviar") and shows each turn with the reply Phoenix approved. It
+   does not depend on the microphone, so a learner who declined audio completes
+   the station by typing. Replies to typed turns are shown as text only; speaking
+   them is a later slice. In a voice training, spoken turns join the same panel:
+   the learner's words show in grey while they speak, then each turn and the
+   patient's spoken reply stay in the conversation like typed ones.
+5. The "Exames" button at the top right opens the exam panel. A request typed
+   there ("exame físico", "eletrocardiograma") goes to Phoenix's impresso route,
+   never to the patient, and never joins the conversation. Phoenix decides what
+   is released: findings and impressos appear under "Documentos liberados", and
+   a request Phoenix declines is shown as declined, with nothing in its place.
+6. "Finalizar estação" under the timer ends the run early; at 00:00 the Station
+   Timer ends it. Either way no turn or exam request can be sent any more, and
+   the feedback screen shows each criterion with the transcript excerpts that
+   support it, under the unofficial educational result notice. "Reiniciar
+   estação" asks Phoenix to forget the run and, once it confirms, goes back to
+   the brief for a new run. Grading needs Phoenix's text provider
+   (`LLM_PROVIDER` and its key); for a local check only,
+   `JEV_E2E_APPROVING_ADAPTER=true` grades with a fixed result that judges nothing.
 
 Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 `[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config.
@@ -124,8 +152,45 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 - The patient plays copies of the MetaHuman Creator template idle loops
   (`/Game/Station/Patient/Animations`) in single-node mode, with `useLiveLink`
   off. The project's `MetaHumans/Common` body and face skeletons list the
-  plugin's skeletons as compatible so those loops can play. Lip sync (#191) has
-  to blend the face idle with Live Link.
+  plugin's skeletons as compatible so those loops can play.
+- In a voice training (#191) the game swaps the face to
+  `UStationPatientFaceAnim` at runtime: it keeps the same idle loop and, while
+  the patient speaks, lays the jaw, mouth, lips, tongue and teeth controls
+  solved from the voice (StreamingADA, as in the #189 spike) over it. The
+  patient is found as the actor with a skeletal mesh component named `Face`, so
+  the level needs no extra setup, and no Live Link source is involved.
+
+### Voice trainings
+
+- First launch shows the microphone disclosure. **Permitir microfone** asks
+  macOS for the microphone; **Agora não** skips it, and choosing **Treino por
+  voz** asks then. The answer is remembered in `GameUserSettings.ini`
+  (`[StationVoice] bMicrophoneDisclosureShown`); delete that line to see the
+  disclosure again. On macOS the editor asks for the microphone as
+  UnrealEditor, and **System Settings › Privacy & Security › Microphone**
+  resets it.
+- To try a voice training without paid providers, start the local stack in a
+  terminal with `scripts/run-voice-stack.sh` and open the editor; the stack's
+  Phoenix is on the default `http://127.0.0.1:4000`. The fake transcription
+  hears every utterance as "Qual é o seu nome?" and the patient answers "Meu
+  nome é Carlos." with a tone instead of a voice, so the mouth moves with
+  the loudness of the tone. Real speech needs the real-time voice runbook in
+  the README.
+- The voice status under the timer reads "Conectando a voz..." until the
+  worker joins, then "Microfone ativo". While LiveKit retries the connection or
+  the worker is gone it reads "Reconectando a voz..." and the microphone stops.
+  If the worker has not joined within 20 seconds, or the voice has not come back
+  within 10, it reads "A voz caiu. O tempo da estação continua." for the rest of
+  the run; the station timer keeps running. Stopping the local stack with Ctrl-C
+  shows this. The microphone also stops as soon as the run ends, with
+  "Finalizar estação" or the timer, before the feedback loads. If the system
+  microphone will not open, it reads "Microfone indisponível. Continue por
+  escrito." for the rest of the run, without trying the device again; the
+  next run tries again. The voice loss message wins when both apply.
+- Packaged macOS builds ask for the microphone through
+  `NSMicrophoneUsageDescription` in `unreal/Build/Mac/Resources/Info.Template.plist`;
+  without it macOS refuses the microphone without asking. The editor asks as
+  UnrealEditor and needs nothing.
 - The learner sees the scene through the `CameraActor` tagged `StationView`,
   standing 1.40 m from the patient at 1.62 m with a 70° field of view. Both
   stand because MetaHuman Creator ships no seated animation.
@@ -241,26 +306,120 @@ Run on a real machine after setup; these are the acceptance criteria of #188.
    never `*` or `0.0.0.0`.
 5. **Absent from packaged builds:** package a Development build
    (**Platforms > <platform> > Package Project**, or `RunUAT.sh BuildCookRun
-   -platform=Mac -clientconfig=Development -build -cook -stage -pak -archive`),
+   -platform=Mac -clientconfig=Development -build -cook -stage -pak -package -archive`,
+   see "Packaging a client build"),
    run it, and confirm that nothing listens on port 8000 and that the game
-   binary contains no `ModelContextProtocol`, `ToolsetRegistry`, or
-   `HttpListener` strings. Search both ASCII and UTF-16LE, because Unreal
+   binary contains no `ModelContextProtocol` or `ToolsetRegistry` strings.
+   (`HttpListener` is expected in Development builds: `StationClient` links
+   `HTTPServer` outside Shipping for its fake-Phoenix automation tests.)
+   Search both ASCII and UTF-16LE, because Unreal
    stores `TEXT()` literals as UTF-16; `LogInit` is a good positive control.
 
-## Known toolchain issue: Xcode 27 and macOS packaging
+## Packaging a client build
 
-With UE 5.8.3 and Xcode 27, building the game target through UnrealBuildTool
-fails at the final `.app` step: the generated stub Xcode project's pre-action
-"Touch UBT generated tiles" fails and UBT reports "Failed to finalize the .app
-with Xcode". The game binary itself compiles and links. Running the same
-`xcodebuild build -workspace
+Installable builds for testers (#197) are Development builds. Code signing,
+store distribution, and auto-update are out of scope. Share the archived build
+outside the repository (see "What goes in Git and what can go elsewhere").
+
+### macOS
+
+From the repository root, with the LiveKit SDK fetched and the editor closed:
+
+```sh
+"/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
+  -project="$PWD/unreal/ProyectoMed.uproject" -platform=Mac \
+  -clientconfig=Development -build -cook -stage -pak -package -archive \
+  -archivedirectory="$PWD/unreal/Packaged" -unattended -utf8output
+```
+
+The result is `unreal/Packaged/Mac/ProyectoMed.app` (about 1.7 GB).
+
+- **`-package` is required on macOS.** `-archive` copies
+  `unreal/Binaries/Mac/ProyectoMed.app`. Without `-package`, that `.app` holds
+  only the executable (about 425 MB): no paks, no engine dylibs, no
+  `liblivekit.dylib`, and macOS refuses to open it with "ProyectoMed cannot be
+  opened because of a problem" (`Library not loaded: @rpath/liblivekit.dylib`
+  in the crash report). `-package` folds the staged content into that `.app`.
+- **Runs without Unreal Engine.** Every non-system dylib the packaged app
+  loads comes from inside the bundle (`Contents/UE/...`); check with
+  `lsof -p <pid> | grep dylib` while it runs.
+- **The app is ad-hoc signed** ("Sign to Run Locally"). On another Mac,
+  Gatekeeper blocks a downloaded copy: right-click the app > **Open**, or run
+  `xattr -dr com.apple.quarantine ProyectoMed.app`.
+- **Sandbox.** Development builds use
+  `unreal/Build/Mac/Resources/Sandbox.Server.entitlements`, which allows the
+  network and the microphone (`com.apple.security.device.audio-input`);
+  `Info.Template.plist` declares `NSMicrophoneUsageDescription`. Logs go to
+  `~/Library/Containers/com.YourCompany.ProyectoMed/Data/Library/Logs/ProyectoMed/`.
+  Shipping builds would use `Sandbox.NoNet.entitlements`, which has no network
+  access and could not reach Phoenix.
+
+### Windows
+
+Not yet verified on a Windows machine. The expected command, from a Developer
+Command Prompt with the LiveKit SDK fetched:
+
+```bat
+"C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\RunUAT.bat" BuildCookRun ^
+  -project="%CD%\unreal\ProyectoMed.uproject" -platform=Win64 ^
+  -clientconfig=Development -build -cook -stage -pak -archive ^
+  -archivedirectory="%CD%\unreal\Packaged" -unattended -utf8output
+```
+
+`LiveKitSDK.Build.cs` stages the LiveKit DLLs next to `ProyectoMed.exe`
+through `RuntimeDependencies`.
+
+### Choosing the environment
+
+Point a packaged build at Phoenix with `-PhoenixUrl=<origin>`, for example
+`open ProyectoMed.app --args -PhoenixUrl=https://phoenix.example.org` or
+`ProyectoMed.exe -PhoenixUrl=https://phoenix.example.org`. The LiveKit URL
+comes from Phoenix in each voice credential, so neither needs a rebuild.
+
+### What a packaged build listens on
+
+Nothing listens on port 8000 (the editor-only Unreal MCP server). Development
+builds open the Unreal Insights trace control port, `TCP *:1985`, on every
+interface; it is engine tooling, not part of the client, and Shipping builds
+do not include it.
+
+### Known toolchain issue: "Failed to finalize the .app with Xcode"
+
+**Symptom.** Building the game target through UnrealBuildTool compiles and
+links the game binary, then fails at the final `.app` step: UBT reports
+"Failed to finalize the .app with Xcode" (UAT exit 6). Because the finalize
+step fails, UBT never writes `unreal/Binaries/Mac/ProyectoMed.target`, so a
+later `BuildCookRun -skipbuild -cook -stage` cooks with no errors and then
+stops with "Missing receipt .../Binaries/Mac/ProyectoMed.target" (UAT
+exit 103).
+
+**Root cause (verified).** The checkout was under `~/Documents`, which iCloud
+Drive syncs. The File Provider adds `com.apple.FinderInfo` and
+`com.apple.fileprovider.fpfs#P` extended attributes to the `.app`, and
+`codesign` refuses it with "resource fork, Finder information, or similar
+detritus not allowed". `xattr -cr` does not help because iCloud adds them back
+during the build. The Xcode version is not the cause: the failure reproduces on
+Xcode 26.6.
+
+**Fix.** Build from a checkout, or a `git worktree`, under a folder iCloud does
+not sync (see "Machine prerequisites"), for example
+`~/code/proyectoMed-worktrees/<name>`. Copy `unreal/Source/ThirdParty/LiveKitSDK/Mac`
+into it from an existing checkout or fetch it again. From there, the
+`BuildCookRun ... -build -cook -stage -pak -package -archive` command in
+"Packaging a client build" produces a runnable `ProyectoMed.app`, and nothing
+listens on port 8000 while it runs. Verified on UE 5.8.4 with Xcode 26.6 on
+Apple silicon (#262).
+
+**Diagnosing.** Search the UBT log for "detritus" first. If it is there, move
+the checkout. The original report (UE 5.8.3, Xcode 27) showed the Xcode scheme
+pre-action "Touch UBT generated tiles" failing during `ApplePostBuildSync`
+(exit 65), while running the same `xcodebuild build -workspace
 unreal/Intermediate/ProjectFiles/ProyectoMed_Mac_ProyectoMed.xcworkspace
 -scheme ProyectoMed -configuration Development -destination
-generic/platform=macOS UE_XCODE_BUILD_MODE=PostBuildSync` by hand finalizes the
-`.app`, and `BuildCookRun -skipbuild -cook` then cooks with no errors, but
-staging still fails with "Missing receipt .../Binaries/Mac/ProyectoMed.target"
-because UBT never writes the receipt after the failed finalize step. Packaging
-and distribution are out of scope for #188; the fix is tracked in #262.
+generic/platform=macOS UE_XCODE_BUILD_MODE=PostBuildSync` by hand succeeded.
+Whether that Xcode 27 failure has the same cause is not yet confirmed. If the
+log has no "detritus" and the checkout is outside iCloud, record the Xcode
+version and the full `ApplePostBuildSync` output in #262.
 
 All Toolsets enables the GameFeatures plugin in the editor, so the cook (an
 editor process) requires a `GameFeatureData` rule in the Asset Manager. The

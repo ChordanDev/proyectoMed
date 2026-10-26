@@ -137,6 +137,24 @@ describe("App", () => {
       expect(screen.getByTestId("play-button")).toBeInTheDocument();
     });
 
+    it("realtime: the consent names the real-time providers (#360)", () => {
+      withVoiceMode("realtime");
+      render(<App />);
+
+      expect(screen.getByText(strings.audioDisclosureRealtime)).toBeInTheDocument();
+      expect(screen.getByText(strings.consentCheckboxLabelRealtime)).toBeInTheDocument();
+      expect(screen.queryByText(strings.consentCheckboxLabel)).toBeNull();
+    });
+
+    it("turn: the consent keeps the OpenAI copy", () => {
+      withVoiceMode("turn");
+      render(<App />);
+
+      expect(screen.getByText(strings.audioDisclosure)).toBeInTheDocument();
+      expect(screen.getByText(strings.consentCheckboxLabel)).toBeInTheDocument();
+      expect(screen.queryByText(strings.consentCheckboxLabelRealtime)).toBeNull();
+    });
+
     it("off: no audio consent is asked and no voice control is offered", async () => {
       installVoiceBrowser();
       const user = userEvent.setup();

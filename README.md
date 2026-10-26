@@ -220,9 +220,11 @@ openssl rand -hex 32   # paste as VOICE_WORKER_SECRET
 | `PHOENIX_URL` | `http://localhost:4000` |
 | `VOICE_WORKER_SECRET` | The same secret as Phoenix. |
 | `DEEPGRAM_API_KEY` | Learner speech-to-text. |
-| `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` | Patient voice. Without them the reply is still shown as text. |
-| `ELEVENLABS_MODEL` | Optional, default `eleven_flash_v2_5`. |
+| `CARTESIA_API_KEY` / `CARTESIA_VOICE_ID` | Patient voice. Without them the reply is still shown as text. |
+| `CARTESIA_MODEL` | Optional, default `sonic-3`. |
 | `PHOENIX_TURN_TIMEOUT_S` / `PHOENIX_TURN_RETRIES` | Optional, defaults `35` and `1`. |
+| `VOICE_WORKER_FAKE_PROVIDERS` | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on; the worker refuses it unless `LIVEKIT_URL` is on loopback. |
+| `VOICE_WORKER_FAKE_TRANSCRIPT` | Optional. The fixed phrase the fake speech-to-text returns. Default `Qual é o seu nome?`. |
 
 Never commit `.env`. No secret reaches the browser: it only receives a short-lived
 LiveKit token.
@@ -352,7 +354,7 @@ Phoenix with a monotonic `turn_id`. Phoenix commits each turn at most once. With
 `VOICE_MODE=realtime` the web shows the final transcripts in the station transcript and
 the interim ones as a live caption (#270). The patient reply Phoenix returns for each turn
 is spoken by the same worker; see
-["Patient speech (ElevenLabs)"](#patient-speech-elevenlabs--manual-test) below.
+["Patient speech (Cartesia)"](#patient-speech-cartesia--manual-test) below.
 
 **Prerequisites:** the LiveKit setup from the previous section, `brew install uv`, and
 a Deepgram API key.
@@ -436,7 +438,7 @@ The worker log shows it registered with the LiveKit server.
 
 Worker unit tests (no credentials): `cd voice-worker && uv run python -m unittest`.
 
-## Patient speech (ElevenLabs) — manual test
+## Patient speech (Cartesia) — manual test
 
 When Phoenix commits a learner turn it returns the approved patient reply to the worker
 (`reply_text` with its `generation_id`, #119). The worker (#120) does two things with
@@ -444,7 +446,7 @@ it, in this order:
 
 1. Publishes the approved text to the room (data topic `transcript`), so the reply can
    be read whatever happens to the audio.
-2. Sends that text, and nothing else, to ElevenLabs streaming TTS and publishes the
+2. Sends that text, and nothing else, to Cartesia TTS (#360) and publishes the
    audio frame by frame on one patient audio track (`patient-voice`) of the
    `voice-worker` participant.
 
@@ -486,11 +488,14 @@ through the subscribed audio track.
 
 | Variable              | Required | Purpose                                                                 |
 | --------------------- | -------- | ----------------------------------------------------------------------- |
-| `ELEVENLABS_API_KEY`  | yes      | ElevenLabs API key.                                                     |
-| `ELEVENLABS_VOICE_ID` | yes      | Voice used for the patient.                                             |
-| `ELEVENLABS_MODEL`    | no       | TTS model. Default `eleven_flash_v2_5` (low latency, supports pt-BR).   |
+| `CARTESIA_API_KEY`    | yes      | Cartesia API key.                                                       |
+| `CARTESIA_VOICE_ID`   | yes      | Cartesia voice id used for the patient, and for any actor whose voice key `CARTESIA_VOICE_IDS` does not map. |
+| `CARTESIA_VOICE_IDS`  | no       | Companion stations (#341): `voice-key=voice-id,...` for the keys `infantil`, `masculina-adulta`, `feminina-adulta`, `masculina-idosa` and `feminina-idosa`. Malformed pairs are skipped with a warning naming only the variable. |
+| `CARTESIA_MODEL`      | no       | TTS model. Default `sonic-3` (low latency, supports Portuguese).        |
 | `PHOENIX_TURN_TIMEOUT_S` | no    | Seconds each transcript POST waits for Phoenix. Default `35` (see below). |
 | `PHOENIX_TURN_RETRIES`   | no    | Retries of a transcript POST after a timeout or disconnect. Default `1`.  |
+| `VOICE_WORKER_FAKE_PROVIDERS` | no | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on, and LiveKit must be on loopback or the job fails with `fake_providers_refused`. |
+| `VOICE_WORKER_FAKE_TRANSCRIPT` | no | The fixed phrase the fake speech-to-text returns. Default `Qual é o seu nome?`. |
 
 Without the sentence stream Phoenix answers a transcript only after the patient reply
 is generated and verified; with it, the timeout applies to each wait for the next line.
@@ -503,7 +508,10 @@ was received the POST is not retried. An
 invalid value keeps the default.
 
 If the key or the voice id is missing the worker keeps transcribing and delivers every
-reply as text followed by a `synthesis_failed` event.
+reply as text followed by a `synthesis_failed` event. The worker asks Cartesia for raw
+16-bit PCM at 24 kHz in Portuguese (the session language `pt-BR` is sent as `pt`).
+Phoenix's turn-based voice reads the same `CARTESIA_*` variables (see
+["Turn-based voice providers"](#turn-based-voice-providers-deepgram-and-cartesia)).
 
 **Room events** (all on data topic `transcript`, reliable, JSON):
 
@@ -540,18 +548,19 @@ id, generation id and failure kind only.
   it no turn gets a reply to speak.
 - `LIVEKIT_URL` must be `ws://127.0.0.1:7880` for the local `livekit-server --dev`, in
   both the backend and the worker.
-- `ELEVENLABS_VOICE_ID` must be a voice the API key may use. On the free plan, library
-  voices answer `402 paid_plan_required`; use a default voice. Check a voice before
-  starting the worker (expects `http 200`):
+- `CARTESIA_VOICE_ID` must be a voice the API key may use. Check the key and the voice
+  before starting the worker with the same request the worker sends (expects
+  `http 200`):
 
   ```sh
-  curl -s -o /dev/null -w 'http %{http_code}\n' -X POST \
-    "https://api.elevenlabs.io/v1/text-to-speech/$ELEVENLABS_VOICE_ID/stream?output_format=pcm_24000" \
-    -H "xi-api-key: $ELEVENLABS_API_KEY" -H "content-type: application/json" \
-    -d '{"text":"Olá, tudo bem?","model_id":"eleven_flash_v2_5"}'
+  curl -s -o /dev/null -w 'http %{http_code}\n' -X POST https://api.cartesia.ai/tts/bytes \
+    -H "X-API-Key: $CARTESIA_API_KEY" -H "Cartesia-Version: 2025-04-16" \
+    -H "content-type: application/json" \
+    -d "{\"model_id\":\"sonic-3\",\"transcript\":\"Olá, tudo bem?\",\"language\":\"pt\",
+         \"voice\":{\"mode\":\"id\",\"id\":\"$CARTESIA_VOICE_ID\"},
+         \"output_format\":{\"container\":\"raw\",\"encoding\":\"pcm_s16le\",\"sample_rate\":24000}}"
   ```
 
-- An API key restricted to the Text to Speech endpoint is enough.
 - Browser extensions or VPNs that block local WebRTC make **Conectar voz** fail before
   the microphone prompt; use a browser profile without them.
 
@@ -574,8 +583,8 @@ made only of stage directions has nothing to speak and keeps the learner turn.
 
    ```sh
    LIVEKIT_URL=ws://127.0.0.1:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
-     DEEPGRAM_API_KEY=<your-key> ELEVENLABS_API_KEY=<your-key> \
-     ELEVENLABS_VOICE_ID=<voice-id> PHOENIX_URL=http://localhost:4000 \
+     DEEPGRAM_API_KEY=<your-key> CARTESIA_API_KEY=<your-key> \
+     CARTESIA_VOICE_ID=<voice-id> PHOENIX_URL=http://localhost:4000 \
      VOICE_WORKER_SECRET=dev-worker-secret uv run python worker.py dev
    ```
 
@@ -587,7 +596,7 @@ made only of stage directions has nothing to speak and keeps the learner turn.
    is ready the old audio stops and only the new answer is heard.
 4. Press **Desconectar voz** mid-answer, then **Conectar voz**: the interrupted answer
    does not resume and the next question is answered normally.
-5. Restart the worker with `ELEVENLABS_API_KEY=wrong` and ask a question: no audio, the
+5. Restart the worker with `CARTESIA_API_KEY=wrong` and ask a question: no audio, the
    worker logs `speech stopped for session <id> turn <n> generation <n>:
    synthesis_failed` and keeps running; the next learner turn is still committed.
 6. Scan the worker output: no reply text, API key or provider message appears.
@@ -657,6 +666,47 @@ prove the result contract, not the quality of any assessment.
   harness runs; in `test` and `prod` it is ignored and the default adapter stays
   in place.
 - Do not set the variable outside the E2E suite.
+
+### Voice worker fake speech providers
+
+The Unreal spoken-turn test (#191) runs the real voice worker without Deepgram
+or Cartesia. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
+
+- Every learner utterance becomes one final transcript,
+  `VOICE_WORKER_FAKE_TRANSCRIPT` (default `Qual é o seu nome?`). An utterance
+  starts when the microphone is loud and ends after 500 ms of quiet, like the
+  Deepgram endpointing.
+- Every approved reply is spoken as a 220 Hz tone, 80 ms per character, from
+  0.4 s to 3 s.
+- Rooms, Phoenix calls, turn tracking and the `transcript` events are the real
+  worker's.
+
+**The switch is test-only.** The worker refuses to start with it unless
+`LIVEKIT_URL` points at a loopback address (`127.0.0.1`, `localhost` or
+`::1`). The worker's unit tests (`cd voice-worker && uv run python -m unittest`)
+cover the fakes in `test_fake_providers.py`.
+
+`scripts/run-voice-stack.sh` starts the whole stack with no paid provider and
+never reads `.env`:
+
+- `livekit-server --dev` on `ws://127.0.0.1:7880`;
+- a mock OpenAI (`scripts/voice-stack/mock_openai.py`) that answers every
+  patient turn with `VOICE_STACK_PATIENT_REPLY` (default `Meu nome é Carlos.`);
+- Phoenix in `dev` with `VOICE_MODE=realtime` and the E2E-only approving Jev
+  adapter, on port `VOICE_STACK_PHOENIX_PORT` (default `4000`);
+- the voice worker with its fake speech providers, hearing
+  `VOICE_STACK_TRANSCRIPT` (default `Qual é o seu nome?`). It runs in `dev`
+  mode without reload, which has no CPU-load cap, so it still takes rooms
+  while the Unreal editor starts.
+
+It runs until Ctrl-C, or runs one command once the stack is up and exits with
+that command's status. The probe joins as the learner, speaks a tone burst and
+checks the transcript events and the patient's audio:
+
+```sh
+scripts/run-voice-stack.sh -- \
+  uv run --project voice-worker python scripts/voice-stack/probe_spoken_turn.py
+```
 
 ### Database
 
@@ -827,7 +877,7 @@ off, setting `ACTIVE_STATION_ID` stops the boot, and the active-station routes
 answer `404 no_active_station`. Learners start sessions on published stations
 from the database with `POST /sessions` (see `docs/unreal-station-client.md`).
 
-### Turn-based voice providers (Deepgram and ElevenLabs)
+### Turn-based voice providers (Deepgram and Cartesia)
 
 The station's turn-based voice ("Usar voz" / "Ouvir resposta") transcribes the
 learner through `POST /api/stations/active/sessions/:id/transcribe` and speaks the
@@ -835,21 +885,21 @@ patient reply through `POST /api/stations/active/sessions/:id/synthesize`. By
 default both use OpenAI (`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`,
 `OPENAI_TRANSCRIPTION_MODEL` = `whisper-1`, `OPENAI_TTS_MODEL` = `tts-1`,
 `OPENAI_TTS_VOICE` = `alloy`); that path is unchanged. `VOICE_PROVIDER` switches
-both endpoints to Deepgram (speech-to-text, pt-BR) and ElevenLabs (patient voice).
+both endpoints to Deepgram (speech-to-text, pt-BR) and Cartesia (patient voice, #398).
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `VOICE_PROVIDER` | `deepgram_elevenlabs` selects Deepgram and ElevenLabs for voice (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps OpenAI. | unset |
+| `VOICE_PROVIDER` | `deepgram_cartesia` selects Deepgram and Cartesia for voice (`dev` and `prod`; ignored in `test`). Any other value, or none, keeps OpenAI. | unset |
 | `DEEPGRAM_API_KEY` | Deepgram key, sent as `Authorization: Token <key>` to the pre-recorded `/v1/listen` API with `language=pt-BR`. | unset |
 | `DEEPGRAM_MODEL` | Deepgram model. | `nova-3` |
-| `ELEVENLABS_API_KEY` | ElevenLabs key, sent as `xi-api-key`. | unset |
-| `ELEVENLABS_VOICE_ID` | Voice used for the patient. It must be a voice the key may use. | unset |
-| `ELEVENLABS_MODEL` | Multilingual text-to-speech model. | `eleven_flash_v2_5` (low latency, pt-BR) |
+| `CARTESIA_API_KEY` | Cartesia key, sent as `Authorization: Bearer <key>` to `POST /tts/bytes` (`Cartesia-Version: 2026-08-14`). | unset |
+| `CARTESIA_VOICE_ID` | Voice used for the patient. It must be a voice the key may use. | unset |
+| `CARTESIA_MODEL` | Text-to-speech model. | `sonic-3` (low latency, Portuguese) |
 
 `backend/config/runtime.exs` reads these variables once, at boot. The web is
-unchanged: transcription returns the same JSON, and ElevenLabs is asked for mp3
-(`output_format=mp3_44100_128`), served as `audio/mpeg` like the OpenAI audio.
-The patient always speaks with `ELEVENLABS_VOICE_ID`; an OpenAI voice name sent by
+unchanged: transcription returns the same JSON, and Cartesia is asked for mp3 in
+Portuguese (44.1 kHz, 128 kbps), served as `audio/mpeg` like the OpenAI audio.
+The patient always speaks with `CARTESIA_VOICE_ID`; an OpenAI voice name sent by
 a client is still validated but not used. Without the selected provider's key (or
 without the voice id), voice is unavailable exactly as it is without an OpenAI
 key: the endpoints answer `502` and the learner continues by text. Neither
@@ -868,8 +918,8 @@ endpoint answers `400` (nothing to synthesize). The rule lives in
 Check it with the acute-appendicitis station:
 
 ```sh
-cd backend && ACTIVE_STATION_ID=acute-appendicitis VOICE_PROVIDER=deepgram_elevenlabs \
-  DEEPGRAM_API_KEY=<key> ELEVENLABS_API_KEY=<key> ELEVENLABS_VOICE_ID=<voice-id> \
+cd backend && ACTIVE_STATION_ID=acute-appendicitis VOICE_PROVIDER=deepgram_cartesia \
+  DEEPGRAM_API_KEY=<key> CARTESIA_API_KEY=<key> CARTESIA_VOICE_ID=<voice-id> \
   mix phx.server
 ```
 
@@ -984,7 +1034,7 @@ patient turn of a station, `cache_read_input_tokens` should be above 0.
 ### Session usage and cost
 
 Each finished session gets one content-free row in `session_usages` (issue
-#342): Claude tokens per model, Jev calls, and the Deepgram seconds, ElevenLabs
+#342): Claude tokens per model, Jev calls, and the Deepgram seconds, Cartesia
 characters and LiveKit participant minutes the voice worker reports to
 `POST /api/internal/voice/sessions/:id/usage`, with an estimated USD cost.
 `Backend.Stations.session_cost_report/2` gives the median cost per station over
@@ -992,7 +1042,7 @@ a period. See `docs/operations/session-usage-cost.md`.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `USAGE_PRICES_JSON` | JSON object overriding entries of the price table in `config/runtime.exs` (`claude` per model, `jev_call`, `deepgram_minute`, `elevenlabs_1k_characters`, `livekit_participant_minute`). Invalid JSON stops the boot; ignored in `test`. | unset (public list prices of 2026-10-25) |
+| `USAGE_PRICES_JSON` | JSON object overriding entries of the price table in `config/runtime.exs` (`claude` per model, `jev_call`, `deepgram_minute`, `cartesia_1k_characters`, `livekit_participant_minute`). Invalid JSON stops the boot; ignored in `test`. | unset (public list prices of 2026-10-25) |
 
 ### Subscription (RevenueCat)
 
@@ -1073,9 +1123,11 @@ configured on the backend, or the microphone permission is denied, the panel
 reports the failure and the text path keeps working unaffected.
 The `voice-worker/` Python process transcribes the learner microphone through
 Deepgram and commits final utterances to Phoenix (#118), then speaks each reply
-Phoenix approves through ElevenLabs on the patient audio track (#120).
+Phoenix approves through Cartesia on the patient audio track (#120, #360).
 `NoticeScreen` requires explicit audio consent whenever voice support is
-enabled; callers can pass `voiceSupport={false}` for text-only mode. See
+enabled; callers can pass `voiceSupport={false}` for text-only mode. With
+`VOICE_MODE=realtime` the consent names Deepgram (learner audio) and Cartesia
+(patient voice); `turn` keeps the OpenAI copy (#360). See
 ["Voice session (LiveKit) — manual test"](#voice-session-livekit--manual-test)
 above for how to exercise it locally.
 

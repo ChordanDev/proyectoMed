@@ -1093,7 +1093,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     @report %{
       "report_id" => "AJ_job-1",
       "deepgram_audio_seconds" => 312.5,
-      "elevenlabs_characters" => 1830,
+      "cartesia_characters" => 1830,
       "livekit_participant_minutes" => 21.25
     }
 
@@ -1119,10 +1119,10 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
       row = Backend.Repo.get!(Backend.Stations.Usage.SessionUsage, id)
       assert row.deepgram_audio_seconds == 312.5
-      assert row.elevenlabs_characters == 1830
+      assert row.cartesia_characters == 1830
       assert row.livekit_participant_minutes == 21.25
       assert row.cost_by_provider["deepgram"] > 0
-      assert row.cost_by_provider["elevenlabs"] > 0
+      assert row.cost_by_provider["cartesia"] > 0
       assert row.cost_by_provider["livekit"] > 0
     end
 
@@ -1133,12 +1133,12 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert json_response(post(conn, usage_path(id), @report), 202)
       assert json_response(post(conn, usage_path(id), @report), 202)
 
-      second_job = %{@report | "report_id" => "AJ_job-2", "elevenlabs_characters" => 170}
+      second_job = %{@report | "report_id" => "AJ_job-2", "cartesia_characters" => 170}
       assert json_response(post(conn, usage_path(id), second_job), 202)
 
       voice = Backend.Stations.Usage.snapshot(id).voice
       assert voice.deepgram_audio_seconds == 625.0
-      assert voice.elevenlabs_characters == 2000
+      assert voice.cartesia_characters == 2000
       assert voice.livekit_participant_minutes == 42.5
     end
 
@@ -1151,7 +1151,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
       {:ok, _} = Stations.complete_session(id, :user)
 
-      assert Backend.Repo.get!(Backend.Stations.Usage.SessionUsage, id).elevenlabs_characters ==
+      assert Backend.Repo.get!(Backend.Stations.Usage.SessionUsage, id).cartesia_characters ==
                1830
     end
 
@@ -1165,14 +1165,14 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
             %{@report | "report_id" => ""},
             %{@report | "report_id" => String.duplicate("a", 129)},
             %{@report | "deepgram_audio_seconds" => -1},
-            %{@report | "elevenlabs_characters" => 1.5},
+            %{@report | "cartesia_characters" => 1.5},
             %{@report | "livekit_participant_minutes" => "many"},
-            Map.delete(@report, "elevenlabs_characters")
+            Map.delete(@report, "cartesia_characters")
           ] do
         assert %{"error" => "invalid_usage"} = json_response(post(conn, usage_path(id), bad), 400)
       end
 
-      assert Backend.Stations.Usage.snapshot(id).voice.elevenlabs_characters == 0
+      assert Backend.Stations.Usage.snapshot(id).voice.cartesia_characters == 0
     end
 
     test "answers 404 for an unknown session and 401 without the worker secret", %{conn: conn} do

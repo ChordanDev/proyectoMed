@@ -27,7 +27,7 @@ Method: read-only reading of official documentation and pricing pages. No accoun
 | A11 | LiveKit Cloud plan for ~200 concurrent sessions | Unverified: the plan depends on where the voice workers run (see the LiveKit section) |
 | A12 | Anthropic limits allow ~200 simultaneous sessions | **Changed**: the binding limit is the monthly spend cap, not RPM |
 | A13 | Deepgram limits allow ~200 simultaneous sessions | **Changed**: Pay As You Go allows 150 concurrent streams. Growth or Enterprise is needed |
-| A14 | ElevenLabs limits allow ~200 simultaneous sessions | Confirmed with conditions: WebSocket streaming and a Scale or higher plan |
+| A14 | Text-to-speech limits allow ~200 simultaneous sessions | **Changed** (Cartesia, #398): Scale allows 15 concurrent contexts, enough for the average load only; Enterprise for headroom |
 
 ## 1. Fly.io (Phoenix)
 
@@ -121,7 +121,7 @@ Method: read-only reading of official documentation and pricing pages. No accoun
 
 ## 4. LiveKit Cloud (media and voice workers)
 
-The current voice worker (`voice-worker/worker.py`) is a LiveKit Agents process. It uses the Deepgram (`nova-3`) and ElevenLabs (`eleven_flash_v2_5`) plugins with our own provider keys, not LiveKit Inference.
+The current voice worker (`voice-worker/worker.py`) is a LiveKit Agents process. It uses the Deepgram (`nova-3`) and Cartesia (`sonic-3`, #360) plugins with our own provider keys, not LiveKit Inference.
 
 ### Findings
 
@@ -199,24 +199,14 @@ Load model (an assumption to replace with the usage metering from user story 53)
 
 Whether our traffic counts as "North America" depends on the endpoint region, which is **unverified**.
 
-### ElevenLabs
+### Cartesia
 
-- **TTS concurrency by plan:**
+Real-time patient speech moved from ElevenLabs to Cartesia in #360 (#398 for the launch branch). Read on 2026-10-25.
 
-  | Plan | Flash | Multilingual v2 |
-  |---|---|---|
-  | Free | 4 | 2 |
-  | Starter | 6 | 3 |
-  | Creator | 10 | 5 |
-  | Pro | 20 | 10 |
-  | Scale | 30 | 15 |
-  | Business | 30 | 15 |
-  | Enterprise | elevated | elevated |
+- **TTS concurrency by plan:** Free 2, Pro 3, Startup 5, Scale 15, Enterprise custom. Over HTTP every request is its own context and counts. Over the WebSocket a context (`context_id`) counts, and more requests on the same context are processed one after another without adding to the count. WebSocket connections are capped at 10 times the concurrency limit (`429` beyond it), and an idle TTS WebSocket closes after 5 minutes. Source: <https://docs.cartesia.ai/use-the-api/concurrency-limits-and-timeouts>.
+- **Plan prices:** Pro $5, Startup $49, Scale $299 per month, with 100k, 1.25M and 8M credits. Sonic speech costs 1 credit per character. Overage, when turned on: $65 (Pro), $45 (Startup) and $38 (Scale) per 1M credits; with overage off, requests are refused once the credits run out. Source: <https://cartesia.ai/pricing>.
 
-  Over HTTP, every in-flight request counts. **Over the WebSocket, only the time spent generating audio counts.** The `current-concurrent-requests` and `maximum-concurrent-requests` headers report usage. Flash v2.5 lists about 75 ms model latency. Source: <https://elevenlabs.io/docs/overview/models>.
-- **Plan prices:** Creator $22, Pro $99, Scale $299, Business $990 per month. Included Flash characters: 550k for Creator, 2.475M for Pro, 7.475M for Scale and 24.75M for Business. The page lists $0.04 per 1k Flash characters. Whether that is the overage rate is **unverified**, because the page does not label it. Source: <https://elevenlabs.io/pricing/api>.
-
-**A14 Confirmed with conditions.** With WebSocket streaming, a concurrency slot is held only while audio is generated. That is a fraction of a second per reply. 200 sessions × 1 reply per 15 s gives about 13 replies starting per second. If each generation takes about 0.5 to 1 s, about 7 to 13 slots are busy on average (Little's law), so **Scale (30)** fits with burst headroom. These generation times are unmeasured: read the concurrency headers during a load test. Characters, not concurrency, will drive cost. Size the plan from measured characters per session.
+**A14 Changed.** The same estimate as before (200 sessions × 1 reply per 15 s, about 0.5 to 1 s of generation per reply) keeps about 7 to 13 contexts busy on average, so **Scale (15)** fits the average with almost no burst headroom; plan for Enterprise above about 100 concurrent sessions. Whether the LiveKit Cartesia plugin holds a context only while audio is generated is **unverified**: measure concurrency during the load test. Characters, not concurrency, will drive cost; with overage on, Scale is $0.038 per 1,000 characters (the price table default, `docs/operations/session-usage-cost.md`).
 
 ## Open questions for the user
 
@@ -230,7 +220,7 @@ Whether our traffic counts as "North America" depends on the endpoint region, wh
 - **Q5 Provider plans before launch.** Approve:
   - an Anthropic Scale tier request;
   - Deepgram Growth ($4k/year prepaid) or an Enterprise conversation;
-  - an ElevenLabs Scale plan or higher;
+  - a Cartesia Scale plan, or Enterprise above about 100 concurrent sessions;
   - a paid Neon plan with scale to zero turned off.
 - **Q6 Stripe merchant category.** Confirm with Stripe that an exam-preparation product is classified under education, not a medical MCC. This matters for Pix eligibility if Q1 is yes.
 
@@ -240,6 +230,6 @@ These need accounts or measurements, so this research did not do them:
 
 - Round-trip latency from Fly `gru` to Neon `aws-sa-east-1`.
 - End-to-end voice turn latency with the agent in `gru` versus LiveKit `us-east`.
-- A 200-session load test that reads ElevenLabs concurrency headers, Deepgram stream counts and Anthropic rate-limit headers.
+- A 200-session load test that measures Cartesia concurrent contexts, Deepgram stream counts and Anthropic rate-limit headers.
 - The Anthropic organization's current tier on the Console Rate limits page.
 - Whether self-hosted agents are exempt from the LiveKit agent session limit, confirmed with LiveKit support.

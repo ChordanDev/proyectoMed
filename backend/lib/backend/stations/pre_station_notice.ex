@@ -16,7 +16,7 @@ defmodule Backend.Stations.PreStationNotice do
     {"typesafe", "TypeSafe (Jev)"},
     {"livekit", "LiveKit"},
     {"deepgram", "Deepgram"},
-    {"elevenlabs", "ElevenLabs"}
+    {"cartesia", "Cartesia"}
   ]
 
   @roles %{
@@ -87,7 +87,7 @@ defmodule Backend.Stations.PreStationNotice do
         [
           {"livekit", role("audio_transport")},
           {"deepgram", role("speech_to_text")},
-          {"elevenlabs", role("text_to_speech")}
+          {"cartesia", role("text_to_speech")}
         ]
 
       "turn" ->
@@ -98,8 +98,8 @@ defmodule Backend.Stations.PreStationNotice do
     end
   end
 
-  defp turn_audio_roles(:deepgram_elevenlabs) do
-    [{"deepgram", role("speech_to_text")}, {"elevenlabs", role("text_to_speech")}]
+  defp turn_audio_roles(:deepgram_cartesia) do
+    [{"deepgram", role("speech_to_text")}, {"cartesia", role("text_to_speech")}]
   end
 
   # The OpenAI voice path is unavailable without its key.
