@@ -1,9 +1,9 @@
 name: Voice Worker
 
-# Runs the voice worker's unit tests on every pull request that touches the
-# worker, whatever its base. Draft pull requests are skipped until they are
-# marked ready for review. The tests fake every provider, so they need no
-# network access or API keys.
+# Lints, type-checks and tests the voice worker on every pull request that
+# touches the worker, whatever its base. Draft pull requests are skipped until
+# they are marked ready for review. The tests fake every provider, so they need
+# no network access or API keys.
 #
 # Pushes to develop also run, so the uv cache is saved on develop, where every
 # pull request to develop can restore it.
@@ -27,8 +27,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test Voice Worker
+  check:
+    name: Check Voice Worker
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     defaults:
@@ -44,9 +44,19 @@ jobs:
           cache-dependency-glob: voice-worker/uv.lock
 
       # --locked fails when uv.lock is out of date with pyproject.toml instead
-      # of silently re-resolving it.
+      # of silently re-resolving it. The dev group brings the pinned ruff and
+      # pyright.
       - name: Install worker dependencies
         run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run --locked ruff check --output-format github .
+
+      - name: Ruff format check
+        run: uv run --locked ruff format --check .
+
+      - name: Pyright type check
+        run: uv run --locked pyright
 
       - name: Unit tests
         run: uv run --locked python -m unittest discover

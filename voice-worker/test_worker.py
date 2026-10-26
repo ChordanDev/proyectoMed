@@ -4,6 +4,7 @@ import json
 import os
 import unittest
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import patch
 
 from livekit.agents import APIConnectionError
@@ -689,8 +690,11 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
 class BuildVoiceTTSTest(unittest.TestCase):
     """Issues #341, #398: voice keys (`voz=`) map to Cartesia voices by environment."""
 
-    CONTEXT = {"language": "pt-BR", "keyterms": []}
-    BASE = {"CARTESIA_API_KEY": PROVIDER_SECRET, "CARTESIA_VOICE_ID": "voice-1"}
+    CONTEXT: ClassVar[dict[str, object]] = {"language": "pt-BR", "keyterms": []}
+    BASE: ClassVar[dict[str, str]] = {
+        "CARTESIA_API_KEY": PROVIDER_SECRET,
+        "CARTESIA_VOICE_ID": "voice-1",
+    }
 
     def test_maps_each_voice_key_to_its_cartesia_voice(self):
         env = {
@@ -812,7 +816,7 @@ class BuildVoiceTTSTest(unittest.TestCase):
 
 
 class BuildTTSTest(unittest.TestCase):
-    CONTEXT = {"language": "pt-BR", "keyterms": []}
+    CONTEXT: ClassVar[dict[str, object]] = {"language": "pt-BR", "keyterms": []}
 
     def test_reads_cartesia_settings_from_the_worker_environment(self):
         env = {"CARTESIA_API_KEY": PROVIDER_SECRET, "CARTESIA_VOICE_ID": "voice-1"}

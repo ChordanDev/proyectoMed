@@ -436,16 +436,21 @@ The worker log shows it registered with the LiveKit server.
 10. The worker never logs transcript text: scan its output from steps 2–7 and confirm
     only lifecycle lines and session ids appear.
 
-Worker unit tests (no credentials, no network): run the same check CI runs.
+Worker checks (no credentials, no network): run the same checks CI runs.
 
 ```bash
 cd voice-worker
 uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pyright
 uv run --locked python -m unittest discover
 ```
 
-The `Test Voice Worker` job (`.github/workflows/voice-worker.yml`) runs them on Python
-3.12 for every pull request that touches `voice-worker/`. `--locked` fails when
+The `Check Voice Worker` job (`.github/workflows/voice-worker.yml`) runs them on
+Python 3.12 for every pull request that touches `voice-worker/`. `uv sync` installs
+the `dev` group, which pins ruff and pyright. `uv run ruff format .` fixes formatting.
+Pyright checks the worker modules, not the `test_*.py` files. `--locked` fails when
 `uv.lock` is out of date with `pyproject.toml`; run `uv lock` and commit the lockfile.
 
 ## Patient speech (Cartesia) — manual test

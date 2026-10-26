@@ -214,18 +214,20 @@ class SpeechPlayer:
             stream = tts.synthesize(reply.reply_text, conn_options=SYNTHESIS_OPTIONS)
             if self.meter is not None:
                 self.meter.add_characters(reply.reply_text)
+            source = self._source
+            assert source is not None  # start() published the track
             async for audio in stream:
                 if self._speaking is not reply:
                     return None
                 if not self._is_current(reply):
                     # Fenced by the tracker alone: drop this frame and every later one.
-                    self._source.clear_queue()
+                    source.clear_queue()
                     return None
                 self._log_first_audio(reply)
-                await self._source.capture_frame(audio.frame)
+                await source.capture_frame(audio.frame)
             # Still this generation until the buffered tail is heard, so a cancel in
             # that window clears it instead of being a finished-generation no-op.
-            await self._source.wait_for_playout()
+            await source.wait_for_playout()
             return None
         except Exception:
             if self._speaking is not reply:

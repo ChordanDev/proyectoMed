@@ -379,6 +379,7 @@ class PatientVoice:
         `GET /sessions/:id/impressos`.
         """
         try:
+            assert reply.impresso is not None  # is_impresso_receipt checked it
             await publish(
                 self.room,
                 {

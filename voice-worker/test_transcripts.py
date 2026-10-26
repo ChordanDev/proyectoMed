@@ -1821,9 +1821,12 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 started = asyncio.Event()
                 release = asyncio.Event()
                 cancelled = []
-                response = dict(
-                    turn_id=2, status="committed", generation_id=2, reply_text="Reply"
-                )
+                response = {
+                    "turn_id": 2,
+                    "status": "committed",
+                    "generation_id": 2,
+                    "reply_text": "Reply",
+                }
                 response.update(override)
                 if response.get("turn_id") is None:
                     response.pop("turn_id")
@@ -2297,9 +2300,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         # Call log must confirm cancel(1) completed before commit(2) started
         log_order = [log[0] for log in client.call_log]
         idx_cancel_end = log_order.index("cancel_end")
-        idx_commit_2_start = [
+        idx_commit_2_start = next(
             i for i, log in enumerate(client.call_log) if log[:2] == ("commit_start", 2)
-        ][0]
+        )
         self.assertLess(
             idx_cancel_end,
             idx_commit_2_start,

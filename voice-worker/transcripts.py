@@ -295,6 +295,7 @@ class TurnTracker:
             return None
         if reply.generation_id in self.cancelled_generations:
             return None
+        assert reply.generation_id is not None  # is_committed_receipt checked it
         if (
             self.active_generation_id is not None
             and reply.generation_id < self.active_generation_id
@@ -392,6 +393,7 @@ class PhoenixClient:
 
         async def hand_over(sentence: VoiceTurnReply) -> None:
             nonlocal handed_over
+            assert on_sentence is not None  # only streamed turns hand sentences over
             handed_over = True
             await on_sentence(sentence)
 
@@ -413,8 +415,9 @@ class PhoenixClient:
                     raise
                 attempts_left -= 1
 
+        # Wire values stay unvalidated here; the is_*_receipt checks vet them.
         return VoiceTurnReply(
-            turn_id=result.get("turn_id"),
+            turn_id=result.get("turn_id"),  # pyright: ignore[reportArgumentType]
             status=result["status"],
             generation_id=result.get("generation_id"),
             reply_text=result.get("reply_text"),
@@ -450,7 +453,7 @@ class PhoenixClient:
                     if kind == "sentence":
                         await on_sentence(
                             VoiceTurnReply(
-                                turn_id=item.get("turn_id"),
+                                turn_id=item.get("turn_id"),  # pyright: ignore[reportArgumentType]
                                 status="committed",
                                 generation_id=item.get("generation_id"),
                                 reply_text=item.get("text"),
@@ -714,6 +717,7 @@ class TurnManager:
                 self._queued_commit = None
                 self._queued_task = None
                 task = asyncio.current_task()
+                assert task is not None  # always awaited inside a task
                 self._active_commit_tasks.add(task)
                 try:
                     return await self._do_commit(turn_id, text, None)
@@ -734,6 +738,7 @@ class TurnManager:
             else:
                 turn_id = self._local_cancel_turn
                 self._local_cancel_turn = None
+            assert turn_id is not None  # the loop condition guarantees one
             result = await self._do_cancel(turn_id)
             self._capacity_changed.set()
         return result
