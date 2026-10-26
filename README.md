@@ -788,7 +788,8 @@ and the station deadline, which ends the voice session.
 `POST /device/start` answers `429` with a `retry-after` header (seconds) and
 `{"error": "rate_limited", "message": "Muitas tentativas. Aguarde N s e tente novamente."}`;
 a session route answers the same with the message "Muitas solicitações nesta
-sessão. Aguarde N s e tente novamente.".
+sessão. Aguarde N s e tente novamente.". A refused request counts toward none
+of its limits.
 The pages show the flash "Muitas tentativas. Aguarde alguns minutos e tente
 novamente." and send no email, create no account and log nobody in. A throttled
 request logs `rate limited action=<action> keys=<kinds>`: never an IP, email,

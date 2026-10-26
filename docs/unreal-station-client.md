@@ -468,7 +468,7 @@ request never meets them. Operators can change them (`RATE_LIMIT_<ACTION>_<KIND>
 see the README).
 
 Past a limit the route answers `429` with a `Retry-After` header (seconds)
-and this body; the request did nothing, so the client may resend it after
+and this body; the request did nothing and counts toward neither limit, so the client may resend it after
 `Retry-After`, but never in a loop:
 
 ```json

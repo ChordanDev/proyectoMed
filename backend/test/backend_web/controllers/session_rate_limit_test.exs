@@ -128,17 +128,40 @@ defmodule BackendWeb.SessionRateLimitTest do
              }).status == 429
     end
 
-    test "the deprecated active-station aliases share the session's counter",
-         %{conn: conn, kase: kase} do
-      enable_rate_limit(session_message: [session: {1, 60_000}])
-      learner = learner_conn(conn)
-      session_id = start_session!(learner, kase)
+    # Every deprecated alias of a paid route: {action, method, alias prefix,
+    # path suffix, params}.
+    @aliases [
+      {:session_message, :post, "/api/stations/active/sessions", "/messages", @message},
+      {:session_result, :get, "/api/stations/active/sessions", "/result", %{}},
+      {:session_result, :get, "/api/v2/stations/active/sessions", "/result", %{}},
+      {:session_impresso, :post, "/api/stations/active/sessions", "/impressos/request",
+       %{"text" => "hemograma"}},
+      {:session_transcribe, :post, "/api/stations/active/sessions", "/transcribe", %{}},
+      {:session_synthesize, :post, "/api/stations/active/sessions", "/synthesize",
+       %{"text" => "Bom dia."}},
+      {:session_voice, :post, "/api/stations/active/sessions", "/voice", %{}}
+    ]
 
-      refute request(learner, :post, "/sessions/#{session_id}/messages", @message).status == 429
+    for {action, method, prefix, suffix, params} <- @aliases do
+      @action action
+      @method method
+      @prefix prefix
+      @suffix suffix
+      @params params
 
-      assert_rate_limited(
-        request(learner, :post, "/api/stations/active/sessions/#{session_id}/messages", @message)
-      )
+      test "the deprecated alias #{prefix}/:id#{suffix} shares the session's #{action} counter",
+           %{conn: conn, kase: kase} do
+        enable_rate_limit([{@action, session: {1, 60_000}}])
+        learner = learner_conn(conn)
+        session_id = start_session!(learner, kase)
+
+        refute request(learner, @method, "/sessions/#{session_id}#{@suffix}", @params).status ==
+                 429
+
+        assert_rate_limited(
+          request(learner, @method, "#{@prefix}/#{session_id}#{@suffix}", @params)
+        )
+      end
     end
   end
 
@@ -156,6 +179,26 @@ defmodule BackendWeb.SessionRateLimitTest do
       second = start_session!(learner, kase)
 
       assert_rate_limited(request(learner, :post, "/sessions/#{second}/messages", @message))
+    end
+
+    test "requests a session refuses spend none of the learner's budget",
+         %{conn: conn, kase: kase} do
+      enable_rate_limit(session_message: [session: {2, 60_000}, learner: {3, 60_000}])
+      learner = learner_conn(conn)
+      first = start_session!(learner, kase)
+
+      for _ <- 1..2 do
+        refute request(learner, :post, "/sessions/#{first}/messages", @message).status == 429
+      end
+
+      for _ <- 1..2 do
+        assert_rate_limited(request(learner, :post, "/sessions/#{first}/messages", @message))
+      end
+
+      assert request(learner, :post, "/sessions/#{first}/discard", %{}).status == 204
+      second = start_session!(learner, kase)
+
+      refute request(learner, :post, "/sessions/#{second}/messages", @message).status == 429
     end
   end
 
@@ -231,7 +274,7 @@ defmodule BackendWeb.SessionRateLimitTest do
       assert %{"status" => "completed"} =
                request(learner, :post, path.("/finish"), %{}) |> json_response(200)
 
-      # The client polls the result every 2 s while it is graded.
+      # The client fetches the result once; ten retries every 2 s stay under the limit.
       for _ <- 1..10 do
         send!.(:get, "/result", %{})
         advance_rate_limit_clock(2_000)

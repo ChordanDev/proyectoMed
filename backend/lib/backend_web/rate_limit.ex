@@ -23,7 +23,8 @@ defmodule BackendWeb.RateLimit do
     * `:clock_offset_ms` - tests only: moves the limiter's clock forward
       (`BackendWeb.RateLimitHelpers.advance_rate_limit_clock/1`).
 
-  Emails are hashed before they become keys, and a throttled request logs only
+  Emails and session ids are hashed before they become keys, so a key's size
+  never depends on the request, and a throttled request logs only
   the action and the key kinds, never an IP, email, code or token.
   """
 
@@ -83,7 +84,9 @@ defmodule BackendWeb.RateLimit do
   @doc """
   Counts one request of `action` for every `{kind, value}` key and answers
   `:ok`, or `{:error, :rate_limited, retry_after_seconds}` when any key is
-  beyond its limit. A key whose value is `nil` or that has no limit is skipped.
+  beyond its limit. A refused request is taken back from the keys that allowed
+  it, so it spends none of their budget. A key whose value is `nil` or that has
+  no limit is skipped.
   """
   @spec check(action(), keyword()) :: :ok | {:error, :rate_limited, pos_integer()}
   def check(action, keys) do
@@ -137,23 +140,22 @@ defmodule BackendWeb.RateLimit do
   defp count(action, keys) do
     now = now_ms()
 
-    refused =
-      Enum.flat_map(keys, fn {kind, value} ->
-        with false <- is_nil(value),
-             {_count, _window_ms} = limit <- limit(action, kind),
-             retry_ms when is_integer(retry_ms) <-
-               hit({action, kind, key(kind, value)}, limit, now) do
-          [{kind, retry_ms}]
-        else
-          _allowed -> []
-        end
-      end)
+    hits =
+      for {kind, value} <- keys,
+          not is_nil(value),
+          limit = limit(action, kind),
+          limit != nil do
+        key = {action, kind, key(kind, value)}
+        {kind, key, hit(key, limit, now)}
+      end
 
-    case refused do
+    case for {kind, _key, retry_ms} <- hits, retry_ms != nil, do: {kind, retry_ms} do
       [] ->
         :ok
 
       refused ->
+        for {_kind, key, nil} <- hits, do: :ets.update_counter(@table, key, {2, -1})
+
         kinds = refused |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.join(",")
         Logger.warning("rate limited action=#{action} keys=#{kinds}")
 
@@ -183,6 +185,9 @@ defmodule BackendWeb.RateLimit do
 
   defp key(:email, email) when is_binary(email),
     do: :crypto.hash(:sha256, email |> String.trim() |> String.downcase())
+
+  defp key(:session, session_id) when is_binary(session_id),
+    do: :crypto.hash(:sha256, session_id)
 
   defp key(_kind, value), do: value
 
