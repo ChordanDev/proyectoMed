@@ -13,8 +13,13 @@ import argparse
 import asyncio
 import json
 import multiprocessing
+import os
 import platform
 import queue
+import shutil
+import signal
+import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import asdict
@@ -176,7 +181,7 @@ def main(argv=None) -> int:
     parser.add_argument("--steps", default="10,25,50,100,200", type=parse_steps)
     parser.add_argument("--turns", type=int, default=Script.turns)
     parser.add_argument("--turn-interval", type=float, default=Script.turn_interval_s)
-    parser.add_argument("--ramp-per-session", type=float, default=0.25)
+    parser.add_argument("--ramp-per-session", type=float, default=1.0)
     parser.add_argument("--sessions-per-shard", type=int, default=25)
     parser.add_argument("--memory-guard-mb", type=int, default=1024)
     parser.add_argument("--p95-limit-ms", type=float, default=1500)
@@ -184,6 +189,12 @@ def main(argv=None) -> int:
     parser.add_argument("--database", default="backend_load401")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
+    # A stopped run still stops the stack: SIGTERM and SIGHUP unwind through `finally`.
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, lambda num, _frame: sys.exit(128 + num))
+    # A sleeping laptop stalls every session: keep macOS awake while this process runs.
+    if shutil.which("caffeinate"):
+        subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
     script = Script(turns=args.turns, turn_interval_s=args.turn_interval)
     out = args.out or Path(tempfile.mkdtemp(prefix="voice-load-"))
     out.mkdir(parents=True, exist_ok=True)
@@ -192,7 +203,7 @@ def main(argv=None) -> int:
     idle: dict = {}
     try:
         stack.start()
-        time.sleep(3)
+        time.sleep(20)  # the warm job processes start
         idle = ProcessTreeSampler(stack.procs["worker"].pid).sample()
         baseline = idle["processes"]
         for n in args.steps:

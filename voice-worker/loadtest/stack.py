@@ -202,14 +202,16 @@ class Stack:
             ),
             300,
         )
-        # `dev`: no CPU-load cap, so the worker takes every job and degradation shows.
+        # `dev`: no CPU-load cap, so the worker takes every job and degradation shows;
+        # `worker_entry` adds the production number of warm job processes.
         self._spawn(
             "worker",
             [
                 "uv",
                 "run",
                 "python",
-                "worker.py",
+                "-m",
+                "loadtest.worker_entry",
                 "dev",
                 "--no-reload",
                 "--log-level",
