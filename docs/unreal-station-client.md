@@ -747,7 +747,7 @@ worker, nothing spoken):
 | `request_id` | string | `voice-exam-<turn_id>`, the id of the recorded `impresso_requests` event. |
 | `decision` | string | As `RequestImpresso`: `released`, `already_released` or `unavailable` (an exam the station does not author, or a declined request). |
 | `newly_released` | array | The impressos this request released: `id`, `title`, `category`, without `content`; read the content with `ListImpressos`. |
-| `feedback_message` | string | The pt-BR line a typed request shows ("Impresso liberado: ...", "Exame não disponível nesta estação"). |
+| `feedback_message` | string | The pt-BR line a typed request shows ("Impresso liberado: ...", "Considere solicitado.", "Não consta no script."). |
 
 - Show the outcome as after a typed request: `feedback_message`, then
   `ListImpressos` for what was released.

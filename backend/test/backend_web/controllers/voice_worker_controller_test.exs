@@ -1071,7 +1071,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       end
     end
 
-    test "an unauthored exam answers decision unavailable", %{conn: conn} do
+    test "an unauthored exam answers decision unavailable with Jev disabled", %{conn: conn} do
       id = Stations.create_session(%{audio_consent: true}).session_id
       {:ok, _} = Stations.arm_exam_mode(id)
 
@@ -1079,7 +1079,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
                "status" => "impresso_requested",
                "decision" => "unavailable",
                "newly_released" => [],
-               "feedback_message" => "Exame não disponível nesta estação"
+               "feedback_message" => "Não consta no script."
              } =
                conn
                |> post(transcripts_path(id), %{turn_id: 1, text: "Solicito uma tomografia"})
