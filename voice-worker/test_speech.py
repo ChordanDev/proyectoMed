@@ -623,6 +623,25 @@ class StreamingProviderTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.tts.prewarms, warmed_before_cancel + 1)
 
+    async def test_each_voice_is_prewarmed_and_speaks_through_its_own_stream(self):
+        companion_tts = FakeStreamingTTS()
+        self.player.voices = {"feminina-adulta": companion_tts}
+        await self.player.start()
+        self.assertEqual((self.tts.prewarms, companion_tts.prewarms), (1, 1))
+
+        reply = accepted(self.tracker, 1)
+        reply.voice = "feminina-adulta"
+        task = await self.start(reply)
+        stream = companion_tts.streams[0]
+        stream.queue.put_nowait(chunk("c1"))
+        stream.queue.put_nowait(None)
+        self.assertIsNone(await task)
+
+        self.assertEqual(stream.pushed, [reply.reply_text])
+        self.assertEqual(self.tts.streams, [])
+        self.assertEqual(self.sources[0].frames, ["c1"])
+        self.assertEqual((self.tts.prewarms, companion_tts.prewarms), (2, 2))
+
     async def test_prewarm_failure_never_stops_the_reply(self):
         self.tts.prewarm_error = RuntimeError(PROVIDER_SECRET)
         with self.assertLogs("voice-worker.speech", level="WARNING") as logs:
