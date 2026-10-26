@@ -25,8 +25,9 @@ import sys
 
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, cli
-from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
 from livekit.plugins import cartesia, deepgram
+
+from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
 from speech import SpeechPlayer
 from transcripts import (
     DEFAULT_TURN_RETRIES,
@@ -378,6 +379,7 @@ class PatientVoice:
         `GET /sessions/:id/impressos`.
         """
         try:
+            assert reply.impresso is not None  # is_impresso_receipt checked it
             await publish(
                 self.room,
                 {
