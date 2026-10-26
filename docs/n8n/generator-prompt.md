@@ -146,6 +146,7 @@ Tipos de critério:
 - tipo=SOLICITAÇÃO impressos=id1,id2 — o candidato pede um exame; impressos= lista os impressos que comprovam o pedido.
 - tipo=VERBALIZAÇÃO após=id1,id2 — o candidato interpreta um exame; após= lista os impressos que precisam ter sido liberados antes.
 - tipo=COMUNICAÇÃO — o candidato explica, prescreve, orienta ou responde. Use perguntas=id1,id2 para ligar o critério às [PERGUNTA-OBRIGATÓRIA] que ele avalia.
+- Toda interpretação, classificação, estratificação ou hipótese que dependa do resultado de um exame (por exemplo, classificação de Killip-Kimball pelo exame físico, artéria culpada pelo ECG, gravidade pelos exames laboratoriais, hipótese diagnóstica confirmada por imagem) é tipo=VERBALIZAÇÃO com após= citando o impresso de que ela depende, nunca tipo=COMUNICAÇÃO. Assim ela só pontua depois que o candidato recebeu o exame. Use COMUNICAÇÃO apenas para condutas, prescrições, orientações e respostas que não dependem de ler um impresso.
 Flags opcionais no critério: OBRIGATÓRIO (sem ele o item vale zero) ou PROIBIDO (se acontecer, o item vale zero; não conta no mínimo).
 
 ========================================================================
@@ -322,7 +323,7 @@ O exemplo abaixo segue todas as regras desta mensagem e passa em todas as verifi
 
 [ITEM item-08] Hipótese diagnóstica
 [CRITÉRIO criterio-1 tipo=VERBALIZAÇÃO após=impresso-2-urina OBRIGATÓRIO] formula a hipótese de infecção do trato urinário febril (pielonefrite aguda)
-[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] classifica o quadro como sem sinais de gravidade, com tratamento ambulatorial possível
+[CRITÉRIO criterio-2 tipo=VERBALIZAÇÃO após=impresso-1-exame-fisico,impresso-3-hemograma-pcr] classifica o quadro como sem sinais de gravidade, com tratamento ambulatorial possível
 [NÍVEL adequado pontos=1,2 mínimo=2] Realiza os 2 critérios.
 [NÍVEL parcialmente_adequado pontos=0,6 mínimo=1] Formula a hipótese sem classificar a gravidade.
 [NÍVEL inadequado pontos=0 mínimo=0] Não formula a hipótese diagnóstica.
