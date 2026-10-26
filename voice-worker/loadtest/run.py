@@ -145,29 +145,21 @@ def run_step(n: int, stack: Stack, args, script: Script, idle: dict) -> dict:
     turns = [t for lr in learners for t in lr["turns"]]
     window = steady_window(turns)
 
-    def steady(rows):
-        inside = [r for r in rows if window and window[0] <= r["at"] <= window[1]]
-        return inside or rows
-
     step = summarize_step(
         n,
         turns,
         sessions_started=n,
         sessions_failed=n - sum(1 for lr in learners if not lr["failed"]),
-        worker=steady(samples["worker"]),
-        phoenix=steady(samples["phoenix"]),
+        worker=steady_rows(samples["worker"], window),
+        phoenix=steady_rows(samples["phoenix"], window),
     )
-    # Peaks come from the whole step, ramp included; averages from the steady window.
     for name in ("worker", "phoenix"):
-        step[name]["rss_peak_mb"] = summarize_samples(samples[name])["rss_peak_mb"]
-        step[name]["processes_peak"] = summarize_samples(samples[name])[
-            "processes_peak"
-        ]
+        step[name] = summarize_process(samples[name], window)
     # Memory each session adds over the idle worker (main process, no jobs).
     step["worker_rss_per_session_mb"] = (
         (step["worker"]["rss_peak_mb"] or 0) - idle["rss_mb"]
     ) / n
-    step["livekit"] = summarize_samples(steady(samples["livekit"]))
+    step["livekit"] = summarize_process(samples["livekit"], window)
     step["steady_window_s"] = window[1] - window[0] if window else None
     step["min_available_mb"] = min_available / 2**20
     step["session_failures"] = sorted({lr["failed"] for lr in learners if lr["failed"]})
@@ -175,6 +167,19 @@ def run_step(n: int, stack: Stack, args, script: Script, idle: dict) -> dict:
     # Samples are about 1 s apart; a long gap means a sleeping or stalled laptop.
     step["max_sample_gap_s"] = max_gap(r["at"] for r in samples["worker"])
     return step
+
+
+def summarize_process(rows, window: tuple[float, float] | None) -> dict:
+    """Peaks (CPU, RSS, processes) from the whole step, ramp included; the CPU average
+    from the steady window, or from the whole step when there is no window."""
+    steady = summarize_samples(steady_rows(rows, window))
+    return {**summarize_samples(rows), "cpu_avg_percent": steady["cpu_avg_percent"]}
+
+
+def steady_rows(rows, window: tuple[float, float] | None) -> list[dict]:
+    """The samples inside the steady window, or all of them when it is empty."""
+    inside = [r for r in rows if window and window[0] <= r["at"] <= window[1]]
+    return inside or rows
 
 
 def drain(stack: Stack, baseline: int, seconds: float = 120) -> None:

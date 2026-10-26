@@ -2,7 +2,7 @@ import array
 import unittest
 
 from loadtest.learner import is_audible, session_offsets
-from loadtest.run import max_gap, parse_steps, steady_window
+from loadtest.run import max_gap, parse_steps, steady_window, summarize_process
 from loadtest.stack import (
     LOOPBACK,
     Ports,
@@ -167,6 +167,31 @@ class RunTest(unittest.TestCase):
         ]
         self.assertIsNone(steady_window(turns))
         self.assertIsNone(steady_window([]))
+
+    def test_peaks_from_the_whole_step_average_from_the_window(self):
+        def row(at, cpu, rss, processes):
+            return {"at": at, "cpu_percent": cpu, "rss_mb": rss, "processes": processes}
+
+        rows = [
+            row(1.0, 400.0, 3000.0, 12),  # ramp spike, before the window
+            row(31.0, 100.0, 2500.0, 20),
+            row(60.0, 200.0, 2600.0, 21),
+            row(100.0, 50.0, 2000.0, 11),  # drain, after the window
+        ]
+        summary = summarize_process(rows, (30.0, 90.0))
+        self.assertEqual(summary["cpu_avg_percent"], 150.0)
+        self.assertEqual(summary["cpu_peak_percent"], 400.0)
+        self.assertEqual(summary["rss_peak_mb"], 3000.0)
+        self.assertEqual(summary["processes_peak"], 21)
+
+    def test_no_window_averages_the_whole_step(self):
+        rows = [
+            {"at": 1.0, "cpu_percent": 100.0, "rss_mb": 1.0, "processes": 1},
+            {"at": 2.0, "cpu_percent": 300.0, "rss_mb": 2.0, "processes": 2},
+        ]
+        summary = summarize_process(rows, None)
+        self.assertEqual(summary["cpu_avg_percent"], 200.0)
+        self.assertEqual(summary["cpu_peak_percent"], 300.0)
 
 
 if __name__ == "__main__":

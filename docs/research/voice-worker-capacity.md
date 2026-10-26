@@ -71,6 +71,13 @@ Learners arrive one per second (N=50 ramps over 50 s).
 Raw data: [`voice-worker-capacity-results.json`](voice-worker-capacity-results.json).
 CPU is the percent of one core, so 160 means 1.6 cores.
 
+The harness now takes every peak (CPU, RSS, processes) from the whole step and the CPU
+average from the steady window. The run below predates that for the CPU peak: at N=10 and
+N=25 it is the maximum inside the steady window, so the whole-step CPU peak is at least
+that. N=50 never had every session talking at once (no steady window), so its CPU
+average and peak both come from the whole step, ramp included, and are not comparable
+with the other rows.
+
 | N | sessions ok | turns ok | p50 ms | p95 ms | p99 ms | worker CPU avg/peak % | worker RSS peak MB | worker processes | Phoenix CPU avg/peak % | Phoenix RSS peak MB |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 10 | 10/10 | 400/400 | 618 | 636 | 641 | 51/187 | 6519 | 21 | 6/12 | 297 |
