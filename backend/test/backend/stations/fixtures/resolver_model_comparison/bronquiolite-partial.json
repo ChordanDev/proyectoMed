@@ -1,7 +1,7 @@
 {
   "description": "Issue #343: a fictional partial attempt at the bronquiolite companion case (n8n sample). The learner asks part of the history, requests the exams without the oximetry, reaches the diagnosis without classifying severity and gives incomplete management. Companion replies use the `patient` role.",
   "station_id": "bronquiolite-viral-lactente",
-  "package": "case_format:n8n-sample-bronquiolite-companion.md",
+  "package": "case_format:resolver-comparison-bronquiolite.md",
   "quality": "partial",
   "expected_released_ids": [
     "impresso-1-exame-geral",

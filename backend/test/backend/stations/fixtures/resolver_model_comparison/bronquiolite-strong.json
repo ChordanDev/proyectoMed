@@ -1,7 +1,7 @@
 {
   "description": "Issue #343: a fictional strong attempt at the bronquiolite companion case (n8n sample). The learner talks to the mother, covers history and risk factors, requests and interprets the exams, classifies severity, admits the infant and answers the mother's doubts. Companion replies use the `patient` role, the only non-learner role of a qualification turn.",
   "station_id": "bronquiolite-viral-lactente",
-  "package": "case_format:n8n-sample-bronquiolite-companion.md",
+  "package": "case_format:resolver-comparison-bronquiolite.md",
   "quality": "strong",
   "expected_released_ids": [
     "impresso-1-exame-geral",

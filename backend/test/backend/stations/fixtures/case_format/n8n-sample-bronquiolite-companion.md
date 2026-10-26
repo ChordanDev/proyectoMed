@@ -1,200 +1,208 @@
 # ESTAÇÃO
 
-[ESTAÇÃO bronquiolite-viral-lactente]
+[ESTAÇÃO bronquiolite-lactente]
 [ÁREA] Pediatria
 [TEMA] Bronquiolite viral aguda em lactente, atendida com a mãe como acompanhante
 [PROVISÓRIO] sim
 
 # 1. CENÁRIO DE ATUAÇÃO E INSTRUÇÕES AO PARTICIPANTE
 
-[CENÁRIO] Você é o médico ou a médica plantonista de uma Unidade de Pronto Atendimento (UPA 24 horas). A unidade dispõe de sala de emergência pediátrica, oxigênio, oxímetro de pulso, laboratório e radiologia básicos. Há leitos pediátricos de referência no hospital municipal, com transporte sanitário disponível. Helena, uma lactente de 4 meses, é trazida pela mãe por tosse e "cansaço".
-[TAREFA tarefa-1] Realizar a anamnese dirigida com a acompanhante.
-[TAREFA tarefa-2] Solicitar e interpretar o exame físico e os exames que julgar necessários.
-[TAREFA tarefa-3] Formular a hipótese diagnóstica e classificar a gravidade do quadro.
-[TAREFA tarefa-4] Definir e explicar a conduta à acompanhante.
-[TAREFA tarefa-5] Responder às dúvidas da acompanhante e fazer as orientações pertinentes.
+[CENÁRIO] Você é o médico ou a médica plantonista do consultório pediátrico de uma Unidade de Pronto Atendimento (UPA 24 horas), em um mês de outono. A unidade dispõe de materiais para o exame físico pediátrico: estetoscópio, otoscópio, oxímetro de pulso com sensor neonatal e pediátrico, balança, termômetro e relógio para contagem da frequência respiratória. Há rede de oxigênio com cateter nasal e máscara, aspirador de secreções, soro fisiológico 0,9%, sonda nasogástrica e material para acesso venoso. O laboratório realiza hemograma, proteína C-reativa, gasometria e pesquisa de vírus respiratórios em amostra de nasofaringe, e há radiografia de tórax. O hospital municipal de referência tem enfermaria pediátrica e UTI pediátrica e recebe transferências pela central de regulação. Sofia Andrade Lima, 4 meses, sexo feminino, 6,4 kg, é trazida pela mãe por tosse e nariz entupido há quatro dias, com piora há um dia. Sinais vitais da triagem: temperatura axilar 37,9 °C; FC 168 bpm; FR 64 irpm; SpO2 89% em ar ambiente; peso 6,4 kg.
+[TAREFA tarefa-1] Realizar a anamnese dirigida com a mãe.
+[TAREFA tarefa-2] Solicitar e interpretar o exame físico.
+[TAREFA tarefa-3] Solicitar e interpretar os exames complementares pertinentes.
+[TAREFA tarefa-4] Formular a hipótese diagnóstica, classificar a gravidade e definir a conduta.
+[TAREFA tarefa-5] Orientar a mãe sobre prevenção e responder às suas dúvidas.
 
 # 2. ATORES
 
-[ATOR paciente papel=paciente idade=0 voz=infantil] Helena Souza Prado
-[PERFIL] Lactente de 4 meses, no colo da mãe, acordada, com respiração rápida e esforço visível para respirar, nariz com muita secreção. Choraminga de vez em quando e se acalma no colo. Não responde a perguntas.
-[TOM] Não fala. Faz choro fraco e entrecortado quando é manipulada.
-[CONTEXTO] Helena Souza Prado, 4 meses, sexo feminino, peso de 6,2 kg, trazida pela mãe à UPA por tosse e cansaço que pioraram hoje. Sinais vitais da triagem: temperatura axilar 38,1 °C; FC 168 bpm; FR 64 irpm; SpO2 89% em ar ambiente. A classificação de risco foi amarela, e a criança foi encaminhada ao consultório pediátrico.
+[ATOR paciente papel=paciente idade=0 voz=infantil] Sofia Andrade Lima
+[PERFIL] Lactente de 4 meses no colo da mãe, com respiração rápida e esforçada, nariz com secreção clara e tosse frequente. Irritada, mas consolável. Não responde a perguntas.
+[TOM] Não fala; choraminga, tosse e chora ao ser manipulada.
+[CONTEXTO] Sofia Andrade Lima, 4 meses e 10 dias, 6,4 kg, trazida pela mãe por tosse e obstrução nasal há quatro dias, com cansaço e piora da alimentação há um dia. Triagem: temperatura axilar 37,9 °C; FC 168 bpm; FR 64 irpm; SpO2 89% em ar ambiente.
 
-[ATOR mae papel=acompanhante idade=24 voz=feminina-adulta] Juliana Souza Prado
-[PERFIL] Mãe de Helena, ansiosa e cansada porque dormiu pouco na última noite. É colaborativa e acaricia a filha o tempo todo. Fica mais aflita se ouvir a palavra "internar" sem explicação.
-[TOM] Fala de forma simples, com frases curtas. Estudou até o primeiro ano do ensino médio e usa termos como "chiado", "cansaço" e "puxando o ar".
+[ATOR mae papel=acompanhante idade=24 voz=feminina-adulta] Juliana Andrade Lima
+[PERFIL] Mãe de Sofia, 24 anos, auxiliar de cozinha em licença-maternidade, ensino médio completo. Está cansada, preocupada e assustada com a respiração da filha. Colabora, mas resiste à ideia de internação porque tem outro filho de 3 anos em casa.
+[TOM] Fala de forma simples, sem termos técnicos; usa expressões como "cansaço" e "chiadeira no peito".
 
 # 3. ROTEIRO DO ATOR SIMULADO
 
-[TÓPICO] Queixa principal e história da doença atual (respostas da mãe)
-[FATO queixa-principal ator=mae] Doutor, ela está com uma tosse que não para e hoje começou a ficar cansadinha, puxando o ar.
-[FATO inicio-coriza ator=mae pep=item-02.criterio-1] Começou há quatro dias, com nariz escorrendo e espirro, igual a um resfriado.
-[FATO evolucao-tosse ator=mae pep=item-02.criterio-1] Há uns dois dias começou a tosse, e de ontem para hoje ela ficou cansada.
-[FATO febre ator=mae pep=item-02.criterio-2] Teve febre baixa, de 37,8 a 38 graus, desde o começo. Eu dei paracetamol e baixou.
-[FATO chiado ator=mae pep=item-02.criterio-3] Dá para ouvir um chiado no peito, e a barriguinha dela afunda quando respira.
-[FATO alimentacao ator=mae pep=item-02.criterio-4] Ela mama só no peito. Hoje pega o peito, mama um pouquinho, cansa e solta. Está mamando menos da metade do normal.
-[FATO vomito-tosse ator=mae] Às vezes engasga com a tosse e põe um pouco de leite para fora.
-[FATO diurese ator=mae pep=item-02.criterio-5 EXPLÍCITO] Hoje troquei só três fraldas molhadas. Normalmente são umas seis ou sete.
-[FATO apneia ator=mae pep=item-02.criterio-6 EXPLÍCITO] Não, ela não parou de respirar nenhuma vez.
-[FATO cianose ator=mae pep=item-02.criterio-6 EXPLÍCITO] Não vi a boca roxa, não.
-[FATO sono ator=mae] Ela acorda muito à noite tossindo e chorando.
-[FATO medicacao-em-casa ator=mae] Só dei paracetamol e soro no nariz uma vez. Não dei xarope.
+[TÓPICO] HDA — respostas da mãe
+[FATO coriza-inicio ator=mae pep=item-02.criterio-1] Começou há quatro dias com o nariz escorrendo água e entupido; ela ronca para respirar.
+[FATO tosse-caracter ator=mae pep=item-02.criterio-2] A tosse começou no dia seguinte; é seca, em crise, e piorou muito de ontem para hoje.
+[FATO febre-caracter ator=mae pep=item-02.criterio-3] Teve febre baixa, no máximo 38,2 °C no termômetro, desde anteontem; melhora com o remédio.
+[FATO cansaco-chiado ator=mae pep=item-02.criterio-4] Desde ontem à tarde está respirando rápido, com a barriga afundando, e faz um chiado no peito.
+[FATO primeira-vez ator=mae] É a primeira vez que ela fica assim; ontem à noite quase não dormiu.
 
-[TÓPICO] Antecedentes e fatores de risco (respostas da mãe)
-[FATO gestacao-parto ator=mae pep=item-03.criterio-1] Ela nasceu de parto normal, com 39 semanas, e pesou 3 quilos e 200. Não precisou ficar internada.
-[FATO comorbidades ator=mae pep=item-03.criterio-2] Ela não tem problema no coração nem no pulmão. Nunca tinha chiado antes.
-[FATO internacoes ator=mae pep=item-03.criterio-2] Nunca ficou internada.
-[FATO vacinacao ator=mae pep=item-03.criterio-3] As vacinas estão em dia. Tomou as de 2 e de 4 meses, a última na semana passada.
-[FATO contato-irmao ator=mae pep=item-03.criterio-4] O irmão dela, de 3 anos, vai à creche e estava resfriado na semana passada.
-[FATO tabagismo ator=mae pep=item-03.criterio-4 EXPLÍCITO] O pai dela fuma. Às vezes fuma dentro de casa, na cozinha.
-[FATO alergias ator=mae] Que eu saiba, ela não tem alergia a remédio.
-[FATO desenvolvimento ator=mae] Ela está crescendo bem e já sustenta a cabecinha.
+[TÓPICO] Sinais de gravidade — respostas da mãe
+[FATO aceitacao-mamadas ator=mae pep=item-03.criterio-1] Ela pega o peito, mama um pouquinho e solta para respirar; hoje mamou menos da metade do que costuma.
+[FATO diurese ator=mae pep=item-03.criterio-2] Hoje só molhou três fraldas; antes eram umas seis ou sete por dia.
+[FATO sem-apneia ator=mae pep=item-03.criterio-3] Não ficou roxinha e não percebi ela parar de respirar.
+[FATO vomitos-tosse ator=mae pep=item-03.criterio-4] Vomitou duas vezes depois da crise de tosse, só leite; não tem diarreia.
 
-[TÓPICO] Comportamento da paciente
-[FATO choro-exame ator=paciente] Chora de forma fraca e entrecortada quando é colocada na maca e se acalma no colo da mãe.
+[TÓPICO] Antecedentes, medicações e vacinação — respostas da mãe
+[FATO perinatal ator=mae pep=item-04.criterio-1] Fiz pré-natal certinho; nasceu de parto normal com 38 semanas, pesando 3.250 g, e foi para casa comigo em dois dias.
+[FATO sem-doencas-previas ator=mae pep=item-04.criterio-2] Nunca teve chiado, nunca foi internada e o pediatra nunca falou de problema no coração.
+[FATO medicacoes ator=mae pep=item-04.criterio-3] Só pinguei soro no nariz e dei paracetamol em gotas, 6 gotas; ela não tem alergia a remédio.
+[FATO vacinas ator=mae pep=item-04.criterio-4] As vacinas estão em dia; as de 4 meses ela tomou na semana passada. Trouxe a caderneta.
 
-[REGRA comportamento-no-exame] Se o candidato pedir para examinar a criança, a mãe a coloca na maca, ajuda a segurá-la e pergunta, preocupada, se "é grave". Os achados do exame físico só são informados pelo impresso correspondente.
-[REGRA reacao-internacao] Se o candidato indicar internação sem explicar o motivo, a mãe pergunta: "Mas por que tem que internar, doutor?". Se a explicação for clara, ela aceita e fica mais tranquila.
-[REGRA exames-nao-solicitados] Se o candidato não solicitar radiografia ou exames laboratoriais, o examinador não os oferece. Se o candidato solicitar, o examinador entrega o impresso correspondente.
+[TÓPICO] Contexto epidemiológico, hábitos e família — respostas da mãe
+[FATO irmao-creche ator=mae pep=item-05.criterio-1] O irmão de 3 anos vai à creche e está gripado, com nariz escorrendo, há uma semana.
+[FATO tabagismo ator=mae pep=item-05.criterio-2 EXPLÍCITO] O pai dela fuma um maço por dia, às vezes dentro de casa, na cozinha.
+[FATO aleitamento ator=mae pep=item-05.criterio-3] Ela mama só no peito, não toma água nem chá.
+[FATO familia-atopia ator=mae pep=item-05.criterio-4] O pai tem rinite; ninguém na família tem asma ou bronquite.
+[FATO moradia ator=mae] Moramos em casa de três cômodos, com um pouco de mofo no quarto.
+[FATO choro-lactente ator=paciente] Chora fraco ao ser despida e tosse em crise; acalma no colo da mãe.
 
-[TÓPICO] Dúvidas obrigatórias da mãe (nos minutos finais)
-[PERGUNTA-OBRIGATÓRIA duvida-mae-inalacao ator=mae] “Doutor, ela não vai precisar de uma inalação com remédio, de xarope ou de antibiótico para sarar mais rápido?”
-[PERGUNTA-OBRIGATÓRIA duvida-mae-asma ator=mae] “Esse chiado quer dizer que ela vai ficar com asma pelo resto da vida?”
+[REGRA comportamento-no-exame] Se o candidato pedir para examinar, a mãe coloca Sofia na maca, despe a criança e a mantém tranquila. O examinador entrega o Impresso 1 assim que o exame físico é verbalizado.
 
-[CONDUTA-ESPERADA resposta-duvida-inalacao] O candidato explica que a bronquiolite é causada por vírus, na maioria das vezes pelo vírus sincicial respiratório. Antibiótico não trata vírus e não está indicado, porque não há sinais de infecção bacteriana. Corticoide, xaropes para tosse e inalação com broncodilatador ou com outros remédios não aceleram a melhora e não são recomendados de rotina pela Sociedade Brasileira de Pediatria. O tratamento é de suporte: oxigênio, lavagem e aspiração do nariz, hidratação e alimentação.
-[CONDUTA-ESPERADA resposta-duvida-asma] O candidato explica que ter bronquiolite não significa ter asma. Algumas crianças podem apresentar novos episódios de chiado nos meses ou anos seguintes, sobretudo se expostas à fumaça de cigarro. O acompanhamento na unidade básica de saúde vai avaliar essa evolução. Evitar a exposição ao fumo ajuda a proteger o pulmão da criança.
-[CONDUTA-ESPERADA conduta-geral] O examinador espera o diagnóstico clínico de bronquiolite viral aguda com sinais de gravidade e indicação de internação hospitalar. Os sinais de gravidade são SpO2 de 89% em ar ambiente, taquipneia (FR de 64 irpm), tiragem subcostal e intercostal, batimento de asa nasal e aceitação alimentar menor que 50% do habitual, com redução da diurese. O candidato deve prescrever oxigênio por cateter nasal para manter SpO2 ≥ 92%, lavagem nasal com soro fisiológico 0,9% e aspiração das vias aéreas superiores e manutenção da hidratação. A alimentação deve ser fracionada. Se a FR permanecer acima de 60 a 70 irpm ou a aceitação seguir insuficiente, indica-se sonda nasogástrica ou hidratação venosa. O antitérmico é prescrito por peso. Exames complementares não são necessários de rotina.
+[TÓPICO] Dúvidas obrigatórias da mãe
+[PERGUNTA-OBRIGATÓRIA duvida-mae-01 ator=mae] “Doutor, precisa mesmo internar? Não dá para eu levar para casa e fazer nebulização lá?”
+[PERGUNTA-OBRIGATÓRIA duvida-mae-02 ator=mae] “Ela não vai tomar antibiótico, xarope ou bombinha para o chiado?”
+[PERGUNTA-OBRIGATÓRIA duvida-mae-03 ator=mae] “Isso vai virar asma? Quanto tempo essa tosse vai durar?”
+
+[CONDUTA-ESPERADA resposta-as-duvidas-da-mae] Sobre a internação, o candidato explica que Sofia está com oxigênio baixo (89%), respira muito rápido, com esforço, e mama menos da metade. Por isso precisa de oxigênio e de vigilância no hospital, e a nebulização caseira não substitui esse cuidado. Sobre os remédios, explica que a doença é causada por vírus, o vírus sincicial respiratório. Antibiótico, xarope para tosse, corticoide e salbutamol ou adrenalina inalatórios não ajudam e podem causar efeitos adversos; o tratamento é de suporte, com oxigênio, lavagem e aspiração nasal, alimentação e hidratação. Sobre o prognóstico, informa que o pico da doença ocorre entre o 3º e o 5º dia e que a maioria das crianças se recupera completamente. A tosse pode persistir por 2 a 4 semanas. Uma parte das crianças pode ter novos episódios de chiado nos primeiros anos, sem que isso signifique asma, e o risco diminui sem exposição à fumaça de cigarro.
 
 # 4. IMPRESSOS DISPONÍVEIS NA ESTAÇÃO
 
-[IMPRESSO impresso-1-exame-geral categoria=exame-fisico] IMPRESSO 1 — EXAME FÍSICO GERAL E SINAIS VITAIS
-[LIBERAÇÃO] exame físico; exame físico geral; examinar a criança; sinais vitais; ectoscopia; estado geral; hidratação; peso
+[IMPRESSO impresso-1-exame-fisico categoria=exame-fisico] IMPRESSO 1 — EXAME FÍSICO SEGMENTAR
+[LIBERAÇÃO] exame físico; examinar a criança; exame físico segmentar; ausculta pulmonar; sinais vitais
 [CONTEÚDO]
-- **Peso:** 6,2 kg (adequado para a idade).
-- **Sinais vitais:** temperatura axilar 38,1 °C; FC 168 bpm; FR 64 irpm.
-- **Estado geral:** regular, acordada e reativa ao manuseio, com aspecto cansado; acalma-se no colo.
-- **Hidratação:** mucosas levemente secas; fontanela anterior normotensa; tempo de enchimento capilar de 2 segundos; lágrimas presentes ao choro.
-- **Pele:** corada, sem cianose central ou periférica.
-- **Nariz e orofaringe:** coriza hialina abundante; orofaringe levemente hiperemiada, sem exsudato.
-- **Otoscopia:** membranas timpânicas íntegras e sem abaulamento.
-- **Cardiovascular:** ritmo cardíaco regular em dois tempos, bulhas normofonéticas, sem sopros; pulsos periféricos cheios.
-- **Abdome:** flácido, sem visceromegalias; fígado palpável a 1 cm do rebordo costal direito.
+- **Estado geral:** regular estado geral, irritada, consolável, corada, acianótica em repouso, anictérica, afebril no momento; peso 6,4 kg.
+- **Sinais vitais:** temperatura axilar 37,9 °C; FC 168 bpm; FR 64 irpm (contada em 1 minuto); SpO2 89% em ar ambiente; tempo de enchimento capilar 2 s.
+- **Hidratação:** mucosas discretamente secas, lágrimas presentes, fontanela anterior normotensa, turgor cutâneo preservado.
+- **Cabeça e pescoço:** coriza hialina abundante bilateral; otoscopia com membranas timpânicas íntegras e translúcidas; orofaringe sem exsudato; sem linfonodomegalias.
+- **Aparelho respiratório:** batimento de asa nasal, tiragem subcostal e intercostal moderadas; tórax com aumento do diâmetro anteroposterior; percussão com som claro pulmonar; murmúrio vesicular presente bilateralmente, com tempo expiratório prolongado, sibilos expiratórios difusos e estertores crepitantes finos bibasais; sem gemência.
+- **Aparelho cardiovascular:** ritmo cardíaco regular em 2 tempos, bulhas normofonéticas, sem sopros; pulsos femorais palpáveis e simétricos.
+- **Abdome:** flácido, indolor; fígado palpável a 2 cm do rebordo costal direito, de consistência normal (rebaixamento por hiperinsuflação pulmonar); baço não palpável.
+- **Pele:** sem exantema, sem petéquias.
+- **Neurológico:** ativa ao manuseio, tônus preservado, sucção presente porém interrompida pela dispneia; sem rigidez de nuca.
 
-[IMPRESSO impresso-2-exame-respiratorio categoria=exame-fisico] IMPRESSO 2 — EXAME DO APARELHO RESPIRATÓRIO
-[LIBERAÇÃO] exame do aparelho respiratório; ausculta pulmonar; exame respiratório; exame do tórax; inspeção do tórax; padrão respiratório
+[IMPRESSO impresso-2-painel-viral categoria=laboratorio] IMPRESSO 2 — PESQUISA DE VÍRUS RESPIRATÓRIOS EM ASPIRADO DE NASOFARINGE
+[LIBERAÇÃO] pesquisa de vírus respiratórios; painel viral; painel respiratório; pesquisa de VSR; vírus sincicial respiratório; aspirado de nasofaringe; swab de nasofaringe; RT-PCR para vírus respiratórios; imunofluorescência para vírus respiratórios
 [CONTEÚDO]
-- **Inspeção:** taquipneia; batimento de asa nasal; tiragem subcostal e intercostal moderada; sem gemência e sem retração de fúrcula.
-- **Expansibilidade:** simétrica.
-- **Percussão:** som claro pulmonar, levemente hipersonoro bilateralmente.
-- **Ausculta:** murmúrio vesicular presente bilateralmente, com tempo expiratório prolongado, sibilos expiratórios difusos e crepitações finas em ambas as bases.
+- **Material:** aspirado de nasofaringe. **Método:** RT-PCR em tempo real (painel multiplex).
+- Vírus sincicial respiratório (VSR): **DETECTADO**. Referência: não detectado.
+- Influenza A e B: não detectado. Referência: não detectado.
+- SARS-CoV-2: não detectado. Referência: não detectado.
+- Rinovírus/enterovírus: não detectado. Referência: não detectado.
+- Metapneumovírus humano: não detectado. Referência: não detectado.
+- Adenovírus: não detectado. Referência: não detectado.
+- Parainfluenza 1 a 4: não detectado. Referência: não detectado.
 
-[IMPRESSO impresso-3-oximetria categoria=exame-fisico] IMPRESSO 3 — OXIMETRIA DE PULSO
-[LIBERAÇÃO] oximetria de pulso; oximetria; saturação de oxigênio; saturação; SpO2; oxímetro
+[IMPRESSO impresso-3-caderneta categoria=registro] IMPRESSO 3 — CADERNETA DA CRIANÇA (VACINAÇÃO E CRESCIMENTO)
+[LIBERAÇÃO] caderneta da criança; caderneta de vacinação; cartão de vacina; carteira de vacinação; curva de crescimento; caderneta de saúde da criança
 [CONTEÚDO]
-- **SpO2 em ar ambiente:** 89%, medida com a criança calma, com boa curva de pulso.
-- **Valor de referência:** SpO2 ≥ 95% em ar ambiente.
-
-[IMPRESSO impresso-4-radiografia categoria=imagem] IMPRESSO 4 — RADIOGRAFIA DE TÓRAX
-[LIBERAÇÃO] radiografia de tórax; raio X de tórax; RX de tórax; raio X; radiografia
-[CONTEÚDO]
-- **Incidência:** anteroposterior, com a criança em decúbito; técnica adequada.
-- **Laudo:** hiperinsuflação pulmonar bilateral com retificação das cúpulas diafragmáticas; espessamento peribrônquico difuso; pequena atelectasia laminar no lobo superior direito; sem consolidação e sem derrame pleural. Área cardíaca normal.
-- **Impressão:** achados compatíveis com doença inflamatória de pequenas vias aéreas.
-
-[IMPRESSO impresso-5-hemograma-pcr categoria=laboratorio] IMPRESSO 5 — HEMOGRAMA E PROTEÍNA C REATIVA
-[LIBERAÇÃO] hemograma; hemograma completo; PCR; proteína C reativa; exames de sangue; exames laboratoriais
-[CONTEÚDO]
-- **Hemoglobina:** 11,2 g/dL (VR: 9,5 a 13,5 g/dL)
-- **Hematócrito:** 33% (VR: 29% a 41%)
-- **Leucócitos:** 10.800/mm³ (VR: 6.000 a 17.500/mm³)
-- **Neutrófilos:** 30% — 3.240/mm³ (VR: 1.000 a 8.500/mm³)
-- **Linfócitos:** 62% — 6.696/mm³ (VR: 4.000 a 13.500/mm³)
-- **Monócitos:** 7% (VR: 2% a 10%)
-- **Eosinófilos:** 1% (VR: 0% a 5%)
-- **Plaquetas:** 385.000/mm³ (VR: 150.000 a 450.000/mm³)
-- **Proteína C reativa:** 4 mg/L (VR: < 10 mg/L)
-
-[IMPRESSO impresso-6-pesquisa-viral categoria=laboratorio] IMPRESSO 6 — PESQUISA DE VÍRUS RESPIRATÓRIOS EM SECREÇÃO NASOFARÍNGEA
-[LIBERAÇÃO] pesquisa de vírus respiratórios; painel viral; pesquisa de vírus sincicial respiratório; pesquisa de VSR; swab nasal; aspirado nasofaríngeo; teste rápido para VSR
-[CONTEÚDO]
-- **Vírus sincicial respiratório (teste rápido de antígeno):** detectado (VR: não detectado)
-- **Influenza A e B (teste rápido de antígeno):** não detectado (VR: não detectado)
-- **SARS-CoV-2 (teste rápido de antígeno):** não detectado (VR: não detectado)
+- **Ao nascer:** BCG dose única; hepatite B dose ao nascer.
+- **2 meses:** pentavalente (DTP + Hib + hepatite B) 1ª dose; VIP 1ª dose; pneumocócica 10-valente 1ª dose; rotavírus 1ª dose.
+- **3 meses:** meningocócica C 1ª dose.
+- **4 meses (aplicadas há 7 dias):** pentavalente 2ª dose; VIP 2ª dose; pneumocócica 10-valente 2ª dose; rotavírus 2ª dose.
+- **Crescimento:** peso ao nascer 3.250 g; comprimento 49 cm. Peso atual 6,4 kg, entre escore z 0 e +1 na curva de peso para idade da OMS (meninas), com ganho ponderal adequado.
+- **Observação:** idade gestacional de 38 semanas; sem registro de cardiopatia, doença pulmonar crônica ou internações.
 
 # 5. PADRÃO ESPERADO DE PROCEDIMENTO (PEP)
 
-[ITEM item-01] Apresentação e identificação
-[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO] Apresenta-se à acompanhante com nome e função
-[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] Identifica a criança e a acompanhante pelo nome e confirma o vínculo
-[NÍVEL adequado pontos=0,5 mínimo=2] Realiza as duas ações.
-[NÍVEL parcialmente_adequado pontos=0,25 mínimo=1] Realiza uma ação.
-[NÍVEL inadequado pontos=0 mínimo=0] Não realiza nenhuma ação.
+[ITEM item-01] Apresentação e acolhimento
+[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO] subitem (1): apresenta-se com nome e função
+[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] subitem (2): cumprimenta a mãe e confirma o nome e a idade da criança
+[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO] subitem (3): higieniza as mãos antes de examinar a lactente
+[NÍVEL adequado pontos=0,3 mínimo=3] Realiza os 3 critérios.
+[NÍVEL parcialmente_adequado pontos=0,15 mínimo=1] Realiza 1 ou 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Não realiza nenhum critério.
 
-[ITEM item-02] Anamnese da doença atual
-[CRITÉRIO criterio-1 tipo=PERGUNTA] Pergunta o início e a evolução dos sintomas (pródromo de coriza seguido de tosse e cansaço)
-[CRITÉRIO criterio-2 tipo=PERGUNTA] Pergunta sobre febre
-[CRITÉRIO criterio-3 tipo=PERGUNTA] Pergunta sobre chiado ou dificuldade para respirar
-[CRITÉRIO criterio-4 tipo=PERGUNTA] Pergunta sobre a aceitação alimentar (mamadas)
-[CRITÉRIO criterio-5 tipo=PERGUNTA] Pergunta sobre a diurese (número de fraldas molhadas)
-[CRITÉRIO criterio-6 tipo=PERGUNTA] Pergunta sobre pausas respiratórias (apneia) ou cianose
-[NÍVEL adequado pontos=1,5 mínimo=5] Investiga cinco ou seis itens.
-[NÍVEL parcialmente_adequado pontos=0,75 mínimo=3] Investiga três ou quatro itens.
-[NÍVEL inadequado pontos=0 mínimo=0] Investiga dois itens ou menos.
+[ITEM item-02] Anamnese — sintomas respiratórios
+[CRITÉRIO criterio-1 tipo=PERGUNTA] subitem (1): início e evolução da coriza e da obstrução nasal (pródromo)
+[CRITÉRIO criterio-2 tipo=PERGUNTA] subitem (2): início e características da tosse
+[CRITÉRIO criterio-3 tipo=PERGUNTA] subitem (3): febre e temperatura máxima aferida
+[CRITÉRIO criterio-4 tipo=PERGUNTA] subitem (4): cansaço, respiração rápida e chiado no peito
+[NÍVEL adequado pontos=0,7 mínimo=3] Investiga 3 ou 4 critérios.
+[NÍVEL parcialmente_adequado pontos=0,35 mínimo=2] Investiga 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Investiga 1 critério ou nenhum.
 
-[ITEM item-03] Antecedentes e fatores de risco
-[CRITÉRIO criterio-1 tipo=PERGUNTA] Pergunta sobre idade gestacional ao nascer e intercorrências neonatais (prematuridade)
-[CRITÉRIO criterio-2 tipo=PERGUNTA] Pergunta sobre doença cardíaca ou pulmonar prévia, episódios anteriores de chiado ou internações
-[CRITÉRIO criterio-3 tipo=PERGUNTA] Pergunta sobre a situação vacinal
-[CRITÉRIO criterio-4 tipo=PERGUNTA] Pergunta sobre contato com pessoas doentes ou frequência à creche e sobre exposição à fumaça de cigarro
-[NÍVEL adequado pontos=1,0 mínimo=4] Investiga os quatro itens.
-[NÍVEL parcialmente_adequado pontos=0,5 mínimo=2] Investiga dois ou três itens.
-[NÍVEL inadequado pontos=0 mínimo=0] Investiga um item ou nenhum.
+[ITEM item-03] Anamnese — sinais de gravidade
+[CRITÉRIO criterio-1 tipo=PERGUNTA] subitem (1): aceitação das mamadas em relação ao habitual
+[CRITÉRIO criterio-2 tipo=PERGUNTA] subitem (2): diurese (número de fraldas molhadas por dia)
+[CRITÉRIO criterio-3 tipo=PERGUNTA] subitem (3): episódios de apneia ou cianose
+[CRITÉRIO criterio-4 tipo=PERGUNTA] subitem (4): vômitos e diarreia
+[NÍVEL adequado pontos=0,7 mínimo=3] Investiga 3 ou 4 critérios.
+[NÍVEL parcialmente_adequado pontos=0,35 mínimo=2] Investiga 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Investiga 1 critério ou nenhum.
 
-[ITEM item-04] Solicitação do exame físico
-[CRITÉRIO criterio-1 tipo=SOLICITAÇÃO impressos=impresso-1-exame-geral] Solicita o exame físico geral com sinais vitais
-[CRITÉRIO criterio-2 tipo=SOLICITAÇÃO impressos=impresso-2-exame-respiratorio] Solicita o exame do aparelho respiratório
-[CRITÉRIO criterio-3 tipo=SOLICITAÇÃO impressos=impresso-3-oximetria] Solicita a oximetria de pulso
-[NÍVEL adequado pontos=0,75 mínimo=3] Solicita os três exames.
-[NÍVEL parcialmente_adequado pontos=0,5 mínimo=2] Solicita dois exames.
-[NÍVEL inadequado pontos=0 mínimo=0] Solicita um exame ou nenhum.
+[ITEM item-04] Anamnese — antecedentes, medicações e vacinação
+[CRITÉRIO criterio-1 tipo=PERGUNTA] subitem (1): idade gestacional, peso ao nascer e intercorrências neonatais (prematuridade, UTI neonatal)
+[CRITÉRIO criterio-2 tipo=PERGUNTA] subitem (2): sibilância prévia, internações e cardiopatia congênita
+[CRITÉRIO criterio-3 tipo=PERGUNTA] subitem (3): medicações em uso e alergias
+[CRITÉRIO criterio-4 tipo=PERGUNTA] subitem (4): situação vacinal
+[CRITÉRIO criterio-5 tipo=SOLICITAÇÃO impressos=impresso-3-caderneta] subitem (5): solicita a Caderneta da Criança para conferir vacinas e curva de crescimento
+[NÍVEL adequado pontos=0,6 mínimo=4] Realiza 4 ou 5 critérios.
+[NÍVEL parcialmente_adequado pontos=0,3 mínimo=2] Realiza 2 ou 3 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Realiza 1 critério ou nenhum.
 
-[ITEM item-05] Interpretação dos achados clínicos
-[CRITÉRIO criterio-1 tipo=VERBALIZAÇÃO após=impresso-1-exame-geral,impresso-2-exame-respiratorio] Verbaliza desconforto respiratório: taquipneia, tiragem subcostal e intercostal e batimento de asa nasal, com sibilos e crepitações difusos
-[CRITÉRIO criterio-2 tipo=VERBALIZAÇÃO após=impresso-3-oximetria] Verbaliza hipoxemia (SpO2 de 89% em ar ambiente)
-[NÍVEL adequado pontos=1,0 mínimo=2] Verbaliza os dois achados.
-[NÍVEL parcialmente_adequado pontos=0,5 mínimo=1] Verbaliza um achado.
-[NÍVEL inadequado pontos=0 mínimo=0] Não verbaliza nenhum achado.
+[ITEM item-05] Anamnese — contexto epidemiológico, hábitos e família
+[CRITÉRIO criterio-1 tipo=PERGUNTA] subitem (1): contato com pessoas resfriadas e frequência a creche dos contactantes
+[CRITÉRIO criterio-2 tipo=PERGUNTA] subitem (2): exposição à fumaça de cigarro no domicílio (tabagismo passivo)
+[CRITÉRIO criterio-3 tipo=PERGUNTA] subitem (3): tipo de aleitamento
+[CRITÉRIO criterio-4 tipo=PERGUNTA] subitem (4): asma ou atopia na família
+[NÍVEL adequado pontos=0,5 mínimo=3] Investiga 3 ou 4 critérios.
+[NÍVEL parcialmente_adequado pontos=0,25 mínimo=2] Investiga 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Investiga 1 critério ou nenhum.
 
-[ITEM item-06] Hipótese diagnóstica e classificação de gravidade
-[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO OBRIGATÓRIO] Formula a hipótese de bronquiolite viral aguda
-[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] Classifica o quadro como moderado a grave, com critérios de internação: hipoxemia, desconforto respiratório e aceitação alimentar menor que 50%
-[NÍVEL adequado pontos=1,5 mínimo=2] Formula a hipótese e classifica a gravidade com os critérios.
-[NÍVEL parcialmente_adequado pontos=0,75 mínimo=1] Formula a hipótese de bronquiolite viral aguda sem classificar a gravidade.
+[ITEM item-06] Exame físico e verbalização dos achados
+[CRITÉRIO criterio-1 tipo=SOLICITAÇÃO impressos=impresso-1-exame-fisico] subitem (1): solicita o exame físico segmentar com contagem da FR em 1 minuto e oximetria de pulso
+[CRITÉRIO criterio-2 tipo=VERBALIZAÇÃO após=impresso-1-exame-fisico] subitem (2): verbaliza desconforto respiratório (FR 64 irpm, tiragem subcostal e intercostal, batimento de asa nasal)
+[CRITÉRIO criterio-3 tipo=VERBALIZAÇÃO após=impresso-1-exame-fisico] subitem (3): verbaliza ausculta com expiração prolongada, sibilos expiratórios difusos e crepitantes finos bibasais
+[CRITÉRIO criterio-4 tipo=VERBALIZAÇÃO após=impresso-1-exame-fisico] subitem (4): verbaliza hipoxemia (SpO2 89% em ar ambiente) e desidratação leve (mucosas discretamente secas)
+[NÍVEL adequado pontos=1,0 mínimo=3] Realiza 3 ou 4 critérios.
+[NÍVEL parcialmente_adequado pontos=0,5 mínimo=2] Realiza 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Realiza 1 critério ou nenhum.
+
+[ITEM item-07] Exames complementares
+[CRITÉRIO criterio-1 tipo=SOLICITAÇÃO impressos=impresso-2-painel-viral] subitem (1): solicita pesquisa de vírus respiratórios em aspirado de nasofaringe para orientar o isolamento hospitalar
+[CRITÉRIO criterio-2 tipo=VERBALIZAÇÃO após=impresso-2-painel-viral] subitem (2): identifica o vírus sincicial respiratório (VSR) detectado por RT-PCR
+[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO] subitem (3): explica que o diagnóstico é clínico e que radiografia de tórax, hemograma e PCR não são indicados de rotina
+[NÍVEL adequado pontos=0,6 mínimo=3] Realiza os 3 critérios.
+[NÍVEL parcialmente_adequado pontos=0,3 mínimo=2] Realiza 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Realiza 1 critério ou nenhum.
+
+[ITEM item-08] Hipótese diagnóstica e classificação de gravidade
+[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO OBRIGATÓRIO] subitem (1): formula a hipótese de bronquiolite viral aguda (primeiro episódio de sibilância em lactente menor de 2 anos após pródromo de vias aéreas superiores)
+[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] subitem (2): classifica como bronquiolite com indicação de internação, citando SpO2 menor que 92%, FR acima de 60 irpm com tiragem e aceitação alimentar menor que 50%
+[NÍVEL adequado pontos=1,2 mínimo=2] Realiza os 2 critérios.
+[NÍVEL parcialmente_adequado pontos=0,6 mínimo=1] Formula a hipótese sem classificar a gravidade.
 [NÍVEL inadequado pontos=0 mínimo=0] Não formula a hipótese de bronquiolite viral aguda.
 
-[ITEM item-07] Conduta terapêutica
-[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO OBRIGATÓRIO] Indica internação hospitalar e explica o motivo à mãe
-[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] Prescreve oxigênio suplementar por cateter nasal para manter SpO2 ≥ 92%
-[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO] Prescreve lavagem nasal com soro fisiológico 0,9% e aspiração das vias aéreas superiores, sobretudo antes das mamadas
-[CRITÉRIO criterio-4 tipo=COMUNICAÇÃO] Orienta hidratação e alimentação: mamadas fracionadas e sonda nasogástrica ou hidratação venosa se FR > 60 a 70 irpm ou aceitação insuficiente
-[CRITÉRIO criterio-5 tipo=COMUNICAÇÃO] Prescreve antitérmico por peso: paracetamol 200 mg/mL, 6 gotas (cerca de 10 mg/kg) por via oral a cada 6 horas se temperatura ≥ 37,8 °C, enquanto houver febre
-[CRITÉRIO corticoide-antibiotico tipo=COMUNICAÇÃO PROIBIDO] Prescreve corticoide sistêmico ou antibiótico
-[NÍVEL adequado pontos=2,0 mínimo=4] Indica a internação e realiza pelo menos mais três medidas.
-[NÍVEL parcialmente_adequado pontos=1,0 mínimo=2] Indica a internação e realiza mais uma ou duas medidas.
-[NÍVEL inadequado pontos=0 mínimo=0] Não indica internação, realiza menos de duas medidas ou prescreve corticoide sistêmico ou antibiótico.
+[ITEM item-09] Conduta — suporte respiratório e internação
+[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO OBRIGATÓRIO] subitem (1): prescreve oxigênio por cateter nasal de baixo fluxo, 0,5 a 1 L/min (até 2 L/min), com alvo de SpO2 igual ou maior que 92%
+[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] subitem (2): indica internação em enfermaria pediátrica, com transferência pela central de regulação em uso de oxigênio
+[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO] subitem (3): indica monitorização contínua com oximetria de pulso e reavaliação seriada de FR, FC e esforço respiratório
+[CRITÉRIO criterio-4 tipo=COMUNICAÇÃO] subitem (4): indica precauções de contato e gotículas e higienização das mãos
+[CRITÉRIO criterio-5 tipo=COMUNICAÇÃO] subitem (5): posiciona a lactente com cabeceira elevada a 30 graus
+[NÍVEL adequado pontos=1,4 mínimo=4] Realiza 4 ou 5 critérios.
+[NÍVEL parcialmente_adequado pontos=0,7 mínimo=2] Realiza 2 ou 3 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Não prescreve oxigênio suplementar.
 
-[ITEM item-08] Resposta às dúvidas da mãe
-[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO perguntas=duvida-mae-inalacao] Explica que antibiótico, corticoide, xarope e inalação com broncodilatador não são indicados de rotina porque a doença é viral e o tratamento é de suporte
-[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO perguntas=duvida-mae-asma] Explica que bronquiolite não é sinônimo de asma, que pode haver novos episódios de chiado e que a criança será acompanhada
-[NÍVEL adequado pontos=1,0 mínimo=2] Responde adequadamente às duas dúvidas.
-[NÍVEL parcialmente_adequado pontos=0,5 mínimo=1] Responde adequadamente a uma dúvida.
-[NÍVEL inadequado pontos=0 mínimo=0] Não responde adequadamente a nenhuma dúvida.
+[ITEM item-10] Conduta — desobstrução, hidratação e sintomáticos
+[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO] subitem (1): prescreve lavagem nasal com soro fisiológico 0,9%, 0,5 a 1 mL por narina, seguida de aspiração das vias aéreas superiores antes das mamadas
+[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] subitem (2): mantém aleitamento materno fracionado e indica sonda nasogástrica ou hidratação venosa com solução isotônica se a aceitação persistir insuficiente ou a FR passar de 60 a 70 irpm
+[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO] subitem (3): prescreve paracetamol 10 a 15 mg/kg por dose (6 a 9 gotas da solução de 200 mg/mL) por via oral, até de 6/6 h se febre
+[CRITÉRIO uso-de-medicacoes-ineficazes tipo=COMUNICAÇÃO PROIBIDO] subitem (4): prescreve salbutamol inalatório, corticoide sistêmico (prednisolona) ou antibiótico (amoxicilina) de rotina
+[NÍVEL adequado pontos=1,2 mínimo=3] Realiza os 3 critérios.
+[NÍVEL parcialmente_adequado pontos=0,6 mínimo=2] Realiza 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Realiza 1 critério ou nenhum, ou prescreve broncodilatador, corticoide ou antibiótico de rotina.
 
-[ITEM item-09] Orientações e prevenção
-[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO] Explica a doença em linguagem acessível: causa viral, piora entre o terceiro e o quinto dia e tosse que pode durar de 2 a 3 semanas
-[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] Orienta a lavagem das mãos, o afastamento de pessoas resfriadas e a suspensão da exposição à fumaça de cigarro
-[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO] Orienta a manutenção do aleitamento materno
-[NÍVEL adequado pontos=0,75 mínimo=3] Realiza as três orientações.
-[NÍVEL parcialmente_adequado pontos=0,5 mínimo=2] Realiza duas orientações.
-[NÍVEL inadequado pontos=0 mínimo=0] Realiza uma orientação ou nenhuma.
+[ITEM item-11] Orientações preventivas
+[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO] subitem (1): orienta a cessação do tabagismo domiciliar e oferece ao pai o tratamento do tabagismo na UBS
+[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO] subitem (2): orienta higiene das mãos e evitar o contato próximo da lactente com o irmão sintomático
+[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO] subitem (3): reforça o aleitamento materno exclusivo até os 6 meses
+[NÍVEL adequado pontos=0,5 mínimo=2] Realiza 2 ou 3 critérios.
+[NÍVEL parcialmente_adequado pontos=0,25 mínimo=1] Realiza 1 critério.
+[NÍVEL inadequado pontos=0 mínimo=0] Não realiza nenhum critério.
+
+[ITEM item-12] Comunicação e Resolução de Dúvidas
+[CRITÉRIO criterio-1 tipo=COMUNICAÇÃO perguntas=duvida-mae-01] subitem (1): justifica a internação pela hipoxemia, pelo desconforto respiratório e pela baixa aceitação alimentar, e explica que a nebulização em casa não substitui o oxigênio
+[CRITÉRIO criterio-2 tipo=COMUNICAÇÃO perguntas=duvida-mae-02] subitem (2): explica que a causa é viral e que antibiótico, xarope, corticoide e broncodilatador não são indicados
+[CRITÉRIO criterio-3 tipo=COMUNICAÇÃO perguntas=duvida-mae-03] subitem (3): informa recuperação completa na maioria dos casos, tosse por 2 a 4 semanas e possibilidade de sibilância recorrente sem diagnóstico de asma
+[CRITÉRIO criterio-4 tipo=COMUNICAÇÃO] subitem (4): mantém postura empática e linguagem acessível, sem jargões
+[NÍVEL adequado pontos=1,3 mínimo=3] Cumpre 3 ou 4 critérios.
+[NÍVEL parcialmente_adequado pontos=0,65 mínimo=2] Cumpre 2 critérios.
+[NÍVEL inadequado pontos=0 mínimo=0] Cumpre 1 critério ou nenhum.
