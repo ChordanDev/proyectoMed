@@ -84,6 +84,7 @@ All operations are methods of `UStationClient`. Each one takes a
 | `FinishSession(Reason)` | `POST .../sessions/:id/finish` | `FStationSession` marked completed | #195 |
 | `FetchResult` | `GET /api/v2/.../sessions/:id/result` | `FStationResult`: criteria with transcript evidence | #195 |
 | `DiscardSession` | `POST .../sessions/:id/discard` | Nothing; the local session is cleared only after Phoenix confirms | #195, #196 |
+| `ForgetSession` | none | Clears the local session at once and leaves the room, for a run Phoenix stopped answering; call `DiscardSession` first so Phoenix forgets it too if it is back | #196 |
 
 Synchronous accessors: `GetSession()` (null without a run), `GetRemainingTime()`
 (and `GetRemainingTimeAt(LocalSeconds)` for tests), `GetPhoenixBaseUrl()` and
@@ -92,7 +93,8 @@ Synchronous accessors: `GetSession()` (null without a run), `GetRemainingTime()`
 Known limits, for the slices that build on them:
 
 - A run whose `StartSession` is still in flight when the game quits is not
-  discarded; Phoenix forgets it after 30 minutes.
+  discarded; Phoenix forgets it after 30 minutes. So does a run forgotten with
+  `ForgetSession` whose `DiscardSession` did not reach Phoenix.
 
 ### Run lifecycle
 
@@ -109,6 +111,34 @@ no session ──StartSession──▶ active ──FinishSession──▶ compl
 - `SendTurn` is not idempotent. After a `network_error`, Phoenix may still have
   taken the turn, and after `reply_verification_failed` it may have kept it
   without a reply: call `RefreshSession` and check the transcript before resending.
+
+### A training that loses Phoenix (#196)
+
+`UStationRunFlow` invalidates a training when Phoenix is lost, because nothing
+can go on without it. Phoenix counts as lost when a call of the run gets no
+answer (`network_error`, or `http_502`, `http_503` or `http_504`, which a
+gateway answers for a Phoenix that did not) and the `RefreshSession` that
+follows gets none either. The calls are a turn (its transcript reload is the
+check), an exam request, the voice credential, the finish and the result. A
+voice failure checks Phoenix the same way: `Fatal` (for example a failed
+transcription) or a `Failed` link. A failed microphone does not.
+
+- When the check is answered, nothing changes: the turn or exam request comes
+  back to the learner as before, a voice failure leaves the run going in writing
+  ("A voz caiu. O tempo da estação continua." or "Microfone indisponível.
+  Continue por escrito."), and a finish or result shows why the feedback is
+  missing.
+- When it is not, the step becomes `Invalidated`: the run's conversation,
+  requests and answers are forgotten, the room is left, the patient is silenced
+  and nothing resumes it, and every later Phoenix answer for the run is
+  dropped. No feedback or partial result is ever shown.
+- `Restart` sends `DiscardSession` without waiting for it, calls
+  `ForgetSession` and shows the brief at once. A new run starts as soon as
+  Phoenix answers `StartSession`.
+- A Phoenix error with its own code (`station_time_elapsed`, `invalid_attempt`,
+  and so on) is an answer: it never invalidates the run.
+- The real-test mode ("Prova simulada", #318), where a voice failure also
+  invalidates the run, is not built yet.
 - `RefreshSession` skips transcript lines whose speaker the client does not know.
 - `RefreshSession` never reopens a run this client saw finish: an answer read
   before the finish keeps the run completed, with its completion time.
@@ -843,8 +873,8 @@ if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.P
 | Events | `OnEvent` gets the worker's `transcript` data messages, parsed as strictly as the web client does. Messages for another session, or from anyone but `voice-worker`, are dropped. The kinds are `Learner` (`bFinal` false for an interim caption), `PatientText` (one sentence, `Segment`), `PatientComplete`, `ExaminerAcknowledged`, `PatientUnanswered`, `TurnFailure` and `Fatal`. |
 | Patient voice | `OnPatientPcm` runs on a LiveKit thread every 10 ms of the worker's `patient-voice` track. It must not block. |
 | Same reply | The worker sends a reply's text before its audio, and both are the text Phoenix approved and stored for the run. |
-| Barge-in | A `Learner` event with text for a newer turn means the learner spoke over the patient: the worker has already stopped the patient's voice and cancelled any turn Phoenix had not settled. `UStationRunFlow` then calls `FStationPatientOutput::Silence`, and `Resume` with the next `PatientText` while the run is going on, so audio still buffered or in flight never plays (#193). Finishing silences it too, and nothing resumes it while Phoenix closes the run. A turn without an outcome (`PatientComplete`, a whole reply, `ExaminerAcknowledged` or `PatientUnanswered`) leaves the conversation with its partial reply. Events of an earlier turn arrive late and are ignored. |
-| Run end | The link leaves the room when `FinishSession` succeeds, when `DiscardSession` is called, when `RefreshSession` sees the run completed, on `DisconnectVoice`, and when the client is destroyed. Leaving returns at once and finishes in the background, even while a join still hangs on an unreachable server (about 30 s). No game-thread handler runs after that; an `OnPatientPcm` call already under way may finish, so its target must outlive it or cut itself off. A refused finish (`deadline_not_reached`) keeps the link. The link does not notice a run that ended on Phoenix's side until `RefreshSession` or `FinishSession` reports it. |
+| Barge-in | A `Learner` event with text for a newer turn means the learner spoke over the patient: the worker has already stopped the patient's voice and cancelled any turn Phoenix had not settled. `UStationRunFlow` then calls `FStationPatientOutput::Silence`, and `Resume` with the next `PatientText` while the run is going on, so audio still buffered or in flight never plays (#193). Finishing silences it too, and nothing resumes it while Phoenix closes the run; so does an invalidated run (#196). A turn without an outcome (`PatientComplete`, a whole reply, `ExaminerAcknowledged` or `PatientUnanswered`) leaves the conversation with its partial reply. Events of an earlier turn arrive late and are ignored. |
+| Run end | The link leaves the room when `FinishSession` succeeds, when `DiscardSession` or `ForgetSession` is called, when `RefreshSession` sees the run completed, on `DisconnectVoice`, and when the client is destroyed. Leaving returns at once and finishes in the background, even while a join still hangs on an unreachable server (about 30 s). No game-thread handler runs after that; an `OnPatientPcm` call already under way may finish, so its target must outlive it or cut itself off. A refused finish (`deadline_not_reached`) keeps the link. The link does not notice a run that ended on Phoenix's side until `RefreshSession` or `FinishSession` reports it. |
 | LiveKit SDK | The module initialises the SDK on first use, or reuses it when another module (the #189 spike) did. On quit it waits up to 2 s for each room still being left. |
 | Privacy | The module logs no transcript or reply text and keeps none: events go straight to the handlers. |
 | Threading | `ConnectVoice`, `DisconnectVoice` and the state run on the game thread, as do `OnEvent` and `OnStateChanged`. |
@@ -895,6 +925,16 @@ previous section:
 ```bash
 scripts/run-unreal-tests.sh "ProyectoMed.StationClient+ProyectoMed.StationRun.Phoenix+ProyectoMed.StationRun.Unit"
 ```
+
+`ProyectoMed.StationRun.Unit.PhoenixLoss` (in `StationRunPhoenixLossSpec.cpp`)
+needs nothing else either: it serves a fake Phoenix on port 18766 that can leave
+one call unanswered while it still answers the check after it, which a real
+Phoenix cannot be made to do, and it uses `http://127.0.0.1:9` for a Phoenix
+that answers nothing. It covers each failure of a training that loses Phoenix
+(#196). Like `ProyectoMed.StationClient.FakePhoenix`, it starts the editor's
+HTTP listeners, so an editor already open on the same machine makes it fail
+with "HttpListener unable to bind to 127.0.0.1:8000" (the Model Context
+Protocol server): close that editor first.
 
 The stack test checks four things:
 

@@ -183,6 +183,13 @@ void UStationClient::DiscardSession(TStationCallback<FStationNone> OnDone)
 		});
 }
 
+void UStationClient::ForgetSession()
+{
+	DisconnectVoice();
+	Session.Reset();
+	Clock = FStationClock();
+}
+
 TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> UStationClient::ConnectVoice(const FStationVoiceCredential& Credential,
 	FStationVoiceHandlers Handlers)
 {

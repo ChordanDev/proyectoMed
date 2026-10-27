@@ -11,6 +11,7 @@
 class UStationBriefWidget;
 class UStationFeedbackWidget;
 class UStationHudWidget;
+class UStationInvalidatedWidget;
 class UStationMicrophone;
 class UStationMicrophoneWidget;
 class UStationNoticeWidget;
@@ -54,6 +55,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStationFeedbackWidget> Feedback;
+
+	UPROPERTY()
+	TObjectPtr<UStationInvalidatedWidget> Invalidated;
 
 	UPROPERTY()
 	TObjectPtr<UStationMicrophoneWidget> MicrophoneScreen;

@@ -2,8 +2,9 @@
 // disclosure, then the Pre-Station Notice, then the brief Phoenix serves with the
 // choice of a text or a voice training, then the run, where typed turns are
 // always available and exam and impresso requests have their own channel, then
-// the feedback once the learner or the Station Timer ends it. Interface code
-// renders it; only the station client talks to the network.
+// the feedback once the learner or the Station Timer ends it. A run that loses
+// Phoenix is invalidated instead (#196). Interface code renders it; only the
+// station client talks to the network.
 
 #pragma once
 
@@ -34,6 +35,11 @@ enum class EStationRunStep : uint8
 	Finishing,
 	/** The feedback, or why it could not be loaded, until the learner discards the run. */
 	Feedback,
+	/**
+	 * Phoenix stopped answering during the run: it is over, with no feedback and no
+	 * partial result, until the learner restarts the station (#196).
+	 */
+	Invalidated,
 };
 
 UENUM()
@@ -294,6 +300,16 @@ public:
 	/** True while a discard waits for Phoenix. */
 	bool IsDiscarding() const { return bDiscarding; }
 
+	/** True once the run is invalidated. */
+	bool CanRestart() const;
+
+	/**
+	 * Starts over after an invalidated run: the brief is shown, ready for a new run,
+	 * without waiting for Phoenix. Phoenix is asked to forget the run in case it is
+	 * back; otherwise it forgets it on its own.
+	 */
+	void Restart();
+
 	UStationClient* GetClient() const { return Client; }
 
 	/** Broadcast after every change the interface should render. */
@@ -302,12 +318,29 @@ public:
 private:
 	// Test access to the voice event handling (StationRunFlowSpec.cpp).
 	friend class FStationRunUnitSpec;
+	friend class FStationRunPhoenixLossSpec;
 
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
 	void StartSession();
 	void ConnectVoice();
 	void HandleVoiceEvent(const FStationVoiceEvent& Event);
+	void HandleVoiceState(EStationVoiceState State);
+
+	/**
+	 * The voice stopped for good. The run goes on in writing, unless Phoenix does not
+	 * answer either.
+	 */
+	void LoseVoice();
+
+	/**
+	 * A call of this run got no answer from Phoenix. The run is invalidated unless
+	 * Phoenix answers a check right away; then `OnAnswered` runs, if set.
+	 */
+	void CheckPhoenix(TFunction<void()> OnAnswered = nullptr);
+
+	/** Phoenix is lost: the run ends here, with nothing kept and the patient silent. */
+	void Invalidate();
 
 	/** Moves the spoken reply, if any, into the conversation. */
 	void CommitVoiceReply();
@@ -326,7 +359,7 @@ private:
 
 	void AddLine(EStationSpeaker Speaker, const FString& Text);
 
-	/** Forgets everything the last run held. */
+	/** Forgets everything the last run held, and drops Phoenix's answers for it. */
 	void ResetRun();
 
 	void BeginFinish(EStationFinishReason Reason);
@@ -338,6 +371,9 @@ private:
 
 	/** The run is over, but its feedback could not be loaded. */
 	void FailResult(const FStationClientError& Error);
+
+	/** `FailResult`, unless Phoenix gave no answer and does not answer a check either. */
+	void FailResultUnlessLost(const FStationClientError& Error);
 
 	/**
 	 * Replaces the transcript with Phoenix's record, for when `Turn`'s fate is
@@ -390,4 +426,9 @@ private:
 	 */
 	bool bVoiceOutcome = false;
 	FStationPatientOutput Patient;
+	/**
+	 * Changes with every new, discarded or invalidated run. A Phoenix answer for an
+	 * earlier one is dropped.
+	 */
+	uint32 Run = 0;
 };

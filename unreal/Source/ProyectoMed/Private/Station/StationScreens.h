@@ -210,6 +210,23 @@ private:
 	TObjectPtr<UButton> FinishButton;
 };
 
+/** A training that lost Phoenix (#196): it is over, with nothing to show but the restart. */
+UCLASS()
+class UStationInvalidatedWidget : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	FSimpleDelegate OnRestart;
+
+protected:
+	virtual TSharedRef<SWidget> RebuildWidget() override;
+
+private:
+	UFUNCTION()
+	void HandleRestart();
+};
+
 UCLASS()
 class UStationFeedbackWidget : public UUserWidget
 {

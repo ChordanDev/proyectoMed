@@ -550,6 +550,28 @@ void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	}
 }
 
+TSharedRef<SWidget> UStationInvalidatedWidget::RebuildWidget()
+{
+	if (WidgetTree && !WidgetTree->RootWidget)
+	{
+		UVerticalBox* Column = StationUi::MakeCenteredCard(*WidgetTree, 760.f, 900.f, false);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("InvalidatedTitle", "Treino invalidado"), 32, true,
+			StationUi::Ink, 0.f);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("InvalidatedBody",
+			"A conexão com o servidor caiu e o treino não pode continuar. Esta tentativa não tem resultado nem feedback."), 18);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("InvalidatedRestart",
+			"Reinicie a estação para começar de novo."), 16, false, StationUi::Muted);
+		UButton* Restart = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("RestartStation", "Reiniciar estação"));
+		Restart->OnClicked.AddDynamic(this, &UStationInvalidatedWidget::HandleRestart);
+	}
+	return Super::RebuildWidget();
+}
+
+void UStationInvalidatedWidget::HandleRestart()
+{
+	OnRestart.ExecuteIfBound();
+}
+
 TSharedRef<SWidget> UStationFeedbackWidget::RebuildWidget()
 {
 	if (WidgetTree && !WidgetTree->RootWidget)
