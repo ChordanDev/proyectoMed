@@ -204,7 +204,7 @@ defmodule Backend.StationAI.SystemPromptTest do
                "Uma pergunta sobre como algo está agora pede só o estado atual: se a lista conta que algo mudou, responda com o que vale agora, sem contar como era antes nem quando mudou."
 
       assert prompt =~
-               "Por exemplo, se a dor mudou de lugar e perguntarem onde dói, diga só onde ela dói agora; onde ela começou só aparece se perguntarem onde ela começou ou se ela mudou de lugar."
+               ~s(Por exemplo, se a dor mudou de lugar, "Onde dói?" e "Onde é a dor?" perguntam onde ela dói agora: diga só o lugar de agora, sem dizer onde ela começou nem quando mudou; onde ela começou só aparece se perguntarem onde ela começou ou se ela mudou de lugar.)
     end
 
     test "a question a fact answers in other words never gets the refusal", %{prompt: prompt} do
@@ -223,7 +223,7 @@ defmodule Backend.StationAI.SystemPromptTest do
 
     test "an open question gets only the chief complaint from the context", %{prompt: prompt} do
       assert prompt =~
-               "Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples e sem detalhes: há quanto tempo, onde exatamente, quão forte e o que mais você sente são fatos que o estudante precisa perguntar."
+               "Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais você sente: cada um desses detalhes é um fato que o estudante precisa perguntar."
     end
   end
 

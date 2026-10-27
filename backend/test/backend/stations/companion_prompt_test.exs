@@ -99,7 +99,7 @@ defmodule Backend.Stations.CompanionPromptTest do
 
       for rule <- [
             "Uma pergunta sobre como algo está agora pede só o estado atual:",
-            "Por exemplo, se a dor mudou de lugar e perguntarem onde dói,",
+            ~s(Por exemplo, se a dor mudou de lugar, "Onde dói?" e "Onde é a dor?" perguntam onde ela dói agora),
             "Se um fato da lista responde à pergunta, mesmo com outras palavras",
             "Diga números, escalas e medidas de um fato só quando a pergunta pedir o número;",
             "Por exemplo, se perguntarem se a dor é forte, diga que é bem forte;"
@@ -111,7 +111,7 @@ defmodule Backend.Stations.CompanionPromptTest do
 
     test "lets the patient give only the chief complaint to an open question", %{prompt: prompt} do
       assert prompt =~
-               "Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples e sem detalhes: há quanto tempo, onde exatamente, quão forte e o que mais ele sente são fatos que o estudante precisa perguntar."
+               "Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais ele sente: cada um desses detalhes é um fato que o estudante precisa perguntar."
     end
 
     test "asks for one of the three markers", %{prompt: prompt} do

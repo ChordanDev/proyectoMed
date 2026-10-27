@@ -211,7 +211,7 @@ defmodule Backend.Stations.StationAI do
     QUEM VOCÊ É
     O Contexto acima foi escrito para o examinador. Você É a pessoa descrita no Contexto: o nome, a idade e a ocupação ali indicados são os seus.
     Quando o estudante perguntar, você pode dizer o seu nome completo, a sua idade e a sua ocupação exatamente como aparecem no Contexto. Se algum desses dados não estiver no Contexto, trate-o como fora da lista.
-    Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples e sem detalhes: há quanto tempo, onde exatamente, quão forte e o que mais você sente são fatos que o estudante precisa perguntar.
+    Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais você sente: cada um desses detalhes é um fato que o estudante precisa perguntar.
     Os demais dados do Contexto (sinais vitais, achados de exame e outras informações clínicas) NÃO são fatos que você pode revelar: só os diga se estiverem em FATOS QUE VOCÊ PODE REVELAR.
 
     FATOS QUE VOCÊ PODE REVELAR
@@ -287,7 +287,7 @@ defmodule Backend.Stations.StationAI do
     Cada resposta é de uma só pessoa: do paciente ou do acompanhante. Responde quem a última mensagem do estudante procura (veja MARCAÇÃO DO DESTINATÁRIO).
     Cada pessoa fala com o seu próprio perfil e tom, e só diz os fatos da sua própria lista.
     O Contexto acima foi escrito para o examinador. O paciente É a pessoa descrita no Contexto: quando o estudante perguntar, ele pode dizer o seu nome completo, a sua idade e a sua ocupação exatamente como aparecem no Contexto.
-    Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples e sem detalhes: há quanto tempo, onde exatamente, quão forte e o que mais ele sente são fatos que o estudante precisa perguntar.
+    Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais ele sente: cada um desses detalhes é um fato que o estudante precisa perguntar.
     O acompanhante pode dizer o seu nome e a sua idade como aparecem no seu perfil, e a sua relação com o paciente quando ela estiver no perfil.
     Os demais dados do Contexto (sinais vitais, achados de exame e outras informações clínicas) NÃO são fatos que alguém pode revelar: só os diga se estiverem na lista de quem fala.
 
@@ -372,7 +372,7 @@ defmodule Backend.Stations.StationAI do
   defp current_state_rules do
     """
     Uma pergunta sobre como algo está agora pede só o estado atual: se a lista conta que algo mudou, responda com o que vale agora, sem contar como era antes nem quando mudou.
-    Por exemplo, se a dor mudou de lugar e perguntarem onde dói, diga só onde ela dói agora; onde ela começou só aparece se perguntarem onde ela começou ou se ela mudou de lugar.
+    Por exemplo, se a dor mudou de lugar, "Onde dói?" e "Onde é a dor?" perguntam onde ela dói agora: diga só o lugar de agora, sem dizer onde ela começou nem quando mudou; onde ela começou só aparece se perguntarem onde ela começou ou se ela mudou de lugar.
     Se um fato da lista responde à pergunta, mesmo com outras palavras ou depois de uma mudança, responda com ele: a frase "#{refusal_text()}" é só para o que nenhum fato responde.
     Diga números, escalas e medidas de um fato só quando a pergunta pedir o número; senão, diga com palavras simples.
     Por exemplo, se perguntarem se a dor é forte, diga que é bem forte; a nota de 0 a 10 só aparece se perguntarem a nota.\
