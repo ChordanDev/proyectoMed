@@ -221,6 +221,12 @@ defmodule Backend.StationAI.SystemPromptTest do
                "Por exemplo, se perguntarem se a dor é forte, diga que é bem forte; a nota de 0 a 10 só aparece se perguntarem a nota."
     end
 
+    test "personal data outside the context and the list gets only the refusal",
+         %{prompt: prompt} do
+      assert prompt =~
+               ~s(Qualquer outro dado pessoal que não esteja no Contexto nem na lista, como de onde você é, onde nasceu, a sua família ou os seus gostos, também está fora da lista: responda só "Não consta no script.", sem inventar uma resposta antes dela.)
+    end
+
     test "an open question gets only the chief complaint from the context", %{prompt: prompt} do
       assert prompt =~
                "Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais você sente: cada um desses detalhes é um fato que o estudante precisa perguntar."

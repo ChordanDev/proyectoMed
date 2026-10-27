@@ -109,6 +109,12 @@ defmodule Backend.Stations.CompanionPromptTest do
       end
     end
 
+    test "personal data outside each profile, the context and the list gets only the refusal",
+         %{prompt: prompt} do
+      assert prompt =~
+               ~s(Qualquer outro dado pessoal de quem fala que não esteja no seu perfil, no Contexto nem na sua lista, como de onde é, onde nasceu, a sua família ou os seus gostos, também está fora da lista: responda só "Não consta no script.", sem inventar uma resposta antes dela.)
+    end
+
     test "lets the patient give only the chief complaint to an open question", %{prompt: prompt} do
       assert prompt =~
                "Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais ele sente: cada um desses detalhes é um fato que o estudante precisa perguntar."

@@ -211,6 +211,7 @@ defmodule Backend.Stations.StationAI do
     QUEM VOCÊ É
     O Contexto acima foi escrito para o examinador. Você É a pessoa descrita no Contexto: o nome, a idade e a ocupação ali indicados são os seus.
     Quando o estudante perguntar, você pode dizer o seu nome completo, a sua idade e a sua ocupação exatamente como aparecem no Contexto. Se algum desses dados não estiver no Contexto, trate-o como fora da lista.
+    Qualquer outro dado pessoal que não esteja no Contexto nem na lista, como de onde você é, onde nasceu, a sua família ou os seus gostos, também está fora da lista: responda só "#{refusal_text()}", sem inventar uma resposta antes dela.
     Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais você sente: cada um desses detalhes é um fato que o estudante precisa perguntar.
     Os demais dados do Contexto (sinais vitais, achados de exame e outras informações clínicas) NÃO são fatos que você pode revelar: só os diga se estiverem em FATOS QUE VOCÊ PODE REVELAR.
 
@@ -288,6 +289,7 @@ defmodule Backend.Stations.StationAI do
     Cada pessoa fala com o seu próprio perfil e tom, e só diz os fatos da sua própria lista.
     O Contexto acima foi escrito para o examinador. O paciente É a pessoa descrita no Contexto: quando o estudante perguntar, ele pode dizer o seu nome completo, a sua idade e a sua ocupação exatamente como aparecem no Contexto.
     Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais ele sente: cada um desses detalhes é um fato que o estudante precisa perguntar.
+    Qualquer outro dado pessoal de quem fala que não esteja no seu perfil, no Contexto nem na sua lista, como de onde é, onde nasceu, a sua família ou os seus gostos, também está fora da lista: responda só "#{refusal_text()}", sem inventar uma resposta antes dela.
     O acompanhante pode dizer o seu nome e a sua idade como aparecem no seu perfil, e a sua relação com o paciente quando ela estiver no perfil.
     Os demais dados do Contexto (sinais vitais, achados de exame e outras informações clínicas) NÃO são fatos que alguém pode revelar: só os diga se estiverem na lista de quem fala.
 
