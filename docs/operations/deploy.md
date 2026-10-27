@@ -1,21 +1,28 @@
 # Production deploy on Fly (runbook)
 
-How to run proyectoMed in production on Fly.io São Paulo (`gru`) (#344).
-Two Fly apps, both built from this repository:
+How to run proyectoMed in production in São Paulo (#344). Phoenix runs on
+Fly.io (`gru`). The voice worker runs on a Vultr VPS (`sao`), following option
+(b) of `docs/research/vps-vs-fly-and-livekit-hosting.md`. Both are built from
+this repository:
 
-| App | Source | What it runs | Public |
-|---|---|---|---|
-| `proyectomed` | `backend/` (`backend/fly.toml`, `backend/Dockerfile`) | Phoenix: the JSON API, the LiveView pages, the RevenueCat webhook | HTTPS through Fly's proxy |
-| `proyectomed-voice` | `voice-worker/` (`voice-worker/fly.toml`, `voice-worker/Dockerfile`) | The LiveKit voice worker, self-hosted and connected to LiveKit Cloud as an agent | No service |
+| Service | Source | Host | What it runs | Public |
+|---|---|---|---|---|
+| `proyectomed` | `backend/` (`backend/fly.toml`, `backend/Dockerfile`) | Fly app | Phoenix: the JSON API, the LiveView pages, the RevenueCat webhook | HTTPS through Fly's proxy |
+| `proyectomed-voice` | `voice-worker/` (`voice-worker/Dockerfile`) | Vultr VPS, Docker | The LiveKit voice worker, self-hosted and connected to LiveKit Cloud as an agent | No service; only SSH is open |
 
-The app names and `PHX_HOST` in both `fly.toml` files are placeholders: replace
-them before the first deploy. Postgres is Neon (ADR-014 #346). LiveKit Cloud
-carries only the media (SFU and TURN); LiveKit-hosted agents are not used
-(decision of 2026-10-22 on #344).
+`voice-worker/fly.toml` is kept for running the worker on Fly instead. The app
+names and `PHX_HOST` in the `fly.toml` files are placeholders: replace them
+before the first deploy. Postgres is Neon (ADR-014 #346). LiveKit Cloud carries
+only the media (SFU and TURN); LiveKit-hosted agents are not used (decision of
+2026-10-22 on #344).
 
-Nothing in this runbook has been run against Fly, Neon or LiveKit Cloud yet:
-the repository side is ready, and the first run waits for the owner's
-authorization. See "Pending live checks" at the end.
+The first live deploy ran on 2026-10-26. That deploy used Fly app
+`proyectomed` on one `shared-cpu-1x` machine with 1 GB, through
+`fly deploy --ha=false --vm-size shared-cpu-1x --vm-memory 1024`, a test size
+below the `performance-1x` of `fly.toml`. The worker ran on one 1 vCPU / 2 GB
+VPS. That VPS was deleted on 2026-10-27 to stop billing until the demo:
+recreate it with "Voice worker on Vultr" below. See "Pending live checks" at
+the end.
 
 ## Why deploys drain first
 
@@ -108,10 +115,13 @@ LiveKit Cloud project as Phoenix), `VOICE_WORKER_SECRET` (the same value as
 Phoenix), `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID`, and
 optionally `CARTESIA_VOICE_IDS` for companion stations.
 
-Set in `voice-worker/fly.toml` `[env]`: `PHOENIX_URL` (placeholder
-`https://proyectomed.fly.dev`; it must go through Fly's proxy, not
-`.internal`, so `fly-replay` reaches the machine that owns a session) and
-`CARTESIA_MODEL`. Never set `VOICE_WORKER_FAKE_PROVIDERS` in production.
+Also set `PHOENIX_URL` and `CARTESIA_MODEL` (`sonic-3`). `PHOENIX_URL` is
+`https://<phoenix app>.fly.dev`: it must go through Fly's proxy, not
+`.internal`, so `fly-replay` reaches the machine that owns a session. On
+Vultr, every variable goes in one env file,
+`/opt/proyectomed/voice-worker.env` (mode 600). On Fly, the secrets go through
+`fly secrets set` and the other two go in `voice-worker/fly.toml` `[env]`.
+Never set `VOICE_WORKER_FAKE_PROVIDERS` in production.
 
 ## First deploy
 
@@ -130,8 +140,8 @@ organization.
    on boot (a no-op).
 5. Keep one Phoenix machine: `fly scale count 1 --app <phoenix app>`.
 6. Create the first admin (below).
-7. Deploy the voice worker: `cd voice-worker && fly deploy`, then size it with
-   `fly scale count <n> --app <voice app>` from the load test.
+7. Deploy the voice worker on Vultr ("Voice worker on Vultr" below). Size the
+   VPS plan, or add VPSs, from the load test.
 8. Point the RevenueCat webhook at `https://<host>/webhooks/revenuecat`.
 9. Run the smoke checks.
 
@@ -148,12 +158,67 @@ Arguments after the script go to `fly deploy`, for example
 tune the wait.
 
 Deploy the voice worker in the same quiet window, right after the Phoenix
-drain, when no station is running: on `SIGTERM` the agent server stops taking
-jobs and finishes the running ones, but Fly waits at most 300 s.
+drain, when no station is running. On `SIGTERM` the agent server stops taking
+jobs and finishes the running ones. Docker waits `--stop-timeout 900` seconds
+for them; on Fly, the wait is at most 300 s. To update the worker on Vultr,
+rerun steps 3 and 4 of "Voice worker on Vultr", running
+`docker stop proyectomed-voice && docker rm proyectomed-voice` before
+`docker run`.
+
+## Voice worker on Vultr
+
+What this needs:
+
+- `vultr-cli`, logged in with an API key.
+- The Vultr SSH key id of the operator's key (`vultr-cli ssh-key list`).
+- The worker env file described in "Voice worker" above. It is kept outside
+  the repository because it holds secrets.
+
+The worker only dials out (LiveKit Cloud and Phoenix), so a new VPS needs no
+DNS change and no other open port.
 
 ```sh
-cd voice-worker && fly deploy
+# 1. Create the VPS: São Paulo, 1 vCPU / 2 GB (about USD 12/month), Ubuntu 24.04 (os 2284).
+vultr-cli instance create --region sao --plan vhp-1c-2gb-amd --os 2284 \
+  --label proyectomed-voice-1 --host proyectomed-voice-1 \
+  --ssh-keys <ssh key id> --userdata "$(cat cloud-init.yaml)"
+vultr-cli instance list                      # wait for "active"; note the IP
+
+# 2. Wait for cloud-init to install Docker and the firewall.
+ssh root@<ip> 'cloud-init status --wait && docker --version'
+
+# 3. Copy the env file and the worker source.
+scp voice-worker.env root@<ip>:/opt/proyectomed/voice-worker.env
+ssh root@<ip> 'chmod 600 /opt/proyectomed/voice-worker.env'
+rsync -az --delete voice-worker/ root@<ip>:/opt/proyectomed/voice-worker/
+
+# 4. Build and run.
+ssh root@<ip> 'cd /opt/proyectomed/voice-worker && docker build -q -t proyectomed-voice .'
+ssh root@<ip> 'docker run -d --name proyectomed-voice --restart unless-stopped \
+  --stop-timeout 900 --env-file /opt/proyectomed/voice-worker.env \
+  --log-opt max-size=20m --log-opt max-file=5 proyectomed-voice'
+
+# 5. The log shows "registered worker".
+ssh root@<ip> 'docker logs --tail 30 proyectomed-voice'
 ```
+
+`cloud-init.yaml`:
+
+```yaml
+#cloud-config
+package_update: true
+packages: [docker.io, ufw]
+runcmd:
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw --force enable
+  - systemctl enable --now docker
+  - mkdir -p /opt/proyectomed && chmod 700 /opt/proyectomed
+```
+
+To stop billing, delete the VPS with `vultr-cli instance delete <id>`; a
+stopped VPS is still billed. Recreating it repeats steps 1 to 5.
 
 Manual drain controls, from inside a machine:
 
@@ -225,8 +290,8 @@ After every deploy:
 
 These need the accounts and the owner's authorization:
 
-- The first deploy itself, and a deploy during a running station (drain,
-  bluegreen and `fly-replay` end to end).
+- A deploy during a running station (drain, bluegreen and `fly-replay` end to
+  end). The first deploy ran on 2026-10-26.
 - What Fly's proxy answers for `fly-replay: instance=<id>` once that machine
   is gone, and for a replayed request body above 1 MB (a large `/transcribe`
   upload to an old machine's session).
