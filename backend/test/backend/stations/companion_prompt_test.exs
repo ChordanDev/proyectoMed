@@ -93,6 +93,27 @@ defmodule Backend.Stations.CompanionPromptTest do
       refute companion_facts =~ "(choro)"
     end
 
+    test "answers the current state, a fact in other words and numbers as the patient prompt does",
+         %{prompt: prompt} do
+      single = StationAI.system_prompt(parse!(@reference_case))
+
+      for rule <- [
+            "Uma pergunta sobre como algo está agora pede só o estado atual:",
+            "Por exemplo, se a dor mudou de lugar e perguntarem onde dói,",
+            "Se um fato da lista responde à pergunta, mesmo com outras palavras",
+            "Diga números, escalas e medidas de um fato só quando a pergunta pedir o número;",
+            "Por exemplo, se perguntarem se a dor é forte, diga que é bem forte;"
+          ] do
+        assert single =~ rule
+        assert prompt =~ rule
+      end
+    end
+
+    test "lets the patient give only the chief complaint to an open question", %{prompt: prompt} do
+      assert prompt =~
+               "Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples e sem detalhes: há quanto tempo, onde exatamente, quão forte e o que mais ele sente são fatos que o estudante precisa perguntar."
+    end
+
     test "asks for one of the three markers", %{prompt: prompt} do
       assert prompt =~ "[PACIENTE], [ACOMPANHANTE], [EXAMINADOR:EXAME] ou [EXAMINADOR]"
       assert prompt =~ "Use [EXAMINADOR:EXAME]"

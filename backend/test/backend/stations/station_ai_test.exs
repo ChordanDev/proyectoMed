@@ -198,6 +198,35 @@ defmodule Backend.StationAI.SystemPromptTest do
     end
   end
 
+  describe "system_prompt/1 current state, chief complaint and numbers" do
+    test "a question about now gets only the current state, not its history", %{prompt: prompt} do
+      assert prompt =~
+               "Uma pergunta sobre como algo está agora pede só o estado atual: se a lista conta que algo mudou, responda com o que vale agora, sem contar como era antes nem quando mudou."
+
+      assert prompt =~
+               "Por exemplo, se a dor mudou de lugar e perguntarem onde dói, diga só onde ela dói agora; onde ela começou só aparece se perguntarem onde ela começou ou se ela mudou de lugar."
+    end
+
+    test "a question a fact answers in other words never gets the refusal", %{prompt: prompt} do
+      assert prompt =~
+               ~s(Se um fato da lista responde à pergunta, mesmo com outras palavras ou depois de uma mudança, responda com ele: a frase "Não consta no script." é só para o que nenhum fato responde.)
+    end
+
+    test "numbers and scales of a fact are said only when the question asks for them",
+         %{prompt: prompt} do
+      assert prompt =~
+               "Diga números, escalas e medidas de um fato só quando a pergunta pedir o número; senão, diga com palavras simples."
+
+      assert prompt =~
+               "Por exemplo, se perguntarem se a dor é forte, diga que é bem forte; a nota de 0 a 10 só aparece se perguntarem a nota."
+    end
+
+    test "an open question gets only the chief complaint from the context", %{prompt: prompt} do
+      assert prompt =~
+               "Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples e sem detalhes: há quanto tempo, onde exatamente, quão forte e o que mais você sente são fatos que o estudante precisa perguntar."
+    end
+  end
+
   describe "system_prompt/1 tightened patient rules (issue #308)" do
     @station_packages Path.wildcard(
                         Path.expand("../../../priv/stations/**/*package.json", __DIR__)
