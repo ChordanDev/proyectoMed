@@ -150,8 +150,9 @@ only code that talks to it, and its interface is documented in
    feedback and no partial result; the patient stops speaking and moving, and
    the room is left. "Reiniciar estação" goes back to the brief at once, and a
    new run starts as soon as Phoenix answers again. Stopping Phoenix while a
-   run is open shows this at the next turn, exam request or finish, or at once
-   in a voice training, whose voice stops with it. A voice failure alone does
+   run is open shows this at the next turn, exam request or finish, or, in a
+   voice training, as soon as the voice stops with it. Either way the call and
+   the check can take up to about 30 s. A voice failure alone does
    not (see "Voice trainings").
 
 Point the client at another Phoenix with `-PhoenixUrl=<origin>` or

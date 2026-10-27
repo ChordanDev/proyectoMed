@@ -44,7 +44,7 @@ Build-file dependency: add `"StationClient"` to the consuming module's
 | --- | --- |
 | Threading | Every callback runs on the game thread, exactly once while the engine runs. A call refused locally (for example `no_session`) calls back before it returns. |
 | Timeouts | A request Phoenix does not answer within 15 s fails with `network_error`. `FetchResult` waits 95 s, as the web client does, because the first fetch assesses the run before answering. |
-| One run at a time | The client holds at most one session. `StartSession` fails with `session_in_progress` until `DiscardSession` succeeds. |
+| One run at a time | The client holds at most one session. `StartSession` fails with `session_in_progress` until `DiscardSession` succeeds or `ForgetSession` is called. |
 | Content | The client holds no clinical rules and no Station Package content. Everything it returns is what Phoenix served for this run. |
 | Secrets | `FStationVoiceCredential::Token`, the device login's `device_code` and its `access_token` and `refresh_token` are secrets: never log or display them (the `user_code` is shown to the learner, but not logged). |
 | Authentication | `GET /stations`, `GET /pre-station-notice`, `POST /sessions` and every `/sessions/:id/...` route need `Authorization: Bearer <access_token>` from the [device login](#learner-login-device-flow). A session belongs to the learner that started it. |
@@ -111,6 +111,9 @@ no session ──StartSession──▶ active ──FinishSession──▶ compl
 - `SendTurn` is not idempotent. After a `network_error`, Phoenix may still have
   taken the turn, and after `reply_verification_failed` it may have kept it
   without a reply: call `RefreshSession` and check the transcript before resending.
+- `RefreshSession` skips transcript lines whose speaker the client does not know.
+- `RefreshSession` never reopens a run this client saw finish: an answer read
+  before the finish keeps the run completed, with its completion time.
 
 ### A training that loses Phoenix (#196)
 
@@ -131,7 +134,11 @@ transcription) or a `Failed` link. A failed microphone does not.
 - When it is not, the step becomes `Invalidated`: the run's conversation,
   requests and answers are forgotten, the room is left, the patient is silenced
   and nothing resumes it, and every later Phoenix answer for the run is
-  dropped. No feedback or partial result is ever shown.
+  dropped. No feedback or partial result is ever shown. A check that fails
+  after the run reached its feedback changes nothing: the finish and the
+  result were answered.
+- Invalidating can take up to about 30 s: the call's 15 s timeout, then the
+  check's.
 - `Restart` sends `DiscardSession` without waiting for it, calls
   `ForgetSession` and shows the brief at once. A new run starts as soon as
   Phoenix answers `StartSession`.
@@ -139,9 +146,6 @@ transcription) or a `Failed` link. A failed microphone does not.
   and so on) is an answer: it never invalidates the run.
 - The real-test mode ("Prova simulada", #318), where a voice failure also
   invalidates the run, is not built yet.
-- `RefreshSession` skips transcript lines whose speaker the client does not know.
-- `RefreshSession` never reopens a run this client saw finish: an answer read
-  before the finish keeps the run completed, with its completion time.
 
 ## Errors
 

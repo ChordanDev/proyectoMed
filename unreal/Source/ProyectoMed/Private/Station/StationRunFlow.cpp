@@ -574,7 +574,11 @@ void UStationRunFlow::CheckPhoenix(TFunction<void()> OnAnswered)
 		}
 		if (Checked.HasError() && IsUnanswered(Checked.GetError()))
 		{
-			Self->Invalidate();
+			// Once the feedback is in, Phoenix answered the finish and the result.
+			if (Self->Step == EStationRunStep::Running || Self->Step == EStationRunStep::Finishing)
+			{
+				Self->Invalidate();
+			}
 			return;
 		}
 		if (OnAnswered)

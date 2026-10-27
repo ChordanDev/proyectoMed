@@ -36,6 +36,19 @@ namespace StationPhoenixLoss
 		"messages": [], "server_now": "2026-10-27T12:01:00Z"
 	})");
 
+	const TCHAR* FinishBody = TEXT(R"({
+		"session_id": "stub-session", "status": "completed", "completed_at": "2026-10-27T12:05:00Z",
+		"completion_reason": "user", "deadline_at": "2026-10-27T12:10:00Z", "server_now": "2026-10-27T12:05:00Z"
+	})");
+
+	const TCHAR* ResultPath = TEXT("/api/v2/stations/active/sessions/stub-session/result");
+
+	const TCHAR* ResultBody = TEXT(R"({
+		"schema_version": "2", "session_id": "stub-session", "status": "completed", "placeholder": false,
+		"criteria": [], "coverage": {"assessed": 0, "uncertain": 0, "not_observable": 0, "not_applicable": 0},
+		"estimates": {"total": null, "scored_subtotal": "0", "scored_max": "0", "eligible_max": "0", "unresolved": []}
+	})");
+
 	/** Routes on a local port that answer with a fixed status and body after a delay. */
 	class FServer
 	{
@@ -308,6 +321,48 @@ void FStationRunPhoenixLossSpec::Define()
 			ExpectInvalidated();
 			TestTrue("no error shown", Flow->GetErrorText().IsEmpty());
 			Done.Execute();
+		});
+	});
+
+	LatentIt("invalidates the run, with no feedback, when its result and the check after it go unanswered", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		Server.Route(FString(SessionPath) + TEXT("/finish"), EHttpServerRequestVerbs::VERB_POST,
+			EHttpServerResponseCodes::Ok, FinishBody);
+		Server.Route(ResultPath, EHttpServerRequestVerbs::VERB_GET, EHttpServerResponseCodes::ServiceUnavail, FString());
+		Server.Route(SessionPath, EHttpServerRequestVerbs::VERB_GET, EHttpServerResponseCodes::ServiceUnavail, FString());
+		Flow->Finish();
+		WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+		{
+			ExpectInvalidated();
+			Done.Execute();
+		});
+	});
+
+	LatentIt("keeps the feedback when a check started during the run goes unanswered after it", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		// The exam request's check is slow; the finish and the result are answered meanwhile.
+		Server.Route(FString(SessionPath) + TEXT("/impressos/request"), EHttpServerRequestVerbs::VERB_POST,
+			EHttpServerResponseCodes::ServiceUnavail, FString());
+		Server.Route(SessionPath, EHttpServerRequestVerbs::VERB_GET, EHttpServerResponseCodes::ServiceUnavail, FString(), 2.f);
+		Server.Route(FString(SessionPath) + TEXT("/finish"), EHttpServerRequestVerbs::VERB_POST,
+			EHttpServerResponseCodes::Ok, FinishBody);
+		Server.Route(ResultPath, EHttpServerRequestVerbs::VERB_GET, EHttpServerResponseCodes::Ok, ResultBody);
+		TestTrue("exam accepted", Flow->RequestExam(TEXT("Exame físico")));
+		WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done]()
+		{
+			Flow->Finish();
+			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+			{
+				TestEqual("feedback", Flow->GetStep(), EStationRunStep::Feedback);
+				After(2.5f, [this, Done]()
+				{
+					TestEqual("still on the feedback", Flow->GetStep(), EStationRunStep::Feedback);
+					TestNotNull("result kept", Flow->GetResult());
+					Done.Execute();
+				});
+			});
 		});
 	});
 
