@@ -8,7 +8,19 @@ This outcome is educational feedback, not certification or a determination that 
 
 ## Content Partner
 
-The project partner who creates and curates every clinical station, rubric, and case outside the application. The MVP application consumes this prepared content; it has no clinician workspace, authoring roles, or in-app content administration.
+The project partner who created and curated the MVP clinical station, rubric, and case outside the application, such as the hand-tuned acute-appendicitis Station Package. For the production launch (#326, ADR-012 amendment on #124) the Content Partner is no longer the source of cases: the n8n pipeline generates each Case, and Admins review it in the admin case panel before publication. The term remains only for the hand-authored MVP content.
+
+## Case (decided for launch)
+
+A numbered, generated clinical case in the tagged Markdown format, stored by the Content context with its area, theme, status, and revisions (ADR-007 amendment on #92). The n8n pipeline inserts it as `pending`; an Admin moves it to `approved` or `disapproved`. It is generated from public material as inspiration, never reproduced verbatim. A deterministic case format parser turns it into a Station Package or a list of located format errors; a Case with format errors cannot be approved.
+
+## Admin (decided for launch)
+
+A paid doctor with the `admin` role who reviews Cases in the Phoenix LiveView admin case panel (ADR-015, #347): reads, fixes small errors in place, and approves or disapproves. Doctor review is the clinical qualification gate of each Case.
+
+## Station Version (decided for launch)
+
+The immutable Station Package published when an Admin approves a Case. Editing an approved Case publishes a new Station Version. A session pins one Station Version, so its result stays explainable after later edits.
 
 ## Station AI
 
@@ -24,11 +36,11 @@ The educational station result identifies actions performed correctly, relevant 
 
 ## MVP Station
 
-The MVP contains one complete original clinical station authored by the Content Partner. It is the only case needed to validate the end-to-end learner experience before expanding content.
+The MVP contains one complete original clinical station authored by the Content Partner. It is the only case needed to validate the end-to-end learner experience before expanding content. The production launch (#326) replaces it with a catalog of at least 400 approved Station Versions; the acute-appendicitis case is rewritten in the tagged Markdown format as the reference Case.
 
 ## Original Case
 
-The MVP station is an original case inspired by skills relevant to Revalida. It does not copy or publicly use official Revalida materials.
+Every station is an original case inspired by skills relevant to Revalida. Public material, including official INEP cases, may inspire a generated Case, but no official case or item content is reproduced verbatim (ADR-012 amendment on #124).
 
 ## Learner-Facing Language
 
@@ -36,7 +48,7 @@ The MVP station instructions, Station AI interaction, voice and text input, and 
 
 ## MVP Runtime
 
-The MVP uses an Elixir/Phoenix backend and a native Unreal Engine 5.8 station client with a MetaHuman patient (accepted architecture, ADR-013). The learner performs the station in the Unreal client, whose code is not in this repository yet; Phoenix remains the only authority, and the client holds no clinical rules. The Vite + React + TypeScript web SPA is frozen as an internal test harness: it receives no new features and keeps working unchanged until the Unreal client reaches parity. Both clients communicate with the Phoenix API over HTTP.
+The MVP uses an Elixir/Phoenix backend and a native Unreal Engine 5.8 station client with a MetaHuman patient (accepted architecture, ADR-013). The learner performs the station in the Unreal client, whose code is not in this repository yet; Phoenix remains the only authority, and the client holds no clinical rules. The Vite + React + TypeScript web SPA is frozen as an internal test harness: it receives no new features and keeps working unchanged until the Unreal client reaches parity. Both clients communicate with the Phoenix API over HTTP. For the production launch, account, billing, device-login confirmation, and the admin case panel are Phoenix LiveView screens (ADR-015, #347), not SPA features.
 
 ## MVP Work Streams
 
@@ -56,11 +68,23 @@ The Station AI replies with synthesized speech and visible Brazilian Portuguese 
 
 ## Rubric-Bound Feedback
 
-The MVP compares the learner transcript against the Content Partner's rubric. The legacy result endpoint reports each criterion as met, omitted, or uncertain with supporting evidence and no points (ADR-005). The MVP preserves uncertainty and provides no global readiness grade or certification. The architecture ADR-012 accepted on 2026-09-21 adds assessment statuses, performance levels, and educational point estimates. Issue #128 implemented that assessment in the backend, and #129 exposed it through the versioned `/api/v2/stations/active/sessions/:id/result` endpoint, which the web client uses. The default decision adapter is disabled, so under it an assessment that needs a decision call is an invalid attempt. The opt-in TypeSafe adapter (#212) serves rubric batches. The provider, privacy, legal, zero-data-retention and clinical qualification gates are still pending. See Rubric Assessment and `docs/design/jev-prototype.md`.
+The MVP compares the learner transcript against the Station Package rubric. The legacy result endpoint reports each criterion as met, omitted, or uncertain with supporting evidence and no points (ADR-005). The MVP preserves uncertainty and provides no global readiness grade or certification. The architecture ADR-012 accepted on 2026-09-21 adds assessment statuses, performance levels, and educational point estimates. Issue #128 implemented that assessment in the backend, and #129 exposed it through the versioned `/api/v2/stations/active/sessions/:id/result` endpoint, which the web client uses. The default decision adapter is disabled, so under it an assessment that needs a decision call is an invalid attempt. The opt-in TypeSafe adapter (#212) serves rubric batches. The provider, privacy, legal, zero-data-retention and clinical qualification gates are still pending. See Rubric Assessment and `docs/design/jev-prototype.md`.
 
 ## MVP Data Retention
 
-The MVP has no learner account, server-side personal history, or retained learner transcript. It shows the current station result and permits a restart. Any non-identifying operational telemetry needs separate definition and justification.
+ADR-014 (#346) supersedes the MVP's no-database stance (ADR-001, #34) for the production launch. Phoenix stores Learner Accounts, Subscription Entitlement, content-free per-session usage, and one Educational Result per finished session in the Results History. It never stores raw audio or a full transcript: the only transcript fragments kept are the learner phrases cited in an Educational Result. Account deletion erases the account, its entitlement, and its Educational Results and revokes every token; usage records keep no user reference. Retention periods are configuration set together with the legal documents. Until the launch work ships, the running MVP still has no database.
+
+## Learner Account (decided for launch)
+
+A learner's account, created on the LiveView web with email and password and acceptance of the terms of use and privacy policy. The Unreal client logs in through a browser Device Login and holds a short-lived, refreshable, revocable token; a password change or account deletion logs the learner out everywhere (ADR-013 amendment on #209).
+
+## Subscription Entitlement (decided for launch)
+
+The plan and entitlement state of a learner, received from a signed RevenueCat webhook by the Billing context. Phoenix checks it, and the plan's Daily Quota, when a session is created. Usage counts only sessions that reach a graded result; a Technical Failure consumes no quota.
+
+## Results History (decided for launch)
+
+The learner's past Educational Results, listed by date and filterable by area, each with its criteria, cited learner phrases, and recommendations. It has no aggregate across sessions, no pass/fail verdict, and no readiness score.
 
 ## Pilot Operations
 
@@ -72,7 +96,7 @@ Before a station, the MVP shows a concise Brazilian Portuguese notice: it is an 
 
 ## Station Package
 
-The Content Partner supplies the one MVP station as a versioned structured package: clinical context, facts the Station AI may reveal, response rules, expected learner actions, and feedback criteria. This package constrains Station AI behavior without an in-app authoring workspace.
+A versioned structured package: clinical context, facts the Station AI may reveal, response rules, expected learner actions, and feedback criteria. It constrains Station AI behavior. The Content Partner hand-authored the MVP package; for the launch, the case format parser produces it from an approved Case and it is published as a Station Version. It declares its actors (the patient and, when the case has one, a companion), each with a profile and a voice; facts and mandatory final questions belong to an actor.
 
 ## Station Completion
 
@@ -80,7 +104,7 @@ The learner may finish a station at any time. In a real test, the ten-minute tim
 
 ## Feedback Evidence Display
 
-The feedback view shows the current session transcript and highlights excerpts that support each rubric criterion. It is session-only and discarded when the learner exits; it does not create personal history or server-side transcript retention.
+The feedback view shows the current session transcript and highlights excerpts that support each rubric criterion. The full transcript is session-only and discarded when the learner exits; it is never retained server-side. The Results History keeps only the cited learner phrases of each Educational Result (ADR-014, #346).
 
 ## Unknown Clinical Facts
 
@@ -88,7 +112,7 @@ When a learner asks for a clinical fact absent from the Station Package, the Sta
 
 ## Session Data Lifecycle
 
-The backend holds conversation, transcription, and evaluation data only while it is needed to complete the station. It deletes them when the learner exits the result or after a short safety timeout; no personal history remains.
+The backend holds conversation, transcription, and evaluation data in memory only while it is needed to complete the station. It deletes them when the learner exits the result or after a short safety timeout. Under ADR-014 (#346), the only thing that outlives the session is its Educational Result, stored in the Results History of a Learner Account, and only when the session reached a graded result. A planned deploy drains running sessions instead of dropping them.
 
 ## MVP Continuation Criterion
 
@@ -100,11 +124,11 @@ The station client targets macOS and Windows desktops through the native Unreal 
 
 ## Station Retry Policy
 
-The MVP allows unlimited repetitions of the single station during the pilot. Usage caps, commercial limits, or station rotation are separate decisions for after the pilot.
+The MVP allows unlimited repetitions of the single station during the pilot. For the production launch (#326), a learner picks a station from the catalog or draws a random one, optionally within an area, within the Daily Quota of their plan; quota numbers are set after cost measurement.
 
 ## Jev (accepted architecture)
 
-Jev is the working name for an independent decision-model family — a vendor candidate behind the backend's shared Phoenix proxy/domain interface, not a measured specialist in clinical pt-BR. It does not generate or replace patient dialogue. Separate adapters may use that shared interface for generation, transcription, text-to-speech, and decision-model calls. Under the architecture accepted on 2026-09-21, Jev verifies candidate Station AI replies and classifies rubric evidence into bounded observations. The decision seam is implemented as `Backend.Stations.JevDecision`: its default adapter is disabled, and an opt-in TypeSafe adapter (`JEV_ADAPTER=typesafe`, #206) serves patient decisions only and returns `rubric_decision_unsupported` for rubric decisions. The seam never truncates: text over its caps (24,000 characters per patient request, 120,000 per rubric evidence pool by default) fails closed before any adapter call. Live use awaits the human privacy and legal gate (#183); provider approval, data-processing terms, threshold calibration, and zero-data-retention claims remain pending. This term does not describe a qualified live service or an approved provider.
+Jev is the working name for an independent decision-model family — a vendor candidate behind the backend's shared Phoenix proxy/domain interface, not a measured specialist in clinical pt-BR. It does not generate or replace patient dialogue. Separate adapters may use that shared interface for generation, transcription, text-to-speech, and decision-model calls. Under the architecture accepted on 2026-09-21, Jev verifies candidate Station AI replies and classifies rubric evidence into bounded observations; since #307 it audits patient replies after delivery by default (see Jev Gate). The decision seam is implemented as `Backend.Stations.JevDecision`: its default adapter is disabled, and an opt-in TypeSafe adapter (`JEV_ADAPTER=typesafe`, #206) serves patient decisions only and returns `rubric_decision_unsupported` for rubric decisions. The seam never truncates: text over its caps (24,000 characters per patient request, 120,000 per rubric evidence pool by default) fails closed before any adapter call. Live use awaits the human privacy and legal gate (#183); provider approval, data-processing terms, threshold calibration, and zero-data-retention claims remain pending. This term does not describe a qualified live service or an approved provider.
 
 ## Approved Generic Reply (accepted architecture)
 
@@ -112,7 +136,7 @@ A Station AI reply that bypasses Jev only when it is the exact text of a package
 
 ## Jev Gate (accepted architecture)
 
-Every Station AI reply that is not an Approved Generic Reply must pass Jev before it is displayed or sent to text-to-speech; there is no parallel bypass. The gate checks groundedness in allowed facts, contradiction with the case and context, early or excessive disclosure, relevance to the patient role, and treats injected instructions found in learner turns as evidence to report, never as instructions to follow. Semantic refusal or low confidence permits at most one regeneration and complete recheck within the turn deadline; no text is delivered if that path does not pass. Timeout, malformed output, transport error, or provider 5xx is a technical failure that invalidates the attempt under the existing policy; it is not converted to `uncertain` and cannot produce fallback clinical text. Learner input may reach generation as untrusted evidence. Rejected or otherwise unverified patient candidates never enter trusted history or regeneration input, and text-to-speech receives only approved patient text. `Backend.Stations.CandidateGate` implements the deny checks, exact-template bypass, decision call, and single semantic retry before patient text is committed; known violations currently return an error without the optional approved fallback.
+`PATIENT_VERIFICATION` selects how Jev checks patient replies (ADR-011 amendment for #307 on #123). In the default `audit` mode the deterministic `BoundedReply` check is the only pre-delivery gate: a reply is delivered once it passes, and Jev judges the delivered reply afterwards, for audit and measurement only, never delaying, blocking, or rewriting it. `off` makes no patient-side Jev call. The rest of this entry describes the `blocking` mode, kept as a fallback. In `blocking` mode, every Station AI reply that is not an Approved Generic Reply must pass Jev before it is displayed or sent to text-to-speech; there is no parallel bypass. The gate checks groundedness in allowed facts, contradiction with the case and context, early or excessive disclosure, relevance to the patient role, and treats injected instructions found in learner turns as evidence to report, never as instructions to follow. Semantic refusal or low confidence permits at most one regeneration and complete recheck within the turn deadline; no text is delivered if that path does not pass. Timeout, malformed output, transport error, or provider 5xx is a technical failure that invalidates the attempt under the existing policy; it is not converted to `uncertain` and cannot produce fallback clinical text. Learner input may reach generation as untrusted evidence. Rejected or otherwise unverified patient candidates never enter trusted history or regeneration input, and text-to-speech receives only approved patient text. `Backend.Stations.CandidateGate` implements the deny checks, exact-template bypass, decision call, and single semantic retry before patient text is committed; known violations currently return an error without the optional approved fallback.
 
 ## Rubric Assessment (implemented)
 

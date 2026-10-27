@@ -7,6 +7,8 @@ defmodule Backend.Stations.JevDecision do
     2. Closed-set rubric criterion classification (`decide_rubric/2`).
     3. Batched classification of independent rubric questions over one shared
        evidence pool (`decide_rubric_batch/2`).
+    4. Classification of an impresso request that matched no authored impresso
+       as plausible or not for the case (`decide_impresso_request/2`, #357).
 
   Since #309 the patient generation decides who a learner turn is addressed to
   (`Backend.Stations.StationAI.Addressee`); Jev no longer does.
@@ -50,6 +52,7 @@ defmodule Backend.Stations.JevDecision do
   alias Backend.Stations.JevDecision.RubricBatch
 
   @default_deadline_ms 3_000
+  @default_impresso_deadline_ms 2_000
   @default_max_context_turns 10
   @default_max_characters 2_000
   # Worst case of a validated session: candidate (2,000) + 10 bounded turns of at
@@ -241,6 +244,81 @@ defmodule Backend.Stations.JevDecision do
   end
 
   @doc """
+  Classifies an impresso request that matched no authored impresso (issue
+  #357): does the requested exam make clinical sense for the case?
+
+  The request is `%{text: String.t(), package: map()}` plus the same optional
+  deadline fields `decide_rubric/2` accepts (atom or string keys). Only the
+  request text and the case context (`candidate_brief` and `patient_profile`
+  of the package) reach the adapter; authored impressos, facts and the rubric
+  never do. The text must be non-blank and at most `max_characters/0`.
+
+  The deadline defaults to `impresso_deadline_ms/0` (2,000 ms), shorter than
+  the other decisions because the learner is waiting on the impresso route.
+
+  Returns `{:ok, %{classification: :plausible | :not_plausible | :undecided}}`,
+  or `{:error, reason}` on an invalid request, a technical failure (the
+  disabled default adapter included), an adapter without the
+  `decide_impresso_request` callback, or a label outside the closed set. The
+  caller decides what the learner reads; this seam never writes text.
+  """
+  @spec decide_impresso_request(map(), keyword()) ::
+          {:ok, %{classification: :plausible | :not_plausible | :undecided}}
+          | {:error, technical_failure()}
+  def decide_impresso_request(request, opts \\ []) when is_map(request) and is_list(opts) do
+    text = Map.get(request, :text) || Map.get(request, "text")
+    package = Map.get(request, :package) || Map.get(request, "package")
+    opts = Keyword.put_new(opts, :deadline_ms, impresso_deadline_ms())
+
+    with :ok <- validate_impresso_text(text, opts[:max_characters] || max_characters()),
+         :ok <- validate_package(package),
+         {:ok, deadline_ms, deadline_at} <- resolve_deadline(request, opts) do
+      adapter_request = %{
+        text: text,
+        case: Map.take(package, ["candidate_brief", "patient_profile"]),
+        deadline_ms: deadline_ms,
+        deadline_at_monotonic_ms: deadline_at
+      }
+
+      opts
+      |> resolve_adapter()
+      |> execute_adapter(:decide_impresso_request, adapter_request, deadline_ms, opts)
+      |> validate_impresso_output()
+    end
+  end
+
+  @impresso_classifications %{
+    "plausible" => :plausible,
+    "not_plausible" => :not_plausible,
+    "undecided" => :undecided
+  }
+
+  defp validate_impresso_text(text, max_chars) when is_binary(text) do
+    cond do
+      String.trim(text) == "" -> {:error, {:invalid_request, :invalid_text}}
+      String.length(text) > max_chars -> {:error, {:invalid_request, :context_limit_exceeded}}
+      true -> :ok
+    end
+  end
+
+  defp validate_impresso_text(_text, _max_chars), do: {:error, {:invalid_request, :invalid_text}}
+
+  defp validate_impresso_output({:ok, %{} = decision}) do
+    label = Map.get(decision, :classification) || Map.get(decision, "classification")
+
+    case Map.fetch(@impresso_classifications, to_label(label)) do
+      {:ok, classification} -> {:ok, %{classification: classification}}
+      :error -> normalize_error({:invalid_response, :invalid_classification})
+    end
+  end
+
+  defp validate_impresso_output({:error, reason}), do: normalize_error(reason)
+  defp validate_impresso_output(_other), do: normalize_error({:malformed_output, :expected_map})
+
+  defp to_label(label) when is_atom(label) and not is_nil(label), do: Atom.to_string(label)
+  defp to_label(label), do: label
+
+  @doc """
   Returns `true` if the given term represents a typed technical failure.
   """
   @spec technical_failure?(term()) :: boolean()
@@ -271,6 +349,20 @@ defmodule Backend.Stations.JevDecision do
   @spec default_deadline_ms() :: pos_integer()
   def default_deadline_ms do
     Application.get_env(:backend, :jev_decision_default_deadline_ms, @default_deadline_ms)
+  end
+
+  @doc """
+  Returns the configured deadline, in milliseconds, of an impresso request
+  classification (issue #357). The learner waits on the impresso route, so
+  it defaults to 2,000 ms.
+  """
+  @spec impresso_deadline_ms() :: pos_integer()
+  def impresso_deadline_ms do
+    Application.get_env(
+      :backend,
+      :jev_decision_impresso_deadline_ms,
+      @default_impresso_deadline_ms
+    )
   end
 
   @doc "Returns configured maximum conversation history turns."

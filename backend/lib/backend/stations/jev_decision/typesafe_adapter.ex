@@ -1,8 +1,8 @@
 defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   @moduledoc """
   `Backend.Stations.JevDecision.Adapter` backed by the TypeSafe System One HTTP API
-  (model Jev). It serves the patient decision and the batched rubric decision; the
-  single-criterion rubric decision is not served.
+  (model Jev). It serves the patient decision, the batched rubric decision and the
+  impresso request decision; the single-criterion rubric decision is not served.
 
   This adapter is never the default. It is selected by explicit configuration, and
   using it against the live provider is gated by the human privacy and legal
@@ -69,6 +69,17 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
   that does not fit alone fails the batch with
   `{:technical_failure, :rubric_request_too_large}`. Any group failure fails the
   whole batch; a group still running at the deadline is a `:timeout`.
+
+  ## Impresso request
+
+  `decide_impresso_request/2` (issue #357) asks one noul question, id
+  `plausible`: does the exam requested in `exam_request` make clinical sense to
+  order for the case in `case`? The `state` is `exam_request` (the learner's
+  request text, untrusted) and `case` (the package `candidate_brief` and
+  `patient_profile`). The answer is thresholded like the others: a yes is
+  `"plausible"`, a no is `"not_plausible"` and anything between is
+  `"undecided"`. The caller maps the label to fixed text; nothing the provider
+  writes reaches the learner.
 
   ## Disclosure conditions
 
@@ -299,6 +310,49 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
       {:ok, %{decisions: rubric_decisions(questions, plans, nouls, thresholds)}}
     end
   end
+
+  @impresso_question "plausible"
+
+  @impresso_instructions "The exam, test or procedure the learner requests in `exam_request` " <>
+                           "makes clinical sense to order for the case described in `case`, " <>
+                           "even if it is not essential: a physician examining this patient " <>
+                           "could reasonably ask for it."
+
+  @impl true
+  def decide_impresso_request(request), do: decide_impresso_request(request, [])
+
+  @spec decide_impresso_request(map(), keyword()) ::
+          {:ok, %{classification: String.t()}} | {:error, term()}
+  def decide_impresso_request(request, opts) when is_map(request) and is_list(opts) do
+    config = get_config(opts)
+
+    with :ok <- validate_credentials(config.api_key),
+         {:ok, thresholds} <- validate_thresholds(config.yes_threshold, config.no_threshold),
+         :ok <- validate_base_url(config.base_url),
+         {:ok, budget_ms} <- usable_budget(request),
+         payload = impresso_payload(request, config.model),
+         {:ok, body} <- execute_request(config, payload, budget_ms),
+         {:ok, %{@impresso_question => noul}} <- parse_answers(body, [@impresso_question]) do
+      {:ok, %{classification: impresso_label(classify(noul, thresholds))}}
+    end
+  end
+
+  defp impresso_payload(request, model) do
+    %{
+      "model" => model,
+      "state" => %{
+        "exam_request" => to_string(Map.get(request, :text) || ""),
+        "case" => request |> Map.get(:case) |> map_or_empty()
+      },
+      "questions" => %{
+        @impresso_question => %{"type" => "noul", "instructions" => @impresso_instructions}
+      }
+    }
+  end
+
+  defp impresso_label(:yes), do: "plausible"
+  defp impresso_label(:no), do: "not_plausible"
+  defp impresso_label(:undecided), do: "undecided"
 
   # ============================================================================
   # Configuration
@@ -634,7 +688,11 @@ defmodule Backend.Stations.JevDecision.TypesafeAdapter do
         finch: [pool_timeout: budget_ms, request_timeout: budget_ms]
       )
 
-    case Req.post(url, req_opts) do
+    response = Req.post(url, req_opts)
+    # Every request that got an HTTP response is one Jev call (issue #342).
+    if match?({:ok, %Req.Response{}}, response), do: Backend.Stations.Usage.record_jev_call()
+
+    case response do
       # Only 200 is a decision. Another 2xx (a partial or queued response, for
       # example) is not one, whatever its body says.
       {:ok, %Req.Response{status: 200, body: body}} ->

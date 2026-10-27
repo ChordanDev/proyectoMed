@@ -179,6 +179,27 @@ defmodule Backend.Stations.MediaSessionTest do
       refute_receive {:deleted_room, "some-other-room"}, 50
     end
 
+    test "keeps rooms owned by another machine and sweeps this machine's own" do
+      previous = Application.fetch_env(:backend, :machine_id)
+      Application.put_env(:backend, :machine_id, "aaa")
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:backend, :machine_id, value)
+          :error -> Application.delete_env(:backend, :machine_id)
+        end
+      end)
+
+      other = "station-session-bbb.AAAAAAAAAAAAAAAAAAAAAA"
+      own = "station-session-aaa.AAAAAAAAAAAAAAAAAAAAAA"
+      Application.put_env(:backend, :media_session_test_rooms, [other, own])
+
+      MediaSession.sweep_orphans()
+
+      assert_receive {:deleted_room, ^own}
+      refute_receive {:deleted_room, ^other}, 50
+    end
+
     test "clears the rate-limit entry for a swept session" do
       Application.put_env(:backend, :livekit_rate_limit_max, 1)
       completed = Conversation.start(audio_consent: true)

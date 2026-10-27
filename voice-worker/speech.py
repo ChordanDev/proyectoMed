@@ -10,15 +10,35 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+)
 
 from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 
 TRACK_NAME = "patient-voice"
-# One attempt per generation: a retried reply would be late, and the framework's retry
-# warning echoes the provider error, which can carry the reply text.
+# No framework retries: a retried reply would be late, and the framework's retry
+# warning echoes the provider error, which can carry the reply text. The player itself
+# replaces a dead pooled websocket once, before any audio (`_synthesize`).
 SYNTHESIS_OPTIONS = APIConnectOptions(max_retry=0)
 logger = logging.getLogger("voice-worker.speech")
+# Log fields where the Cartesia plugin puts a provider message, which can echo the
+# reply text: kept as a field, never printed.
+PROVIDER_PAYLOAD_FIELDS = ("error", "lk.pii.data")
+REDACTED = "[redacted]"
+
+
+def _redact_provider_payload(record: logging.LogRecord) -> bool:
+    for field in PROVIDER_PAYLOAD_FIELDS:
+        if field in record.__dict__:
+            record.__dict__[field] = REDACTED
+    return True
+
+
+logging.getLogger("livekit.plugins.cartesia").addFilter(_redact_provider_payload)
 
 
 def _audio_track(source):
@@ -29,7 +49,9 @@ class SpeechPlayer:
     """Speaks accepted replies through an injected TTS provider, one generation at a time.
 
     Owns one audio source and one published local audio track per room, and closes the
-    provider it was given. The tracker stays the authority on which generation is
+    providers it was given. `voices` maps a voice key (`voz=`, #341) to its own
+    provider: a reply whose `voice` is mapped is spoken by it on the same track, any
+    other reply by `tts`. Every provider must share `tts`'s sample rate and channels. The tracker stays the authority on which generation is
     current: a reply is spoken only while it is the tracker's active, non-cancelled
     generation, and that fence is checked again before every frame is pushed.
     """
@@ -41,11 +63,16 @@ class SpeechPlayer:
         tts,
         source_factory=None,
         track_factory=None,
+        voices: dict | None = None,
+        meter=None,
     ):
         self.room = room
+        # Counts the characters sent to Cartesia (#342); optional.
+        self.meter = meter
         self.tracker = tracker
         self.session_id = tracker.session_id
         self.tts = tts
+        self.voices = dict(voices or {})
         self._source_factory = source_factory or rtc.AudioSource
         self._track_factory = track_factory or _audio_track
         self._source = None
@@ -90,6 +117,38 @@ class SpeechPlayer:
             self._track_factory(self._source),
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         )
+        self._prewarm()
+
+    def _prewarm(self) -> None:
+        """Open each provider's connection ahead of the next reply, without waiting.
+
+        A cold Cartesia connection delayed the first audio of a reply by 0.5-1 s in
+        local tests; a reply that ends early (cancelled or failed) drops its connection,
+        so this runs again after every reply. A provider that already holds a connection
+        keeps it. Best effort: a failure only costs the next reply time.
+        """
+        for tts in (self.tts, *self.voices.values()):
+            prewarm = getattr(tts, "prewarm", None)
+            if prewarm is None:
+                continue
+            try:
+                prewarm()
+            except Exception:
+                logger.warning("speech prewarm failed for session %s", self.session_id)
+
+    @staticmethod
+    def _streams(tts) -> bool:
+        return getattr(getattr(tts, "capabilities", None), "streaming", False)
+
+    @classmethod
+    def _open_stream(cls, tts, text: str):
+        """One `tts` stream for `text`: the streaming input when the provider has one."""
+        if not cls._streams(tts):
+            return tts.synthesize(text, conn_options=SYNTHESIS_OPTIONS)
+        stream = tts.stream(conn_options=SYNTHESIS_OPTIONS)
+        stream.push_text(text)
+        stream.end_input()
+        return stream
 
     async def speak(self, reply: VoiceTurnReply) -> VoiceFailure | None:
         """Stream one accepted reply into the room; frames are pushed as they arrive.
@@ -152,6 +211,8 @@ class SpeechPlayer:
         if source is not None:
             await self._release(source.aclose())
         await self._release(self.tts.aclose())
+        for voice in self.voices.values():
+            await self._release(voice.aclose())
 
     async def _release(self, closing) -> None:
         try:
@@ -201,21 +262,53 @@ class SpeechPlayer:
             await self.start()
             if self._speaking is not reply or not self._is_current(reply):
                 return None
-            stream = self.tts.synthesize(
-                reply.reply_text, conn_options=SYNTHESIS_OPTIONS
-            )
-            async for audio in stream:
-                if self._speaking is not reply:
-                    return None
-                if not self._is_current(reply):
-                    # Fenced by the tracker alone: drop this frame and every later one.
-                    self._source.clear_queue()
-                    return None
-                self._log_first_audio(reply)
-                await self._source.capture_frame(audio.frame)
+            tts = self.voices.get(getattr(reply, "voice", None), self.tts)
+            text = reply.reply_text
+            assert text is not None  # a current reply is committed, so it has text
+            stream = self._open_stream(tts, text)
+            if self.meter is not None:
+                self.meter.add_characters(text)
+            source = self._source
+            assert source is not None  # start() published the track
+            heard = retried = False
+            while True:
+                try:
+                    async for audio in stream:
+                        if self._speaking is not reply:
+                            return None
+                        if not self._is_current(reply):
+                            # Fenced by the tracker alone: drop this frame and every
+                            # later one.
+                            source.clear_queue()
+                            return None
+                        heard = True
+                        self._log_first_audio(reply)
+                        await source.capture_frame(audio.frame)
+                    break
+                except (APIStatusError, APIConnectionError) as error:
+                    # A pooled websocket can die while it waits for the reply (J400-2):
+                    # one fresh stream, only before any audio, never after a timeout,
+                    # which would make the reply late, and never when the provider
+                    # refused the request (a bad key, an unpaid account, a rate
+                    # limit), which a second try only repeats.
+                    if (
+                        heard
+                        or retried
+                        or isinstance(error, APITimeoutError)
+                        or not error.retryable
+                        or getattr(error, "status_code", None) == 429
+                        or not self._streams(tts)
+                    ):
+                        raise
+                    retried = True
+                    closing, stream = stream, None
+                    await self._release(closing.aclose())
+                    if self._speaking is not reply or not self._is_current(reply):
+                        return None
+                    stream = self._open_stream(tts, text)
             # Still this generation until the buffered tail is heard, so a cancel in
             # that window clears it instead of being a finished-generation no-op.
-            await self._source.wait_for_playout()
+            await source.wait_for_playout()
             return None
         except Exception:
             if self._speaking is not reply:
@@ -233,3 +326,5 @@ class SpeechPlayer:
         finally:
             if stream is not None:
                 await self._release(stream.aclose())
+                if not self._closed:
+                    self._prewarm()

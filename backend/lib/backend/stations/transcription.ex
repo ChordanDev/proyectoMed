@@ -3,7 +3,7 @@ defmodule Backend.Stations.Transcription do
   Single point of contact between the backend and the speech-to-text provider.
 
   OpenAI's audio transcription API is the default. When `:voice_provider` is
-  `:deepgram_elevenlabs`, the audio goes to Deepgram instead
+  `:deepgram_cartesia`, the audio goes to Deepgram instead
   (`Backend.Stations.Transcription.Deepgram`); validation, consent and session checks,
   the result shape and the error outcomes are the same for both providers.
 
@@ -46,7 +46,7 @@ defmodule Backend.Stations.Transcription do
 
   defp provider_transcribe(audio, format, opts) do
     case Application.get_env(:backend, :voice_provider, :openai) do
-      :deepgram_elevenlabs -> Deepgram.transcribe(audio, format, opts)
+      :deepgram_cartesia -> Deepgram.transcribe(audio, format, opts)
       _openai -> openai_transcribe(audio, format, opts)
     end
   end

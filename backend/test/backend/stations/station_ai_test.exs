@@ -275,7 +275,7 @@ defmodule Backend.StationAI.SystemPromptTest do
       assert prompt =~ "MARCAÇÃO DO DESTINATÁRIO"
 
       assert prompt =~
-               "Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE] ou [EXAMINADOR]."
+               "Comece SEMPRE a sua resposta com exatamente uma destas marcações: [PACIENTE], [EXAMINADOR:EXAME] ou [EXAMINADOR]."
     end
 
     test "says when the turn is the examiner's and that nothing follows its marker",
@@ -285,6 +285,14 @@ defmodule Backend.StationAI.SystemPromptTest do
 
       assert prompt =~ "Depois de [EXAMINADOR] não escreva mais nada."
       assert prompt =~ "Na dúvida, use [PACIENTE]."
+    end
+
+    test "asks for the exam marker on an exam request to the examiner (#351)", %{prompt: prompt} do
+      assert prompt =~
+               "Use [EXAMINADOR:EXAME] quando a última mensagem do estudante pedir ao examinador um exame físico, uma manobra, um exame complementar ou um resultado"
+
+      assert prompt =~ "Depois de [EXAMINADOR:EXAME] não escreva mais nada."
+      assert prompt =~ "o senhor já fez tomografia?"
     end
   end
 end

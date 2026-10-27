@@ -7,7 +7,6 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
-
 from livekit import rtc
 from livekit.agents.stt import SpeechEventType
 

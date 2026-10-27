@@ -1,0 +1,19 @@
+#!/bin/sh
+# Deploy drain gate of the running node (#344), from inside the machine
+# (`fly ssh console --machine <id> --command "/app/bin/drain status"`):
+#   drain start   refuse new sessions (POST /sessions answers 503 draining)
+#   drain stop    admit new sessions again
+#   drain status  print "draining=<true|false> active_sessions=<n>"
+set -eu
+
+cd -P -- "$(dirname -- "$0")"
+
+case "${1:-status}" in
+  start) exec ./backend rpc "Backend.Release.drain()" ;;
+  stop) exec ./backend rpc "Backend.Release.resume()" ;;
+  status) exec ./backend rpc "Backend.Release.drain_status()" ;;
+  *)
+    echo "usage: drain start|stop|status" >&2
+    exit 64
+    ;;
+esac

@@ -8,7 +8,7 @@ defmodule Backend.LLMProviderConfigTest do
   alias Backend.Stations.StationAI
 
   @runtime_config Path.expand("../../config/runtime.exs", __DIR__)
-  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_PATIENT_MODEL ANTHROPIC_ADJUDICATOR_MODEL PATIENT_ADJUDICATOR PATIENT_ADJUDICATOR_DEADLINE_MS PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS RUBRIC_RESOLVER_DEADLINE_MS LEARNER_FEEDBACK_DEADLINE_MS)
+  @variables ~w(LLM_PROVIDER RUBRIC_RESOLVER RUBRIC_RESOLVER_MODEL ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_RESOLVER_MODEL ANTHROPIC_PATIENT_MODEL ANTHROPIC_ADJUDICATOR_MODEL PATIENT_ADJUDICATOR PATIENT_ADJUDICATOR_DEADLINE_MS PATIENT_ADJUDICATOR_REGENERATION_EXTENSION_MS RUBRIC_RESOLVER_DEADLINE_MS LEARNER_FEEDBACK_DEADLINE_MS)
 
   setup do
     previous = Map.new(@variables, &{&1, System.get_env(&1)})
@@ -54,6 +54,24 @@ defmodule Backend.LLMProviderConfigTest do
 
     test "without RUBRIC_RESOLVER the resolver stays disabled" do
       refute Keyword.has_key?(runtime(%{}), :rubric_resolver_adapter)
+    end
+  end
+
+  describe "resolver model (issue #343)" do
+    test "ANTHROPIC_RESOLVER_MODEL is written to the resolver's own setting only" do
+      backend =
+        runtime(%{
+          "LLM_PROVIDER" => "anthropic",
+          "ANTHROPIC_RESOLVER_MODEL" => "claude-sonnet-5-5"
+        })
+
+      assert backend[StationAI.AnthropicClient] == [resolver_model: "claude-sonnet-5-5"]
+    end
+
+    test "unset, no resolver model is written and the client default applies" do
+      backend = runtime(%{"LLM_PROVIDER" => "anthropic", "ANTHROPIC_MODEL" => "claude-opus-5-5"})
+
+      assert backend[StationAI.AnthropicClient] == [model: "claude-opus-5-5"]
     end
   end
 

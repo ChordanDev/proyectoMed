@@ -31,7 +31,80 @@ defmodule BackendWeb.ConnCase do
     end
   end
 
-  setup _tags do
+  setup tags do
+    Backend.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
+  end
+
+  @doc """
+  Setup helper that registers and logs in users.
+
+      setup :register_and_log_in_user
+
+  It stores an updated connection and a registered user in the
+  test context.
+  """
+  def register_and_log_in_user(%{conn: conn} = context) do
+    user = Backend.AccountsFixtures.user_fixture()
+    scope = Backend.Accounts.Scope.for_user(user)
+
+    opts =
+      context
+      |> Map.take([:token_authenticated_at])
+      |> Enum.into([])
+
+    %{conn: log_in_user(conn, user, opts), user: user, scope: scope}
+  end
+
+  @doc """
+  Logs the given `user` into the `conn`.
+
+  It returns an updated `conn`.
+  """
+  def log_in_user(conn, user, opts \\ []) do
+    token = Backend.Accounts.generate_user_session_token(user)
+
+    maybe_set_token_authenticated_at(token, opts[:token_authenticated_at])
+
+    conn
+    |> Phoenix.ConnTest.init_test_session(%{})
+    |> Plug.Conn.put_session(:user_token, token)
+  end
+
+  @doc """
+  Setup helper that registers a learner and authenticates the Unreal client
+  API as them with a device access token (#337).
+
+      setup :register_and_log_in_device
+
+  It stores the updated connection and the learner as `:device_user`.
+  """
+  def register_and_log_in_device(%{conn: conn}) do
+    user = Backend.AccountsFixtures.user_fixture()
+    %{conn: log_in_device(conn, user), device_user: user}
+  end
+
+  @doc """
+  Puts a fresh device access token of `user` in the `authorization` header.
+  `Phoenix.ConnTest.recycle/1` keeps it across requests.
+  """
+  def log_in_device(conn, user) do
+    Plug.Conn.put_req_header(conn, "authorization", "Bearer " <> device_access_token(user))
+  end
+
+  @doc """
+  Runs the device login for `user` and returns the access token.
+  """
+  def device_access_token(user) do
+    {:ok, start} = Backend.Accounts.start_device_authorization()
+    :ok = Backend.Accounts.approve_device_authorization(user, start.user_code)
+    {:ok, tokens} = Backend.Accounts.poll_device_authorization(start.device_code)
+    tokens.access_token
+  end
+
+  defp maybe_set_token_authenticated_at(_token, nil), do: nil
+
+  defp maybe_set_token_authenticated_at(token, authenticated_at) do
+    Backend.AccountsFixtures.override_token_authenticated_at(token, authenticated_at)
   end
 end

@@ -12,9 +12,14 @@ defmodule Backend.Stations do
 
   require Logger
 
+  alias Backend.Stations.Actors
   alias Backend.Stations.CandidateGate
+  alias Backend.Stations.Capacity
+  alias Backend.Stations.CaseFormat
   alias Backend.Stations.Conversation
+  alias Backend.Stations.Drain
   alias Backend.Stations.Evaluator
+  alias Backend.Stations.ExamMode
   alias Backend.Stations.Impressos
   alias Backend.Stations.JevDecision
   alias Backend.Stations.LiveKit
@@ -22,16 +27,21 @@ defmodule Backend.Stations do
   alias Backend.Stations.MediaSession
   alias Backend.Stations.PatientVerification
   alias Backend.Stations.Qualification
+  alias Backend.Stations.Results.DailyQuota
+  alias Backend.Stations.Results.History, as: ResultHistory
   alias Backend.Stations.RubricAssessment
   alias Backend.Stations.StationAI
   alias Backend.Stations.StationAI.Addressee
   alias Backend.Stations.StationAI.SentenceStream
   alias Backend.Stations.StationLoader
+  alias Backend.Stations.StationPackage
   alias Backend.Stations.SttKeyterms
   alias Backend.Stations.Transcription
   alias Backend.Stations.TTS
   alias Backend.Stations.TTS.StageDirections
+  alias Backend.Stations.Usage
 
+  @default_mandatory_questions_window_ms :timer.minutes(3)
   @early_timer_finish_tolerance_ms 2_000
   @default_learner_message_max_characters 2_000
 
@@ -54,6 +64,14 @@ defmodule Backend.Stations do
   end
 
   @doc """
+  Whether a boot-time active station exists: the file loader runs in tests and
+  local development only; production serves stations only from the database
+  (issue #334).
+  """
+  @spec active_station_available?() :: boolean()
+  def active_station_available?, do: StationLoader.running?()
+
+  @doc """
   Returns the full validated active Station Package.
   """
   @spec get_active_package() :: map()
@@ -68,6 +86,60 @@ defmodule Backend.Stations do
   def active_version do
     StationLoader.active_version()
   end
+
+  # ============================================================================
+  # Catalog of Published Stations (#333, spec #326)
+  # ============================================================================
+
+  @doc """
+  Lists published stations for the catalog API (`GET /stations`): `id` (the
+  case number, the catalog identity), `version` (the published version number
+  of that case), `slug` (the `[ESTAÇÃO]` id, display only, may repeat across
+  cases), `area`, `theme`, and public `actors` (`id`, `role`, `name`, `age`,
+  `voice`). Only the latest approved version of each case is listed, ordered by
+  case number ascending.
+
+  Examiner-only data (`fact_ids`, `mandatory_question_ids`, `presenting_context`,
+  `persona`, `tone`) is stripped. Only approved cases appear; disapproved or
+  pending ones are hidden.
+  """
+  @spec list_catalog_stations() :: [map()]
+  def list_catalog_stations do
+    Backend.Content.list_published_stations()
+    |> Enum.map(&to_catalog_station/1)
+  end
+
+  defp to_catalog_station(version) do
+    %{
+      "id" => version.case.number,
+      "version" => version.version_number,
+      "slug" => version.station_id,
+      "area" => version.area,
+      "theme" => version.theme,
+      "actors" => catalog_actors(version.package["actors"] || [])
+    }
+  end
+
+  defp catalog_actors(actors) do
+    Enum.map(actors, fn actor ->
+      %{
+        "id" => actor["id"],
+        "role" => actor["role"],
+        "name" => actor["name"],
+        "age" => actor["age"],
+        "voice" => actor["voice"]
+      }
+    end)
+  end
+
+  @doc """
+  The Pre-Station Notice shown before a station (ADR-003 #36, issue #334): the
+  pt-BR `title`, `body`, `educational_disclaimer` and `audio_consent` texts and
+  `providers`, every active provider with its roles. See
+  `Backend.Stations.PreStationNotice`.
+  """
+  @spec pre_station_notice() :: map()
+  defdelegate pre_station_notice, to: Backend.Stations.PreStationNotice, as: :build
 
   # ============================================================================
   # Session Lifecycle
@@ -90,6 +162,227 @@ defmodule Backend.Stations do
       |> Map.put_new(:station_version, package["version"])
 
     Conversation.start(merged_attrs)
+  end
+
+  @doc """
+  Starts a session on a published Station version from the database (issue
+  #334, ADR-013 amendment on #209).
+
+  `selection` is `{:station, number}` (the catalog id, which is the case
+  number) or `{:random, area}`, where `area` is an `[ÁREA]` or `nil` for any
+  area. The session pins the latest published version at this moment: its
+  validated package is kept with the session, so a later re-publish never
+  changes a session in progress. `attrs` takes `:audio_consent` and
+  `:user_id`, the learner the session belongs to (#337).
+
+  The session's `station_id` is the case number and `station_version` the
+  published version number; `station_slug`, `station_area` and
+  `station_theme` describe that version.
+
+  Returns `{:error, :station_not_found}` when no published station has that
+  number, and `{:error, :no_published_station}` when nothing is published in
+  the area (or at all). A learner (`:user_id`) without an active simulator
+  entitlement gets `{:error, :subscription_required}` (#339).
+
+  A learner who has used their plan's daily quota (#340, see
+  `daily_quota_status/1`) gets `{:error, {:daily_quota_exhausted, resets_at}}`,
+  where `resets_at` is the next local midnight in America/Sao_Paulo. A started
+  session holds one slot until it is graded or expires.
+
+  A node draining for a deploy (`start_draining/0`, #344) answers
+  `{:error, :draining}` before any other check, and a node at its
+  concurrent-session cap (`MAX_CONCURRENT_SESSIONS`, `Backend.Stations.Capacity`)
+  answers `{:error, :capacity_exhausted}`.
+  """
+  @spec start_station_session({:station, integer()} | {:random, String.t() | nil}, map()) ::
+          {:ok, Conversation.session()}
+          | {:error,
+             :draining
+             | :capacity_exhausted
+             | :subscription_required
+             | {:daily_quota_exhausted, DateTime.t()}
+             | :station_not_found
+             | :no_published_station
+             | :invalid_station_package}
+  def start_station_session(selection, attrs \\ %{}) do
+    attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
+
+    with :ok <- admit_new_session(),
+         :ok <- require_entitlement(attrs[:user_id]),
+         {:ok, version} <- published_version(selection),
+         {:ok, package} <- pinned_package(version) do
+      within_daily_quota(attrs[:user_id], fn ->
+        attrs
+        |> Map.take([:audio_consent, :user_id])
+        |> Map.merge(%{
+          station_id: version.case.number,
+          station_version: version.version_number,
+          station_version_id: version.id,
+          station_slug: version.station_id,
+          station_area: version.area,
+          station_theme: version.theme,
+          package: package
+        })
+        |> Conversation.start()
+      end)
+    end
+  end
+
+  # The node-level gates come first (#344): a draining node or a full one
+  # refuses before any entitlement, quota or station work.
+  defp admit_new_session do
+    if Drain.draining?(),
+      do: {:error, :draining},
+      else: Capacity.admit(active_session_count())
+  end
+
+  # ============================================================================
+  # Deploy Drain Gate (#344)
+  # ============================================================================
+
+  @doc """
+  Switches this node to "no new sessions" before a deploy (#344):
+  `start_station_session/2` answers `{:error, :draining}` while running
+  sessions finish. Run by the operator through `bin/drain start`.
+  """
+  @spec start_draining() :: :ok
+  def start_draining do
+    :ok = Drain.start()
+    Logger.info("drain started: new sessions refused, #{active_session_count()} active")
+  end
+
+  @doc "Admits new sessions on this node again (`bin/drain stop`)."
+  @spec resume_sessions() :: :ok
+  def resume_sessions, do: Drain.stop()
+
+  @doc "Whether this node refuses new sessions for a deploy drain."
+  @spec draining?() :: boolean()
+  defdelegate draining?, to: Drain
+
+  @doc "The running sessions of this node: started, not completed, not expired."
+  @spec active_session_count() :: non_neg_integer()
+  defdelegate active_session_count, to: Conversation, as: :active_count
+
+  @doc "The drain state of this node: `draining` and its `active_sessions`."
+  @spec drain_status() :: %{draining: boolean(), active_sessions: non_neg_integer()}
+  def drain_status do
+    %{draining: Drain.draining?(), active_sessions: active_session_count()}
+  end
+
+  @doc """
+  Where a request for `session_id` is served (#344): `{:replay, machine_id}`
+  when the session belongs to another Fly machine, which holds its
+  conversation, otherwise `:local`.
+  """
+  @spec session_placement(String.t()) :: :local | {:replay, String.t()}
+  defdelegate session_placement(session_id), to: Drain, as: :placement
+
+  defp within_daily_quota(nil, start_fun), do: {:ok, start_fun.()}
+
+  defp within_daily_quota(user_id, start_fun) do
+    DailyQuota.reserve(
+      user_id,
+      Backend.Billing.daily_quota(user_id),
+      Backend.Billing.quota_day(),
+      start_fun
+    )
+  end
+
+  @doc """
+  Today's daily quota of the learner `user_id` (#340): `daily_quota`, the
+  plan's quota; `used`, the sessions graded since local midnight in
+  America/Sao_Paulo plus the sessions in flight; `remaining`, never below
+  zero; and `resets_at`, the next local midnight. A technical failure is
+  never graded, so it stops counting when its session expires.
+  """
+  @spec daily_quota_status(pos_integer()) :: %{
+          daily_quota: non_neg_integer(),
+          used: non_neg_integer(),
+          remaining: non_neg_integer(),
+          resets_at: DateTime.t()
+        }
+  def daily_quota_status(user_id) when is_integer(user_id) do
+    quota = Backend.Billing.daily_quota(user_id)
+    day = Backend.Billing.quota_day()
+    used = DailyQuota.used(user_id, day)
+
+    %{daily_quota: quota, used: used, remaining: max(quota - used, 0), resets_at: day.resets_at}
+  end
+
+  defp require_entitlement(nil), do: :ok
+
+  defp require_entitlement(user_id) do
+    if Backend.Billing.entitled?(user_id), do: :ok, else: {:error, :subscription_required}
+  end
+
+  defp published_version({:station, number}) when is_integer(number) do
+    case Backend.Content.get_published_station(number) do
+      nil -> {:error, :station_not_found}
+      version -> {:ok, version}
+    end
+  end
+
+  defp published_version({:random, area}) when is_binary(area) or is_nil(area) do
+    case Backend.Content.random_published_station(area) do
+      nil -> {:error, :no_published_station}
+      version -> {:ok, version}
+    end
+  end
+
+  # The stored package passed the case format parser at approval; validating it
+  # again yields the same runtime shape the file loader serves after decoding.
+  defp pinned_package(version) do
+    case StationPackage.validate(version.package) do
+      {:ok, package} ->
+        {:ok, package}
+
+      {:error, _errors} ->
+        Logger.error("[Stations] invalid published package station_version_id=#{version.id}")
+        {:error, :invalid_station_package}
+    end
+  end
+
+  @doc """
+  The learner-facing station of a session started on a published version
+  (issue #334): the catalog fields (`id`, `version`, `slug`, `area`, `theme`,
+  public `actors`) plus `display_title`, `language` and the `candidate_brief`
+  projected to its `scenario` and `tasks`. `nil` for a session started on the
+  deprecated active station. Nothing examiner-only is included.
+  """
+  @spec session_station(Conversation.session()) :: map() | nil
+  def session_station(%{package: package} = session) when is_map(package) do
+    %{
+      "id" => session.station_id,
+      "version" => session.station_version,
+      "slug" => session.station_slug,
+      "area" => session.station_area,
+      "theme" => session.station_theme,
+      "display_title" => package["display_title"],
+      "language" => package["language"],
+      "candidate_brief" => Map.take(package["candidate_brief"] || %{}, ["scenario", "tasks"]),
+      "actors" => catalog_actors(package["actors"] || [])
+    }
+  end
+
+  def session_station(_legacy_session), do: nil
+
+  # The package a session plays: the version it pinned (issue #334), or, for
+  # a session started on the deprecated active station, the file loader's.
+  defp session_package(%{package: package}) when is_map(package), do: package
+  defp session_package(_legacy_session), do: get_active_package()
+
+  @doc """
+  Returns false when the session exists and belongs to another learner than
+  `user_id` (#337), including a session started without a learner on the
+  deprecated active station. An unknown or expired session returns true, so
+  the caller answers with its usual not-found or expired error.
+  """
+  @spec session_accessible_by?(String.t(), pos_integer()) :: boolean()
+  def session_accessible_by?(session_id, user_id) when is_binary(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, session} -> Map.get(session, :user_id) == user_id
+      {:error, _reason} -> true
+    end
   end
 
   @doc """
@@ -137,6 +430,7 @@ defmodule Backend.Stations do
 
       {:ok, %{status: :completed} = session} ->
         cleanup_voice_room(session_id)
+        :ok = Usage.Store.persist(session)
         {:ok, session}
 
       {:error, reason} ->
@@ -152,6 +446,8 @@ defmodule Backend.Stations do
     case Conversation.complete(session_id, reason) do
       {:ok, session} ->
         cleanup_voice_room(session_id)
+        # The finished session's usage row (issue #342).
+        :ok = Usage.Store.persist(session)
         {:ok, session}
 
       {:error, reason} ->
@@ -179,15 +475,26 @@ defmodule Backend.Stations do
   Jev. It is never truncated.
 
   The patient generation decides who the turn is addressed to (#274, #309,
-  `docs/design/turn-addressee.md`): its reply starts with `[PACIENTE]` or
+  `docs/design/turn-addressee.md`): its reply starts with `[PACIENTE]`,
+  `[EXAMINADOR:EXAME]` (an exam request to the examiner, #351) or
   `[EXAMINADOR]`, stripped before anything else reads the text. A turn naming
   an authored impresso is examiner-addressed without any generation. An
   examiner-addressed turn is kept without a patient reply, nothing is verified,
   and the result is `{:ok, %{outcome: :examiner_acknowledged, learner_turn:
-  message, reply_text: nil, newly_released: impressos}}`, where `impressos` are
-  those the turn released by naming an authored impresso (#302), empty
-  otherwise. A missing or unknown marker is patient-addressed (and logged), and
-  the turn continues as below; its result carries `outcome: :patient_reply`.
+  message, reply_text: nil, newly_released: [], exam_request: boolean}}`.
+  A dialogue turn never releases an impresso nor records an impresso request
+  (#351): only `request_impresso/2` does, so `newly_released` is always empty.
+  `exam_request` is `true` when the turn names an authored impresso or the
+  generation marked it `[EXAMINADOR:EXAME]`; it is display-only (a client may
+  point the learner to the exam button) and is never graded. A missing or
+  unknown marker is patient-addressed (and logged), and the turn continues as
+  below; its result carries `outcome: :patient_reply` and no `exam_request`.
+
+  In a station with a companion (#341) the reply may start with
+  `[ACOMPANHANTE]`: the companion answers, checked against its own profile and
+  facts (`Backend.Stations.Actors.speaker_package/2`). The result and the stored
+  patient message then carry `speaker: :patient | :companion`; a single-actor
+  station's carry none.
 
   Encapsulates:
     1. Appending the learner's message to the session conversation.
@@ -215,7 +522,10 @@ defmodule Backend.Stations do
              | :message_too_long
              | {:refused, :low_confidence | :semantic_refusal, Conversation.message()}
              | term()}
-  def create_message(session_id, params) do
+  def create_message(session_id, params),
+    do: Usage.track(session_id, fn -> do_create_message(session_id, params) end)
+
+  defp do_create_message(session_id, params) do
     role = Map.get(params, :role) || Map.get(params, "role") || :learner
     modality = normalize_modality(Map.get(params, :modality) || Map.get(params, "modality"))
     text = Map.get(params, :text) || Map.get(params, "text")
@@ -227,8 +537,8 @@ defmodule Backend.Stations do
     }
 
     with :ok <- validate_learner_message_length(text),
-         {:ok, _session, token} <- Conversation.begin_turn(session_id, learner_message) do
-      generate_and_resolve_turn(session_id, token, params)
+         {:ok, session, token} <- Conversation.begin_turn(session_id, learner_message) do
+      generate_and_resolve_turn(session_id, session_package(session), token, params)
     end
   end
 
@@ -255,12 +565,12 @@ defmodule Backend.Stations do
   # An exam request that names an authored impresso is examiner-addressed
   # without asking the model (#309); any other turn is decided by the marker
   # the patient generation starts with.
-  defp generate_and_resolve_turn(session_id, token, params) do
+  defp generate_and_resolve_turn(session_id, package, token, params) do
     started_at = JevDecision.monotonic_now_ms()
 
-    if impresso_request?(Map.get(params, :text) || Map.get(params, "text")) do
+    if impresso_request?(package, Map.get(params, :text) || Map.get(params, "text")) do
       log_turn_addressee(:examiner, :impresso, :text, started_at)
-      acknowledge_examiner_turn(session_id, token)
+      acknowledge_examiner_turn(session_id, token, true)
     else
       generate_patient_turn(session_id, token, params, started_at)
     end
@@ -268,9 +578,9 @@ defmodule Backend.Stations do
 
   # An examiner-addressed turn (#274) is real rubric evidence, stored exactly as
   # a refused patient-addressed turn is (#235): the learner message, no reply.
-  # Nothing is generated or verified. An exam request in it releases the
-  # matching impressos (#302), returned as `newly_released`.
-  defp acknowledge_examiner_turn(session_id, token) do
+  # Nothing is generated, verified or released (#351): an exam request in it
+  # only sets the display-only `exam_request` flag.
+  defp acknowledge_examiner_turn(session_id, token, exam_request) do
     case Conversation.resolve_turn(session_id, token, :keep_learner_turn) do
       {:ok, session} ->
         learner_turn = List.last(session.messages)
@@ -282,7 +592,8 @@ defmodule Backend.Stations do
            reply_audio_url: nil,
            used_facts: [],
            learner_turn: learner_turn,
-           newly_released: release_requested_impressos(session_id, learner_turn.text, %{})
+           newly_released: [],
+           exam_request: exam_request
          }}
 
       {:error, reason} ->
@@ -290,42 +601,30 @@ defmodule Backend.Stations do
     end
   end
 
-  # An examiner-addressed turn that names at least one authored impresso is an
-  # impresso request (#302): it goes through `request_impresso/2`, so the
-  # release and its rubric event are those of a modal request. A remark that
-  # matches nothing records nothing, unlike an unavailable modal request.
-  # `params` may carry a stable `request_id` for an idempotent retry.
-  # Returns the newly released impressos; a failure releases nothing.
-  defp release_requested_impressos(session_id, text, params) when is_binary(text) do
-    package = get_active_package()
-
-    with [_ | _] <- Impressos.match(package["impressos"] || [], Impressos.normalize(text)),
-         {:ok, %{newly_released: newly_released}} <-
-           request_impresso(session_id, Map.put(params, :text, text)) do
-      newly_released
-    else
-      _nothing_released -> []
-    end
-  end
-
-  defp release_requested_impressos(_session_id, _text, _params), do: []
-
   # Whether the learner text names an authored impresso (#302, #305), which
-  # makes the turn an exam request to the examiner (#309).
-  defp impresso_request?(text) when is_binary(text) do
-    package = get_active_package()
+  # makes the turn an exam request to the examiner (#309, #351). It only
+  # decides the addressee and the `exam_request` flag; nothing is released.
+  defp impresso_request?(package, text) when is_binary(text) do
     Impressos.match(package["impressos"] || [], Impressos.normalize(text)) != []
   end
 
-  defp impresso_request?(_text), do: false
+  defp impresso_request?(_package, _text), do: false
 
   # Splits the addressee decided by the generation's marker (#309) from the
-  # reply, logging it.
-  defp take_addressee(ai_reply, channel, started_at) do
+  # reply, logging it. An examiner turn returns only whether its marker was
+  # the exam marker (#351). In a station with a companion (#341) the reply
+  # keeps its `speaker` (`:patient` or `:companion`), which follows it to
+  # storage, verification and speech; a single-actor reply carries none.
+  defp take_addressee(package, ai_reply, channel, started_at) do
     {addressee, ai_reply} = Map.pop(ai_reply, :addressee, :patient)
     {source, ai_reply} = Map.pop(ai_reply, :addressee_source, :missing_marker)
     log_turn_addressee(addressee, source, channel, started_at)
-    {addressee, ai_reply}
+
+    cond do
+      addressee == :examiner -> {:examiner, %{exam_request: source == :exam_marker}}
+      Actors.companion?(package) -> {addressee, Map.put(ai_reply, :speaker, addressee)}
+      true -> {addressee, ai_reply}
+    end
   end
 
   # One line per learner turn: the addressee, what decided it (`marker`,
@@ -339,16 +638,15 @@ defmodule Backend.Stations do
   end
 
   defp generate_patient_turn(session_id, token, params, started_at) do
-    package = get_active_package()
-
     with {:ok, current_session} <- Conversation.fetch(session_id),
+         package = session_package(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
-      case take_addressee(ai_reply, :text, started_at) do
-        {:examiner, _ai_reply} ->
-          acknowledge_examiner_turn(session_id, token)
+      case take_addressee(package, ai_reply, :text, started_at) do
+        {:examiner, %{exam_request: exam_request}} ->
+          acknowledge_examiner_turn(session_id, token, exam_request)
 
-        {:patient, ai_reply} ->
+        {_speaker, ai_reply} ->
           verify_and_resolve_turn(
             session_id,
             token,
@@ -413,9 +711,14 @@ defmodule Backend.Stations do
     case PatientVerification.check_delivery(candidate_text, package, fn ->
            bounded_regeneration(package, context)
          end) do
-      {:ok, ^candidate_text} -> {:ok, ai_reply}
-      {:ok, text} -> {:ok, %{text: text, used_facts: []}}
-      {:error, reason} -> {:error, reason}
+      {:ok, ^candidate_text} ->
+        {:ok, ai_reply}
+
+      {:ok, text} ->
+        {:ok, ai_reply |> Map.take([:speaker]) |> Map.merge(%{text: text, used_facts: []})}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -432,12 +735,12 @@ defmodule Backend.Stations do
   # last one of `session`, against the conversation it answered.
   defp audit_delivered_reply(session_id, session, package, answered_session) do
     case List.last(session.messages) do
-      %{role: :patient, at: at, text: text} ->
+      %{role: :patient, at: at, text: text} = message ->
         PatientVerification.start_audit(%{
           session_id: session_id,
           message_at: at,
           text: text,
-          package: package,
+          package: speaker_package(package, Map.get(message, :speaker)),
           conversation: answered_session.messages,
           disclosed_fact_ids: Conversation.disclosed_fact_ids(answered_session)
         })
@@ -496,25 +799,33 @@ defmodule Backend.Stations do
        ) do
     verified_text = extract_reply_text(verified_reply)
     used_facts = extract_used_facts(verified_reply)
+    speaker = reply_speaker(verified_reply)
 
-    patient_message = %{
-      role: :patient,
-      modality: :text,
-      text: verified_text,
-      verified_fact_ids: verified_fact_ids
-    }
+    patient_message =
+      put_speaker(
+        %{
+          role: :patient,
+          modality: :text,
+          text: verified_text,
+          verified_fact_ids: verified_fact_ids
+        },
+        speaker
+      )
 
     case Conversation.resolve_turn(session_id, token, {:ok, patient_message}) do
       {:ok, session} ->
         on_commit.(session)
 
         {:ok,
-         %{
-           outcome: :patient_reply,
-           reply_text: verified_text,
-           reply_audio_url: nil,
-           used_facts: used_facts
-         }}
+         put_speaker(
+           %{
+             outcome: :patient_reply,
+             reply_text: verified_text,
+             reply_audio_url: nil,
+             used_facts: used_facts
+           },
+           speaker
+         )}
 
       {:error, :station_time_elapsed} ->
         {:error, :station_time_elapsed}
@@ -557,7 +868,7 @@ defmodule Backend.Stations do
   def get_session_result(session_id) do
     case Conversation.fetch(session_id) do
       {:ok, %{status: :completed} = session} ->
-        package = get_active_package()
+        package = session_package(session)
         evaluation = Evaluator.evaluate(package, session)
 
         criteria =
@@ -617,9 +928,11 @@ defmodule Backend.Stations do
              | :expired
              | {:invalid_attempt, RubricAssessment.attempt_error()}}
   def assess_session(session_id, opts \\ []) do
-    with {:ok, session} <- fetch_completed_session(session_id) do
-      RubricAssessment.assess(get_active_package(), session, opts)
-    end
+    Usage.track(session_id, fn ->
+      with {:ok, session} <- fetch_completed_session(session_id) do
+        RubricAssessment.assess(session_package(session), session, opts)
+      end
+    end)
   end
 
   @doc """
@@ -637,15 +950,82 @@ defmodule Backend.Stations do
   (issue #215), cached with the session and bound to the graded outcome. Any
   feedback failure keeps the authored `practice_recommendation`; grading is
   never changed.
+
+  The first result served for a learner's session is stored in the learner's
+  results history (#338, `Backend.Stations.Results.History`); a technical
+  failure stores nothing.
   """
   @spec get_educational_result(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_educational_result(session_id, opts \\ []) do
-    with {:ok, assessment} <- graded_assessment(session_id, opts) do
-      package = get_active_package()
-      assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
-      {:ok, Backend.Stations.EducationalResult.serialize(session_id, assessment, package)}
+    Usage.track(session_id, fn ->
+      with {:ok, assessment} <- graded_assessment(session_id, opts),
+           {:ok, session} <- Conversation.fetch(session_id) do
+        package = session_package(session)
+        assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
+        result = Backend.Stations.EducationalResult.serialize(session_id, assessment, package)
+        # History first (#338), then usage (#342): neither fails the result.
+        :ok = ResultHistory.record(session, result)
+        # Grading and feedback may have called providers after the finish (#342).
+        persist_usage(session_id)
+        {:ok, result}
+      end
+    end)
+  end
+
+  @doc """
+  The learner's results history, newest first (#338): `results` summaries
+  (`id`, `session_id`, `finished_at`, `station`), `page`, `page_size`,
+  `has_more` and the pt-BR `educational_disclaimer`. Options `:area`, `:page`
+  and `:page_size`. No aggregate across sessions is computed.
+  """
+  @spec list_results(pos_integer(), keyword()) :: map()
+  defdelegate list_results(user_id, opts \\ []), to: ResultHistory, as: :list
+
+  @doc """
+  One stored result of the learner (#338): the summary fields plus `result`,
+  the Educational Result served at the end of the session. Another learner's
+  result is `{:error, :not_found}`.
+  """
+  @spec get_result(pos_integer(), term()) :: {:ok, map()} | {:error, :not_found}
+  defdelegate get_result(user_id, id), to: ResultHistory, as: :get
+
+  @doc """
+  Records the audio usage the voice worker reports for a session (issue #342;
+  audio never passes through Phoenix, ADR-013 #209): `report_id` (the worker
+  job), `deepgram_audio_seconds`, `cartesia_characters` and
+  `livekit_participant_minutes`, cumulative per job (see
+  `Backend.Stations.Usage.voice_report/1`). An active or finished session
+  accepts it; a finished session's usage row is rewritten with it.
+  """
+  @spec record_voice_usage(String.t(), map()) ::
+          :ok | {:error, :invalid_usage | :not_found | :expired}
+  def record_voice_usage(session_id, params) when is_map(params) do
+    with {:ok, report_id, voice} <- Usage.voice_report(params),
+         {:ok, session} <- Conversation.fetch(session_id) do
+      :ok = Usage.record_voice(session_id, report_id, voice)
+      Usage.Store.persist(session)
     end
   end
+
+  defp persist_usage(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, session} -> Usage.Store.persist(session)
+      {:error, _reason} -> :ok
+    end
+  end
+
+  # ============================================================================
+  # Usage and cost (issue #342)
+  # ============================================================================
+
+  @doc """
+  The estimated cost of the sessions finished in `[from, to)`, per station
+  (issue #342): for each `station_id`, the number of `sessions`, the
+  `median_cost_usd` and the `total_cost_usd`, ordered by station id. Rows
+  are content-free (`Backend.Stations.Usage.SessionUsage`).
+  """
+  @spec session_cost_report(DateTime.t(), DateTime.t()) :: [map()]
+  defdelegate session_cost_report(from, to), to: Usage.Store, as: :cost_report
 
   defp graded_assessment(session_id, opts) do
     with {:ok, _session} <- fetch_completed_session(session_id) do
@@ -697,6 +1077,19 @@ defmodule Backend.Stations do
   @doc "Renders a qualification summary as a label-level plain-text report."
   @spec render_qualification(Qualification.summary()) :: String.t()
   def render_qualification(summary), do: Qualification.render(summary)
+
+  # ============================================================================
+  # Case format (#330)
+  # ============================================================================
+
+  @doc """
+  Parses a case written in the tagged Markdown case format into a Station
+  Package, or into the format errors located at a line of the case.
+
+  Pure and deterministic: no LLM, no database. See `docs/case-format/README.md`.
+  """
+  @spec parse_case(String.t()) :: {:ok, map()} | {:error, [CaseFormat.error()]}
+  def parse_case(text), do: CaseFormat.parse(text)
 
   # ============================================================================
   # Audio & Speech Operations
@@ -782,30 +1175,178 @@ defmodule Backend.Stations do
   feedback_message}}`, where `decision` is `"released"`, `"already_released"`,
   or `"unavailable"`.
 
+  An `"unavailable"` request (the matcher found no authored impresso) is
+  answered as the Revalida examiner does (#357). Jev classifies whether the
+  exam makes clinical sense for the case (`JevDecision.decide_impresso_request/2`,
+  bounded by its own deadline, 2,000 ms by default, and metered as a Jev call
+  of the session) and code maps the label to a fixed text; the model never
+  writes what the learner reads:
+
+    * `plausible` → `"Considere solicitado."`;
+    * anything else → `"Não consta no script."`: `not_plausible`, `undecided`,
+      a timeout, a technical failure, or the disabled adapter (the default).
+
+  Either way nothing is released and nothing is graded: the classification is
+  stored on the request's `impresso_requests` event and the rubric ignores it.
+  Jev is asked only for a new `request_id` on an active session; a retried
+  `request_id` returns its stored event, so it gets the same text without a
+  second Jev call. `"released"` and `"already_released"` never ask Jev.
+
   Stable extension point for Ticket 12 / ADR-008 (#105, #107).
   """
   @spec request_impresso(String.t(), map()) ::
           {:ok, map()}
           | {:error, :not_found | :expired | :completed | :invalid_request | :message_too_long}
-  def request_impresso(session_id, request_params) do
+  def request_impresso(session_id, request_params),
+    do: Usage.track(session_id, fn -> do_request_impresso(session_id, request_params) end)
+
+  defp do_request_impresso(session_id, request_params) do
     text = get_param(request_params, :text)
 
     # The request text enters the rubric evidence pool, so it shares the
     # learner message limit and is rejected (never truncated) before recording.
     with :ok <- validate_impresso_text(text),
-         :ok <- validate_learner_message_length(text) do
-      package = get_active_package()
+         :ok <- validate_learner_message_length(text),
+         {:ok, session} <- Conversation.fetch(session_id) do
+      package = session_package(session)
       normalized_text = Impressos.normalize(text)
       matched_ids = Impressos.match(package["impressos"] || [], normalized_text)
       request_id = resolve_request_id(request_params)
 
-      case Conversation.record_impresso_request(session_id, request_id, matched_ids, text) do
+      record_opts =
+        unavailable_request_opts(session, request_id, matched_ids, text, package)
+
+      case Conversation.record_impresso_request(
+             session_id,
+             request_id,
+             matched_ids,
+             text,
+             record_opts
+           ) do
         {:ok, %{event: event, session: session}} ->
           {:ok, build_impresso_response(package, event, session)}
 
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  # Only a new request that matched nothing, on an active session, asks Jev
+  # (#357). A retried request_id returns its stored event, so it is not asked
+  # again; any Jev failure is stored as :unclassified.
+  defp unavailable_request_opts(%{status: :active} = session, request_id, [], text, package) do
+    if Enum.any?(session.impresso_requests, &(&1.request_id == request_id)) do
+      []
+    else
+      [classification: classify_unavailable_request(text, package)]
+    end
+  end
+
+  defp unavailable_request_opts(_session, _request_id, _matched_ids, _text, _package), do: []
+
+  defp classify_unavailable_request(text, package) do
+    case JevDecision.decide_impresso_request(%{text: text, package: package}) do
+      {:ok, %{classification: classification}}
+      when classification in [:plausible, :not_plausible, :undecided] ->
+        classification
+
+      _failure ->
+        :unclassified
+    end
+  end
+
+  @doc """
+  Arms the exam mode for the learner's next utterance (#364): the learner
+  pressed the exam button and will say the request aloud.
+
+  While armed, the next fresh voice turn (`process_voice_turn/3` or
+  `stream_voice_turn/5`) is not a dialogue turn: its text goes to
+  `request_impresso/2` with request id `voice-exam-<turn_id>`, no learner
+  message is recorded and no patient generation runs, now or later. The mode
+  disarms after that one utterance, at `expires_at`
+  (`:exam_mode_ttl_ms`, default 20 000 ms) or on `cancel_exam_mode/1`.
+  Arming again replaces an earlier mode and restarts its expiry.
+
+  Needs an active session with audio consent: a typed request goes to
+  `request_impresso/2` directly.
+  """
+  @spec arm_exam_mode(String.t()) ::
+          {:ok, %{expires_at: DateTime.t()}}
+          | {:error, :not_found | :expired | :completed | :no_consent}
+  def arm_exam_mode(session_id) do
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_active(session),
+         :ok <- ensure_audio_consent(session) do
+      expires_at = DateTime.add(DateTime.utc_now(), exam_mode_ttl_ms(), :millisecond)
+      :ok = ExamMode.arm(session_id, expires_at)
+      {:ok, %{expires_at: expires_at}}
+    end
+  end
+
+  @doc """
+  Disarms the exam mode (#364), e.g. when the learner closes the exam prompt
+  without speaking. Idempotent: `:ok` also when nothing was armed.
+  """
+  @spec cancel_exam_mode(String.t()) :: :ok | {:error, :not_found | :expired}
+  def cancel_exam_mode(session_id) do
+    with {:ok, _session} <- Conversation.fetch(session_id) do
+      ExamMode.disarm(session_id)
+    end
+  end
+
+  defp exam_mode_ttl_ms, do: Application.get_env(:backend, :exam_mode_ttl_ms, 20_000)
+
+  # The exam mode (#364) decides whether a voice turn is a spoken impresso
+  # request. `:dialogue` lets the turn go on as a dialogue turn.
+  defp exam_mode_turn(session_id, turn_id, text) do
+    text = String.trim(text)
+
+    cond do
+      text == "" -> :dialogue
+      ExamMode.consumed_by?(session_id, turn_id) -> request_spoken_exam(session_id, turn_id, text)
+      ExamMode.armed?(session_id) -> consume_exam_mode(session_id, turn_id, text)
+      true -> :dialogue
+    end
+  end
+
+  # Only a fresh turn consumes the mode: a retry or a stale turn stays a
+  # dialogue turn, which answers it as before.
+  defp consume_exam_mode(session_id, turn_id, text) do
+    now = DateTime.utc_now()
+
+    with {:ok, session} <- Conversation.fetch(session_id),
+         :ok <- ensure_voice_turn_open(session),
+         :ok <- ensure_audio_consent(session),
+         true <- fresh_voice_turn?(session, turn_id, now),
+         :ok <- ExamMode.consume(session_id, turn_id, now) do
+      # Fence the turn id as a turn-only cancel does, so the worker's cursor and
+      # `turn_id_floor` move past it although no learner message is recorded.
+      _fenced = Conversation.cancel_voice_turn(session_id, turn_id: turn_id)
+      request_spoken_exam(session_id, turn_id, text)
+    else
+      _not_an_exam_turn -> :dialogue
+    end
+  end
+
+  defp fresh_voice_turn?(session, turn_id, now) do
+    turn_id > Map.get(session, :last_voice_turn_id, 0) and
+      turn_id > Map.get(session, :cancelled_voice_turn_id, 0) and
+      DateTime.compare(now, session.deadline_at) == :lt
+  end
+
+  # The same request route as the exam button's typed request; the stable
+  # request id makes a retry of the turn idempotent.
+  defp request_spoken_exam(session_id, turn_id, text) do
+    case request_impresso(session_id, %{"text" => text, "request_id" => "voice-exam-#{turn_id}"}) do
+      {:ok, result} ->
+        {:ok, {:impresso, Map.put(result, :turn_id, turn_id)}}
+
+      {:error, reason} when reason in [:invalid_request, :message_too_long] ->
+        {:error, :invalid_transcript}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -819,7 +1360,7 @@ defmodule Backend.Stations do
   def list_impressos(session_id) do
     case Conversation.fetch(session_id) do
       {:ok, session} ->
-        package = get_active_package()
+        package = session_package(session)
 
         {:ok,
          %{
@@ -897,7 +1438,7 @@ defmodule Backend.Stations do
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_active(session),
          :ok <- ensure_audio_consent(session) do
-      package = get_active_package()
+      package = session_package(session)
 
       {:ok,
        %{
@@ -969,6 +1510,12 @@ defmodule Backend.Stations do
        verified or spoken, as
        `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
        A missing marker continues as patient-addressed.
+    4b. While the exam mode is armed (`arm_exam_mode/1`, #364) a fresh turn
+       is none of the above: its text goes to `request_impresso/2` with request
+       id `voice-exam-<turn_id>`, no learner turn is recorded, no generation
+       runs, and the result is `{:ok, {:impresso, %{turn_id: turn_id,
+       request_id, decision, released_impressos, newly_released,
+       feedback_message}}}`. A retry of that turn replays the same result.
     7. Failing closed on technical failures: a reply that is denied, unverifiable,
        or left without usable text fails the generation as
        `:station_ai_unavailable` and commits no patient content.
@@ -1003,6 +1550,7 @@ defmodule Backend.Stations do
                 refusal: :low_confidence | :semantic_refusal | :unspeakable | :examiner_addressed,
                 addressee: :examiner | :patient
               }}}
+          | {:ok, {:impresso, map()}}
           | {:ok, :duplicate}
           | {:error,
              :not_found
@@ -1016,6 +1564,16 @@ defmodule Backend.Stations do
              | term()}
   def process_voice_turn(session_id, turn_id, text)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
+    Usage.track(session_id, fn ->
+      with :dialogue <- exam_mode_turn(session_id, turn_id, text) do
+        process_dialogue_voice_turn(session_id, turn_id, text)
+      end
+    end)
+  end
+
+  def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
+
+  defp process_dialogue_voice_turn(session_id, turn_id, text) do
     case admit_voice_turn(session_id, turn_id, text) do
       {:ok, generation_id, learner_text} ->
         process_voice_reply(session_id, turn_id, generation_id, learner_text)
@@ -1024,8 +1582,6 @@ defmodule Backend.Stations do
         other
     end
   end
-
-  def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
 
   @typedoc "One verified sentence handed to the voice worker (#271)."
   @type voice_sentence ::
@@ -1078,6 +1634,11 @@ defmodule Backend.Stations do
   examiner-addressed turn hands nothing over, stores nothing of the generation
   and is kept as `{:kept, %{refusal: :examiner_addressed, addressee: :examiner}}`.
 
+  In a station with a companion (#341) every sentence event also carries
+  `speaker` (`"patient"` or `"companion"`) and `voice`, the speaker's voice key
+  (`voz=`), and the stored reply its `speaker`; a single-actor station's
+  events are unchanged.
+
   Returns `{result, acc}`, where `result` has the shape of
   `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
   joined by a space. Each sentence logs its generation and verification
@@ -1094,6 +1655,18 @@ defmodule Backend.Stations do
   def stream_voice_turn(session_id, turn_id, text, acc, sink)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) and
              is_function(sink, 2) do
+    Usage.track(session_id, fn ->
+      case exam_mode_turn(session_id, turn_id, text) do
+        :dialogue -> stream_dialogue_voice_turn(session_id, turn_id, text, acc, sink)
+        exam_result -> {exam_result, acc}
+      end
+    end)
+  end
+
+  def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink),
+    do: {{:error, :invalid_transcript}, acc}
+
+  defp stream_dialogue_voice_turn(session_id, turn_id, text, acc, sink) do
     case admit_voice_turn(session_id, turn_id, text) do
       {:ok, generation_id, learner_text} ->
         stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
@@ -1102,9 +1675,6 @@ defmodule Backend.Stations do
         {other, acc}
     end
   end
-
-  def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink),
-    do: {{:error, :invalid_transcript}, acc}
 
   @doc """
   Explicitly cancels a pending voice turn generation (#119).
@@ -1180,6 +1750,7 @@ defmodule Backend.Stations do
   # `verify_patient_reply/3` plus the authored ids of the facts the verdict that
   # verified the delivered text found stated (issue #286).
   defp verify_candidate(package, reply, opts) do
+    package = speaker_package(package, reply_speaker(reply))
     candidate_text = extract_reply_text(reply)
     conversation = Keyword.get(opts, :conversation, [])
 
@@ -1233,7 +1804,7 @@ defmodule Backend.Stations do
       MediaSession.clear_rate_limit(session_id)
     end
 
-    :ok
+    ExamMode.disarm(session_id)
   end
 
   defp ensure_active(%{status: :active}), do: :ok
@@ -1254,11 +1825,11 @@ defmodule Backend.Stations do
          :ok <- ensure_voice_turn_open(session) do
       started_at = JevDecision.monotonic_now_ms()
 
-      if impresso_request?(learner_text) do
+      if impresso_request?(session_package(session), learner_text) do
         log_turn_addressee(:examiner, :impresso, :voice, started_at)
-        keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+        keep_examiner_voice_turn(session_id, turn_id, generation_id, true)
       else
-        generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at)
+        generate_voice_reply(session_id, turn_id, generation_id, started_at)
       end
     else
       {:error, reason} -> fail_voice_reply(session_id, generation_id, reason)
@@ -1266,37 +1837,29 @@ defmodule Backend.Stations do
   end
 
   # An examiner-addressed voice turn (#274) is kept like a refused one, with
-  # nothing generated, verified or spoken. An exam request in it releases the
-  # matching impressos (#302); the web learns of them by listing impressos
-  # after the examiner acknowledgement. The release reads the turn's own
-  # admitted text, never the latest learner message: another learner turn may
-  # have landed while this one was being classified.
-  defp keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text) do
+  # nothing generated, verified, spoken or released (#351). Its receipt carries
+  # the display-only `exam_request` flag.
+  defp keep_examiner_voice_turn(session_id, turn_id, generation_id, exam_request) do
     case keep_voice_turn(session_id, turn_id, generation_id, :examiner_addressed, :examiner) do
-      {:ok, kept} ->
-        release_requested_impressos(session_id, learner_text, %{
-          request_id: "voice-turn-#{turn_id}"
-        })
-
-        {:ok, kept}
+      {:ok, {:kept, kept}} ->
+        {:ok, {:kept, Map.put(kept, :exam_request, exam_request)}}
 
       {:error, reason} ->
         fail_voice_reply(session_id, generation_id, reason)
     end
   end
 
-  defp generate_voice_reply(session_id, turn_id, generation_id, learner_text, started_at) do
-    package = get_active_package()
-
+  defp generate_voice_reply(session_id, turn_id, generation_id, started_at) do
     with {:ok, current_session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(current_session),
+         package = session_package(current_session),
          context = format_context(current_session, package),
          {:ok, ai_reply} <- generate_patient_reply(package, context) do
-      case take_addressee(ai_reply, :voice, started_at) do
-        {:examiner, _ai_reply} ->
-          keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text)
+      case take_addressee(package, ai_reply, :voice, started_at) do
+        {:examiner, %{exam_request: exam_request}} ->
+          keep_examiner_voice_turn(session_id, turn_id, generation_id, exam_request)
 
-        {:patient, ai_reply} ->
+        {_speaker, ai_reply} ->
           deliver_voice_reply(
             package,
             current_session,
@@ -1382,13 +1945,13 @@ defmodule Backend.Stations do
 
     with {:ok, session} <- Conversation.fetch(session_id),
          :ok <- ensure_voice_turn_open(session) do
-      if impresso_request?(learner_text) do
+      if impresso_request?(session_package(session), learner_text) do
         log_turn_addressee(:examiner, :impresso, :voice, started_at)
-        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, true), acc}
       else
         stream_marked_voice_reply(
           session,
-          {turn_id, generation_id, learner_text},
+          {turn_id, generation_id},
           started_at,
           acc,
           sink
@@ -1404,12 +1967,12 @@ defmodule Backend.Stations do
   # before anything of the generation is verified, handed over or stored.
   defp stream_marked_voice_reply(
          %{session_id: session_id} = session,
-         {turn_id, generation_id, learner_text},
+         {turn_id, generation_id},
          started_at,
          acc,
          sink
        ) do
-    package = get_active_package()
+    package = session_package(session)
     context = format_context(session, package)
     mode = PatientVerification.mode()
     parent = self()
@@ -1420,12 +1983,14 @@ defmodule Backend.Stations do
       SentenceStream.run(
         gate: fn -> marker_gate(marker, started_at) end,
         generate: &stream_patient_reply(package, context, &1, on_addressee),
-        verify: &verify_voice_sentence(mode, package, session, context, &1, &2),
+        verify: fn candidate, index ->
+          speaker_view = speaker_package(package, streamed_speaker(package, marker))
+          verify_voice_sentence(mode, {speaker_view, package}, session, context, candidate, index)
+        end,
         deliver: fn sentence, index, acc ->
           deliver_voice_sentence(
             session_id,
-            turn_id,
-            generation_id,
+            {turn_id, generation_id, sentence_label(package, marker)},
             {sentence, index},
             acc,
             sink
@@ -1434,17 +1999,18 @@ defmodule Backend.Stations do
         acc: acc
       )
 
+    speaker = streamed_speaker(package, marker)
+    exam_request = Process.get({marker, :exam_request}, false)
     flush_marker(marker)
 
     case outcome do
       {:closed, :examiner_addressed} ->
-        {keep_examiner_voice_turn(session_id, turn_id, generation_id, learner_text), acc}
+        {keep_examiner_voice_turn(session_id, turn_id, generation_id, exam_request), acc}
 
       outcome ->
         {resolve_streamed_reply(
            session_id,
-           turn_id,
-           generation_id,
+           {turn_id, generation_id, speaker},
            outcome,
            {delivered, fact_ids},
            fn stored -> audit_delivered_reply(session_id, stored, package, session) end
@@ -1464,11 +2030,16 @@ defmodule Backend.Stations do
       end
 
     log_turn_addressee(addressee, source, :voice, started_at)
+    Process.put({marker, :speaker}, addressee)
+    Process.put({marker, :exam_request}, source == :exam_marker)
     if addressee == :examiner, do: {:closed, :examiner_addressed}, else: :open
   end
 
   # A decision sent after the gate (a generation that timed out) is dropped.
   defp flush_marker(marker) do
+    Process.delete({marker, :speaker})
+    Process.delete({marker, :exam_request})
+
     receive do
       {^marker, _addressee, _source} -> :ok
     after
@@ -1476,31 +2047,53 @@ defmodule Backend.Stations do
     end
   end
 
+  # The speaker the gate decided (#341), kept in this process until
+  # `flush_marker/1`; `nil` in a single-actor station.
+  defp streamed_speaker(package, marker) do
+    if Actors.companion?(package) do
+      case Process.get({marker, :speaker}, :patient) do
+        :companion -> :companion
+        _patient -> :patient
+      end
+    end
+  end
+
+  # What a streamed sentence of a station with a companion adds to its event:
+  # the `speaker` and its `voice` key (#341). Nothing in a single-actor station.
+  defp sentence_label(package, marker) do
+    case streamed_speaker(package, marker) do
+      nil -> %{}
+      speaker -> %{speaker: Atom.to_string(speaker), voice: Actors.voice(package, speaker)}
+    end
+  end
+
   # The gate's single regeneration is allowed only for the first sentence,
   # when nothing has been spoken yet. Outside `blocking` (#307) a sentence is
   # checked by BoundedReply only, with the same single regeneration rule.
-  defp verify_voice_sentence(:blocking, package, session, context, candidate, index),
-    do: verify_voice_sentence(package, session, context, candidate, index)
+  # A sentence is checked against its speaker's view, but the regeneration is
+  # a whole generation, so it gets the full package (#341), as on text turns.
+  defp verify_voice_sentence(:blocking, packages, session, context, candidate, index),
+    do: verify_voice_sentence(packages, session, context, candidate, index)
 
-  defp verify_voice_sentence(_audit_or_off, package, _session, context, candidate, index) do
+  defp verify_voice_sentence(_audit_or_off, {view, package}, _session, context, candidate, index) do
     regenerate =
       if index == 0,
         do: fn -> bounded_regeneration(package, context) end,
         else: fn -> {:error, :no_regeneration} end
 
-    case PatientVerification.check_delivery(candidate, package, regenerate) do
+    case PatientVerification.check_delivery(candidate, view, regenerate) do
       {:ok, ^candidate} -> {:verified, []}
       {:ok, regenerated} -> {:regenerated, regenerated, []}
       {:error, {:refused, refusal}} -> {:refused, refusal}
     end
   end
 
-  defp verify_voice_sentence(package, session, context, candidate, index) do
+  defp verify_voice_sentence({view, package}, session, context, candidate, index) do
     params = %{deadline_ms: patient_reply_deadline_ms()}
     params = if index > 0, do: Map.put(params, :verify_opts, can_retry?: false), else: params
     opts = build_verify_opts(package, session, context, params)
 
-    case verify_candidate(package, candidate, opts) do
+    case verify_candidate(view, candidate, opts) do
       {:ok, ^candidate, fact_ids} ->
         {:verified, fact_ids}
 
@@ -1516,7 +2109,13 @@ defmodule Backend.Stations do
   end
 
   # A cancelled or superseded turn hands nothing more over.
-  defp deliver_voice_sentence(session_id, turn_id, generation_id, {sentence, index}, acc, sink) do
+  defp deliver_voice_sentence(
+         session_id,
+         {turn_id, generation_id, label},
+         {sentence, index},
+         acc,
+         sink
+       ) do
     case Conversation.active_generation(session_id) do
       {:ok, ^generation_id} ->
         case StageDirections.strip(sentence) do
@@ -1524,7 +2123,14 @@ defmodule Backend.Stations do
             {:cont, acc}
 
           spoken ->
-            event = %{turn_id: turn_id, generation_id: generation_id, index: index, text: spoken}
+            event =
+              Map.merge(label, %{
+                turn_id: turn_id,
+                generation_id: generation_id,
+                index: index,
+                text: spoken
+              })
+
             sink.({:sentence, event}, acc)
         end
 
@@ -1535,8 +2141,7 @@ defmodule Backend.Stations do
 
   defp resolve_streamed_reply(
          session_id,
-         turn_id,
-         generation_id,
+         {turn_id, generation_id, speaker},
          outcome,
          {delivered, fact_ids},
          on_commit
@@ -1555,7 +2160,8 @@ defmodule Backend.Stations do
                  session_id,
                  generation_id,
                  stored_text,
-                 fact_ids
+                 fact_ids,
+                 speaker
                ) do
           on_commit.(stored_session)
 
@@ -1606,6 +2212,7 @@ defmodule Backend.Stations do
          on_commit
        ) do
     verified_text = extract_reply_text(verified_reply)
+    speaker = reply_speaker(verified_reply)
 
     case speakable_text(verified_text) do
       "" ->
@@ -1617,7 +2224,8 @@ defmodule Backend.Stations do
                  session_id,
                  generation_id,
                  verified_text,
-                 verified_fact_ids
+                 verified_fact_ids,
+                 speaker
                ) do
           on_commit.(session)
 
@@ -1627,7 +2235,9 @@ defmodule Backend.Stations do
              turn_id: turn_id,
              generation_id: generation_id,
              used_facts: extract_used_facts(verified_reply)
-           }}
+           }
+           |> put_speaker(speaker)
+           |> put_voice(session_package(session), speaker)}
         end
     end
   end
@@ -1767,6 +2377,20 @@ defmodule Backend.Stations do
     end
   end
 
+  # The speaker of a reply of a station with a companion (#341), else `nil`.
+  defp reply_speaker(%{speaker: speaker}) when speaker in [:patient, :companion], do: speaker
+  defp reply_speaker(_reply), do: nil
+
+  defp put_speaker(map, nil), do: map
+  defp put_speaker(map, speaker), do: Map.put(map, :speaker, speaker)
+
+  defp put_voice(map, _package, nil), do: map
+  defp put_voice(map, package, speaker), do: Map.put(map, :voice, Actors.voice(package, speaker))
+
+  # The package as `speaker` sees it, for verifying or auditing its reply.
+  defp speaker_package(package, nil), do: package
+  defp speaker_package(package, speaker), do: Actors.speaker_package(package, speaker)
+
   defp resolve_station_ai_adapter do
     case Application.get_env(
            :backend,
@@ -1812,7 +2436,7 @@ defmodule Backend.Stations do
   defp stream_patient_reply(package, context, on_text, on_addressee) do
     started_at = JevDecision.monotonic_now_ms()
     adapter = resolve_station_ai_adapter()
-    {filter, finish} = Addressee.stream(on_text, on_addressee)
+    {filter, finish} = Addressee.stream(on_text, on_addressee, Actors.addressee_opts(package))
 
     result =
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :stream_reply, 3) do
@@ -1848,13 +2472,13 @@ defmodule Backend.Stations do
 
     case adapter.next_reply(package, context) do
       {:ok, %{text: text, used_facts: used_facts}} when is_binary(text) and is_list(used_facts) ->
-        {:ok, marked_reply(text, used_facts)}
+        {:ok, marked_reply(package, text, used_facts)}
 
       {:ok, %{text: text}} when is_binary(text) ->
-        {:ok, marked_reply(text, [])}
+        {:ok, marked_reply(package, text, [])}
 
       {:ok, text} when is_binary(text) ->
-        {:ok, marked_reply(text, [])}
+        {:ok, marked_reply(package, text, [])}
 
       {:error, reason} ->
         {:error, reason}
@@ -1875,8 +2499,8 @@ defmodule Backend.Stations do
     end
   end
 
-  defp marked_reply(marked_text, used_facts) do
-    {addressee, source, text} = Addressee.split(marked_text)
+  defp marked_reply(package, marked_text, used_facts) do
+    {addressee, source, text} = Addressee.split(marked_text, Actors.addressee_opts(package))
     %{text: text, used_facts: used_facts, addressee: addressee, addressee_source: source}
   end
 
@@ -1900,7 +2524,7 @@ defmodule Backend.Stations do
             _ -> :student
           end
 
-        %{role: role, text: generator_text(role, msg.text)}
+        %{role: role, text: generator_text(role, Map.get(msg, :speaker), msg.text)}
       end)
       |> drop_unanswered_learner_turns()
 
@@ -1908,13 +2532,40 @@ defmodule Backend.Stations do
       conversation: conversation,
       language: package["language"] || "pt-BR"
     }
+    |> put_mandatory_questions(session, package)
+  end
+
+  # In the final minutes of a station with a companion (#341), the mandatory
+  # questions no reply has asked yet; a single-actor station keeps today's
+  # context. The window is `:mandatory_questions_window_ms` before the deadline
+  # (default 3 minutes).
+  defp put_mandatory_questions(context, session, package) do
+    window_ms =
+      Application.get_env(
+        :backend,
+        :mandatory_questions_window_ms,
+        @default_mandatory_questions_window_ms
+      )
+
+    remaining_ms = DateTime.diff(session.deadline_at, DateTime.utc_now(), :millisecond)
+
+    case Actors.pending_questions(package, session.messages) do
+      [_ | _] = questions when remaining_ms <= window_ms ->
+        Map.put(context, :mandatory_questions, questions)
+
+      _none ->
+        context
+    end
   end
 
   # The generator sees its earlier replies with the addressee marker it wrote
   # (#309): stored replies have it stripped, and a history without it led the
   # live model to stop marking its replies after the second turn.
-  defp generator_text(:patient, text) when is_binary(text), do: "[PACIENTE] " <> text
-  defp generator_text(_role, text), do: text
+  defp generator_text(:patient, :companion, text) when is_binary(text),
+    do: "[ACOMPANHANTE] " <> text
+
+  defp generator_text(:patient, _speaker, text) when is_binary(text), do: "[PACIENTE] " <> text
+  defp generator_text(_role, _speaker, text), do: text
 
   defp drop_unanswered_learner_turns(turns) do
     turns
@@ -1977,9 +2628,14 @@ defmodule Backend.Stations do
     }
   end
 
-  defp impresso_feedback_message(%{decision: :unavailable}, _impressos_by_id) do
-    "Exame não disponível nesta estação"
-  end
+  defp impresso_feedback_message(
+         %{decision: :unavailable, classification: :plausible},
+         _impressos_by_id
+       ),
+       do: "Considere solicitado."
+
+  defp impresso_feedback_message(%{decision: :unavailable}, _impressos_by_id),
+    do: "Não consta no script."
 
   defp impresso_feedback_message(%{decision: :released, released_ids: ids}, impressos_by_id) do
     "Impresso liberado: #{impresso_titles(impressos_by_id, ids)}"

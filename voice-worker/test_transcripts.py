@@ -6,12 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
-import worker
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError
 from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 
 import transcripts
+import worker
 from transcripts import (
     PhoenixClient,
     TurnManager,
@@ -360,6 +360,43 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply.addressee, addressee)
             self.assertIs(reply.is_examiner_acknowledgement(), acknowledged)
 
+    async def test_commit_reads_a_spoken_exam_request_receipt(self):
+        # Issue #364: in exam mode Phoenix routes the turn to the impresso
+        # request; the receipt has no generation and nothing to speak.
+        outcome = {
+            "request_id": "voice-exam-1",
+            "decision": "released",
+            "newly_released": [
+                {"id": "lab", "title": "Laboratório", "category": "laboratory"}
+            ],
+            "feedback_message": "Impresso liberado: Laboratório",
+        }
+
+        def handler(request):
+            return httpx.Response(
+                201, json={"turn_id": 1, "status": "impresso_requested", **outcome}
+            )
+
+        async with phoenix(handler) as client:
+            reply = await client.commit(1, "Solicito hemograma e PCR")
+        self.assertTrue(reply.is_impresso_receipt())
+        self.assertTrue(reply.is_settled_receipt())
+        self.assertFalse(reply.is_kept_receipt())
+        self.assertIsNone(reply.generation_id)
+        self.assertIsNone(reply.reply_text)
+        self.assertEqual(reply.impresso, outcome)
+
+        tracker = TurnTracker("s1", 0)
+        self.assertIs(tracker.accept_reply(reply), reply)
+        self.assertEqual(tracker.last_accepted_turn_id, 1)
+        # A retry of the same turn is not accepted twice.
+        self.assertIsNone(tracker.accept_reply(reply))
+
+    async def test_a_malformed_exam_receipt_is_not_settled(self):
+        reply = VoiceTurnReply(turn_id=1, status="impresso_requested")
+        self.assertFalse(reply.is_impresso_receipt())
+        self.assertIsNone(TurnTracker("s1", 0).accept_reply(reply))
+
     async def test_a_kept_reply_from_an_older_server_is_not_an_acknowledgement(self):
         def handler(request):
             return httpx.Response(
@@ -487,9 +524,7 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
             calls.append(1)
             if len(calls) == 1:
                 raise exc
-            return httpx.Response(
-                200, json={"status": "cancelled", "session_id": "s1"}
-            )
+            return httpx.Response(200, json={"status": "cancelled", "session_id": "s1"})
 
         async with phoenix(handler) as client:
             res = await client.cancel(turn_id=1)
@@ -591,7 +626,6 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ctx.exception.kind, "malformed")
 
 
-
 def ndjson(*items) -> bytes:
     return b"".join(json.dumps(item).encode() + b"\n" for item in items)
 
@@ -660,6 +694,42 @@ class PhoenixClientSentenceStreamTest(unittest.IsolatedAsyncioTestCase):
             VoiceTurnReply(1, "committed", 1, "Começou ontem. Ainda dói."),
         )
 
+    # Issue #341: a station with a companion labels each sentence.
+    async def test_a_sentence_keeps_its_speaker_and_voice(self):
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=ndjson(
+                    {
+                        **sentence_line(0, "Começou ontem."),
+                        "speaker": "companion",
+                        "voice": "feminina-adulta",
+                    },
+                    sentence_line(1, "Ainda dói."),
+                    {
+                        "type": "result",
+                        "turn_id": 1,
+                        "status": "committed",
+                        "generation_id": 1,
+                        "reply_text": "Começou ontem. Ainda dói.",
+                    },
+                ),
+            )
+
+        sentences = []
+
+        async def on_sentence(sentence):
+            sentences.append(sentence)
+
+        async with self.client(handler) as client:
+            await client.commit(1, "Quando?", on_sentence=on_sentence)
+
+        self.assertEqual(
+            [(s.speaker, s.voice) for s in sentences],
+            [("companion", "feminina-adulta"), (None, None)],
+        )
+
     async def test_a_single_json_reply_is_still_understood(self):
         def handler(request):
             return httpx.Response(
@@ -700,6 +770,22 @@ class PhoenixClientSentenceStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.kind, "stale_generation")
         on_sentence.assert_awaited_once()
 
+    async def test_an_error_line_with_a_non_string_error_is_malformed(self):
+        for error in (["stale_generation"], {"kind": "auth"}, None, 409):
+            with self.subTest(error=error):
+
+                def handler(request):
+                    return httpx.Response(
+                        200,
+                        headers={"content-type": "application/x-ndjson"},
+                        content=ndjson({"type": "error", "error": error}),
+                    )
+
+                async with self.client(handler) as client:
+                    with self.assertRaises(VoiceFailure) as ctx:
+                        await client.commit(1, "Quando?", on_sentence=AsyncMock())
+                self.assertEqual(ctx.exception.kind, "malformed")
+
     async def test_a_stream_cut_after_a_sentence_is_not_retried(self):
         calls = 0
 
@@ -729,9 +815,7 @@ class PhoenixClientSentenceStreamTest(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(
                 200,
                 headers={"content-type": "application/x-ndjson"},
-                content=ndjson(
-                    {"type": "result", "turn_id": 1, "status": "duplicate"}
-                ),
+                content=ndjson({"type": "result", "turn_id": 1, "status": "duplicate"}),
             )
 
         async with self.client(handler, turn_retries=1) as client:
@@ -864,7 +948,9 @@ class ControllablePhoenixClient(PhoenixClient):
             raise self.cancel_errors[turn_id]
 
         res = (
-            self.cancel_results.get(turn_id, {"status": "cancelled", "turn_id": turn_id})
+            self.cancel_results.get(
+                turn_id, {"status": "cancelled", "turn_id": turn_id}
+            )
             if turn_id is not None
             else {"status": "cancelled"}
         )
@@ -936,19 +1022,28 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_fresh_job_bootstrap_allocates_above_context_floor(self):
         # Offline wire-contract proof; real Phoenix admission is covered by controller tests.
         for committed, floor, expected in [
-            (0, 1, 2), (0, 7, 8), (9, 3, 10), (3, None, 4)
+            (0, 1, 2),
+            (0, 7, 8),
+            (9, 3, 10),
+            (3, None, 4),
         ]:
             with self.subTest(committed=committed, floor=floor):
                 context = {
-                    "last_turn_id": committed, "language": "pt-BR", "keyterms": []
+                    "last_turn_id": committed,
+                    "language": "pt-BR",
+                    "keyterms": [],
                 }
                 if floor is not None:
                     context["turn_id_floor"] = floor
                 posted = []
+                usage = []
 
                 def handler(request):
                     if request.method == "GET":
                         return httpx.Response(200, json=context)
+                    if request.url.path.endswith("/usage"):
+                        usage.append(json.loads(request.content))
+                        return httpx.Response(202, json={"status": "recorded"})
                     body = json.loads(request.content)
                     posted.append(body)
                     if body["turn_id"] < expected:
@@ -981,12 +1076,16 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 replies = []
 
                 async def run_transcribe(
-                    room, learner, context, tracker, phoenix, voice=None
+                    room, learner, context, tracker, phoenix, voice=None, meter=None
                 ):
                     self.assertEqual(tracker.last_accepted_turn_id, committed)
                     self.assertIsInstance(voice, worker.PatientVoice)
                     await transcribe(
-                        room, learner, context, tracker, phoenix,
+                        room,
+                        learner,
+                        context,
+                        tracker,
+                        phoenix,
                         stt=MockSTT(stream),
                         audio=MockAudioStream(),
                         on_reply=replies.append,
@@ -998,14 +1097,32 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 with (
                     patch.dict(
                         "os.environ",
-                        {"PHOENIX_URL": "http://phoenix", "VOICE_WORKER_SECRET": "secret"},
+                        {
+                            "PHOENIX_URL": "http://phoenix",
+                            "VOICE_WORKER_SECRET": "secret",
+                        },
                     ),
-                    patch.object(worker, "PhoenixClient", return_value=phoenix(handler)),
+                    patch.object(
+                        worker, "PhoenixClient", return_value=phoenix(handler)
+                    ),
                     patch.object(worker, "transcribe", side_effect=run_transcribe),
                 ):
                     await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
 
-                self.assertEqual(posted, [{"turn_id": expected, "text": "New question"}])
+                self.assertEqual(
+                    posted, [{"turn_id": expected, "text": "New question"}]
+                )
+                # The job's usage is reported once, when it ends (#342).
+                self.assertEqual(len(usage), 1)
+                self.assertEqual(
+                    set(usage[0]),
+                    {
+                        "report_id",
+                        "deepgram_audio_seconds",
+                        "cartesia_characters",
+                        "livekit_participant_minutes",
+                    },
+                )
                 self.assertEqual(len(replies), 1)
                 self.assertEqual(replies[0].turn_id, expected)
                 ctx.shutdown.assert_called_once()
@@ -1015,11 +1132,17 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     ):
         posted = []
 
+        usage = []
+
         def handler(request):
             if request.method == "GET":
                 return httpx.Response(
                     200, json={"last_turn_id": 0, "language": "pt-BR", "keyterms": []}
                 )
+            if request.url.path.endswith("/usage"):
+                # The session is over, and the usage of its job is still reported (#342).
+                usage.append(json.loads(request.content))
+                return httpx.Response(202, json={"status": "recorded"})
             if request.url.path.endswith("/cancel"):
                 # The timer already completed the session on the server.
                 return httpx.Response(422, json={"error": "session_completed"})
@@ -1042,10 +1165,16 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         replies = []
         streams_started = []
 
-        async def run_transcribe(room, learner, context, tracker, phoenix, voice=None):
+        async def run_transcribe(
+            room, learner, context, tracker, phoenix, voice=None, meter=None
+        ):
             streams_started.append(1)
             await transcribe(
-                room, learner, context, tracker, phoenix,
+                room,
+                learner,
+                context,
+                tracker,
+                phoenix,
                 stt=MockSTT(stream),
                 audio=MockAudioStream(),
                 on_reply=replies.append,
@@ -1068,6 +1197,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted, [{"turn_id": 1, "text": "Late question"}])
         self.assertEqual(replies, [])
         self.assertEqual(len(streams_started), 1)
+        self.assertEqual(len(usage), 1)
         publish.assert_awaited_with(
             room, {"session_id": "s1", "error": "station_time_elapsed"}
         )
@@ -1128,7 +1258,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 async with asyncio.timeout(1):
                     old = manager.commit_turn(1, "Cancelled question")
                     await posted.wait()
-                    await manager.on_speech_event(event(SpeechEventType.START_OF_SPEECH))
+                    await manager.on_speech_event(
+                        event(SpeechEventType.START_OF_SPEECH)
+                    )
                     self.assertEqual(cancelled_through, 1)
                     self.assertEqual(manager._unresolved_cancel_turns, set())
                     release_post.set()
@@ -1199,7 +1331,10 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                     [turn for turn, _ in client.commit_calls], list(range(1, 17))
                 )
                 self.assertEqual(
-                    [call["turn_id"] for call in client.cancel_calls[cleanup_calls[0] :]],
+                    [
+                        call["turn_id"]
+                        for call in client.cancel_calls[cleanup_calls[0] :]
+                    ],
                     list(range(1, 18)),
                 )
             finally:
@@ -1255,12 +1390,16 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(VoiceFailure) as ctx:
                         await manager.wait_pending(timeout=0.01)
                     self.assertEqual(ctx.exception.kind, "timeout")
-                    self.assertEqual(manager._unresolved_cancel_turns, set(range(1, 17)))
+                    self.assertEqual(
+                        manager._unresolved_cancel_turns, set(range(1, 17))
+                    )
                     self.assertFalse(queued.done())
                     self.assertEqual(len(client.commit_calls), 16)
                     await manager.cleanup()
                     self.assertTrue(queued.cancelled())
-                    self.assertEqual(manager._unresolved_cancel_turns, set(range(1, 17)))
+                    self.assertEqual(
+                        manager._unresolved_cancel_turns, set(range(1, 17))
+                    )
             finally:
                 await asyncio.wait_for(manager.cleanup(), 1)
         self.assertEqual(asyncio.all_tasks(), tasks_before)
@@ -1477,7 +1616,10 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     ):
         for exhausted in (False, True):
             for independent_active, teardown in (
-                (False, False), (True, False), (False, True), (True, True)
+                (False, False),
+                (True, False),
+                (False, True),
+                (True, True),
             ):
                 with self.subTest(
                     exhausted=exhausted,
@@ -1669,20 +1811,22 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 1)
 
     async def test_invalid_server_receipts_preserve_older_cancel_ownership(self):
-        cases = [
-            {"generation_id": value}
-            for value in ("invalid", True, 0, -1, [], None)
-        ] + [
-            {"turn_id": value} for value in (None, True, 0, -1, "2", 3)
-        ] + [{"status": "duplicate"}, {"reply_text": "  "}, {"reply_text": 7}]
+        cases = (
+            [{"generation_id": value} for value in ("invalid", True, 0, -1, [], None)]
+            + [{"turn_id": value} for value in (None, True, 0, -1, "2", 3)]
+            + [{"status": "duplicate"}, {"reply_text": "  "}, {"reply_text": 7}]
+        )
         for override in cases:
             with self.subTest(override=override):
                 started = asyncio.Event()
                 release = asyncio.Event()
                 cancelled = []
-                response = dict(
-                    turn_id=2, status="committed", generation_id=2, reply_text="Reply"
-                )
+                response = {
+                    "turn_id": 2,
+                    "status": "committed",
+                    "generation_id": 2,
+                    "reply_text": "Reply",
+                }
                 response.update(override)
                 if response.get("turn_id") is None:
                     response.pop("turn_id")
@@ -1806,7 +1950,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await asyncio.wait_for(manager.cleanup(), 1)
 
-    async def test_cleanup_has_one_budget_for_unconfirmed_cancellation_obligations(self):
+    async def test_cleanup_has_one_budget_for_unconfirmed_cancellation_obligations(
+        self,
+    ):
         async with ControllablePhoenixClient() as client:
             manager = TurnManager(TurnTracker("s1", 0), client, cleanup_timeout=0.03)
             async with asyncio.timeout(1):
@@ -1839,7 +1985,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 hold.set()
                 await asyncio.wait_for(manager.cleanup(), 1)
 
-    async def test_healthy_newer_commits_keep_teardown_bounded_independent_of_history(self):
+    async def test_healthy_newer_commits_keep_teardown_bounded_independent_of_history(
+        self,
+    ):
         for history_size in (1, 8):
             with self.subTest(history_size=history_size):
                 async with ControllablePhoenixClient() as client:
@@ -1909,7 +2057,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                             asyncio.gather(task, return_exceptions=True), 1
                         )
 
-    async def test_transcribe_closes_local_resources_before_remote_cleanup_finishes(self):
+    async def test_transcribe_closes_local_resources_before_remote_cleanup_finishes(
+        self,
+    ):
         queue = asyncio.Queue()
         stream = MockStream(queue)
         pump_stopped = asyncio.Event()
@@ -2150,9 +2300,9 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         # Call log must confirm cancel(1) completed before commit(2) started
         log_order = [log[0] for log in client.call_log]
         idx_cancel_end = log_order.index("cancel_end")
-        idx_commit_2_start = [
+        idx_commit_2_start = next(
             i for i, log in enumerate(client.call_log) if log[:2] == ("commit_start", 2)
-        ][0]
+        )
         self.assertLess(
             idx_cancel_end,
             idx_commit_2_start,

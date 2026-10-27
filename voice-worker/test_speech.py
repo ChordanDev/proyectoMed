@@ -1,11 +1,18 @@
 # pyright: reportMissingImports=false
 import asyncio
+import base64
+import json
+import logging
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import aiohttp
 from livekit.agents import APIConnectionError, APIStatusError
+from livekit.agents.cli.log import ColoredFormatter, JsonFormatter
+from livekit.plugins import cartesia
 
-from speech import SpeechPlayer
+from speech import SYNTHESIS_OPTIONS, SpeechPlayer
 from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 
 REPLY_TEXT = "Resposta clinica confidencial"
@@ -128,6 +135,43 @@ class FakeTTS:
         self.closed += 1
 
 
+class FakeStreamingSynthesis(FakeSynthesis):
+    """A provider input stream: the text pushed into it and whether input ended."""
+
+    def __init__(self):
+        super().__init__()
+        self.pushed: list[str] = []
+        self.input_ended = False
+
+    def push_text(self, text: str) -> None:
+        self.pushed.append(text)
+
+    def end_input(self) -> None:
+        self.input_ended = True
+
+
+class FakeStreamingTTS(FakeTTS):
+    """A streaming provider with a connection pool, like Cartesia's websocket."""
+
+    capabilities = SimpleNamespace(streaming=True)
+
+    def __init__(self):
+        super().__init__()
+        self.prewarms = 0
+        self.prewarm_error: Exception | None = None
+        self.stream_options: list[dict] = []
+
+    def prewarm(self) -> None:
+        self.prewarms += 1
+        if self.prewarm_error is not None:
+            raise self.prewarm_error
+
+    def stream(self, **options):
+        self.stream_options.append(options)
+        self.streams.append(FakeStreamingSynthesis())
+        return self.streams[-1]
+
+
 async def settle() -> None:
     # Let the playback task run up to its next provider or source await.
     for _ in range(10):
@@ -174,6 +218,33 @@ class SpeechPlayerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await task)
         self.assertEqual(self.sources[0].frames, ["a1", "a2"])
         self.assertEqual(self.tts.streams[0].closed, 1)
+
+    # Issue #341: each actor speaks with its own voice on the one track.
+    async def test_a_reply_with_a_mapped_voice_is_spoken_by_that_voice(self):
+        companion_tts = FakeTTS()
+        self.player.voices = {"feminina-adulta": companion_tts}
+
+        reply = accepted(self.tracker, 1)
+        reply.voice = "feminina-adulta"
+        task = await self.start(reply)
+        companion_tts.streams[0].queue.put_nowait(chunk("c1"))
+        companion_tts.streams[0].queue.put_nowait(None)
+        self.assertIsNone(await task)
+
+        self.assertEqual(companion_tts.texts, [reply.reply_text])
+        self.assertEqual(self.tts.texts, [])
+        self.assertEqual(self.sources[0].frames, ["c1"])
+        self.assertEqual(len(self.room.local_participant.published), 1)
+
+        other = accepted(self.tracker, 2)
+        other.voice = "masculina-idosa"  # not mapped: the default voice
+        task = await self.start(other)
+        self.tts.streams[0].queue.put_nowait(None)
+        await task
+        self.assertEqual(self.tts.texts, [other.reply_text])
+
+        await self.player.aclose()
+        self.assertEqual((self.tts.closed, companion_tts.closed), (1, 1))
 
     async def test_playback_is_correlated_to_session_turn_and_generation(self):
         reply = accepted(self.tracker, 3)
@@ -492,6 +563,373 @@ class SpeechPlayerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn(REPLY_TEXT, "\n".join(logs.output))
         self.assertNotIn(REPLY_TEXT, repr(self.player))
+
+
+class StreamingProviderTest(unittest.IsolatedAsyncioTestCase):
+    """A streaming provider is warmed ahead of each reply, so none waits for a connection."""
+
+    def setUp(self):
+        self.tracker = TurnTracker("s1", last_turn_id=0)
+        self.room = FakeRoom()
+        self.tts = FakeStreamingTTS()
+        self.sources: list[FakeSource] = []
+
+        def source_factory(sample_rate: int, num_channels: int) -> FakeSource:
+            self.sources.append(FakeSource(sample_rate, num_channels))
+            return self.sources[-1]
+
+        self.player = SpeechPlayer(
+            self.room,
+            self.tracker,
+            self.tts,
+            source_factory=source_factory,
+            track_factory=lambda source: SimpleNamespace(source=source),
+        )
+
+    async def start(self, reply: VoiceTurnReply) -> asyncio.Task:
+        task = asyncio.create_task(self.player.speak(reply))
+        await settle()
+        return task
+
+    async def test_start_prewarms_the_provider_connection(self):
+        await self.player.start()
+
+        self.assertEqual(self.tts.prewarms, 1)
+        self.assertEqual(len(self.room.local_participant.published), 1)
+
+    async def test_reply_is_spoken_through_one_provider_stream_with_one_attempt(self):
+        reply = accepted(self.tracker, 1)
+        task = await self.start(reply)
+        stream = self.tts.streams[0]
+
+        self.assertEqual(stream.pushed, [reply.reply_text])
+        self.assertTrue(stream.input_ended)
+        self.assertEqual(self.tts.stream_options, [{"conn_options": SYNTHESIS_OPTIONS}])
+        self.assertEqual(self.tts.texts, [])
+
+        stream.queue.put_nowait(chunk("a1"))
+        stream.queue.put_nowait(None)
+        self.assertIsNone(await task)
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        self.assertEqual(stream.closed, 1)
+
+    async def test_provider_is_prewarmed_again_after_a_finished_reply(self):
+        task = await self.start(accepted(self.tracker, 1))
+        warmed_before_reply_ended = self.tts.prewarms
+        self.tts.streams[0].queue.put_nowait(None)
+        await task
+
+        self.assertEqual(self.tts.prewarms, warmed_before_reply_ended + 1)
+
+    async def test_provider_is_prewarmed_again_after_a_cancelled_reply(self):
+        reply = accepted(self.tracker, 1)
+        task = await self.start(reply)
+        warmed_before_cancel = self.tts.prewarms
+        self.player.cancel(reply.generation_id)
+        self.assertIsNone(await task)
+
+        self.assertEqual(self.tts.prewarms, warmed_before_cancel + 1)
+
+    async def test_each_voice_is_prewarmed_and_speaks_through_its_own_stream(self):
+        companion_tts = FakeStreamingTTS()
+        self.player.voices = {"feminina-adulta": companion_tts}
+        await self.player.start()
+        self.assertEqual((self.tts.prewarms, companion_tts.prewarms), (1, 1))
+
+        reply = accepted(self.tracker, 1)
+        reply.voice = "feminina-adulta"
+        task = await self.start(reply)
+        stream = companion_tts.streams[0]
+        stream.queue.put_nowait(chunk("c1"))
+        stream.queue.put_nowait(None)
+        self.assertIsNone(await task)
+
+        self.assertEqual(stream.pushed, [reply.reply_text])
+        self.assertEqual(self.tts.streams, [])
+        self.assertEqual(self.sources[0].frames, ["c1"])
+        self.assertEqual((self.tts.prewarms, companion_tts.prewarms), (2, 2))
+
+    async def test_closing_while_speaking_never_prewarms_afterwards(self):
+        task = await self.start(accepted(self.tracker, 1))
+        warmed_before_close = self.tts.prewarms
+
+        await self.player.aclose()
+        self.assertIsNone(await task)
+
+        self.assertEqual(self.tts.prewarms, warmed_before_close)
+
+    async def test_a_stream_failing_mid_reply_is_content_free_and_prewarms_once(self):
+        reply = accepted(self.tracker, 1)
+        task = await self.start(reply)
+        warmed_before_failure = self.tts.prewarms
+        with self.assertLogs("voice-worker.speech", level="WARNING") as logs:
+            self.tts.streams[0].queue.put_nowait(chunk("a1"))
+            self.tts.streams[0].queue.put_nowait(RuntimeError(reply.reply_text))
+            failure = await task
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertNotIn(reply.reply_text, "\n".join(logs.output))
+        self.assertEqual(self.tts.prewarms, warmed_before_failure + 1)
+
+    async def test_prewarm_failure_never_stops_the_reply(self):
+        self.tts.prewarm_error = RuntimeError(PROVIDER_SECRET)
+        with self.assertLogs("voice-worker.speech", level="WARNING") as logs:
+            await self.player.start()
+            task = await self.start(accepted(self.tracker, 1))
+            self.tts.streams[0].queue.put_nowait(chunk("a1"))
+            self.tts.streams[0].queue.put_nowait(None)
+            self.assertIsNone(await task)
+
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        self.assertNotIn(PROVIDER_SECRET, "\n".join(logs.output))
+
+
+def provider_text(payload):
+    return lambda context_id: SimpleNamespace(
+        type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload(context_id))
+    )
+
+
+def socket_closed():
+    return lambda _context_id: SimpleNamespace(
+        type=aiohttp.WSMsgType.CLOSED, data=None, extra=None
+    )
+
+
+def provider_timeout():
+    def raise_timeout(_context_id):
+        raise TimeoutError
+
+    return raise_timeout
+
+
+def provider_audio(milliseconds: int = 200):
+    pcm = bytes(24000 * milliseconds // 1000 * 2)
+    return [
+        provider_text(
+            lambda c: {"context_id": c, "data": base64.b64encode(pcm).decode()}
+        ),
+        provider_text(lambda c: {"context_id": c, "done": True}),
+    ]
+
+
+class FakeCartesiaSocket:
+    """A Cartesia websocket that answers the first request with its `script`, in order.
+
+    Each script item takes the request's context id and returns the message.
+    """
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.sent: list[dict] = []
+        self._context = asyncio.Event()
+        self.closed = False
+        self.close_code = None
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+        self._context.set()
+
+    async def receive(self, timeout=None):
+        await self._context.wait()
+        if not self.script:
+            await asyncio.Event().wait()  # nothing more from the provider
+        return self.script.pop(0)(self.sent[0]["context_id"])
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class CartesiaProviderTest(unittest.IsolatedAsyncioTestCase):
+    """The real Cartesia plugin behind the player, over a fake websocket."""
+
+    def setUp(self):
+        self.tracker = TurnTracker("s1", last_turn_id=0)
+        self.room = FakeRoom()
+        self.sockets: list[FakeCartesiaSocket] = []
+        self.answers: list = []
+
+        self.handshake_errors: list[Exception] = []
+        self.handshakes = 0
+
+        async def connect(_tts, _timeout):
+            self.handshakes += 1
+            if self.handshake_errors:
+                raise self.handshake_errors.pop(0)
+            script = self.answers.pop(0) if self.answers else []
+            self.sockets.append(FakeCartesiaSocket(script))
+            return self.sockets[-1]
+
+        async def close(_tts, ws):
+            await ws.close()
+
+        patches = (
+            patch.object(cartesia.TTS, "_connect_ws", connect),
+            patch.object(cartesia.TTS, "_close_ws", close),
+        )
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.tts = cartesia.TTS(
+            api_key="test-key",
+            voice="test-voice",
+            model="sonic-3",
+            encoding="pcm_s16le",
+            sample_rate=24000,
+            word_timestamps=False,
+            language="pt",
+        )
+        self.player = SpeechPlayer(
+            self.room,
+            self.tracker,
+            self.tts,
+            source_factory=FakeSource,
+            track_factory=lambda source: SimpleNamespace(source=source),
+        )
+
+    def capture_logs(self) -> list[str]:
+        """Every log line, as both livekit console formatters would print it."""
+        lines: list[str] = []
+        formatters = (
+            ColoredFormatter(
+                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s"
+                " %(name)s - %(message)s %(esc_gray)s%(extra)s"
+            ),
+            JsonFormatter(),
+        )
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                lines.extend(f.format(record) for f in formatters)
+
+        handler = Capture(level=logging.DEBUG)
+        root = logging.getLogger()
+        previous_level = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+
+        def restore():
+            root.removeHandler(handler)
+            root.setLevel(previous_level)
+
+        self.addCleanup(restore)
+        return lines
+
+    async def test_a_provider_error_reaches_the_logs_without_its_payload(self):
+        self.answers.append(
+            [
+                provider_text(
+                    lambda c: {
+                        "type": "error",
+                        "context_id": c,
+                        "error": f"PROVIDER_MARKER {REPLY_TEXT}",
+                    }
+                )
+            ]
+        )
+        lines = self.capture_logs()
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1, REPLY_TEXT))
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        output = "\n".join(lines)
+        self.assertIn("Cartesia returned error", output)
+        self.assertNotIn("PROVIDER_MARKER", output)
+        self.assertNotIn(REPLY_TEXT, output)
+        await self.player.aclose()
+
+    async def test_a_dead_prewarmed_socket_is_replaced_and_the_reply_is_heard(self):
+        # The socket opened ahead of the reply died while it waited (#400, J400-2).
+        self.answers.extend([[socket_closed()], provider_audio()])
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+
+        self.assertIsNone(failure)
+        heard = sum(f.samples_per_channel for f in self.player._source.frames)
+        self.assertEqual(heard, 24000 * 200 // 1000)  # the whole 200 ms reply
+        self.assertEqual(len(self.sockets[1].sent), 2)  # the reply, then its end
+        await self.player.aclose()
+
+    async def test_a_rejected_handshake_is_not_retried(self):
+        # Cartesia refusing the request itself (J400-4): a bad key, an unpaid account
+        # or a rate limit fails the same way on a second try.
+        for status in (401, 429):
+            with self.subTest(status=status):
+                self.tts.prewarm = lambda: None  # count only the reply's handshakes
+                self.handshakes = 0
+                self.handshake_errors = [
+                    APIStatusError("rejected", status_code=status),
+                    APIStatusError("rejected", status_code=status),
+                ]
+                reply = accepted(self.tracker, self.tracker.last_accepted_turn_id + 1)
+
+                failure = await self.player.speak(reply)
+
+                self.assertEqual(failure.kind, "synthesis_failed")
+                self.assertEqual(self.handshakes, 1)
+        await self.player.aclose()
+
+    async def test_a_second_dead_socket_is_not_replaced_again(self):
+        self.answers.extend([[socket_closed()], [socket_closed()], provider_audio()])
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+        await settle()
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual([len(s.sent) for s in self.sockets], [2, 2, 0])
+        await self.player.aclose()
+
+    async def test_a_timeout_before_audio_is_not_retried(self):
+        self.answers.extend([[provider_timeout()], provider_audio()])
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+        await settle()
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual([len(s.sent) for s in self.sockets], [2, 0])
+        await self.player.aclose()
+
+    async def test_a_provider_cut_after_audio_is_not_retried(self):
+        self.answers.extend(
+            [[*provider_audio()[:1], socket_closed()], provider_audio()]
+        )
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual(len(self.sockets[1].sent), 0)  # only prewarmed, never asked
+        await self.player.aclose()
+
+    async def test_a_provider_error_is_not_retried(self):
+        self.answers.extend(
+            [
+                [provider_text(lambda c: {"type": "error", "context_id": c})],
+                provider_audio(),
+            ]
+        )
+        await self.player.start()
+
+        failure = await self.player.speak(accepted(self.tracker, 1))
+
+        self.assertEqual(failure.kind, "synthesis_failed")
+        self.assertEqual(len(self.sockets[1].sent), 0)
+        await self.player.aclose()
+
+    async def test_an_unexpected_provider_message_is_logged_without_its_payload(self):
+        lines = self.capture_logs()
+        # The plugin's own call for a message type it does not know.
+        logging.getLogger("livekit.plugins.cartesia").warning(
+            "unexpected message", extra={"lk.pii.data": {"transcript": REPLY_TEXT}}
+        )
+
+        output = "\n".join(lines)
+        self.assertIn("unexpected message", output)
+        self.assertNotIn(REPLY_TEXT, output)
 
 
 if __name__ == "__main__":

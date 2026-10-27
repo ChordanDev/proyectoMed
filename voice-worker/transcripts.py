@@ -88,6 +88,14 @@ class VoiceTurnReply:
     when the patient reply was refused, and `None` from an older server.
     `speech_ended_at` is the event-loop time the learner's
     utterance ended, set by `TurnManager` for the first-audio latency log.
+
+    A sentence of a station with a companion (#341) carries `speaker` (`patient`
+    or `companion`) and `voice`, the speaker's voice key; `None` otherwise.
+
+    `impresso_requested` (#364) is a turn Phoenix routed to the impresso request
+    because the learner armed the exam mode: no generation and nothing to speak;
+    `impresso` holds the outcome (`request_id`, `decision`, `newly_released`,
+    `feedback_message`) for the learner's screen.
     """
 
     def __init__(
@@ -98,6 +106,9 @@ class VoiceTurnReply:
         reply_text: str | None = None,
         index: int | None = None,
         addressee: str | None = None,
+        speaker: str | None = None,
+        voice: str | None = None,
+        impresso: dict | None = None,
     ):
         self.turn_id = turn_id
         self.status = status
@@ -105,6 +116,9 @@ class VoiceTurnReply:
         self.reply_text = reply_text
         self.index = index
         self.addressee = addressee
+        self.speaker = speaker
+        self.voice = voice
+        self.impresso = impresso
         self.speech_ended_at: float | None = None
 
     def is_committed_receipt(self) -> bool:
@@ -134,9 +148,25 @@ class VoiceTurnReply:
         """A kept turn addressed to the examiner (#274), not a refused reply."""
         return self.is_kept_receipt() and self.addressee == "examiner"
 
+    def is_impresso_receipt(self) -> bool:
+        """A spoken exam request Phoenix sent to the impresso request (#364)."""
+        return (
+            self.status == "impresso_requested"
+            and type(self.turn_id) is int
+            and self.turn_id > 0
+            and self.generation_id is None
+            and self.reply_text is None
+            and isinstance(self.impresso, dict)
+            and isinstance(self.impresso.get("request_id"), str)
+        )
+
     def is_settled_receipt(self) -> bool:
         """Server evidence that this turn was admitted and resolved."""
-        return self.is_committed_receipt() or self.is_kept_receipt()
+        return (
+            self.is_committed_receipt()
+            or self.is_kept_receipt()
+            or self.is_impresso_receipt()
+        )
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, VoiceTurnReply):
@@ -235,6 +265,9 @@ class TurnTracker:
             return False
         if self.is_turn_stale(reply.turn_id):
             return False
+        if reply.is_impresso_receipt():
+            # Not generation-bound: Phoenix ran no generation for it (#364).
+            return reply.turn_id > self.last_accepted_turn_id
         if (
             reply.generation_id is None
             or reply.generation_id in self.cancelled_generations
@@ -262,6 +295,7 @@ class TurnTracker:
             return None
         if reply.generation_id in self.cancelled_generations:
             return None
+        assert reply.generation_id is not None  # is_committed_receipt checked it
         if (
             self.active_generation_id is not None
             and reply.generation_id < self.active_generation_id
@@ -335,6 +369,10 @@ class PhoenixClient:
     async def context(self) -> dict:
         return await self._request("GET", self._path)
 
+    async def report_usage(self, report: dict) -> dict:
+        """POSTs the job's provider usage (#342): counts only, never content."""
+        return await self._request("POST", self._path + "/usage", json=report)
+
     async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
         """Commits a final transcript; returns typed VoiceTurnReply.
 
@@ -355,6 +393,7 @@ class PhoenixClient:
 
         async def hand_over(sentence: VoiceTurnReply) -> None:
             nonlocal handed_over
+            assert on_sentence is not None  # only streamed turns hand sentences over
             handed_over = True
             await on_sentence(sentence)
 
@@ -376,12 +415,14 @@ class PhoenixClient:
                     raise
                 attempts_left -= 1
 
+        # Wire values stay unvalidated here; the is_*_receipt checks vet them.
         return VoiceTurnReply(
-            turn_id=result.get("turn_id"),
+            turn_id=result.get("turn_id"),  # pyright: ignore[reportArgumentType]
             status=result["status"],
             generation_id=result.get("generation_id"),
             reply_text=result.get("reply_text"),
             addressee=result.get("addressee"),
+            impresso=_impresso_outcome(result),
         )
 
     async def _stream_turn(self, path: str, body: dict, on_sentence) -> dict:
@@ -412,18 +453,23 @@ class PhoenixClient:
                     if kind == "sentence":
                         await on_sentence(
                             VoiceTurnReply(
-                                turn_id=item.get("turn_id"),
+                                turn_id=item.get("turn_id"),  # pyright: ignore[reportArgumentType]
                                 status="committed",
                                 generation_id=item.get("generation_id"),
                                 reply_text=item.get("text"),
                                 index=item.get("index"),
+                                speaker=_label(item.get("speaker")),
+                                voice=_label(item.get("voice")),
                             )
                         )
                     elif kind == "result" and isinstance(item.get("status"), str):
                         return item
                     elif kind == "error":
+                        error = item.get("error")
                         raise VoiceFailure(
-                            _STREAM_ERROR_KINDS.get(item.get("error"), "malformed")
+                            _STREAM_ERROR_KINDS.get(error, "malformed")
+                            if isinstance(error, str)
+                            else "malformed"
                         )
                     else:
                         raise VoiceFailure("malformed")
@@ -478,6 +524,21 @@ class PhoenixClient:
             raise VoiceFailure("malformed")
         if response.status_code >= 300:
             raise VoiceFailure("disconnected")
+
+
+# The outcome fields of an `impresso_requested` receipt (#364), as Phoenix sent them.
+_IMPRESSO_FIELDS = ("request_id", "decision", "newly_released", "feedback_message")
+
+
+def _impresso_outcome(result: dict) -> dict | None:
+    if result.get("status") != "impresso_requested":
+        return None
+    return {field: result.get(field) for field in _IMPRESSO_FIELDS}
+
+
+def _label(value) -> str | None:
+    """A speaker or voice label from Phoenix (#341); anything but a non-empty string is none."""
+    return value if isinstance(value, str) and value else None
 
 
 def _stream_item(line: str) -> dict:
@@ -577,9 +638,8 @@ class TurnManager:
         if not supersedes:
             return None
         self._notify_barge_in(self.tracker.turn_id - 1)
-        if (
-            self.pending_turn_id is not None
-            and not self.tracker.is_turn_stale(self.pending_turn_id)
+        if self.pending_turn_id is not None and not self.tracker.is_turn_stale(
+            self.pending_turn_id
         ):
             turn_to_cancel = self.pending_turn_id
             self.tracker.mark_turn_stale(turn_to_cancel)
@@ -662,6 +722,7 @@ class TurnManager:
                 self._queued_commit = None
                 self._queued_task = None
                 task = asyncio.current_task()
+                assert task is not None  # always awaited inside a task
                 self._active_commit_tasks.add(task)
                 try:
                     return await self._do_commit(turn_id, text, None)
@@ -682,6 +743,7 @@ class TurnManager:
             else:
                 turn_id = self._local_cancel_turn
                 self._local_cancel_turn = None
+            assert turn_id is not None  # the loop condition guarantees one
             result = await self._do_cancel(turn_id)
             self._capacity_changed.set()
         return result
