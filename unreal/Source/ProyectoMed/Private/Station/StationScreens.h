@@ -150,6 +150,9 @@ private:
 	void HandleRequestExam();
 
 	UFUNCTION()
+	void HandleAskExamAloud();
+
+	UFUNCTION()
 	void HandleExamCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 
 	UFUNCTION()
@@ -193,6 +196,12 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UButton> ExamButton;
+
+	UPROPERTY()
+	TObjectPtr<UButton> AskAloudButton;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ExamAloudText;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> ModeText;

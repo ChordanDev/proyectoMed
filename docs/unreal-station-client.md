@@ -81,6 +81,8 @@ All operations are methods of `UStationClient`. Each one takes a
 | `SendTurn(Text, Modality)` | `POST .../sessions/:id/messages` | `FStationTurnReply`: the approved patient reply, or an examiner acknowledgement (it releases nothing; see [exam requests in the dialogue](#exam-requests-in-the-dialogue-issue-351)) | #191, #192, #194 |
 | `RequestImpresso(Text, RequestId)` | `POST .../sessions/:id/impressos/request` | `FStationImpressoReply`: the decision and what was released | #194 |
 | `ListImpressos` | `GET .../sessions/:id/impressos` | Every impresso released so far | #194 |
+| `ArmExamMode` | `POST .../sessions/:id/exam-mode` | `FStationExamMode`: the learner's next utterance is the [spoken exam request](#spoken-exam-requests-issue-364), until `ExpiresAt` | #364 |
+| `CancelExamMode` | `DELETE .../sessions/:id/exam-mode` | Nothing; the mode is disarmed | #364 |
 | `FinishSession(Reason)` | `POST .../sessions/:id/finish` | `FStationSession` marked completed | #195 |
 | `FetchResult` | `GET /api/v2/.../sessions/:id/result` | `FStationResult`: criteria with transcript evidence | #195 |
 | `DiscardSession` | `POST .../sessions/:id/discard` | Nothing; the local session is cleared only after Phoenix confirms | #195, #196 |
@@ -481,7 +483,7 @@ the ones of the operations table above.
 | `POST /sessions/:id/messages` | A learner turn (`SendTurn`). |
 | `POST /sessions/:id/impressos/request` | An impresso request (`RequestImpresso`). |
 | `GET /sessions/:id/impressos` | Released impressos (`ListImpressos`). |
-| `POST /sessions/:id/exam-mode`, `DELETE /sessions/:id/exam-mode` | Arm or cancel the [spoken exam request](#spoken-exam-requests-issue-364) (no `UStationClient` method yet). |
+| `POST /sessions/:id/exam-mode`, `DELETE /sessions/:id/exam-mode` | Arm or cancel the [spoken exam request](#spoken-exam-requests-issue-364) (`ArmExamMode`, `CancelExamMode`). |
 | `POST /sessions/:id/voice` | LiveKit credential (`RequestVoiceCredential`). |
 | `POST /sessions/:id/transcribe`, `POST /sessions/:id/synthesize` | Turn-based voice (legacy HTTP audio). |
 | `POST /sessions/:id/finish` | Finish (`FinishSession`). |
@@ -818,6 +820,17 @@ worker, nothing spoken):
 - The event carries no `generation_id` and no `text`; no audio follows it.
 - When the room event is lost (a publish error or a barge-in that dropped the
   receipt), the request is still recorded: `ListImpressos` shows it.
+
+`ParseStationVoiceEvent` reads this event as `ExaminerImpresso`, with the
+decision in `Impresso` (no `ReleasedImpressos`, and `NewlyReleased` without
+`Content`). In `UStationRunFlow`, opening the "Exames" panel in a voice
+training arms the mode (`AskExamAloud`) and closing it unused cancels it
+(`CancelExamAloud`). The utterance that takes the mode shows in the exam panel
+("Você solicitou: ... (solicitando...)"), never in the conversation; its
+outcome joins `GetExamRequests` as a typed request's does, and the flow reads
+`ListImpressos` again. If Phoenix answers that utterance as dialogue instead
+(it ended after `expires_at`), its learner line joins the conversation before
+the reply.
 
 - Errors: `403 no_consent` on a run without audio consent (a typed request
   needs no exam mode), `409 session_completed`, `404 session_not_found`,

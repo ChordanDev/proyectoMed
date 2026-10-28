@@ -23,9 +23,9 @@ Server side (Phoenix route, worker routing and room event) is done in PR #396 an
 
 | ID | Specs | Route | Status | Commit / evidence |
 |----|-------|-------|--------|-------------------|
-| T1 | S5 | inline | pending | |
-| T2 | S6 | inline | pending | |
-| T3 | S1, S2, S3, S7, S8 | inline | pending | |
+| T1 | S5 | inline | done | 18304e3; RED 4 controller/limit/auth tests (404), GREEN 57/57 |
+| T2 | S6 | inline | done | RED 4 client/voice specs on stubs, GREEN 117/117 (see L5) |
+| T3 | S1, S2, S3, S7, S8 | inline | done | RED 5 flow specs on stubs, GREEN 117/117 (see L5) |
 | T4 | S1-S3 by eye (human) | human | pending | |
 
 - T1 Phoenix: deprecated aliases of the exam-mode routes, tests, docs.
@@ -38,3 +38,5 @@ Server side (Phoenix route, worker routing and room event) is done in PR #396 an
 - L1 (2026-10-28, parent session brief): "Implement issue #364 of ChordanDev/proyectoMed: \"Request exams and impressos aloud: press \"Exames\", then say the request\". [...] what remains is most likely the Unreal client: the \"Exames\" button arms exam mode through Phoenix, the next utterance shows as an impresso request with released findings or a declined request exactly as a typed request shows (#194), and an exam request spoken without the button releases nothing (#351). The learner token stays without data publishing. Implement on the `/sessions/:id/...` routes, as the issue's note says."
 - L2 (2026-10-28): mapped. Server side in develop (router.ex:129-132, voice_worker_controller.ex:172, worker.py `_publish_impresso`). `StationClient.cpp:14` uses only `/api/stations/active/sessions`, with no `Authorization` header; `/sessions/:id` runs `DeviceAuth` with no dev bypass, so an Unreal call there answers `401 missing_token`.
 - L3 (2026-10-28, parent session): "Go with A. [...] Add POST/DELETE `/api/stations/active/sessions/:id/exam-mode` to the legacy scope with the same `limit_session_exam_mode` limiter, reusing `SessionController.arm_exam_mode/cancel_exam_mode`, plus controller tests for both routes. In the PR and in #364, note that every Unreal call migrates to `/sessions/:id` together once Unreal has device login."
+- L4 (2026-10-28): T1. Alias added to the deprecated scope with `limit_session_exam_mode`. The alias rate-limit tests are now named by method too, since POST and DELETE share a path.
+- L5 (2026-10-28): T2+T3. Stubs first: `StationClient+StationVoice.Unit+StationRun.Unit+StationRun.Phoenix` 108/117, the 9 new behaviour specs failing; then GREEN 117/117 against a scripted Phoenix on port 4364 (the #325 session shares the machine). One fix in the spec itself: Phoenix reads its clock again for `server_now`, so `expires_at - server_now` is just under 20 s. Design: opening "Exames" in a voice training arms the mode and closing it unused cancels it; the utterance that takes the mode is held out of the conversation (`SpokenExamText`) and shown as "Você solicitou: ... (solicitando...)"; an `ExaminerImpresso` outcome joins `ExamRequests` and reloads `ListImpressos`; any dialogue outcome on that turn puts the held line in the conversation first; a superseded exam turn passes the mode to the next utterance and reloads the impressos. Later refactor: `DisarmSpokenExam` replaces a cancel path that faked an expiry; covered by a new Phoenix spec (no RED: refactor guard).

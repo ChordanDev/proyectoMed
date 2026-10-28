@@ -300,6 +300,99 @@ bool UStationRunFlow::CanRequestExam() const
 	return Step == EStationRunStep::Running && !PendingExamRequest.IsSet();
 }
 
+bool UStationRunFlow::CanAskExamAloud() const
+{
+	return Step == EStationRunStep::Running && Mode == EStationTrainingMode::Voice && !bVoiceFallback
+		&& !Voice.bLost && !bArmingSpokenExam && !IsListeningForExam() && !IsSpokenExamInFlight();
+}
+
+bool UStationRunFlow::AskExamAloud()
+{
+	if (!CanAskExamAloud())
+	{
+		return false;
+	}
+
+	bArmingSpokenExam = true;
+	bCancelSpokenExamWhenArmed = false;
+	ExamErrorText = FText::GetEmpty();
+	OnChanged.Broadcast();
+
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	const uint32 ThisRun = Run;
+	Client->ArmExamMode([WeakThis, ThisRun](const TStationResult<FStationExamMode>& Armed)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self || Self->Run != ThisRun)
+		{
+			return;
+		}
+		Self->bArmingSpokenExam = false;
+		if (Armed.HasError())
+		{
+			Self->SetExamError(Armed.GetError());
+			if (IsUnanswered(Armed.GetError()))
+			{
+				Self->CheckPhoenix();
+			}
+			if (IsRunOver(Armed.GetError()))
+			{
+				Self->ExpireTimer();
+			}
+			return;
+		}
+		if (Self->bCancelSpokenExamWhenArmed || Self->Step != EStationRunStep::Running)
+		{
+			// The learner closed the prompt while Phoenix armed it.
+			Self->bCancelSpokenExamWhenArmed = false;
+			Self->DisarmSpokenExam();
+			Self->OnChanged.Broadcast();
+			return;
+		}
+		// Phoenix's clock sets the expiry; this clock counts it down from now.
+		const FTimespan Left = Armed.GetValue().ExpiresAt - Armed.GetValue().ServerNow;
+		Self->SpokenExamExpiresAt = FPlatformTime::Seconds() + Left.GetTotalSeconds();
+		Self->OnChanged.Broadcast();
+	});
+	return true;
+}
+
+bool UStationRunFlow::IsListeningForExam() const
+{
+	return SpokenExamTurn == 0 && SpokenExamExpiresAt > 0.0 && FPlatformTime::Seconds() < SpokenExamExpiresAt;
+}
+
+void UStationRunFlow::CancelExamAloud()
+{
+	if (bArmingSpokenExam)
+	{
+		bCancelSpokenExamWhenArmed = true;
+		return;
+	}
+	if (SpokenExamTurn != 0 || SpokenExamExpiresAt <= 0.0)
+	{
+		return; // nothing armed, or the learner already spoke into it
+	}
+	SpokenExamExpiresAt = 0.0;
+	DisarmSpokenExam();
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::DisarmSpokenExam()
+{
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	const uint32 ThisRun = Run;
+	Client->CancelExamMode([WeakThis, ThisRun](const TStationResult<FStationNone>& Cancelled)
+	{
+		// The mode also ends at its expiry: a failure here needs only the Phoenix check.
+		UStationRunFlow* Self = WeakThis.Get();
+		if (Self && Self->Run == ThisRun && Cancelled.HasError() && IsUnanswered(Cancelled.GetError()))
+		{
+			Self->CheckPhoenix();
+		}
+	});
+}
+
 FString UStationRunFlow::TakeUnsentExamRequest()
 {
 	FString Request = MoveTemp(UnsentExamRequest);
@@ -440,6 +533,12 @@ void UStationRunFlow::ExpireTimer()
 
 void UStationRunFlow::CheckStationTimer()
 {
+	if (SpokenExamTurn == 0 && SpokenExamExpiresAt > 0.0 && FPlatformTime::Seconds() >= SpokenExamExpiresAt)
+	{
+		// The learner did not speak in time; Phoenix disarmed it too.
+		SpokenExamExpiresAt = 0.0;
+		OnChanged.Broadcast();
+	}
 	if (CanFinish() && FPlatformTime::Seconds() >= TimerRetryNotBefore
 		&& Client->GetRemainingTime() <= FTimespan::Zero())
 	{
@@ -662,6 +761,9 @@ void UStationRunFlow::ResetRun()
 	ReleasedImpressos.Reset();
 	UnsentExamRequest.Reset();
 	ExamErrorText = FText::GetEmpty();
+	bArmingSpokenExam = false;
+	bCancelSpokenExamWhenArmed = false;
+	ResetSpokenExam();
 	FinishReason = EStationFinishReason::User;
 	Result.Reset();
 	TimerRetryNotBefore = 0.0;
@@ -791,7 +893,20 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 			// The learner speaks over the patient: the worker stops its voice, and
 			// what is already buffered here stops too (#193).
 			SilencePatient();
+			if (IsListeningForExam())
+			{
+				// The armed exam mode takes this utterance: Phoenix sends it to the
+				// impresso request, not to the patient (#364).
+				SpokenExamTurn = Event.TurnId;
+				SpokenExamText.Reset();
+			}
 		}
+	}
+	if (Event.TurnId == SpokenExamTurn
+		&& (Event.Kind == EStationVoiceEventKind::PatientText || Event.Kind == EStationVoiceEventKind::PatientComplete
+			|| Event.Kind == EStationVoiceEventKind::ExaminerAcknowledged || Event.Kind == EStationVoiceEventKind::PatientUnanswered))
+	{
+		ReleaseSpokenExamAsDialogue();
 	}
 	switch (Event.Kind)
 	{
@@ -800,7 +915,13 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		{
 			return;
 		}
-		if (Event.bFinal)
+		if (Event.TurnId == SpokenExamTurn)
+		{
+			// The spoken exam request shows with the exam requests, never in the conversation.
+			SpokenExamText = Event.Text;
+			bVoiceLearnerCommitted = Event.bFinal;
+		}
+		else if (Event.bFinal)
 		{
 			// Spoken turns join the same conversation as typed ones.
 			AddLine(EStationSpeaker::Learner, Event.Text);
@@ -838,6 +959,15 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		// Phoenix kept the turn without a reply; nothing new is shown.
 		bVoiceOutcome = true;
 		return;
+	case EStationVoiceEventKind::ExaminerImpresso:
+		if (bVoiceOutcome)
+		{
+			return;
+		}
+		// An outcome like any other: a newer turn keeps this one (#193).
+		TakeSpokenExamOutcome(Event);
+		bVoiceOutcome = true;
+		break;
 	default:
 		// A refused reply and a failed synthesis change nothing shown.
 		return;
@@ -865,6 +995,14 @@ void UStationRunFlow::ReportMicrophoneUnavailable()
 void UStationRunFlow::DropSupersededVoiceTurn()
 {
 	Voice.PatientText.Reset();
+	if (SpokenExamTurn != 0)
+	{
+		// The armed mode passes to the next utterance unless Phoenix already took
+		// this one, whose outcome then never arrives: its impressos are read again.
+		SpokenExamTurn = 0;
+		SpokenExamText.Reset();
+		ReloadReleasedImpressos();
+	}
 	if (Transcript.IsValidIndex(VoiceLearnerLine) && Transcript[VoiceLearnerLine].Speaker == EStationSpeaker::Learner)
 	{
 		Transcript.RemoveAt(VoiceLearnerLine);
@@ -887,6 +1025,81 @@ void UStationRunFlow::ResumePatient()
 	{
 		Patient.Resume();
 	}
+}
+
+void UStationRunFlow::ReleaseSpokenExamAsDialogue()
+{
+	const FString Text = SpokenExamText;
+	ResetSpokenExam();
+	if (bVoiceLearnerCommitted)
+	{
+		AddLine(EStationSpeaker::Learner, Text);
+		VoiceLearnerLine = Transcript.Num() - 1;
+	}
+	else
+	{
+		Voice.LearnerText = Text; // its final transcript joins the conversation as usual
+	}
+}
+
+void UStationRunFlow::TakeSpokenExamOutcome(const FStationVoiceEvent& Event)
+{
+	FString Text = Event.TurnId == SpokenExamTurn ? SpokenExamText : FString();
+	if (Text.IsEmpty() && Transcript.IsValidIndex(VoiceLearnerLine) && Transcript[VoiceLearnerLine].Speaker == EStationSpeaker::Learner)
+	{
+		// The learner started speaking before the mode was armed, so the utterance
+		// first showed as dialogue; it was the exam request.
+		Text = Transcript[VoiceLearnerLine].Text;
+		Transcript.RemoveAt(VoiceLearnerLine);
+		VoiceLearnerLine = INDEX_NONE;
+	}
+	if (Text.IsEmpty())
+	{
+		Text = Voice.LearnerText;
+	}
+	Voice.LearnerText.Reset();
+	// Phoenix used the mode for this request.
+	ResetSpokenExam();
+
+	FStationExamRequest& Answered = ExamRequests.AddDefaulted_GetRef();
+	Answered.Text = Text;
+	Answered.Reply = Event.Impresso;
+	ReloadReleasedImpressos();
+}
+
+void UStationRunFlow::ResetSpokenExam()
+{
+	SpokenExamExpiresAt = 0.0;
+	SpokenExamTurn = 0;
+	SpokenExamText.Reset();
+}
+
+void UStationRunFlow::ReloadReleasedImpressos()
+{
+	if (!Client)
+	{
+		return;
+	}
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	const uint32 ThisRun = Run;
+	Client->ListImpressos([WeakThis, ThisRun](const TStationResult<TArray<FStationImpresso>>& Listed)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self || Self->Run != ThisRun)
+		{
+			return;
+		}
+		if (Listed.HasError())
+		{
+			if (IsUnanswered(Listed.GetError()))
+			{
+				Self->CheckPhoenix();
+			}
+			return;
+		}
+		Self->ReleasedImpressos = Listed.GetValue();
+		Self->OnChanged.Broadcast();
+	});
 }
 
 void UStationRunFlow::CommitVoiceReply()

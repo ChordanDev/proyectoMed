@@ -402,6 +402,11 @@ void UStationHudWidget::BuildExams(UOverlay& Root)
 
 	StationUi::AddText(*WidgetTree, *ExamPanel, LOCTEXT("ExamHeading", "Solicitar Exame Físico ou Exame Complementar"),
 		18, true, StationUi::Ink, 16.f);
+	// In a voice training the request can be said aloud (#364): opening the panel
+	// arms Phoenix's exam mode for the learner's next utterance.
+	AskAloudButton = StationUi::AddButton(*WidgetTree, *ExamPanel, LOCTEXT("AskExamAloud", "Falar solicitação"), 12.f);
+	AskAloudButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleAskExamAloud);
+	ExamAloudText = StationUi::AddText(*WidgetTree, *ExamPanel, FText::GetEmpty(), 15, true, StationUi::Ink, 8.f);
 	ExamInput = WidgetTree->ConstructWidget<UEditableTextBox>();
 	ExamInput->SetHintText(LOCTEXT("ExamHint", "Descreva a manobra de exame físico ou o exame complementar solicitado"));
 	ExamInput->OnTextCommitted.AddDynamic(this, &UStationHudWidget::HandleExamCommitted);
@@ -447,6 +452,22 @@ void UStationHudWidget::RefreshExams()
 			FText::Format(LOCTEXT("ExamPendingLine", "Você solicitou: {0} (solicitando...)"),
 				FText::FromString(Flow->GetPendingExamRequestText())), 15, false, StationUi::Muted, 12.f);
 	}
+	if (Flow->IsSpokenExamInFlight())
+	{
+		const FString& Heard = Flow->GetSpokenExamText();
+		StationUi::AddText(*WidgetTree, *ExamRequestBox,
+			FText::Format(LOCTEXT("ExamPendingLine", "Você solicitou: {0} (solicitando...)"),
+				FText::FromString(Heard.IsEmpty() ? FString(TEXT("...")) : Heard)), 15, false, StationUi::Muted, 12.f);
+	}
+
+	const bool bVoiceRun = Flow->GetMode() == EStationTrainingMode::Voice && !Flow->IsVoiceFallback();
+	StationUi::SetShown(AskAloudButton, bVoiceRun);
+	AskAloudButton->SetIsEnabled(Flow->CanAskExamAloud());
+	const FText AloudStatus = Flow->IsArmingExamAloud() ? LOCTEXT("ExamAloudArming", "Um momento...")
+		: Flow->IsListeningForExam() ? LOCTEXT("ExamAloudListening", "Fale agora a sua solicitação.")
+		: FText::GetEmpty();
+	StationUi::SetShown(ExamAloudText, !AloudStatus.IsEmpty());
+	ExamAloudText->SetText(AloudStatus);
 
 	DocumentBox->ClearChildren();
 	const TArray<FStationImpresso>& Released = Flow->GetReleasedImpressos();
@@ -473,7 +494,30 @@ void UStationHudWidget::RequestExam()
 
 void UStationHudWidget::HandleToggleExams()
 {
-	StationUi::SetShown(ExamPanel, ExamPanel->GetVisibility() == ESlateVisibility::Collapsed);
+	const bool bOpening = ExamPanel->GetVisibility() == ESlateVisibility::Collapsed;
+	StationUi::SetShown(ExamPanel, bOpening);
+	if (!Flow)
+	{
+		return;
+	}
+	// Pressing "Exames" in a voice training, then speaking, asks for the exam (#364);
+	// closing the panel without speaking takes it back.
+	if (bOpening && Flow->CanAskExamAloud())
+	{
+		Flow->AskExamAloud();
+	}
+	else if (!bOpening)
+	{
+		Flow->CancelExamAloud();
+	}
+}
+
+void UStationHudWidget::HandleAskExamAloud()
+{
+	if (Flow)
+	{
+		Flow->AskExamAloud();
+	}
 }
 
 void UStationHudWidget::HandleRequestExam()
