@@ -503,6 +503,38 @@ void FStationRunUnitSpec::Define()
 		TestEqual("the next utterance is dialogue", Later->GetTranscript().Num(), 1);
 	});
 
+	It("frees the exam button when the spoken request's turn fails", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		FStationVoiceEvent Failed = Spoken(EKind::TurnFailure, 1);
+		Failed.Failure = TEXT("turn_failed");
+		Flow->HandleVoiceEvent(Failed);
+		TestFalse("no request waits", Flow->IsSpokenExamInFlight());
+		TestTrue("the learner may ask again", Flow->CanAskExamAloud());
+		TestFalse("told it failed", Flow->GetExamErrorText().IsEmpty());
+		TestEqual("not a dialogue line", Flow->GetTranscript().Num(), 0);
+	});
+
+	It("moves an utterance that took the mode before it was known out of the conversation", [this, Spoken, ImpressoOutcome]()
+	{
+		// The learner spoke before Phoenix's answer to the press arrived here.
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		TestEqual("shown as dialogue first", Flow->GetTranscript().Num(), 1);
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+		TestEqual("then out of the conversation", Flow->GetTranscript().Num(), 0);
+		if (TestEqual("an exam request", Flow->GetExamRequests().Num(), 1))
+		{
+			TestEqual("with what the learner said", Flow->GetExamRequests()[0].Text, FString(TEXT("Solicito hemograma")));
+		}
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 2, TEXT("Aqui.")));
+		TestEqual("later turns join as usual", Flow->GetTranscript().Num(), 2);
+	});
+
 	It("asks for exams aloud instead of typing only while the voice training's voice works", [this]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();

@@ -928,6 +928,16 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 			}
 		}
 	}
+	if (Event.TurnId == SpokenExamTurn && Event.Kind == EStationVoiceEventKind::TurnFailure)
+	{
+		// The request may or may not have reached Phoenix: the learner may ask again,
+		// and what Phoenix released is read again.
+		ResetSpokenExam();
+		ExamErrorText = LOCTEXT("ExamRequestFailed", "Não foi possível enviar sua solicitação. Tente novamente.");
+		ReloadReleasedImpressos();
+		OnChanged.Broadcast();
+		return;
+	}
 	if (Event.TurnId == SpokenExamTurn
 		&& (Event.Kind == EStationVoiceEventKind::PatientText || Event.Kind == EStationVoiceEventKind::PatientComplete
 			|| Event.Kind == EStationVoiceEventKind::ExaminerAcknowledged || Event.Kind == EStationVoiceEventKind::PatientUnanswered))

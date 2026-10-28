@@ -193,6 +193,11 @@ defmodule BackendWeb.SessionAuthTest do
                  conn
                  |> request(method, "/api/stations/active/sessions/#{session_id}/exam-mode")
                  |> json_response(401)
+
+        assert %{"error" => "session_not_found"} =
+                 stranger
+                 |> request(method, "/api/stations/active/sessions/#{session_id}/exam-mode")
+                 |> json_response(404)
       end
 
       assert %{"error" => "session_not_found"} =
