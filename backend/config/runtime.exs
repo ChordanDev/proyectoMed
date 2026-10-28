@@ -439,6 +439,15 @@ if config_env() == :dev and System.get_env("STATION_AI_E2E_SCRIPTED_ADAPTER") ==
   config :backend, :station_ai_adapter, Backend.E2ESupport.ScriptedStationAIAdapter
 end
 
+# E2E-only: a short station duration, so the browser suite (#136) can watch the
+# authoritative countdown reach zero and finish the station by timer. Honored
+# only under `:dev`; anything but a positive integer keeps the 10-minute default.
+with true <- config_env() == :dev,
+     raw when is_binary(raw) <- System.get_env("E2E_STATION_DURATION_MS"),
+     {duration_ms, ""} when duration_ms > 0 <- Integer.parse(raw) do
+  config :backend, :station_duration_ms, duration_ms
+end
+
 # Database (ADR-014 #346, issue #329). `DATABASE_URL`
 # (`ecto://USER:PASS@HOST/DATABASE`) is required in `:prod` and optional in
 # `:dev`, where it replaces the local `backend_dev` database (config/dev.exs),
