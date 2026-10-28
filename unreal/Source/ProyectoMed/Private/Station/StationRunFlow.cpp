@@ -254,7 +254,8 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
 	const uint32 ThisRun = Run;
-	Client->SendTurn(Turn, EStationTurnModality::Text, [WeakThis, ThisRun, Turn](const TStationResult<FStationTurnReply>& Reply)
+	const int32 SentAfterVoiceTurn = VoiceTurnId;
+	Client->SendTurn(Turn, EStationTurnModality::Text, [WeakThis, ThisRun, Turn, SentAfterVoiceTurn](const TStationResult<FStationTurnReply>& Reply)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
 		if (!Self || Self->Run != ThisRun)
@@ -286,6 +287,13 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 			if (Value.Outcome == EStationTurnOutcome::PatientReply && !Value.ReplyText.IsEmpty())
 			{
 				Self->AddLine(EStationSpeaker::Patient, Value.ReplyText);
+				// The voice worker speaks this reply too (#325): it is the newer reply that
+				// lets the patient's voice through again (#193), unless the learner has
+				// spoken since, and then the worker does not speak it.
+				if (Self->VoiceTurnId == SentAfterVoiceTurn)
+				{
+					Self->ResumePatient();
+				}
 			}
 			Self->OnChanged.Broadcast();
 		}

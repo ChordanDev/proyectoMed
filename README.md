@@ -483,6 +483,18 @@ Phoenix answers with the single JSON body, as it does for a worker that does not
 the stream. A barge-in while the reply streams cancels the turn: the remaining
 sentences are dropped and, as for any cancelled generation, nothing of it is stored.
 
+**Typed turns (#325).** In a session with audio consent, when Phoenix approves the reply
+to a typed turn (`POST .../messages`) it also sends that reply to the worker through
+LiveKit's server API (`SendData`, data topic `typed-reply`, delivered to `voice-worker`
+only, under a token that administers only that room). The payload carries the session,
+`turn_id` (the last spoken turn the typed turn followed, 0 before any), `generation_id`
+(taken when the typed turn began, from the same counter as spoken turns) and the
+approved text. The worker accepts it only from the server and speaks it on
+`patient-voice` with no `transcript` event, since the learner already has the text from
+the HTTP answer, which stays text-only. It is never spoken once a newer generation was
+accepted or the learner has spoken a later turn, and speaking over it stops it. A
+LiveKit failure is logged without content and never fails the typed turn.
+
 Latency is logged without content: Phoenix logs each sentence's
 `voice_sentence index=<i> generation_ms=<ms> verification_ms=<ms> outcome=<o>`, and the
 worker logs `first patient audio for session <id> turn <n> generation <g> after <ms> ms`,

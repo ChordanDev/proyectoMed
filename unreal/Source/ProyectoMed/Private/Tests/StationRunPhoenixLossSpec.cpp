@@ -1,6 +1,8 @@
 // Run flow tests for a training that loses Phoenix (#196), against a fake Phoenix
 // served in-process: it can leave a call unanswered (a gateway's 503) while it still
-// answers the check that follows, which a real Phoenix cannot be made to do.
+// answers the check that follows, which a real Phoenix cannot be made to do. It also
+// holds a typed turn's reply for as long as a test needs, to check when the patient's
+// voice of that reply may play (#325).
 // `http://127.0.0.1:9` stands for a Phoenix that answers nothing at all.
 
 #include "Containers/Ticker.h"
@@ -40,6 +42,8 @@ namespace StationPhoenixLoss
 		"session_id": "stub-session", "status": "completed", "completed_at": "2026-10-27T12:05:00Z",
 		"completion_reason": "user", "deadline_at": "2026-10-27T12:10:00Z", "server_now": "2026-10-27T12:05:00Z"
 	})");
+
+	const TCHAR* TypedReplyBody = TEXT(R"({"outcome": "patient_reply", "reply_text": "Dói aqui.", "reply_audio_url": null})");
 
 	const TCHAR* ResultPath = TEXT("/api/v2/stations/active/sessions/stub-session/result");
 
@@ -262,6 +266,67 @@ void FStationRunPhoenixLossSpec::Define()
 			TestTrue("can send again", Flow->CanSendTurn());
 			// Phoenix's record has no such turn, so the learner may send it again.
 			TestEqual("the turn comes back", Flow->TakeUnsentTurn(), TEXT("Bom dia"));
+			Done.Execute();
+		});
+	});
+
+	// #325: the voice worker also speaks a typed turn's reply. Once the learner spoke
+	// over the patient, its voice stays silent until a newer reply (#193): the typed
+	// turn's reply is one, unless the learner spoke again while it was on its way.
+	auto LearnerSpeaks = [](int32 TurnId, const TCHAR* Text, bool bFinal = false)
+	{
+		FStationVoiceEvent Event;
+		Event.Kind = EStationVoiceEventKind::Learner;
+		Event.TurnId = TurnId;
+		Event.Text = Text;
+		Event.bFinal = bFinal;
+		return Event;
+	};
+
+	LatentIt("lets the patient speak a typed turn's reply after the learner spoke over it", Timeout,
+		[this, LearnerSpeaks](const FDoneDelegate& Done)
+	{
+		Server.Route(FString(SessionPath) + TEXT("/messages"), EHttpServerRequestVerbs::VERB_POST,
+			EHttpServerResponseCodes::Ok, TypedReplyBody);
+		Flow->HandleVoiceEvent(LearnerSpeaks(1, TEXT("Espera")));
+		Flow->HandleVoiceEvent(LearnerSpeaks(1, TEXT("Espera, vou examinar."), true));
+		FStationVoiceEvent Noted;
+		Noted.Kind = EStationVoiceEventKind::ExaminerAcknowledged;
+		Noted.TurnId = 1;
+		Flow->HandleVoiceEvent(Noted);
+		TestEqual("the patient is silenced", *Silenced, 1);
+
+		TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Onde dói?")));
+		WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done]()
+		{
+			TestEqual("the reply's voice may play", *Resumed, 1);
+			const TArray<FStationMessage>& Lines = Flow->GetTranscript();
+			if (TestEqual("both turns", Lines.Num(), 3))
+			{
+				TestEqual("the reply is shown", Lines[2].Text, TEXT("Dói aqui."));
+			}
+			Done.Execute();
+		});
+	});
+
+	LatentIt("keeps the patient silent when the learner speaks again before a typed turn's reply arrives", Timeout,
+		[this, LearnerSpeaks](const FDoneDelegate& Done)
+	{
+		Server.Route(FString(SessionPath) + TEXT("/messages"), EHttpServerRequestVerbs::VERB_POST,
+			EHttpServerResponseCodes::Ok, TypedReplyBody, /*DelaySeconds*/ 0.5f);
+		TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Onde dói?")));
+		Flow->HandleVoiceEvent(LearnerSpeaks(1, TEXT("Espera")));
+		TestEqual("the patient is silenced", *Silenced, 1);
+
+		WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done]()
+		{
+			// The worker never speaks that reply now; nothing stale may play either.
+			TestEqual("the patient stays silent", *Resumed, 0);
+			const TArray<FStationMessage>& Lines = Flow->GetTranscript();
+			if (TestEqual("the typed turn and its reply", Lines.Num(), 2))
+			{
+				TestEqual("the reply is still shown", Lines[1].Text, TEXT("Dói aqui."));
+			}
 			Done.Execute();
 		});
 	});
