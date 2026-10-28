@@ -525,6 +525,9 @@ harness and the E2E suite); in production they need the access token, and the
 per-session aliases serve only the learner's own sessions. In production there is no active station (stations come
 only from the database), so `GET /api/stations/active` and
 `POST /api/stations/active/sessions` answer `404 no_active_station` there.
+`POST`/`DELETE /api/stations/active/sessions/:id/exam-mode` (#364) is the
+alias this client uses for the spoken exam request until it has the device
+login; then every call moves to `/sessions/:id/...` together.
 
 The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
 which serves the language and speech-to-text keyterms of the session's own
