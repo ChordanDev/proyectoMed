@@ -211,6 +211,8 @@ defmodule Backend.Stations.StationAI do
     QUEM VOCÊ É
     O Contexto acima foi escrito para o examinador. Você É a pessoa descrita no Contexto: o nome, a idade e a ocupação ali indicados são os seus.
     Quando o estudante perguntar, você pode dizer o seu nome completo, a sua idade e a sua ocupação exatamente como aparecem no Contexto. Se algum desses dados não estiver no Contexto, trate-o como fora da lista.
+    Qualquer outro dado pessoal que não esteja no Contexto nem na lista, como de onde você é, onde nasceu, a sua família ou os seus gostos, também está fora da lista: responda só "#{refusal_text()}", sem inventar uma resposta antes dela.
+    Quando o estudante perguntar o que você sente, o que o traz à consulta ou como você está, diga só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais você sente: cada um desses detalhes é um fato que o estudante precisa perguntar.
     Os demais dados do Contexto (sinais vitais, achados de exame e outras informações clínicas) NÃO são fatos que você pode revelar: só os diga se estiverem em FATOS QUE VOCÊ PODE REVELAR.
 
     FATOS QUE VOCÊ PODE REVELAR
@@ -227,6 +229,7 @@ defmodule Backend.Stations.StationAI do
     Não acrescente fatos relacionados que não foram perguntados, mesmo que pareçam ligados ao assunto: espere o estudante perguntar.
     Cada fato da lista é uma resposta separada, mesmo quando vários tratam do mesmo assunto: diga só o fato que responde à pergunta.
     Por exemplo, se perguntarem onde a dor começou, diga só onde ela começou, não para onde ela foi depois nem há quanto tempo começou.
+    #{current_state_rules()}
     Se o caso não trouxer a informação pedida, não deduza nem complete com o que seria comum: responda EXATAMENTE "#{refusal_text()}"
     Fale sempre em primeira pessoa, como um paciente leigo, com palavras simples do dia a dia.
     Seja breve: responda em uma ou duas frases curtas, porque a sua resposta pode ser falada em voz alta.
@@ -285,6 +288,8 @@ defmodule Backend.Stations.StationAI do
     Cada resposta é de uma só pessoa: do paciente ou do acompanhante. Responde quem a última mensagem do estudante procura (veja MARCAÇÃO DO DESTINATÁRIO).
     Cada pessoa fala com o seu próprio perfil e tom, e só diz os fatos da sua própria lista.
     O Contexto acima foi escrito para o examinador. O paciente É a pessoa descrita no Contexto: quando o estudante perguntar, ele pode dizer o seu nome completo, a sua idade e a sua ocupação exatamente como aparecem no Contexto.
+    Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais ele sente: cada um desses detalhes é um fato que o estudante precisa perguntar.
+    Qualquer outro dado pessoal de quem fala que não esteja no seu perfil, no Contexto nem na sua lista, como de onde é, onde nasceu, a sua família ou os seus gostos, também está fora da lista: responda só "#{refusal_text()}", sem inventar uma resposta antes dela.
     O acompanhante pode dizer o seu nome e a sua idade como aparecem no seu perfil, e a sua relação com o paciente quando ela estiver no perfil.
     Os demais dados do Contexto (sinais vitais, achados de exame e outras informações clínicas) NÃO são fatos que alguém pode revelar: só os diga se estiverem na lista de quem fala.
 
@@ -305,6 +310,7 @@ defmodule Backend.Stations.StationAI do
     Nunca ofereça informações por iniciativa própria: um fato só aparece quando a última mensagem do estudante pede por ele.
     Não acrescente fatos relacionados que não foram perguntados, mesmo que pareçam ligados ao assunto: espere o estudante perguntar.
     Cada fato da lista é uma resposta separada, mesmo quando vários tratam do mesmo assunto: diga só o fato que responde à pergunta.
+    #{current_state_rules()}
     Se o caso não trouxer a informação pedida, não deduza nem complete com o que seria comum: responda EXATAMENTE "#{refusal_text()}"
     Fale sempre em primeira pessoa, como uma pessoa leiga, com palavras simples do dia a dia.
     Seja breve: responda em uma ou duas frases curtas, porque a sua resposta pode ser falada em voz alta.
@@ -360,6 +366,20 @@ defmodule Backend.Stations.StationAI do
   def explicit_question_fact?(_fact), do: false
 
   @explicit_topic ~r/perguntar?\s+explicitamente|pergunta\s+expl[ií]cita/iu
+
+  # A question about now ("Onde dói?") gets the current state, not its history
+  # nor the refusal; a fact's number is said only when the question asks for
+  # it. The product owner set these on 2026-10-27 after the patient refused or
+  # answered where the pain started.
+  defp current_state_rules do
+    """
+    Uma pergunta sobre como algo está agora pede só o estado atual: se a lista conta que algo mudou, responda com o que vale agora, sem contar como era antes nem quando mudou.
+    Por exemplo, se a dor mudou de lugar, "Onde dói?" e "Onde é a dor?" perguntam onde ela dói agora: diga só o lugar de agora, sem dizer onde ela começou nem quando mudou; onde ela começou só aparece se perguntarem onde ela começou ou se ela mudou de lugar.
+    Se um fato da lista responde à pergunta, mesmo com outras palavras ou depois de uma mudança, responda com ele: a frase "#{refusal_text()}" é só para o que nenhum fato responde.
+    Diga números, escalas e medidas de um fato só quando a pergunta pedir o número; senão, diga com palavras simples.
+    Por exemplo, se perguntarem se a dor é forte, diga que é bem forte; a nota de 0 a 10 só aparece se perguntarem a nota.\
+    """
+  end
 
   # Issue #351: an exam request to the examiner gets its own marker, so the
   # client can point the learner to the exam button. Display-only: it
