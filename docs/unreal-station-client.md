@@ -823,9 +823,14 @@ worker, nothing spoken):
 
 `ParseStationVoiceEvent` reads this event as `ExaminerImpresso`, with the
 decision in `Impresso` (no `ReleasedImpressos`, and `NewlyReleased` without
-`Content`). In `UStationRunFlow`, opening the "Exames" panel in a voice
-training arms the mode (`AskExamAloud`) and closing it unused cancels it
-(`CancelExamAloud`). The utterance that takes the mode shows in the exam panel
+`Content`). In `UStationRunFlow`, a text training types its exam requests;
+a voice training whose voice and microphone work says them aloud
+(`ShouldRequestExamsAloud`) while the learner holds "Segure para falar a
+solicitação" in the "Exames" panel: pressing arms the mode (`AskExamAloud`),
+releasing goes back to the dialogue (`ReleaseExamAloud`). A request already
+started when the button is released stays the request; if nothing was heard
+yet, the mode listens two more seconds for the first caption and is then
+disarmed. The utterance that takes the mode shows in the exam panel
 ("Você solicitou: ... (solicitando...)"), never in the conversation; its
 outcome joins `GetExamRequests` as a typed request's does, and the flow reads
 `ListImpressos` again. If Phoenix answers that utterance as dialogue instead

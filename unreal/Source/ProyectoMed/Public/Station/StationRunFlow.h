@@ -264,15 +264,22 @@ public:
 	const FText& GetExamErrorText() const { return ExamErrorText; }
 
 	/**
-	 * True in a running voice training whose voice is not lost, while no spoken exam
-	 * request is being armed, listened for or answered (#364).
+	 * In a voice training whose voice and microphone work, exam requests are said
+	 * aloud while a button is held (#364); otherwise they are typed.
+	 */
+	bool ShouldRequestExamsAloud() const;
+
+	/**
+	 * True while the run is running, `ShouldRequestExamsAloud` holds and no spoken
+	 * exam request is being armed, listened for or answered. A released button whose
+	 * grace still runs may be pressed again.
 	 */
 	bool CanAskExamAloud() const;
 
 	/**
-	 * The learner pressed "Exames" to say the request aloud. Phoenix arms an exam
-	 * mode: the learner's next utterance goes to the impresso request instead of
-	 * the patient, and its outcome joins `GetExamRequests` as a typed request's
+	 * The learner pressed the exam button to say the request aloud. Phoenix arms an
+	 * exam mode: the learner's next utterance goes to the impresso request instead
+	 * of the patient, and its outcome joins `GetExamRequests` as a typed request's
 	 * does. Returns false, and asks nothing, when `CanAskExamAloud` is false.
 	 */
 	bool AskExamAloud();
@@ -283,8 +290,12 @@ public:
 	/** True while the armed exam mode waits for the learner to start speaking. */
 	bool IsListeningForExam() const;
 
-	/** The learner closed the exam prompt without speaking: the mode is disarmed. */
-	void CancelExamAloud();
+	/**
+	 * The learner released the button: the dialogue goes on. A request the learner
+	 * started stays the request. If nothing was heard yet, the mode waits two more
+	 * seconds for the first caption, then Phoenix disarms it.
+	 */
+	void ReleaseExamAloud();
 
 	/** True while the spoken exam request is heard or waits for its outcome. */
 	bool IsSpokenExamInFlight() const { return SpokenExamTurn != 0; }
@@ -455,8 +466,11 @@ private:
 	FString UnsentExamRequest;
 	FText ExamErrorText;
 	bool bArmingSpokenExam = false;
-	/** The learner closed the exam prompt while Phoenix armed the mode: disarm it once armed. */
-	bool bCancelSpokenExamWhenArmed = false;
+	/** The learner released the button while Phoenix armed the mode, at `SpokenExamReleasedAt`. */
+	bool bReleasedWhileArming = false;
+	/** The button was released while the armed mode still listens. */
+	bool bSpokenExamReleased = false;
+	double SpokenExamReleasedAt = 0.0;
 	/** `FPlatformTime::Seconds()` at which the armed exam mode expires; 0 while none is armed. */
 	double SpokenExamExpiresAt = 0.0;
 	/** The spoken turn the armed exam mode went to; 0 while there is none. */

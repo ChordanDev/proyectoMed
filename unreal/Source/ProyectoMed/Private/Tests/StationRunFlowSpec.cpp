@@ -344,6 +344,7 @@ void FStationRunUnitSpec::Define()
 	auto ArmExamAloud = [](UStationRunFlow* Flow)
 	{
 		Flow->Step = EStationRunStep::Running;
+		Flow->Mode = EStationTrainingMode::Voice;
 		Flow->SpokenExamExpiresAt = FPlatformTime::Seconds() + 20.0;
 	};
 
@@ -466,6 +467,58 @@ void FStationRunUnitSpec::Define()
 		Flow->ResetRun();
 		TestFalse("not listening after a reset", Flow->IsListeningForExam());
 		TestFalse("no request after a reset", Flow->IsSpokenExamInFlight());
+	});
+
+	It("keeps the request the learner started before releasing the button", [this, Spoken, ImpressoOutcome, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito")));
+		Flow->ReleaseExamAloud();
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+		TestEqual("the request", Flow->GetExamRequests().Num(), 1);
+		TestEqual("not a dialogue line", Flow->GetTranscript().Num(), 0);
+	});
+
+	It("gives a released button a moment to catch the request, then goes back to the dialogue", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->ReleaseExamAloud();
+		TestTrue("still listening for the first caption", Flow->IsListeningForExam());
+		TestTrue("for two seconds at most", Flow->SpokenExamExpiresAt <= FPlatformTime::Seconds() + 2.0);
+		TestTrue("pressing again re-arms it", Flow->CanAskExamAloud());
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Hemograma")));
+		TestTrue("a caption within the grace is the request", Flow->IsSpokenExamInFlight());
+
+		UStationRunFlow* Later = NewObject<UStationRunFlow>();
+		ArmExamAloud(Later);
+		Later->ReleaseExamAloud();
+		Later->Step = EStationRunStep::Brief; // CheckStationTimer reads the Station Timer only while running
+		Later->SpokenExamExpiresAt = FPlatformTime::Seconds() - 1.0;
+		Later->CheckStationTimer();
+		TestFalse("no longer listening", Later->IsListeningForExam());
+		Later->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		TestEqual("the next utterance is dialogue", Later->GetTranscript().Num(), 1);
+	});
+
+	It("asks for exams aloud instead of typing only while the voice training's voice works", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		Flow->Mode = EStationTrainingMode::Text;
+		TestFalse("typed in a text training", Flow->ShouldRequestExamsAloud());
+		Flow->Mode = EStationTrainingMode::Voice;
+		TestTrue("aloud in a voice training", Flow->ShouldRequestExamsAloud());
+		Flow->bVoiceFallback = true;
+		TestFalse("typed once it fell back to text", Flow->ShouldRequestExamsAloud());
+		Flow->bVoiceFallback = false;
+		Flow->Voice.bMicrophoneUnavailable = true;
+		TestFalse("typed without a microphone", Flow->ShouldRequestExamsAloud());
+		Flow->Voice.bMicrophoneUnavailable = false;
+		Flow->Voice.bLost = true;
+		TestFalse("typed once the voice is lost", Flow->ShouldRequestExamsAloud());
 	});
 
 	It("asks aloud only in a running voice training whose voice is not lost", [this]()
@@ -634,7 +687,7 @@ void FStationRunPhoenixSpec::Define()
 		});
 	});
 
-	LatentIt("listens for a spoken exam request once Phoenix arms the exam mode, until the learner cancels it", Timeout, [this](const FDoneDelegate& Done)
+	LatentIt("listens for a spoken exam request once Phoenix arms the exam mode, a moment past the release", Timeout, [this](const FDoneDelegate& Done)
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
@@ -659,15 +712,15 @@ void FStationRunPhoenixSpec::Define()
 					{
 						TestTrue("no error", Flow->GetExamErrorText().IsEmpty());
 						TestTrue("listening", Flow->IsListeningForExam());
-						Flow->CancelExamAloud();
-						TestFalse("cancelled", Flow->IsListeningForExam());
+						Flow->ReleaseExamAloud();
+						TestTrue("still listening for the first caption", Flow->IsListeningForExam());
 						Done.Execute();
 					});
 				});
 		});
 	});
 
-	LatentIt("does not listen for an exam request the learner took back while Phoenix armed it", Timeout, [this](const FDoneDelegate& Done)
+	LatentIt("stops listening soon after the learner releases the button while Phoenix arms the mode", Timeout, [this](const FDoneDelegate& Done)
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
@@ -681,12 +734,20 @@ void FStationRunPhoenixSpec::Define()
 						Done.Execute();
 						return;
 					}
-					Flow->CancelExamAloud();
-					WhenFlow(Flow, [this]() { return !Flow->IsArmingExamAloud(); }, [this, Done]()
+					Flow->ReleaseExamAloud();
+					const double Released = FPlatformTime::Seconds();
+					// The interface checks the mode every frame; so does this ticker.
+					FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Done, Released](float)
 					{
-						TestFalse("not listening", Flow->IsListeningForExam());
+						Flow->CheckStationTimer();
+						if (Flow->IsArmingExamAloud() || Flow->IsListeningForExam())
+						{
+							return true;
+						}
+						TestTrue("within the grace, not Phoenix's twenty seconds", FPlatformTime::Seconds() - Released < 10.0);
 						Done.Execute();
-					});
+						return false;
+					}));
 				});
 		});
 	});

@@ -153,6 +153,9 @@ private:
 	void HandleAskExamAloud();
 
 	UFUNCTION()
+	void HandleReleaseExamAloud();
+
+	UFUNCTION()
 	void HandleExamCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 
 	UFUNCTION()

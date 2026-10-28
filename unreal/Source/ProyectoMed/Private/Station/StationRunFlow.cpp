@@ -41,6 +41,12 @@ FText FormatStationTimer(const FTimespan& Remaining)
 namespace
 {
 	const TCHAR* VoiceSettingsSection = TEXT("StationVoice");
+
+	/**
+	 * How long a released exam button still listens: the first caption of a request
+	 * spoken right before the release arrives within it.
+	 */
+	constexpr double SpokenExamReleaseGraceSeconds = 2.0;
 	const TCHAR* DisclosureShownKey = TEXT("bMicrophoneDisclosureShown");
 }
 
@@ -300,10 +306,15 @@ bool UStationRunFlow::CanRequestExam() const
 	return Step == EStationRunStep::Running && !PendingExamRequest.IsSet();
 }
 
+bool UStationRunFlow::ShouldRequestExamsAloud() const
+{
+	return Mode == EStationTrainingMode::Voice && !bVoiceFallback && !Voice.bLost && !Voice.bMicrophoneUnavailable;
+}
+
 bool UStationRunFlow::CanAskExamAloud() const
 {
-	return Step == EStationRunStep::Running && Mode == EStationTrainingMode::Voice && !bVoiceFallback
-		&& !Voice.bLost && !bArmingSpokenExam && !IsListeningForExam() && !IsSpokenExamInFlight();
+	return Step == EStationRunStep::Running && ShouldRequestExamsAloud() && !bArmingSpokenExam
+		&& !(IsListeningForExam() && !bSpokenExamReleased) && !IsSpokenExamInFlight();
 }
 
 bool UStationRunFlow::AskExamAloud()
@@ -314,7 +325,8 @@ bool UStationRunFlow::AskExamAloud()
 	}
 
 	bArmingSpokenExam = true;
-	bCancelSpokenExamWhenArmed = false;
+	bReleasedWhileArming = false;
+	bSpokenExamReleased = false;
 	ExamErrorText = FText::GetEmpty();
 	OnChanged.Broadcast();
 
@@ -341,17 +353,22 @@ bool UStationRunFlow::AskExamAloud()
 			}
 			return;
 		}
-		if (Self->bCancelSpokenExamWhenArmed || Self->Step != EStationRunStep::Running)
+		if (Self->Step != EStationRunStep::Running)
 		{
-			// The learner closed the prompt while Phoenix armed it.
-			Self->bCancelSpokenExamWhenArmed = false;
 			Self->DisarmSpokenExam();
-			Self->OnChanged.Broadcast();
 			return;
 		}
 		// Phoenix's clock sets the expiry; this clock counts it down from now.
 		const FTimespan Left = Armed.GetValue().ExpiresAt - Armed.GetValue().ServerNow;
 		Self->SpokenExamExpiresAt = FPlatformTime::Seconds() + Left.GetTotalSeconds();
+		if (Self->bReleasedWhileArming)
+		{
+			// The learner may already have spoken while Phoenix armed it.
+			Self->bReleasedWhileArming = false;
+			Self->bSpokenExamReleased = true;
+			Self->SpokenExamExpiresAt = FMath::Min(Self->SpokenExamExpiresAt,
+				Self->SpokenExamReleasedAt + SpokenExamReleaseGraceSeconds);
+		}
 		Self->OnChanged.Broadcast();
 	});
 	return true;
@@ -362,24 +379,29 @@ bool UStationRunFlow::IsListeningForExam() const
 	return SpokenExamTurn == 0 && SpokenExamExpiresAt > 0.0 && FPlatformTime::Seconds() < SpokenExamExpiresAt;
 }
 
-void UStationRunFlow::CancelExamAloud()
+void UStationRunFlow::ReleaseExamAloud()
 {
 	if (bArmingSpokenExam)
 	{
-		bCancelSpokenExamWhenArmed = true;
+		bReleasedWhileArming = true;
+		SpokenExamReleasedAt = FPlatformTime::Seconds();
 		return;
 	}
-	if (SpokenExamTurn != 0 || SpokenExamExpiresAt <= 0.0)
+	if (!IsListeningForExam() || bSpokenExamReleased)
 	{
 		return; // nothing armed, or the learner already spoke into it
 	}
-	SpokenExamExpiresAt = 0.0;
-	DisarmSpokenExam();
+	bSpokenExamReleased = true;
+	SpokenExamExpiresAt = FMath::Min(SpokenExamExpiresAt, FPlatformTime::Seconds() + SpokenExamReleaseGraceSeconds);
 	OnChanged.Broadcast();
 }
 
 void UStationRunFlow::DisarmSpokenExam()
 {
+	if (!Client)
+	{
+		return;
+	}
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
 	const uint32 ThisRun = Run;
 	Client->CancelExamMode([WeakThis, ThisRun](const TStationResult<FStationNone>& Cancelled)
@@ -535,8 +557,12 @@ void UStationRunFlow::CheckStationTimer()
 {
 	if (SpokenExamTurn == 0 && SpokenExamExpiresAt > 0.0 && FPlatformTime::Seconds() >= SpokenExamExpiresAt)
 	{
-		// The learner did not speak in time; Phoenix disarmed it too.
-		SpokenExamExpiresAt = 0.0;
+		// Nothing was heard: after a release Phoenix is told; at its own expiry it disarmed it already.
+		if (bSpokenExamReleased)
+		{
+			DisarmSpokenExam();
+		}
+		ResetSpokenExam();
 		OnChanged.Broadcast();
 	}
 	if (CanFinish() && FPlatformTime::Seconds() >= TimerRetryNotBefore
@@ -762,7 +788,7 @@ void UStationRunFlow::ResetRun()
 	UnsentExamRequest.Reset();
 	ExamErrorText = FText::GetEmpty();
 	bArmingSpokenExam = false;
-	bCancelSpokenExamWhenArmed = false;
+	bReleasedWhileArming = false;
 	ResetSpokenExam();
 	FinishReason = EStationFinishReason::User;
 	Result.Reset();
@@ -1070,6 +1096,7 @@ void UStationRunFlow::TakeSpokenExamOutcome(const FStationVoiceEvent& Event)
 void UStationRunFlow::ResetSpokenExam()
 {
 	SpokenExamExpiresAt = 0.0;
+	bSpokenExamReleased = false;
 	SpokenExamTurn = 0;
 	SpokenExamText.Reset();
 }

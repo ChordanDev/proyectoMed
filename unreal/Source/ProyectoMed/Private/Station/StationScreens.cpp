@@ -402,10 +402,12 @@ void UStationHudWidget::BuildExams(UOverlay& Root)
 
 	StationUi::AddText(*WidgetTree, *ExamPanel, LOCTEXT("ExamHeading", "Solicitar Exame Físico ou Exame Complementar"),
 		18, true, StationUi::Ink, 16.f);
-	// In a voice training the request can be said aloud (#364): opening the panel
-	// arms Phoenix's exam mode for the learner's next utterance.
-	AskAloudButton = StationUi::AddButton(*WidgetTree, *ExamPanel, LOCTEXT("AskExamAloud", "Falar solicitação"), 12.f);
-	AskAloudButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleAskExamAloud);
+	// In a voice training the request is said aloud while this button is held
+	// (#364); releasing it goes back to the dialogue. A text training types it.
+	AskAloudButton = StationUi::AddButton(*WidgetTree, *ExamPanel,
+		LOCTEXT("AskExamAloud", "Segure para falar a solicitação"), 12.f);
+	AskAloudButton->OnPressed.AddDynamic(this, &UStationHudWidget::HandleAskExamAloud);
+	AskAloudButton->OnReleased.AddDynamic(this, &UStationHudWidget::HandleReleaseExamAloud);
 	ExamAloudText = StationUi::AddText(*WidgetTree, *ExamPanel, FText::GetEmpty(), 15, true, StationUi::Ink, 8.f);
 	ExamInput = WidgetTree->ConstructWidget<UEditableTextBox>();
 	ExamInput->SetHintText(LOCTEXT("ExamHint", "Descreva a manobra de exame físico ou o exame complementar solicitado"));
@@ -460,11 +462,15 @@ void UStationHudWidget::RefreshExams()
 				FText::FromString(Heard.IsEmpty() ? FString(TEXT("...")) : Heard)), 15, false, StationUi::Muted, 12.f);
 	}
 
-	const bool bVoiceRun = Flow->GetMode() == EStationTrainingMode::Voice && !Flow->IsVoiceFallback();
-	StationUi::SetShown(AskAloudButton, bVoiceRun);
-	AskAloudButton->SetIsEnabled(Flow->CanAskExamAloud());
-	const FText AloudStatus = Flow->IsArmingExamAloud() ? LOCTEXT("ExamAloudArming", "Um momento...")
-		: Flow->IsListeningForExam() ? LOCTEXT("ExamAloudListening", "Fale agora a sua solicitação.")
+	const bool bAloud = Flow->ShouldRequestExamsAloud();
+	StationUi::SetShown(AskAloudButton, bAloud);
+	StationUi::SetShown(ExamInput, !bAloud);
+	StationUi::SetShown(ExamButton, !bAloud);
+	// Disabling a held button would lose its release, so it stays enabled while the run goes on.
+	AskAloudButton->SetIsEnabled(Flow->CanFinish());
+	const bool bHeld = AskAloudButton->IsPressed();
+	const FText AloudStatus = bHeld && Flow->IsArmingExamAloud() ? LOCTEXT("ExamAloudArming", "Um momento...")
+		: bHeld && Flow->IsListeningForExam() ? LOCTEXT("ExamAloudListening", "Fale a sua solicitação e solte o botão.")
 		: FText::GetEmpty();
 	StationUi::SetShown(ExamAloudText, !AloudStatus.IsEmpty());
 	ExamAloudText->SetText(AloudStatus);
@@ -494,22 +500,7 @@ void UStationHudWidget::RequestExam()
 
 void UStationHudWidget::HandleToggleExams()
 {
-	const bool bOpening = ExamPanel->GetVisibility() == ESlateVisibility::Collapsed;
-	StationUi::SetShown(ExamPanel, bOpening);
-	if (!Flow)
-	{
-		return;
-	}
-	// Pressing "Exames" in a voice training, then speaking, asks for the exam (#364);
-	// closing the panel without speaking takes it back.
-	if (bOpening && Flow->CanAskExamAloud())
-	{
-		Flow->AskExamAloud();
-	}
-	else if (!bOpening)
-	{
-		Flow->CancelExamAloud();
-	}
+	StationUi::SetShown(ExamPanel, ExamPanel->GetVisibility() == ESlateVisibility::Collapsed);
 }
 
 void UStationHudWidget::HandleAskExamAloud()
@@ -517,6 +508,14 @@ void UStationHudWidget::HandleAskExamAloud()
 	if (Flow)
 	{
 		Flow->AskExamAloud();
+	}
+}
+
+void UStationHudWidget::HandleReleaseExamAloud()
+{
+	if (Flow)
+	{
+		Flow->ReleaseExamAloud();
 	}
 }
 

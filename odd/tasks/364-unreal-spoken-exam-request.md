@@ -16,8 +16,8 @@ Server side (Phoenix route, worker routing and room event) is done in PR #396 an
 
 - S5 (parent session, 2026-10-28) The Unreal client has no device login and calls only the deprecated `/api/stations/active/sessions/...` routes, while `exam-mode` exists only under `/sessions/:id` (device token required). Add `POST`/`DELETE /api/stations/active/sessions/:id/exam-mode` to the deprecated scope with the same `limit_session_exam_mode` limiter, reusing `SessionController.arm_exam_mode/cancel_exam_mode`, with controller tests for both routes. Every Unreal call moves to `/sessions/:id` together once Unreal has device login.
 - S6 `UStationClient` arms and cancels the exam mode; `ParseStationVoiceEvent` reads the `impresso_requested` examiner event.
-- S7 `UStationRunFlow`: in a voice run with the voice link up, the "Exames" panel arms the exam mode for the next utterance. That utterance shows in the exam panel, not in the conversation; its outcome joins the exam requests as a typed request's does, and the released impressos are read again with `ListImpressos`. An `impresso_requested` turn is an outcome, so a newer turn never drops it (#193). When Phoenix treats the utterance as a dialogue turn after all (the mode expired), its learner line joins the conversation before the reply.
-- S8 The mode ends locally on the outcome, at `expires_at` and when the learner cancels it (`DELETE`).
+- S7 (L7) In a text training exam requests stay typed. In a voice training whose voice and microphone work, the "Exames" panel offers a hold-to-speak button instead of the typed box: pressing it arms the exam mode, and the utterance spoken while it is held is the exam request; releasing it returns to the dialogue. Opening the panel arms nothing. When the voice is lost or the microphone unavailable, the typed box comes back. The utterance that takes the mode shows in the exam panel, not in the conversation; its outcome joins the exam requests as a typed request's does, and the released impressos are read again. An `impresso_requested` turn is an outcome, so a newer turn never drops it (#193). When Phoenix treats the utterance as a dialogue turn after all (the mode expired), its learner line joins the conversation before the reply.
+- S8 (L7) Releasing the button after the learner started speaking keeps that request. Releasing it before anything was heard leaves a short grace (2 s, for the first caption to arrive), then disarms the mode in Phoenix. The mode also ends locally on the outcome and at `expires_at`.
 
 ## Tasks
 
@@ -26,12 +26,14 @@ Server side (Phoenix route, worker routing and room event) is done in PR #396 an
 | T1 | S5 | inline | done | 18304e3; RED 4 controller/limit/auth tests (404), GREEN 57/57 |
 | T2 | S6 | inline | done | RED 4 client/voice specs on stubs, GREEN 117/117 (see L5) |
 | T3 | S1, S2, S3, S7, S8 | inline | done | RED 5 flow specs on stubs, GREEN 117/117 (see L5) |
-| T4 | S1-S3 by eye (human) | human | pending | |
+| T4 | S1-S3, S7 by eye (human) | human | pending | |
+| T5 | S7, S8 | inline | done | RED 2 fails + editor crash on release (immediate disarm), GREEN see L9 |
 
 - T1 Phoenix: deprecated aliases of the exam-mode routes, tests, docs.
 - T2 Station client: `ArmExamMode`, `CancelExamMode`, the `impresso_requested` voice event; client specs.
 - T3 Run flow and HUD: the spoken exam request; unit specs.
 - T4 By-eye check in the editor with the voice stack.
+- T5 Hold-to-speak button and typed box only outside voice (L7).
 
 ## Log
 
@@ -41,3 +43,6 @@ Server side (Phoenix route, worker routing and room event) is done in PR #396 an
 - L4 (2026-10-28): T1. Alias added to the deprecated scope with `limit_session_exam_mode`. The alias rate-limit tests are now named by method too, since POST and DELETE share a path.
 - L5 (2026-10-28): T2+T3. Stubs first: `StationClient+StationVoice.Unit+StationRun.Unit+StationRun.Phoenix` 108/117, the 9 new behaviour specs failing; then GREEN 117/117 against a scripted Phoenix on port 4364 (the #325 session shares the machine). One fix in the spec itself: Phoenix reads its clock again for `server_now`, so `expires_at - server_now` is just under 20 s. Design: opening "Exames" in a voice training arms the mode and closing it unused cancels it; the utterance that takes the mode is held out of the conversation (`SpokenExamText`) and shown as "Você solicitou: ... (solicitando...)"; an `ExaminerImpresso` outcome joins `ExamRequests` and reloads `ListImpressos`; any dialogue outcome on that turn puts the held line in the conversation first; a superseded exam turn passes the mode to the next utterance and reloads the impressos. Later refactor: `DisarmSpokenExam` replaces a cancel path that faked an expiry; covered by a new Phoenix spec (no RED: refactor guard).
 - L6 (2026-10-28): PR #414 opened against develop. Open product question found after opening it: Engram decision of 2026-10-22 says exam requests "stay typed (button + text, as #354 built) in trainings" and the spoken version is for the prova simulada (#318), which the Unreal client does not have yet. T3 arms the mode when "Exames" opens in a voice training, which changes that training. Waiting for the user before review and the by-eye check. RDD: assess `high` (auth test path), consent envelope not yet relayed.
+- L7 (2026-10-28, user): "A, dale con el botón explícito. Osea para mi debería ser así, en los entrenamientos uno antes elije si hacerlo por voz o por texto, si se hacer por texto, se hace todo por texto, tocas el botón solicitar examen y pones el examen que solicitas. Si lo hacer por voz, entonces la idea es que sea todo por voz, tocas el botón para solicitar examen y lo tenes que pausar o destocar una vez que ya pediste el examen. Quizas lo que podemos hacer es que haya que mantenerlo presionado mientras pedis el examen, una vez que deja de estar presionado se pasa al dialogo normal"
+- L8 (2026-10-28): S7/S8 rewritten for L7; T5 opened.
+- L9 (2026-10-28): T5. Hold-to-speak: `ShouldRequestExamsAloud` (voice training, voice and microphone working) shows "Segure para falar a solicitação" instead of the typed box; `OnPressed` arms, `OnReleased` calls `ReleaseExamAloud` (2 s grace, then `DELETE`). Opening "Exames" arms nothing. GREEN: `StationClient.Unit+StationClient.Phoenix+StationVoice.Unit+StationRun.Phoenix` 83/83; `StationRun.Unit` without `PhoenixLoss` 24/24. Not re-run after T5: `StationClient.FakePhoenix` and `StationRun.Unit.PhoenixLoss`, because a CrashReportClient left by a crashed test editor of this session holds ports 8000 and 18766 and stopping it was denied; both passed after T3 (118/118). Test filters break on `'` and `,` in spec names inside `-ExecCmds`.
