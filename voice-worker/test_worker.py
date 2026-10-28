@@ -24,7 +24,7 @@ from test_transcripts import (
     MockSTT,
     event,
 )
-from transcripts import TurnTracker, VoiceTurnReply
+from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 from worker import (
     PatientVoice,
     build_tts,
@@ -348,7 +348,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Ainda", output)
         self.assertNotIn("quando", output)
 
-    async def test_barge_in_on_the_pending_turn_cancels_playback(self):
+    async def test_barge_in_on_the_pending_turn_cancels_it_in_phoenix(self):
         self.client.commit_delays[2] = asyncio.Event()
         task = self.connect()
         await self.say("primeira")
@@ -373,6 +373,33 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.client.commit_delays[2].set()
         await self.disconnect(task)
         self.assertEqual(len(self.tts.texts), 1)
+
+    async def test_a_reply_phoenix_finds_stale_stops_its_playback(self):
+        # Nobody speaks over it: only the cancel wiring can stop this playback.
+        self.client.streams[1] = [
+            "Começou ontem.",
+            asyncio.Event(),
+            "Ainda dói.",
+        ]
+        stale = self.client.streams[1][1]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        stream = self.tts.streams[0]
+        stream.queue.put_nowait(chunk("s1"))
+        await settle()
+
+        self.client.streams[1][2] = VoiceFailure("stale_generation")
+        stale.set()
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertEqual(self.sources[0].cleared, 1)
+        stream.queue.put_nowait(chunk("late"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["s1"])
+        self.assertEqual(self.voice.player.speaking, None)
+        await self.disconnect(task)
 
     # Issue #193: speaking over the patient stops it, even after Phoenix settled the turn.
     async def test_barge_in_over_a_settled_reply_stops_its_playback(self):
