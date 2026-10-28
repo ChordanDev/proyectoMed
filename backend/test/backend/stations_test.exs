@@ -1,6 +1,8 @@
 defmodule Backend.StationsTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Backend.AppEnvHelpers
   alias Backend.Stations
   alias Backend.Stations.Conversation
@@ -1149,6 +1151,7 @@ defmodule Backend.StationsTest do
     end
 
     def cleanup_test_pid, do: Process.get(:stations_cleanup_test_pid)
+    def typed_reply_test_pid, do: Application.fetch_env!(:backend, :typed_reply_test_pid)
 
     setup do
       Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
@@ -1221,7 +1224,7 @@ defmodule Backend.StationsTest do
 
       @impl true
       def send_data(room, data, opts) do
-        send(Backend.StationsTest.cleanup_test_pid(), {:sent_data, room, data, opts})
+        send(Backend.StationsTest.typed_reply_test_pid(), {:sent_data, room, data, opts})
         :ok
       end
     end
@@ -1236,7 +1239,48 @@ defmodule Backend.StationsTest do
       def list_rooms, do: {:ok, []}
 
       @impl true
-      def send_data(_room, _data, _opts), do: {:error, :livekit_unavailable}
+      def send_data(_room, _data, _opts) do
+        send(Backend.StationsTest.typed_reply_test_pid(), {:send_started, self()})
+        {:error, :livekit_unavailable}
+      end
+    end
+
+    defmodule RaisingSendRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: :ok
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+
+      @impl true
+      def send_data(_room, _data, _opts) do
+        send(Backend.StationsTest.typed_reply_test_pid(), {:send_started, self()})
+        raise "LiveKit adapter blew up"
+      end
+    end
+
+    # Blocks until the test releases it, like a LiveKit call hanging up to its timeout.
+    defmodule SlowSendRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: :ok
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+
+      @impl true
+      def send_data(_room, _data, _opts) do
+        send(Backend.StationsTest.typed_reply_test_pid(), {:send_started, self()})
+
+        receive do
+          :release -> :ok
+        after
+          1_000 -> :ok
+        end
+      end
     end
 
     setup do
@@ -1244,13 +1288,15 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :livekit_api_key, "test-api-key")
       Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
       Application.put_env(:backend, :livekit_room_service, SendingRoomService)
-      Process.put(:stations_cleanup_test_pid, self())
+      # The send runs outside the request process, so the adapters find the test here.
+      Application.put_env(:backend, :typed_reply_test_pid, self())
 
       on_exit(fn ->
         Application.delete_env(:backend, :livekit_url)
         Application.delete_env(:backend, :livekit_api_key)
         Application.delete_env(:backend, :livekit_api_secret)
         Application.delete_env(:backend, :livekit_room_service)
+        Application.delete_env(:backend, :typed_reply_test_pid)
       end)
 
       :ok
@@ -1320,6 +1366,45 @@ defmodule Backend.StationsTest do
 
       assert {:ok, %{reply_text: reply}} = type_turn(session.session_id, "Olá")
       assert is_binary(reply)
+      assert_receive {:send_started, _sender}
+    end
+
+    test "a raising LiveKit adapter never fails the typed turn and logs no content" do
+      Application.put_env(:backend, :livekit_room_service, RaisingSendRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{reply_text: reply}} = type_turn(session.session_id, "Olá")
+          assert is_binary(reply)
+
+          # The send runs in its own process, which rescues the raise and ends normally.
+          assert_receive {:send_started, sender}
+          refute sender == self()
+          ref = Process.monitor(sender)
+          assert_receive {:DOWN, ^ref, :process, ^sender, reason}
+          assert reason in [:normal, :noproc]
+        end)
+
+      assert log =~ "typed reply not sent to the voice worker for session #{session.session_id}"
+      refute log =~ "blew up"
+
+      assert {:ok, %{messages: [_learner, %{role: :patient}]}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "a slow LiveKit adapter does not delay the typed-turn answer" do
+      Application.put_env(:backend, :livekit_room_service, SlowSendRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{reply_text: reply}} = type_turn(session.session_id, "Olá")
+      assert is_binary(reply)
+
+      # The answer is back while the send is still blocked in another process.
+      assert_receive {:send_started, sender}
+      refute sender == self()
+      assert Process.alive?(sender)
+      send(sender, :release)
     end
 
     test "a typed turn with no patient reply sends nothing" do
