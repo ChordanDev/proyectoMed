@@ -128,10 +128,14 @@ void AStationPlayerController::PreparePatientVoice()
 			TWeakObjectPtr<USkeletalMeshComponent> WeakFace = Face;
 			TWeakObjectPtr<UAnimSequence> WeakIdle = Idle;
 			const TSharedRef<FStationPatientAudioSink, ESPMode::ThreadSafe> Sink = PatientVoice->GetSink();
-			Flow->SetPatientAudio([Sink](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
+			FStationPatientOutput Patient;
+			Patient.Audio = [Sink](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 			{
 				Sink->Handle(Samples, SampleRate, NumChannels);
-			});
+			};
+			Patient.Silence = [Sink]() { Sink->Silence(); };
+			Patient.Resume = [Sink]() { Sink->Resume(); };
+			Flow->SetPatientOutput(MoveTemp(Patient));
 			Flow->OnChanged.AddWeakLambda(this, [this, WeakVoice, WeakFace, WeakIdle]()
 			{
 				UStationPatientVoice* Voice = WeakVoice.Get();

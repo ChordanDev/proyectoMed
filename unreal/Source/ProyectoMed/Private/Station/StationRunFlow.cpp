@@ -372,6 +372,7 @@ void UStationRunFlow::ReloadTranscript(const FString& Turn)
 		if (!Refreshed.HasError())
 		{
 			Self->Transcript = Refreshed.GetValue().Messages;
+			Self->VoiceLearnerLine = INDEX_NONE; // its index belongs to the replaced lines
 			const int32 LastLearner = Self->Transcript.FindLastByPredicate(
 				[](const FStationMessage& Line) { return Line.Speaker == EStationSpeaker::Learner; });
 			if (LastLearner != INDEX_NONE && Self->Transcript[LastLearner].Text == Turn)
@@ -421,6 +422,8 @@ void UStationRunFlow::BeginFinish(EStationFinishReason Reason)
 	// Leaving `Running` stops every new turn and exam request at once.
 	FinishReason = Reason;
 	Step = EStationRunStep::Finishing;
+	// Whatever the patient was saying stops with the run (#193).
+	SilencePatient();
 	OnChanged.Broadcast();
 	ContinueFinish();
 }
@@ -453,6 +456,8 @@ void UStationRunFlow::ContinueFinish()
 				// keep the run going until the timer reads zero once more.
 				UE_LOG(LogStationRun, Log, TEXT("Phoenix's deadline is not reached yet; the run goes on."));
 				Self->Step = EStationRunStep::Running;
+				// The finish silenced the patient; the run goes on, so it may speak again.
+				Self->ResumePatient();
 				Self->TimerRetryNotBefore = FPlatformTime::Seconds() + 1.0;
 				Self->Client->RefreshSession([WeakThis](const TStationResult<FStationSession>&)
 				{
@@ -544,6 +549,8 @@ void UStationRunFlow::ResetRun()
 	Voice = FStationVoiceView();
 	VoiceTurnId = 0;
 	bVoiceLearnerCommitted = false;
+	VoiceLearnerLine = INDEX_NONE;
+	bVoiceOutcome = false;
 	PendingTurn.Reset();
 	Transcript.Reset();
 	UnsentTurn.Reset();
@@ -606,7 +613,7 @@ void UStationRunFlow::ConnectVoice()
 		}
 	};
 	// Runs on a LiveKit thread: copy the handler so the flow is never touched there.
-	Handlers.OnPatientPcm = [PatientAudio = PatientAudio](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
+	Handlers.OnPatientPcm = [PatientAudio = Patient.Audio](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 	{
 		if (PatientAudio)
 		{
@@ -635,12 +642,28 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 	}
 	if (Event.TurnId > VoiceTurnId)
 	{
-		// A reply whose end never arrived is still kept.
-		CommitVoiceReply();
+		const bool bLearnerSpeaks = Event.Kind == EStationVoiceEventKind::Learner;
+		if (bLearnerSpeaks && Event.Text.TrimStartAndEnd().IsEmpty())
+		{
+			return; // not speech yet: the worker supersedes nothing for it
+		}
+		if (!bVoiceOutcome)
+		{
+			DropSupersededVoiceTurn();
+		}
 		VoiceTurnId = Event.TurnId;
 		bVoiceLearnerCommitted = false;
+		VoiceLearnerLine = INDEX_NONE;
+		bVoiceOutcome = false;
 		Voice.LearnerText.Reset();
+		Voice.PatientText.Reset();
 		Voice.bExaminerNoted = false;
+		if (bLearnerSpeaks)
+		{
+			// The learner speaks over the patient: the worker stops its voice, and
+			// what is already buffered here stops too (#193).
+			SilencePatient();
+		}
 	}
 	switch (Event.Kind)
 	{
@@ -653,6 +676,7 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		{
 			// Spoken turns join the same conversation as typed ones.
 			AddLine(EStationSpeaker::Learner, Event.Text);
+			VoiceLearnerLine = Transcript.Num() - 1;
 			bVoiceLearnerCommitted = true;
 			Voice.LearnerText.Reset();
 		}
@@ -662,6 +686,8 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		}
 		break;
 	case EStationVoiceEventKind::PatientText:
+		// The worker sends a sentence's text before its voice.
+		ResumePatient();
 		Voice.PatientText = Event.Segment > 0 && !Voice.PatientText.IsEmpty()
 			? Voice.PatientText + TEXT(" ") + Event.Text
 			: Event.Text;
@@ -669,14 +695,21 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		{
 			// A reply sent whole, not sentence by sentence.
 			CommitVoiceReply();
+			bVoiceOutcome = true;
 		}
 		break;
 	case EStationVoiceEventKind::PatientComplete:
 		CommitVoiceReply();
+		bVoiceOutcome = true;
 		break;
 	case EStationVoiceEventKind::ExaminerAcknowledged:
 		Voice.bExaminerNoted = true;
+		bVoiceOutcome = true;
 		break;
+	case EStationVoiceEventKind::PatientUnanswered:
+		// Phoenix kept the turn without a reply; nothing new is shown.
+		bVoiceOutcome = true;
+		return;
 	default:
 		// A refused reply and a failed synthesis change nothing shown.
 		return;
@@ -699,6 +732,33 @@ void UStationRunFlow::ReportMicrophoneUnavailable()
 	}
 	Voice.bMicrophoneUnavailable = true;
 	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::DropSupersededVoiceTurn()
+{
+	Voice.PatientText.Reset();
+	if (Transcript.IsValidIndex(VoiceLearnerLine) && Transcript[VoiceLearnerLine].Speaker == EStationSpeaker::Learner)
+	{
+		Transcript.RemoveAt(VoiceLearnerLine);
+	}
+	VoiceLearnerLine = INDEX_NONE;
+}
+
+void UStationRunFlow::SilencePatient()
+{
+	if (Patient.Silence)
+	{
+		Patient.Silence();
+	}
+}
+
+void UStationRunFlow::ResumePatient()
+{
+	// Until Phoenix closes the run the room stays, and its sentences still arrive.
+	if (Step == EStationRunStep::Running && Patient.Resume)
+	{
+		Patient.Resume();
+	}
 }
 
 void UStationRunFlow::CommitVoiceReply()

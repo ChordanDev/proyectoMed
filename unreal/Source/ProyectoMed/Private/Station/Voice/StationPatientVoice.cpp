@@ -3,9 +3,9 @@
 #include "Components/AudioComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Animation/AnimSequence.h"
-#include "Sound/SoundWaveProcedural.h"
 #include "Station/Voice/StationMouthSolver.h"
 #include "Station/Voice/StationPatientFaceAnim.h"
+#include "Station/Voice/StationPatientWave.h"
 
 namespace
 {
@@ -24,7 +24,7 @@ namespace
 	}
 }
 
-void FStationPatientAudioSink::Attach(USoundWaveProcedural* InWave, TSharedPtr<FStationMouthSolver> InSolver,
+void FStationPatientAudioSink::Attach(UStationPatientWave* InWave, TSharedPtr<FStationMouthSolver> InSolver,
 	TSharedPtr<FStationMouthState, ESPMode::ThreadSafe> InMouth)
 {
 	FScopeLock Guard(&Lock);
@@ -39,6 +39,26 @@ void FStationPatientAudioSink::Detach()
 	Wave = nullptr;
 	Solver.Reset();
 	Mouth.Reset();
+}
+
+void FStationPatientAudioSink::Silence()
+{
+	FScopeLock Guard(&Lock);
+	bSilenced = true;
+	if (Wave)
+	{
+		Wave->Clear();
+	}
+	if (Mouth)
+	{
+		Mouth->Rest();
+	}
+}
+
+void FStationPatientAudioSink::Resume()
+{
+	FScopeLock Guard(&Lock);
+	bSilenced = false;
 }
 
 void FStationPatientAudioSink::Handle(TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
@@ -62,13 +82,13 @@ void FStationPatientAudioSink::Handle(TConstArrayView<int16> Samples, int32 Samp
 	}
 
 	FScopeLock Guard(&Lock);
-	if (!Wave)
+	if (!Wave || bSilenced)
 	{
 		return;
 	}
 	if (SampleRate == VoiceSampleRate && NumChannels == 1)
 	{
-		Wave->QueueAudio(reinterpret_cast<const uint8*>(Samples.GetData()), Samples.Num() * sizeof(int16));
+		Wave->Push(Samples);
 	}
 	if (Mouth && Mono.Num() > 0 && FMath::Sqrt(SumSquares / Mono.Num()) > SpeechRms)
 	{
@@ -101,7 +121,7 @@ void UStationPatientVoice::Start(USkeletalMeshComponent* Face, UAnimSequence* Id
 	Solver = MakeShared<FStationMouthSolver>(SolverBackend(),
 		[Mouth](TMap<FName, float>&& RawControls) { Mouth->PushControls(MoveTemp(RawControls)); });
 
-	Wave = NewObject<USoundWaveProcedural>(this);
+	Wave = NewObject<UStationPatientWave>(this);
 	Wave->SetSampleRate(VoiceSampleRate);
 	Wave->NumChannels = 1;
 	Wave->Duration = INDEFINITELY_LOOPING_DURATION;

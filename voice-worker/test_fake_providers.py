@@ -201,7 +201,19 @@ class WorkerFakeModeTest(unittest.TestCase):
             interim_results=True,
             endpointing_ms=worker.ENDPOINTING_MS,
             keyterm=[],
+            vad_events=False,
         )
+
+    def test_voice_activity_without_words_starts_no_utterance(self):
+        # Deepgram's SpeechStarted fires on noise and breath too; as a barge-in it
+        # cancelled the turn the learner had just finished (#193). Without it the
+        # plugin starts an utterance on its first transcribed words.
+        with (
+            patch.dict(os.environ, {"LIVEKIT_URL": "ws://127.0.0.1:7880"}, clear=True),
+            patch.object(worker.deepgram, "STT") as stt,
+        ):
+            worker.build_stt(CONTEXT)
+        self.assertIs(stt.call_args.kwargs.get("vad_events"), False)
 
 
 class WorkerFakeModeJobTest(unittest.IsolatedAsyncioTestCase):

@@ -24,7 +24,7 @@ from test_transcripts import (
     MockSTT,
     event,
 )
-from transcripts import TurnTracker, VoiceTurnReply
+from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 from worker import (
     PatientVoice,
     build_tts,
@@ -348,7 +348,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Ainda", output)
         self.assertNotIn("quando", output)
 
-    async def test_barge_in_on_the_pending_turn_cancels_playback(self):
+    async def test_barge_in_on_the_pending_turn_cancels_it_in_phoenix(self):
         self.client.commit_delays[2] = asyncio.Event()
         task = self.connect()
         await self.say("primeira")
@@ -357,10 +357,12 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         await settle()
 
         await self.say("segunda")  # held in Phoenix: turn 2 is pending
-        self.assertEqual(old_stream.closed, 0)
+        # Speaking over the reply of turn 1 already stopped it (#193).
+        self.assertEqual(old_stream.closed, 1)
         self.queue.put_nowait(event(INTERIM, "terceira"))
         await asyncio.sleep(0.01)
 
+        self.assertIn({"generation_id": None, "turn_id": 2}, self.client.cancel_calls)
         self.assertEqual(old_stream.closed, 1)
         self.assertEqual(self.sources[0].cleared, 1)
         old_stream.queue.put_nowait(chunk("late"))
@@ -371,6 +373,56 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.client.commit_delays[2].set()
         await self.disconnect(task)
         self.assertEqual(len(self.tts.texts), 1)
+
+    async def test_a_reply_phoenix_finds_stale_stops_its_playback(self):
+        # Nobody speaks over it: only the cancel wiring can stop this playback.
+        self.client.streams[1] = [
+            "Começou ontem.",
+            asyncio.Event(),
+            "Ainda dói.",
+        ]
+        stale = self.client.streams[1][1]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        stream = self.tts.streams[0]
+        stream.queue.put_nowait(chunk("s1"))
+        await settle()
+
+        self.client.streams[1][2] = VoiceFailure("stale_generation")
+        stale.set()
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertEqual(self.sources[0].cleared, 1)
+        stream.queue.put_nowait(chunk("late"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["s1"])
+        self.assertEqual(self.voice.player.speaking, None)
+        await self.disconnect(task)
+
+    # Issue #193: speaking over the patient stops it, even after Phoenix settled the turn.
+    async def test_barge_in_over_a_settled_reply_stops_its_playback(self):
+        task = self.connect()
+        await self.say("primeira")
+        stream = self.tts.streams[0]
+        stream.queue.put_nowait(chunk("a1"))
+        await settle()
+        # Settled, still speaking.
+        self.assertEqual(self.tracker.last_accepted_turn_id, 1)
+
+        self.queue.put_nowait(event(INTERIM, "espera"))
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertEqual(self.sources[0].cleared, 1)
+        stream.queue.put_nowait(chunk("late"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["a1"])
+        self.assertEqual(self.voice.player.speaking, None)
+        # Phoenix stored the reply: nothing is cancelled there.
+        self.assertEqual(self.client.cancel_calls, [])
+        await self.disconnect(task)
 
     async def test_newer_accepted_turn_supersedes_playback(self):
         task = self.connect()

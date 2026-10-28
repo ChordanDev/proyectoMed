@@ -1,12 +1,24 @@
 // Patient voice tests (#191). `ProyectoMed.PatientVoice.Unit` needs nothing else.
 
 #include "Misc/AutomationTest.h"
-#include "Sound/SoundWaveProcedural.h"
 #include "Station/Voice/StationFaceBlend.h"
 #include "Station/Voice/StationPatientFaceAnim.h"
 #include "Station/Voice/StationPatientVoice.h"
+#include "Station/Voice/StationPatientWave.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+namespace
+{
+	/** Whether the speaker plays voice next, pulling it as the audio thread does. */
+	bool PlaysVoice(UStationPatientWave* Wave)
+	{
+		TArray<int16> Out;
+		Out.SetNumZeroed(4096);
+		const int32 Bytes = Wave->GeneratePCMData(reinterpret_cast<uint8*>(Out.GetData()), Out.Num());
+		return Bytes > 0 && Out.ContainsByPredicate([](int16 Sample) { return Sample != 0; });
+	}
+}
 
 BEGIN_DEFINE_SPEC(FStationPatientVoiceUnitSpec, "ProyectoMed.PatientVoice.Unit",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -58,11 +70,23 @@ void FStationPatientVoiceUnitSpec::Define()
 		TestTrue("speaking", Mouth.Read(Read));
 		TestEqual("jaw kept", Read.FindRef(TEXT("CTRL_expressions_jawOpen")), 0.7f);
 		TestFalse("eyes left to the idle loop", Read.Contains(TEXT("CTRL_expressions_eyeBlinkL")));
+
+		Mouth.Rest();
+		TestFalse("silent once it rests", Mouth.Read(Read));
+		TestEqual("no mouth left", Read.Num(), 0);
+		// The solver may still be working through voice it got before.
+		Mouth.PushControls({ { TEXT("CTRL_expressions_jawOpen"), 0.4f } });
+		Mouth.Read(Read);
+		TestEqual("a late solved mouth is ignored", Read.Num(), 0);
+		Mouth.NoteSpeech();
+		Mouth.PushControls({ { TEXT("CTRL_expressions_jawOpen"), 0.4f } });
+		TestTrue("speaking again", Mouth.Read(Read));
+		TestEqual("moves again", Read.FindRef(TEXT("CTRL_expressions_jawOpen")), 0.4f);
 	});
 
 	It("plays and lip-syncs the patient's voice only while attached", [this]()
 	{
-		USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>();
+		UStationPatientWave* Wave = NewObject<UStationPatientWave>();
 		Wave->SetSampleRate(48000);
 		Wave->NumChannels = 1;
 		const TSharedRef<FStationMouthState, ESPMode::ThreadSafe> Mouth = MakeShared<FStationMouthState, ESPMode::ThreadSafe>();
@@ -73,17 +97,44 @@ void FStationPatientVoiceUnitSpec::Define()
 		Voice.Init(8000, 480);
 		Sink.Handle(Voice, 48000, 1);
 		TMap<FName, float> Read;
-		TestEqual("queued for the speaker", Wave->GetAvailableAudioByteCount(), int32(480 * sizeof(int16)));
+		TestTrue("played by the speaker", PlaysVoice(Wave));
 		TestTrue("mouth told the patient speaks", Mouth->Read(Read));
 
 		Sink.Detach();
 		Sink.Handle(Voice, 48000, 1);
-		TestEqual("nothing after detach", Wave->GetAvailableAudioByteCount(), int32(480 * sizeof(int16)));
+		TestFalse("nothing after detach", PlaysVoice(Wave));
+	});
+
+	It("stops the patient's voice and mouth at once, until it may speak again", [this]()
+	{
+		UStationPatientWave* Wave = NewObject<UStationPatientWave>();
+		Wave->SetSampleRate(48000);
+		Wave->NumChannels = 1;
+		const TSharedRef<FStationMouthState, ESPMode::ThreadSafe> Mouth = MakeShared<FStationMouthState, ESPMode::ThreadSafe>();
+		FStationPatientAudioSink Sink;
+		Sink.Attach(Wave, nullptr, Mouth);
+		TArray<int16> Voice;
+		Voice.Init(8000, 480);
+		TMap<FName, float> Read;
+		Sink.Handle(Voice, 48000, 1);
+
+		Sink.Silence();
+		TestFalse("the queued voice is gone", PlaysVoice(Wave));
+		TestFalse("the mouth rests", Mouth->Read(Read));
+
+		Sink.Handle(Voice, 48000, 1);
+		TestFalse("late voice is dropped", PlaysVoice(Wave));
+		TestFalse("and does not move the mouth", Mouth->Read(Read));
+
+		Sink.Resume();
+		Sink.Handle(Voice, 48000, 1);
+		TestTrue("the next reply plays", PlaysVoice(Wave));
+		TestTrue("and moves the mouth", Mouth->Read(Read));
 	});
 
 	It("treats a silent patient track as silence", [this]()
 	{
-		USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>();
+		UStationPatientWave* Wave = NewObject<UStationPatientWave>();
 		const TSharedRef<FStationMouthState, ESPMode::ThreadSafe> Mouth = MakeShared<FStationMouthState, ESPMode::ThreadSafe>();
 		FStationPatientAudioSink Sink;
 		Sink.Attach(Wave, nullptr, Mouth);

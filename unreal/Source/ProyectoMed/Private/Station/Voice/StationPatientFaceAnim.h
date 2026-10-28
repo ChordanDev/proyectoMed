@@ -15,6 +15,8 @@ struct FStationMouthState
 	void PushControls(TMap<FName, float>&& RawControls);
 	/** Marks the patient as heard now; any thread. */
 	void NoteSpeech();
+	/** The patient stopped: the mouth goes back to the idle loop; any thread. */
+	void Rest();
 	/** Copies the mouth and says whether the patient is speaking; any thread. */
 	bool Read(TMap<FName, float>& OutControls) const;
 
@@ -22,6 +24,8 @@ private:
 	mutable FCriticalSection Lock;
 	TMap<FName, float> Controls;
 	double LastSpeechSeconds = -1.0;
+	/** Since `Rest`: the solver's late controls are ignored until the patient is heard again. */
+	bool bResting = false;
 };
 
 /** Plays the face idle loop and lays the speaking mouth over it (see `UStationPatientFaceAnim`). */

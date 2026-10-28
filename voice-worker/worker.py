@@ -252,6 +252,10 @@ def build_stt(context):
         interim_results=True,
         endpointing_ms=ENDPOINTING_MS,
         keyterm=context["keyterms"],
+        # Deepgram's SpeechStarted also fires on noise and breath; as a barge-in it
+        # cancelled the learner's own turn (#193). Without it an utterance starts
+        # with its first transcribed words.
+        vad_events=False,
     )
 
 
@@ -425,7 +429,7 @@ class PatientVoice:
             )
 
     def cancel_turn(self, turn_id: int) -> None:
-        """Stop the playback bound to a cancelled or stale turn (or an earlier one)."""
+        """Stop the playback bound to a cancelled, stale or spoken-over turn (or an earlier one)."""
         if self.player is None:
             return
         try:
@@ -588,6 +592,8 @@ async def transcribe(
             eof_timeout=phoenix.eof_timeout,
             on_cancel=voice.cancel_turn if voice is not None else None,
             on_turn_end=on_turn_end,
+            # Speaking over the patient stops it, also a reply Phoenix settled (#193).
+            on_barge_in=voice.cancel_turn if voice is not None else None,
         )
     finally:
         primary = sys.exception()

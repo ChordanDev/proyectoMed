@@ -82,6 +82,17 @@ struct PROYECTOMED_API FStationMicrophoneSetup
 	static FStationMicrophoneSetup System();
 };
 
+/** Where the patient's voice goes: the scene's speaker and face; tests pass fakes. */
+struct FStationPatientOutput
+{
+	/** Interleaved int16 PCM from the voice link; a LiveKit thread. */
+	TFunction<void(TConstArrayView<int16>, int32, int32)> Audio;
+	/** Game thread: stop at once and drop whatever still arrives, until `Resume`. */
+	TFunction<void()> Silence;
+	/** Game thread: let the voice of the next reply play. */
+	TFunction<void()> Resume;
+};
+
 /** What the voice of a running voice training shows the learner. */
 struct FStationVoiceView
 {
@@ -160,10 +171,14 @@ public:
 	 */
 	void ReportMicrophoneUnavailable();
 
-	/** Receives the patient's voice on a LiveKit thread; set it before entering. */
-	void SetPatientAudio(TFunction<void(TConstArrayView<int16>, int32, int32)> InPatientAudio)
+	/**
+	 * Receives the patient's voice; set it before entering. The flow silences it when
+	 * the learner speaks over the patient or the run ends (#193), and lets it play
+	 * again with the text of the next reply, which the worker sends before its voice.
+	 */
+	void SetPatientOutput(FStationPatientOutput InPatient)
 	{
-		PatientAudio = MoveTemp(InPatientAudio);
+		Patient = MoveTemp(InPatient);
 	}
 
 	EStationRunStep GetStep() const { return Step; }
@@ -297,6 +312,16 @@ private:
 	/** Moves the spoken reply, if any, into the conversation. */
 	void CommitVoiceReply();
 
+	/**
+	 * The learner spoke over the current spoken turn before it had an outcome: the
+	 * worker cancelled it and Phoenix did not keep it, so its learner line and its
+	 * partial reply leave the conversation, as in the web client.
+	 */
+	void DropSupersededVoiceTurn();
+
+	void SilencePatient();
+	void ResumePatient();
+
 	void SetExamError(const FStationClientError& Error);
 
 	void AddLine(EStationSpeaker Speaker, const FString& Text);
@@ -357,5 +382,12 @@ private:
 	int32 VoiceTurnId = 0;
 	/** The final transcript of the current spoken turn is in the conversation. */
 	bool bVoiceLearnerCommitted = false;
-	TFunction<void(TConstArrayView<int16>, int32, int32)> PatientAudio;
+	/** That line's index in `Transcript`; a reload from Phoenix's record forgets it. */
+	int32 VoiceLearnerLine = INDEX_NONE;
+	/**
+	 * Phoenix settled the current spoken turn: a whole or ended reply, an examiner
+	 * note, or a kept turn without a reply.
+	 */
+	bool bVoiceOutcome = false;
+	FStationPatientOutput Patient;
 };

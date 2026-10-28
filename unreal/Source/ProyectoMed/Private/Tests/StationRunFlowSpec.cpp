@@ -215,6 +215,113 @@ void FStationRunUnitSpec::Define()
 		TestFalse("gone once a later line joins", Flow->GetVoice().bExaminerNoted);
 	});
 
+	// Barge-in (#193): the worker publishes one event at a time; these build them.
+	auto Spoken = [](EStationVoiceEventKind Kind, int32 TurnId, const TCHAR* Text = TEXT(""),
+		int32 Segment = INDEX_NONE, bool bFinal = false)
+	{
+		FStationVoiceEvent Event;
+		Event.Kind = Kind;
+		Event.TurnId = TurnId;
+		Event.Text = Text;
+		Event.Segment = Segment;
+		Event.bFinal = bFinal;
+		return Event;
+	};
+	using EKind = EStationVoiceEventKind;
+
+	It("drops a spoken turn the learner spoke over before Phoenix answered it", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui."), 0));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Espera")));
+
+		TestEqual("neither the turn nor its partial reply stays", Flow->GetTranscript().Num(), 0);
+		TestTrue("no reply in progress", Flow->GetVoice().PatientText.IsEmpty());
+		TestEqual("the new turn is heard", Flow->GetVoice().LearnerText, FString(TEXT("Espera")));
+
+		// The superseded turn's late events never show.
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Muito."), 1));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientComplete, 1));
+		TestEqual("a late sentence or end changes nothing", Flow->GetTranscript().Num(), 0);
+		TestTrue("no late reply in progress", Flow->GetVoice().PatientText.IsEmpty());
+	});
+
+	It("keeps what Phoenix settled when the learner speaks over the patient", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui."), 0));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientComplete, 1));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Vou examinar."), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::ExaminerAcknowledged, 2));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 3, TEXT("Tem febre?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientUnanswered, 3));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 4, TEXT("Qual é a sua idade?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 4, TEXT("Trinta anos.")));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 5, TEXT("E")));
+
+		const TArray<FStationMessage>& Lines = Flow->GetTranscript();
+		if (TestEqual("every settled turn stays", Lines.Num(), 6))
+		{
+			TestEqual("an ended reply", Lines[1].Text, FString(TEXT("Dói aqui.")));
+			TestEqual("a turn the examiner noted", Lines[2].Text, FString(TEXT("Vou examinar.")));
+			TestEqual("a kept turn without a reply", Lines[3].Text, FString(TEXT("Tem febre?")));
+			TestEqual("a reply sent whole", Lines[5].Text, FString(TEXT("Trinta anos.")));
+		}
+	});
+
+	It("silences the patient when the learner speaks over it, until the next reply", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		TSharedRef<int32> Silenced = MakeShared<int32>(0);
+		TSharedRef<int32> Resumed = MakeShared<int32>(0);
+		FStationPatientOutput Patient;
+		Patient.Silence = [Silenced]() { ++*Silenced; };
+		Patient.Resume = [Resumed]() { ++*Resumed; };
+		Flow->SetPatientOutput(MoveTemp(Patient));
+		Flow->Step = EStationRunStep::Running;
+
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde")));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui."), 0));
+		TestEqual("the reply plays", *Resumed, 1);
+		const int32 Before = *Silenced;
+
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("")));
+		TestEqual("an empty caption is not speech yet", *Silenced, Before);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Espera")));
+		TestEqual("speaking over the patient silences it", *Silenced, Before + 1);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Espera, doutor")));
+		TestEqual("once per turn", *Silenced, Before + 1);
+
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Muito."), 1));
+		TestEqual("a late sentence of the old turn stays silent", *Resumed, 1);
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 2, TEXT("Pois não."), 0));
+		TestEqual("the next reply plays", *Resumed, 2);
+	});
+
+	It("silences the patient as soon as the run ends, for good", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		TSharedRef<int32> Silenced = MakeShared<int32>(0);
+		TSharedRef<int32> Resumed = MakeShared<int32>(0);
+		FStationPatientOutput Patient;
+		Patient.Silence = [Silenced]() { ++*Silenced; };
+		Patient.Resume = [Resumed]() { ++*Resumed; };
+		Flow->SetPatientOutput(MoveTemp(Patient));
+		Flow->Step = EStationRunStep::Running;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui."), 0));
+		Flow->PendingTurn = TEXT("Ainda dói?"); // the run closes only after Phoenix answers it
+
+		Flow->Finish();
+		TestEqual("silenced on finish", *Silenced, 2);
+		// The room is left only once Phoenix closes the run; sentences still arrive.
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Muito."), 1));
+		TestEqual("a later sentence stays silent", *Resumed, 1);
+	});
+
 	It("neither finishes nor discards before the run is running", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
@@ -660,12 +767,21 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenRunning(Done, [this, Done]()
 		{
+			TSharedRef<int32> Silenced = MakeShared<int32>(0);
+			TSharedRef<int32> Resumed = MakeShared<int32>(0);
+			FStationPatientOutput Patient;
+			Patient.Silence = [Silenced]() { ++*Silenced; };
+			Patient.Resume = [Resumed]() { ++*Resumed; };
+			Flow->SetPatientOutput(MoveTemp(Patient));
+
 			// The local timer has not run out: Phoenix refuses a timer finish this early.
 			Flow->ExpireTimer();
 			TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
-			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+			TestEqual("the patient stops with the finish", *Silenced, 1);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done, Resumed]()
 			{
 				TestEqual("running again", Flow->GetStep(), EStationRunStep::Running);
+				TestEqual("the patient may speak again (#193)", *Resumed, 1);
 				TestTrue("no error shown", Flow->GetErrorText().IsEmpty());
 				TestTrue("can send a turn", Flow->CanSendTurn());
 				if (TestNotNull("session", Client->GetSession()))
@@ -850,7 +966,8 @@ void FStationRunVoiceSpec::Define()
 		Flow = NewObject<UStationRunFlow>();
 		Flow->AddToRoot();
 		PatientFrames = MakeShared<std::atomic<int32>>(0);
-		Flow->SetPatientAudio([Frames = PatientFrames](TConstArrayView<int16> Samples, int32, int32)
+		FStationPatientOutput Patient;
+		Patient.Audio = [Frames = PatientFrames](TConstArrayView<int16> Samples, int32, int32)
 		{
 			for (const int16 Sample : Samples)
 			{
@@ -860,7 +977,8 @@ void FStationRunVoiceSpec::Define()
 					return;
 				}
 			}
-		});
+		};
+		Flow->SetPatientOutput(MoveTemp(Patient));
 		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
 	});
 

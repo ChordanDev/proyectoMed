@@ -581,6 +581,7 @@ class TurnManager:
         cleanup_timeout: float = 1.0,
         on_cancel=None,
         on_turn_end=None,
+        on_barge_in=None,
     ):
         self.tracker = tracker
         self.phoenix = phoenix
@@ -589,6 +590,9 @@ class TurnManager:
         self.on_turn_end = on_turn_end
         # Synchronous consumer told which turn was cancelled or went stale (#120).
         self.on_cancel = on_cancel
+        # Synchronous consumer told the learner spoke over every turn up to this one
+        # (#193), settled or not: the patient's playback of those turns stops.
+        self.on_barge_in = on_barge_in
         self.pending_turn_id: int | None = None
         self.pending_commit_task: asyncio.Task | None = None
         self.pending_cancel_task: asyncio.Task | None = None
@@ -633,6 +637,7 @@ class TurnManager:
             supersedes = bool(self.tracker._text(speech_event))
         if not supersedes:
             return None
+        self._notify_barge_in(self.tracker.turn_id - 1)
         if self.pending_turn_id is not None and not self.tracker.is_turn_stale(
             self.pending_turn_id
         ):
@@ -861,6 +866,10 @@ class TurnManager:
             ):
                 self.pending_turn_id = None
 
+    def _notify_barge_in(self, turn_id: int) -> None:
+        if self.on_barge_in is not None and turn_id > 0:
+            self.on_barge_in(turn_id)
+
     def _notify_cancel(self, turn_id: int) -> None:
         if self.on_cancel is not None:
             self.on_cancel(turn_id)
@@ -972,6 +981,7 @@ async def process_speech_stream(
     eof_timeout: float = 15.0,
     on_cancel=None,
     on_turn_end=None,
+    on_barge_in=None,
 ) -> None:
     turn_manager = TurnManager(
         tracker=tracker,
@@ -980,6 +990,7 @@ async def process_speech_stream(
         cleanup_timeout=cleanup_timeout,
         on_cancel=on_cancel,
         on_turn_end=on_turn_end,
+        on_barge_in=on_barge_in,
     )
     turn_manager.set_main_task(asyncio.current_task())
     try:
