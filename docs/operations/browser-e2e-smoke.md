@@ -22,8 +22,8 @@ adapter) and Vite, with the provider doubles it needs:
 | `voice.e2e.ts` | Fixed transcription, silent MP3 speech | Microphone granted: record → transcribe → patient reply → playback starts and ends |
 | `microphone-denied.e2e.ts` | Chromium denies the microphone | Fallback notice, text keeps working |
 | `voice-failures.e2e.ts` | Transcription and speech fail with 500 | Failed transcription falls back to text; failed patient audio removes the play control and keeps the reply readable |
-| `timer.e2e.ts` | `E2E_STATION_DURATION_MS=8000` | The countdown reaches zero and the station finishes by timer |
-| `expiry.e2e.ts` | `CONVERSATION_TIMEOUT_MS=5000` | An expired session invalidates the attempt; restart recovers |
+| `timer.e2e.ts` | `E2E_STATION_DURATION_MS=20000` | The countdown reaches zero and the station finishes by timer |
+| `expiry.e2e.ts` | `CONVERSATION_TIMEOUT_MS=15000` | An expired session invalidates the attempt; restart recovers |
 
 After every cancellation, invalidation, expiry and discard the suite checks
 that no patient output, transcript or result stays on screen, that the

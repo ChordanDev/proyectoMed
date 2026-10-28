@@ -11,7 +11,9 @@ import {
   strings,
 } from "./station";
 
-const STATION_DURATION_MS = 8_000;
+// Long enough for page load (Vite compiles modules on first request) and one
+// text turn before the deadline, even on a loaded runner.
+const STATION_DURATION_MS = 20_000;
 
 test.use({ harnessOptions: { stationDurationMs: STATION_DURATION_MS } });
 

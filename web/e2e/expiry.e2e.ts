@@ -11,8 +11,9 @@ import {
 } from "./station";
 
 // The session TTL is fixed at creation and never renewed: it must outlast the
-// steps a test takes before its deliberate wait, even on a loaded runner.
-const SESSION_TTL_MS = 5_000;
+// steps a test takes before its deliberate wait (a text turn, and for the
+// second attempt the notice and brief screens too), even on a loaded runner.
+const SESSION_TTL_MS = 15_000;
 
 test.use({ harnessOptions: { conversationTimeoutMs: SESSION_TTL_MS } });
 
