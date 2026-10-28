@@ -52,6 +52,13 @@ public:
 	void DiscardSession(TStationCallback<FStationNone> OnDone);
 
 	/**
+	 * Forgets the current session here only, at once, and leaves its room: for a run
+	 * Phoenix stopped answering. Phoenix forgets it after 30 minutes unless a
+	 * `DiscardSession` sent first reaches it.
+	 */
+	void ForgetSession();
+
+	/**
 	 * `POST .../sessions/:id/voice`: a short-lived LiveKit credential for this
 	 * run's room only. Phoenix refuses it with `no_consent` when the run started
 	 * without audio consent, and with `voice_unavailable` when LiveKit is not set up.

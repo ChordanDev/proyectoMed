@@ -143,6 +143,17 @@ only code that talks to it, and its interface is documented in
    the brief for a new run. Grading needs Phoenix's text provider
    (`LLM_PROVIDER` and its key); for a local check only,
    `JEV_E2E_APPROVING_ADAPTER=true` grades with a fixed result that judges nothing.
+7. A training that loses Phoenix is invalidated (#196): nothing can go on
+   without it. Phoenix counts as lost when a turn, an exam request, the finish
+   or the feedback gets no answer and a check of the session right after gets
+   none either. The screen "Treino invalidado" replaces everything, with no
+   feedback and no partial result; the patient stops speaking and moving, and
+   the room is left. "Reiniciar estação" goes back to the brief at once, and a
+   new run starts as soon as Phoenix answers again. Stopping Phoenix while a
+   run is open shows this at the next turn, exam request or finish, or, in a
+   voice training, as soon as the voice stops with it. Either way the call and
+   the check can take up to about 30 s. A voice failure alone does
+   not (see "Voice trainings").
 
 Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 `[/Script/StationClient.StationClient] PhoenixBaseUrl` in the game config.
@@ -184,8 +195,13 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   the worker is gone it reads "Reconectando a voz..." and the microphone stops.
   If the worker has not joined within 20 seconds, or the voice has not come back
   within 10, it reads "A voz caiu. O tempo da estação continua." for the rest of
-  the run; the station timer keeps running. Stopping the local stack with Ctrl-C
-  shows this. The microphone also stops as soon as the run ends, with
+  the run; the station timer keeps running and the learner continues in
+  writing. A transcription failure stops the worker and reads the same. Each
+  of these voice failures checks Phoenix once: when Phoenix does not answer
+  either, the run is invalidated instead (see step 7 above). So stopping the
+  whole local stack with Ctrl-C, which stops its Phoenix too, invalidates the
+  run; stopping only `livekit-server` shows the voice
+  loss. The microphone also stops as soon as the run ends, with
   "Finalizar estação" or the timer, before the feedback loads. If the system
   microphone will not open, it reads "Microfone indisponível. Continue por
   escrito." for the rest of the run, without trying the device again; the

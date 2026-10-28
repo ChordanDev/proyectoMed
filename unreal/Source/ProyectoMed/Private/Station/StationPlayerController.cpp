@@ -41,16 +41,19 @@ void AStationPlayerController::BeginPlay()
 	Brief = CreateWidget<UStationBriefWidget>(this, UStationBriefWidget::StaticClass());
 	Hud = CreateWidget<UStationHudWidget>(this, UStationHudWidget::StaticClass());
 	Feedback = CreateWidget<UStationFeedbackWidget>(this, UStationFeedbackWidget::StaticClass());
+	Invalidated = CreateWidget<UStationInvalidatedWidget>(this, UStationInvalidatedWidget::StaticClass());
 	Brief->SetFlow(Flow);
 	Hud->SetFlow(Flow);
 	Feedback->SetFlow(Flow);
 	Notice->OnAcknowledged.BindWeakLambda(this, [this]() { Flow->AcknowledgeNotice(); });
 	MicrophoneScreen->OnAnswered.BindWeakLambda(this, [this](bool bAllow) { Flow->AnswerMicrophone(bAllow); });
+	Invalidated->OnRestart.BindWeakLambda(this, [this]() { Flow->Restart(); });
 	MicrophoneScreen->AddToViewport();
 	Notice->AddToViewport();
 	Brief->AddToViewport();
 	Hud->AddToViewport();
 	Feedback->AddToViewport();
+	Invalidated->AddToViewport();
 
 	Microphone = NewObject<UStationMicrophone>(this);
 	PreparePatientVoice();
@@ -78,7 +81,7 @@ void AStationPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AStationPlayerController::Render()
 {
-	if (!Flow || !Notice || !Brief || !Hud || !Feedback || !MicrophoneScreen)
+	if (!Flow || !Notice || !Brief || !Hud || !Feedback || !Invalidated || !MicrophoneScreen)
 	{
 		return;
 	}
@@ -94,6 +97,7 @@ void AStationPlayerController::Render()
 	Feedback->SetVisibility(Step == EStationRunStep::Finishing || Step == EStationRunStep::Feedback
 		? ESlateVisibility::Visible
 		: ESlateVisibility::Collapsed);
+	Invalidated->SetVisibility(Step == EStationRunStep::Invalidated ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	Brief->Refresh();
 	Hud->Refresh();
 	Feedback->Refresh();

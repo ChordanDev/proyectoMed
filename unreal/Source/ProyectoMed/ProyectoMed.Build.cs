@@ -24,6 +24,12 @@ public class ProyectoMed : ModuleRules
 			"SpeechAnimationSolver",
 		});
 
+		// The run flow tests serve a fake Phoenix that can leave a call unanswered (#196).
+		if (Target.Configuration != UnrealTargetConfiguration.Shipping)
+		{
+			PrivateDependencyModuleNames.Add("HTTPServer");
+		}
+
 		// The system microphone prompt on macOS.
 		if (Target.Platform == UnrealTargetPlatform.Mac)
 		{

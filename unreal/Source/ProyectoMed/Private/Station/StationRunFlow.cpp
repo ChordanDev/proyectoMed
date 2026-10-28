@@ -20,6 +20,16 @@ namespace
 	{
 		return Error.Code == TEXT("station_time_elapsed") || Error.Code == TEXT("session_completed");
 	}
+
+	/**
+	 * Phoenix gave no answer: it is unreachable or did not answer in time, or a
+	 * gateway answered for it without a Phoenix error code.
+	 */
+	bool IsUnanswered(const FStationClientError& Error)
+	{
+		return Error.Code == TEXT("network_error") || Error.Code == TEXT("http_502")
+			|| Error.Code == TEXT("http_503") || Error.Code == TEXT("http_504");
+	}
 }
 
 FText FormatStationTimer(const FTimespan& Remaining)
@@ -156,10 +166,11 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 void UStationRunFlow::StartSession()
 {
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->StartSession(Mode == EStationTrainingMode::Voice, [WeakThis](const TStationResult<FStationSession>& Started)
+	const uint32 ThisRun = Run;
+	Client->StartSession(Mode == EStationTrainingMode::Voice, [WeakThis, ThisRun](const TStationResult<FStationSession>& Started)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
-		if (!Self)
+		if (!Self || Self->Run != ThisRun)
 		{
 			return;
 		}
@@ -179,10 +190,10 @@ void UStationRunFlow::StartSession()
 		}
 
 		// The run has started either way; without a credential it continues as text.
-		Self->Client->RequestVoiceCredential([WeakThis](const TStationResult<FStationVoiceCredential>& Credential)
+		Self->Client->RequestVoiceCredential([WeakThis, ThisRun](const TStationResult<FStationVoiceCredential>& Credential)
 		{
 			UStationRunFlow* Flow = WeakThis.Get();
-			if (!Flow)
+			if (!Flow || Flow->Run != ThisRun)
 			{
 				return;
 			}
@@ -204,6 +215,10 @@ void UStationRunFlow::StartSession()
 				Flow->ConnectVoice();
 			}
 			Flow->OnChanged.Broadcast();
+			if (Credential.HasError() && IsUnanswered(Credential.GetError()))
+			{
+				Flow->CheckPhoenix();
+			}
 		});
 	});
 }
@@ -238,10 +253,11 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 	OnChanged.Broadcast();
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->SendTurn(Turn, EStationTurnModality::Text, [WeakThis, Turn](const TStationResult<FStationTurnReply>& Reply)
+	const uint32 ThisRun = Run;
+	Client->SendTurn(Turn, EStationTurnModality::Text, [WeakThis, ThisRun, Turn](const TStationResult<FStationTurnReply>& Reply)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
-		if (!Self)
+		if (!Self || Self->Run != ThisRun)
 		{
 			return;
 		}
@@ -249,8 +265,9 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 		if (Reply.HasError())
 		{
 			Self->UnsentTurn = Turn;
-			// Phoenix may have taken the turn without this client hearing back.
-			if (Reply.GetError().Code == TEXT("network_error"))
+			// Phoenix may have taken the turn without this client hearing back. Reading
+			// its record also checks that Phoenix is still there.
+			if (IsUnanswered(Reply.GetError()))
 			{
 				Self->ReloadTranscript(Turn);
 			}
@@ -312,10 +329,11 @@ bool UStationRunFlow::RequestExam(const FString& Text)
 	OnChanged.Broadcast();
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->RequestImpresso(Attempt.Text, Attempt.RequestId, [WeakThis, Attempt](const TStationResult<FStationImpressoReply>& Reply)
+	const uint32 ThisRun = Run;
+	Client->RequestImpresso(Attempt.Text, Attempt.RequestId, [WeakThis, ThisRun, Attempt](const TStationResult<FStationImpressoReply>& Reply)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
-		if (!Self)
+		if (!Self || Self->Run != ThisRun)
 		{
 			return;
 		}
@@ -323,11 +341,16 @@ bool UStationRunFlow::RequestExam(const FString& Text)
 		if (Reply.HasError())
 		{
 			Self->UnsentExamRequest = Attempt.Text;
-			if (Reply.GetError().Code == TEXT("network_error"))
+			const bool bUnanswered = IsUnanswered(Reply.GetError());
+			if (bUnanswered)
 			{
 				Self->UnansweredExamRequest = Attempt;
 			}
 			Self->SetExamError(Reply.GetError());
+			if (bUnanswered)
+			{
+				Self->CheckPhoenix();
+			}
 			if (IsRunOver(Reply.GetError()))
 			{
 				Self->ExpireTimer();
@@ -361,14 +384,21 @@ void UStationRunFlow::ReloadTranscript(const FString& Turn)
 	bReloadingTranscript = true;
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->RefreshSession([WeakThis, Turn](const TStationResult<FStationSession>& Refreshed)
+	const uint32 ThisRun = Run;
+	Client->RefreshSession([WeakThis, ThisRun, Turn](const TStationResult<FStationSession>& Refreshed)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
-		if (!Self)
+		if (!Self || Self->Run != ThisRun)
 		{
 			return;
 		}
 		Self->bReloadingTranscript = false;
+		if (Refreshed.HasError() && IsUnanswered(Refreshed.GetError()))
+		{
+			// Neither the turn nor the record reached this client: Phoenix is lost.
+			Self->Invalidate();
+			return;
+		}
 		if (!Refreshed.HasError())
 		{
 			Self->Transcript = Refreshed.GetValue().Messages;
@@ -440,10 +470,11 @@ void UStationRunFlow::ContinueFinish()
 	ErrorText = FText::GetEmpty();
 
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->FinishSession(FinishReason, [WeakThis](const TStationResult<FStationSession>& Finished)
+	const uint32 ThisRun = Run;
+	Client->FinishSession(FinishReason, [WeakThis, ThisRun](const TStationResult<FStationSession>& Finished)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
-		if (!Self)
+		if (!Self || Self->Run != ThisRun)
 		{
 			return;
 		}
@@ -469,7 +500,7 @@ void UStationRunFlow::ContinueFinish()
 				Self->OnChanged.Broadcast();
 				return;
 			}
-			Self->FailResult(Finished.GetError());
+			Self->FailResultUnlessLost(Finished.GetError());
 			return;
 		}
 		Self->LoadResult();
@@ -479,16 +510,17 @@ void UStationRunFlow::ContinueFinish()
 void UStationRunFlow::LoadResult()
 {
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
-	Client->FetchResult([WeakThis](const TStationResult<FStationResult>& Loaded)
+	const uint32 ThisRun = Run;
+	Client->FetchResult([WeakThis, ThisRun](const TStationResult<FStationResult>& Loaded)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
-		if (!Self)
+		if (!Self || Self->Run != ThisRun)
 		{
 			return;
 		}
 		if (Loaded.HasError())
 		{
-			Self->FailResult(Loaded.GetError());
+			Self->FailResultUnlessLost(Loaded.GetError());
 			return;
 		}
 		Self->Step = EStationRunStep::Feedback;
@@ -501,6 +533,72 @@ void UStationRunFlow::FailResult(const FStationClientError& Error)
 {
 	Step = EStationRunStep::Feedback;
 	SetError(Error, LOCTEXT("ResultUnavailable", "Não foi possível carregar o resultado da estação."));
+}
+
+void UStationRunFlow::FailResultUnlessLost(const FStationClientError& Error)
+{
+	if (!IsUnanswered(Error))
+	{
+		FailResult(Error);
+		return;
+	}
+	CheckPhoenix([this, Error]() { FailResult(Error); });
+}
+
+bool UStationRunFlow::CanRestart() const
+{
+	return Step == EStationRunStep::Invalidated;
+}
+
+void UStationRunFlow::Restart()
+{
+	if (!CanRestart())
+	{
+		return;
+	}
+	// Phoenix may be back: let it forget the run, without waiting for it.
+	Client->DiscardSession([](const TStationResult<FStationNone>&) {});
+	Client->ForgetSession();
+	Step = EStationRunStep::Brief;
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::CheckPhoenix(TFunction<void()> OnAnswered)
+{
+	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
+	const uint32 ThisRun = Run;
+	Client->RefreshSession([WeakThis, ThisRun, OnAnswered = MoveTemp(OnAnswered)](const TStationResult<FStationSession>& Checked)
+	{
+		UStationRunFlow* Self = WeakThis.Get();
+		if (!Self || Self->Run != ThisRun)
+		{
+			return;
+		}
+		if (Checked.HasError() && IsUnanswered(Checked.GetError()))
+		{
+			// Once the feedback is in, Phoenix answered the finish and the result.
+			if (Self->Step == EStationRunStep::Running || Self->Step == EStationRunStep::Finishing)
+			{
+				Self->Invalidate();
+			}
+			return;
+		}
+		if (OnAnswered)
+		{
+			OnAnswered();
+		}
+	});
+}
+
+void UStationRunFlow::Invalidate()
+{
+	UE_LOG(LogStationRun, Warning, TEXT("Phoenix does not answer; the run is invalidated."));
+	// No handler of the room runs after this, and nothing it still delivers plays.
+	Client->DisconnectVoice();
+	SilencePatient();
+	ResetRun();
+	Step = EStationRunStep::Invalidated;
+	OnChanged.Broadcast();
 }
 
 bool UStationRunFlow::CanDiscard() const
@@ -543,6 +641,9 @@ void UStationRunFlow::Discard()
 
 void UStationRunFlow::ResetRun()
 {
+	// Phoenix's answers for the last run arrive here no more.
+	++Run;
+	bFinishInFlight = false;
 	ErrorText = FText::GetEmpty();
 	bVoiceFallback = false;
 	VoiceCredential.Reset();
@@ -607,9 +708,7 @@ void UStationRunFlow::ConnectVoice()
 	{
 		if (UStationRunFlow* Self = WeakThis.Get())
 		{
-			Self->Voice.State = State;
-			Self->Voice.bLost |= State == EStationVoiceState::Failed;
-			Self->OnChanged.Broadcast();
+			Self->HandleVoiceState(State);
 		}
 	};
 	// Runs on a LiveKit thread: copy the handler so the flow is never touched there.
@@ -624,15 +723,44 @@ void UStationRunFlow::ConnectVoice()
 	if (!Client->ConnectVoice(VoiceCredential.GetValue(), MoveTemp(Handlers)))
 	{
 		Voice.State = EStationVoiceState::Failed;
-		Voice.bLost = true;
+		LoseVoice();
+	}
+}
+
+void UStationRunFlow::HandleVoiceState(EStationVoiceState State)
+{
+	Voice.State = State;
+	if (State == EStationVoiceState::Failed)
+	{
+		LoseVoice();
+	}
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::LoseVoice()
+{
+	if (Voice.bLost)
+	{
+		return;
+	}
+	Voice.bLost = true;
+	// In a training the learner goes on in writing (#196), which needs Phoenix.
+	if (Step == EStationRunStep::Running && Client)
+	{
+		CheckPhoenix();
 	}
 }
 
 void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 {
+	if (Step == EStationRunStep::Invalidated)
+	{
+		return; // the run is over and kept nothing; the room is being left
+	}
 	if (Event.Kind == EStationVoiceEventKind::Fatal)
 	{
-		Voice.bLost = true;
+		// The worker stopped, for example because the transcription failed.
+		LoseVoice();
 		OnChanged.Broadcast();
 		return;
 	}

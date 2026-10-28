@@ -338,6 +338,9 @@ void FStationRunUnitSpec::Define()
 		Flow->Discard();
 		TestFalse("no discard", Flow->IsDiscarding());
 		TestNull("no result", Flow->GetResult());
+		TestFalse("no restart", Flow->CanRestart());
+		Flow->Restart();
+		TestEqual("still on the notice after a restart", Flow->GetStep(), EStationRunStep::Notice);
 	});
 }
 
@@ -565,28 +568,31 @@ void FStationRunPhoenixSpec::Define()
 		});
 	});
 
-	LatentIt("waits for Phoenix's record before the next turn after a lost answer", Timeout, [this, WhenRunning](const FDoneDelegate& Done)
+	LatentIt("invalidates the run when Phoenix stops answering, and starts a new one once it is back", Timeout,
+		[this, WhenRunning](const FDoneDelegate& Done)
 	{
 		WhenRunning(Done, [this, Done]()
 		{
-			// The run exists in Phoenix; only this client stops hearing back.
+			// Neither the turn nor the check after it reaches Phoenix (#196).
 			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 			TestTrue("accepted locally", Flow->SendTypedTurn(TEXT("Bom dia")));
-			WhenFlow(Flow, [this]() { return !Flow->IsTurnInFlight(); }, [this, Done]()
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Invalidated; }, [this, Done]()
 			{
-				TestTrue("reloading the transcript", Flow->IsReloadingTranscript());
-				TestFalse("no new turn meanwhile", Flow->CanSendTurn());
-				TestFalse("refused meanwhile", Flow->SendTypedTurn(TEXT("Outra pergunta")));
-				TestEqual("the turn is held until Phoenix's record is known", Flow->TakeUnsentTurn(), FString());
-				WhenFlow(Flow, [this]() { return !Flow->IsReloadingTranscript(); }, [this, Done]()
-				{
-					TestTrue("can send again", Flow->CanSendTurn());
-					TestFalse("error shown", Flow->GetErrorText().IsEmpty());
-					// The record could not be read either, so the learner may resend.
-					TestEqual("the turn comes back", Flow->TakeUnsentTurn(), TEXT("Bom dia"));
-					Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
-					Done.Execute();
-				});
+				TestNull("no feedback", Flow->GetResult());
+				TestEqual("no partial conversation", Flow->GetTranscript().Num(), 0);
+				TestFalse("no turn", Flow->CanSendTurn());
+				Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
+				Flow->Restart();
+				TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
+				Flow->Enter(EStationTrainingMode::Text);
+				WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+					[this, Done]()
+					{
+						TestEqual("a new run", Flow->GetStep(), EStationRunStep::Running);
+						TestEqual("from the beginning", Flow->GetTranscript().Num(), 0);
+						TestTrue("with the whole Station Timer", Client->GetRemainingTime() > FTimespan::FromMinutes(9.5));
+						Done.Execute();
+					});
 			});
 		});
 	});
@@ -886,58 +892,6 @@ void FStationRunPhoenixSpec::Define()
 						TestTrue("can start a new run", Flow->CanEnter(EStationTrainingMode::Text));
 						Done.Execute();
 					});
-				});
-			});
-		});
-	});
-
-	LatentIt("shows why the feedback is missing when the run cannot be closed, and still discards it", Timeout,
-		[this, WhenRunning](const FDoneDelegate& Done)
-	{
-		WhenRunning(Done, [this, Done]()
-		{
-			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
-			Flow->Finish();
-			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
-			{
-				Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
-				TestFalse("error shown", Flow->GetErrorText().IsEmpty());
-				TestNull("no result", Flow->GetResult());
-				TestFalse("no turn", Flow->CanSendTurn());
-				Flow->Discard();
-				WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
-				{
-					TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
-					TestNull("session forgotten", Client->GetSession());
-					Done.Execute();
-				});
-			});
-		});
-	});
-
-	LatentIt("gives an exam request Phoenix did not answer back to the learner", Timeout,
-		[this, WhenRunning](const FDoneDelegate& Done)
-	{
-		WhenRunning(Done, [this, Done]()
-		{
-			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
-			TestTrue("accepted locally", Flow->RequestExam(TEXT("Exame físico")));
-			WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done]()
-			{
-				Client->SetPhoenixBaseUrl(StationRunTests::PhoenixUrl());
-				TestFalse("error shown", Flow->GetExamErrorText().IsEmpty());
-				TestTrue("the conversation shows no error", Flow->GetErrorText().IsEmpty());
-				TestEqual("no answered request", Flow->GetExamRequests().Num(), 0);
-				TestEqual("no document", Flow->GetReleasedImpressos().Num(), 0);
-				TestTrue("can request again", Flow->CanRequestExam());
-				TestEqual("the request comes back", Flow->TakeUnsentExamRequest(), TEXT("Exame físico"));
-				TestEqual("only once", Flow->TakeUnsentExamRequest(), FString());
-				TestTrue("resent", Flow->RequestExam(TEXT("Exame físico")));
-				WhenFlow(Flow, [this]() { return !Flow->IsExamRequestInFlight(); }, [this, Done]()
-				{
-					TestTrue("error cleared", Flow->GetExamErrorText().IsEmpty());
-					TestEqual("released on the retry", Flow->GetReleasedImpressos().Num(), 1);
-					Done.Execute();
 				});
 			});
 		});
