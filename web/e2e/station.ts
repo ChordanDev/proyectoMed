@@ -53,6 +53,17 @@ export async function sendText(page: Page, text: string): Promise<void> {
   await page.getByRole("button", { name: strings.sendButton }).click();
 }
 
+/**
+ * One learner question and its patient reply on screen, so a later check that
+ * the reply is gone proves something was cleared.
+ */
+export async function answeredTurn(page: Page): Promise<void> {
+  await sendText(page, LEARNER_QUESTION);
+  await expect(page.getByTestId("message-patient")).toHaveText(
+    new RegExp(PATIENT_REPLY),
+  );
+}
+
 export async function persistedSessionId(page: Page): Promise<string | null> {
   return page.evaluate(
     (key) => sessionStorage.getItem(key),

@@ -2,6 +2,7 @@ import { expect, test } from "./fixtures";
 import {
   LEARNER_QUESTION,
   PATIENT_REPLY,
+  answeredTurn,
   countdown,
   enterStation,
   expectInvalidatedAttempt,
@@ -84,6 +85,7 @@ test.describe("learner journey", () => {
   }) => {
     await enterStation(page);
     const sessionId = await persistedSessionId(page);
+    await answeredTurn(page);
 
     await page.route("**/api/stations/active/sessions/*/messages", (route) =>
       route.abort("connectionreset"),
@@ -103,6 +105,7 @@ test.describe("learner journey", () => {
   }) => {
     await enterStation(page);
     const sessionId = await persistedSessionId(page);
+    await answeredTurn(page);
 
     // The server drops the session behind the learner's back (a restart or a
     // purge): the next turn finds no session.

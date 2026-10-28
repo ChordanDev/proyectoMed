@@ -2,6 +2,7 @@ import { expect, test } from "./fixtures";
 import {
   LEARNER_QUESTION,
   PATIENT_REPLY,
+  answeredTurn,
   enterStation,
   expectInvalidatedAttempt,
   persistedSessionId,
@@ -21,6 +22,7 @@ test("an expired session invalidates the attempt and a restart recovers", async 
 }) => {
   await enterStation(page);
   const sessionId = await persistedSessionId(page);
+  await answeredTurn(page);
 
   await page.waitForTimeout(SESSION_TTL_MS + 500);
   await sendText(page, LEARNER_QUESTION);
