@@ -10,7 +10,9 @@ patient reply as `status: kept` (#269). A turn Phoenix sent to the impresso requ
 because the learner armed the exam mode (#364) is published as `status:
 impresso_requested` with its outcome, and nothing is spoken. Every reply event names its `speaker` (`patient`
 or `companion`, #341), and each actor speaks with the Cartesia voice its voice key maps
-to in `CARTESIA_VOICE_IDS` (#398), on the one patient track. When the job ends it reports
+to in `CARTESIA_VOICE_IDS` (#398), on the one patient track. The reply Phoenix approved
+for a typed turn arrives from the server on the data topic "typed-reply" and is spoken the
+same way, with no text event: the learner already has its text (#325). When the job ends it reports
 its provider usage (Deepgram audio seconds, Cartesia characters, LiveKit
 participant minutes, #342) to Phoenix. Never logs transcript text, reply text or audio.
 """
@@ -37,11 +39,14 @@ from transcripts import (
     VoiceFailure,
     VoiceTurnReply,
     classify_provider_error,
+    parse_typed_reply,
     process_speech_stream,
 )
 from usage import UsageMeter, report_usage
 
 ROOM_PREFIX = "station-session-"
+# Data topic of the approved replies to typed turns, sent by Phoenix (#325).
+TYPED_REPLY_TOPIC = "typed-reply"
 # Silence that closes an utterance. Deepgram's plugin default (25 ms) split one sentence
 # into several turns in manual testing. ponytail: fixed value, tune from real sessions.
 ENDPOINTING_MS = 500
@@ -104,6 +109,11 @@ async def entrypoint(ctx: JobContext) -> None:
             )
             voice = PatientVoice(ctx.room, player, session_id)
             await voice.start()
+            typed_voice = voice
+            ctx.room.on(
+                "data_received",
+                lambda packet: on_typed_reply(packet, tracker, typed_voice),
+            )
             # The job lives as long as the room; a reconnecting learner is a new participant.
             while ctx.room.isconnected():
                 learner = await ctx.wait_for_participant(
@@ -135,6 +145,37 @@ async def entrypoint(ctx: JobContext) -> None:
                 meter.leave("voice-worker")
                 await report_usage(phoenix, meter, job_id(ctx), session_id)
             ctx.shutdown()
+
+
+def on_typed_reply(packet, tracker: TurnTracker, voice: "PatientVoice") -> None:
+    """Speak the reply Phoenix approved for a typed turn (#325), if it is still current.
+
+    Only the server sends it (a packet with no participant), on `TYPED_REPLY_TOPIC`. The
+    tracker fences it as it fences spoken turns: see `TurnTracker.accept_typed_reply`.
+    Anything else is logged content-free and dropped.
+    """
+    if packet.topic != TYPED_REPLY_TOPIC:
+        return
+    if packet.participant is not None:
+        logger.warning(
+            "typed reply from a participant dropped for session %s", tracker.session_id
+        )
+        return
+    reply = parse_typed_reply(packet.data, tracker.session_id)
+    if reply is None:
+        logger.warning(
+            "malformed typed reply dropped for session %s", tracker.session_id
+        )
+        return
+    if tracker.accept_typed_reply(reply) is None:
+        logger.info(
+            "stale typed reply not spoken for session %s turn %d generation %d",
+            tracker.session_id,
+            reply.turn_id,
+            reply.generation_id,
+        )
+        return
+    voice.speak_typed(reply)
 
 
 def job_id(ctx) -> str:
@@ -351,6 +392,17 @@ class PatientVoice:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def speak_typed(self, reply: VoiceTurnReply) -> None:
+        """Speak the accepted reply of a typed turn (#325); its text was already shown.
+
+        A synthesis failure is logged content-free and publishes nothing: the learner's
+        screen has no spoken turn to mark as failed.
+        """
+        task = asyncio.create_task(self._speak(reply, report_failure=False))
+        self._tail = (reply.generation_id, reply.turn_id, task)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
     async def _acknowledge(self, reply: VoiceTurnReply) -> None:
         """Phoenix kept the learner turn without a patient reply.
 
@@ -460,7 +512,10 @@ class PatientVoice:
             await self.player.aclose()
 
     async def _speak(
-        self, reply: VoiceTurnReply, previous: asyncio.Task | None = None
+        self,
+        reply: VoiceTurnReply,
+        previous: asyncio.Task | None = None,
+        report_failure: bool = True,
     ) -> None:
         if previous is not None:
             # The previous sentence of the same reply finishes first; a cancelled
@@ -477,8 +532,18 @@ class PatientVoice:
             )
         else:
             failure = await self.player.speak(reply)
-        if failure is not None:
+        if failure is None:
+            return
+        if report_failure:
             await self._publish_failure(reply, failure.kind)
+        else:
+            logger.warning(
+                "typed reply not spoken for session %s turn %d generation %d: %s",
+                self.session_id,
+                reply.turn_id,
+                reply.generation_id,
+                failure.kind,
+            )
 
     async def _publish_failure(self, reply: VoiceTurnReply, kind: str) -> None:
         if kind == "text_delivery_failed":

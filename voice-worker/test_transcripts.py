@@ -973,9 +973,13 @@ class MockRoom:
     def __init__(self, connected: bool = True):
         self._connected = connected
         self.local_participant = MockParticipant("voice-worker")
+        self.handlers: dict[str, object] = {}
 
     def isconnected(self) -> bool:
         return self._connected
+
+    def on(self, event_name: str, handler) -> None:
+        self.handlers[event_name] = handler
 
 
 class MockStream:
@@ -1080,6 +1084,8 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 ):
                     self.assertEqual(tracker.last_accepted_turn_id, committed)
                     self.assertIsInstance(voice, worker.PatientVoice)
+                    # Typed replies are heard from the job's start (#325).
+                    self.assertIn("data_received", room.handlers)
                     await transcribe(
                         room,
                         learner,

@@ -226,7 +226,8 @@ class SpeechPlayer:
         """Whether `reply` is the tracker's accepted, active and non-cancelled generation."""
         return (
             isinstance(reply, VoiceTurnReply)
-            and reply.is_committed_receipt()
+            # A typed turn's reply (#325) is spoken under the same fence.
+            and (reply.is_committed_receipt() or reply.is_typed_receipt())
             and reply.generation_id == self.tracker.active_generation_id
             and reply.generation_id not in self.tracker.cancelled_generations
         )

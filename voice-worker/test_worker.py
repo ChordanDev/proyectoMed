@@ -26,9 +26,11 @@ from test_transcripts import (
 )
 from transcripts import TurnTracker, VoiceFailure, VoiceTurnReply
 from worker import (
+    TYPED_REPLY_TOPIC,
     PatientVoice,
     build_tts,
     build_voice_tts,
+    on_typed_reply,
     phoenix_turn_settings,
     transcribe,
 )
@@ -737,6 +739,187 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         output = "\n".join(logs.output)
         self.assertIn("synthesis_failed", output)
         self.assertNotIn(PROVIDER_SECRET, output)
+
+
+def typed_reply_packet(
+    turn_id=0,
+    generation_id=1,
+    text="Resposta digitada",
+    session_id="s1",
+    participant=None,
+    topic=TYPED_REPLY_TOPIC,
+    **extra,
+):
+    """A data packet as LiveKit hands it over: from the server when `participant` is None."""
+    payload = {
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "generation_id": generation_id,
+        "text": text,
+        **extra,
+    }
+    return SimpleNamespace(
+        data=json.dumps(payload).encode(),
+        participant=participant,
+        topic=topic,
+        kind=None,
+    )
+
+
+# Issue #325: the approved reply to a typed turn is spoken, fenced like a spoken one.
+class TypedReplyTest(unittest.IsolatedAsyncioTestCase):
+    setUp = PatientVoiceFlowTest.setUp
+    _source = PatientVoiceFlowTest._source
+    connect = PatientVoiceFlowTest.connect
+    say = PatientVoiceFlowTest.say
+    disconnect = PatientVoiceFlowTest.disconnect
+
+    def receive(self, packet) -> None:
+        on_typed_reply(packet, self.tracker, self.voice)
+
+    async def test_an_approved_typed_reply_is_spoken_and_publishes_no_text(self):
+        task = self.connect()
+        self.receive(typed_reply_packet(text="Doi aqui"))
+        await settle()
+
+        self.assertEqual(self.tts.texts, ["Doi aqui"])
+        self.tts.streams[0].queue.put_nowait(chunk("t1"))
+        await settle()
+        self.assertEqual(self.sources[0].frames, ["t1"])
+        # The learner's screen shows the text from the typed turn's own answer.
+        self.assertEqual(self.room.patient_events(), [])
+        await self.disconnect(task)
+
+    async def test_a_companion_reply_is_spoken_with_its_voice(self):
+        task = self.connect()
+        self.receive(typed_reply_packet(speaker="companion", voice="mother"))
+        await settle()
+
+        self.assertEqual(self.voice.player.speaking.speaker, "companion")
+        self.assertEqual(self.voice.player.speaking.voice, "mother")
+        await self.disconnect(task)
+
+    async def test_only_the_server_can_ask_for_a_typed_reply(self):
+        task = self.connect()
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            self.receive(typed_reply_packet(participant=SimpleNamespace(identity="x")))
+            self.receive(typed_reply_packet(topic="transcript"))
+            self.receive(typed_reply_packet(session_id="other"))
+            self.receive(typed_reply_packet(text=""))
+            self.receive(typed_reply_packet(generation_id=0))
+            self.receive(typed_reply_packet(turn_id=-1))
+            self.receive(
+                SimpleNamespace(data=b"{", participant=None, topic=TYPED_REPLY_TOPIC)
+            )
+            await settle()
+            # Something must be logged for the test to read the logs.
+            worker.logger.warning("end of packets")
+
+        self.assertEqual(self.tts.texts, [])
+        self.assertNotIn("Resposta digitada", "\n".join(logs.output))
+        await self.disconnect(task)
+
+    async def test_a_repeated_typed_reply_is_spoken_once(self):
+        task = self.connect()
+        self.receive(typed_reply_packet())
+        self.receive(typed_reply_packet())
+        await settle()
+
+        self.assertEqual(self.tts.texts, ["Resposta digitada"])
+        await self.disconnect(task)
+
+    async def test_a_typed_reply_after_the_spoken_turn_it_follows_is_spoken(self):
+        task = self.connect()
+        await self.say("primeira")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+
+        self.receive(typed_reply_packet(turn_id=1, generation_id=2))
+        await settle()
+
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1", "Resposta digitada"])
+        self.assertEqual(self.tts.streams[0].closed, 1)  # it supersedes the older reply
+        await self.disconnect(task)
+
+    async def test_a_reply_superseded_by_a_newer_spoken_generation_is_never_spoken(
+        self,
+    ):
+        task = self.connect()
+        await self.say("primeira")
+        await settle()
+
+        # Generation 1 began before the spoken turn's generation, which reached the worker first.
+        self.receive(typed_reply_packet(turn_id=1, generation_id=1))
+        await settle()
+
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
+        await self.disconnect(task)
+
+    async def test_a_reply_the_learner_spoke_after_is_never_spoken(self):
+        task = self.connect()
+        # The learner speaks turn 1 while Phoenix still answers the typed turn after turn 0.
+        self.queue.put_nowait(event(INTERIM, "espera"))
+        await asyncio.sleep(0.01)
+
+        self.receive(typed_reply_packet(turn_id=0, generation_id=1))
+        await settle()
+
+        self.assertEqual(self.tts.texts, [])
+        await self.disconnect(task)
+
+    async def test_speaking_over_a_typed_reply_stops_it(self):
+        for turn_id, spoken_turns in ((0, []), (1, ["primeira"])):
+            with self.subTest(turn_id=turn_id):
+                self.setUp()
+                task = self.connect()
+                for text in spoken_turns:
+                    await self.say(text)
+                    await settle()
+                self.receive(typed_reply_packet(turn_id=turn_id, generation_id=9))
+                await settle()
+                stream = self.tts.streams[-1]
+                stream.queue.put_nowait(chunk("t1"))
+                await settle()
+
+                self.queue.put_nowait(event(INTERIM, "espera"))
+                await asyncio.sleep(0.01)
+
+                self.assertEqual(stream.closed, 1)
+                stream.queue.put_nowait(chunk("late"))
+                await settle()
+                self.assertNotIn("late", self.sources[0].frames)
+                self.assertEqual(self.voice.player.speaking, None)
+                await self.disconnect(task)
+
+    async def test_a_newer_spoken_turn_after_a_typed_reply_is_spoken(self):
+        task = self.connect()
+        self.receive(typed_reply_packet(turn_id=0, generation_id=1))
+        await settle()
+
+        # Phoenix gives the spoken turn the next generation.
+        self.client.replies[1] = VoiceTurnReply(
+            turn_id=1, status="committed", generation_id=2, reply_text="Falada"
+        )
+        await self.say("primeira")
+        await settle()
+
+        self.assertEqual(self.tts.texts, ["Resposta digitada", "Falada"])
+        self.assertEqual(self.voice.player.speaking.reply_text, "Falada")
+        await self.disconnect(task)
+
+    async def test_a_synthesis_failure_is_logged_and_publishes_nothing(self):
+        self.tts.synthesize_error = APIConnectionError(PROVIDER_SECRET)
+        task = self.connect()
+        with self.assertLogs("voice-worker", level="WARNING") as logs:
+            self.receive(typed_reply_packet())
+            await settle()
+
+        output = "\n".join(logs.output)
+        self.assertIn("synthesis_failed", output)
+        self.assertNotIn(PROVIDER_SECRET, output)
+        self.assertNotIn("Resposta digitada", output)
+        self.assertEqual(self.room.patient_events(), [])
+        await self.disconnect(task)
 
 
 class BuildVoiceTTSTest(unittest.TestCase):

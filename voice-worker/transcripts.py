@@ -133,6 +133,18 @@ class VoiceTurnReply:
             and bool(self.reply_text.strip())
         )
 
+    def is_typed_receipt(self) -> bool:
+        """A typed turn's approved reply (#325): turn 0 when no spoken turn came before it."""
+        return (
+            self.status == "typed"
+            and type(self.turn_id) is int
+            and self.turn_id >= 0
+            and type(self.generation_id) is int
+            and self.generation_id > 0
+            and isinstance(self.reply_text, str)
+            and bool(self.reply_text.strip())
+        )
+
     def is_kept_receipt(self) -> bool:
         """A refused reply kept the learner turn: generation-bound, with no text."""
         return (
@@ -210,6 +222,8 @@ class TurnTracker:
         self.cancelled_turns: set[int] = set()
         # Allocation is not acceptance, but replies from this prefix must not replay.
         self._stale_turn_floor = allocation_floor
+        # Newest turn the learner has spoken in, even one never committed (#325).
+        self.last_speech_turn_id = 0
 
     def handle(self, event: SpeechEvent) -> dict | None:
         if event.type == SpeechEventType.INTERIM_TRANSCRIPT:
@@ -300,6 +314,34 @@ class TurnTracker:
             self.active_generation_id is not None
             and reply.generation_id < self.active_generation_id
         ):
+            return None
+        self.active_generation_id = reply.generation_id
+        return reply
+
+    def heard_speech(self) -> None:
+        """The learner speaks in the current turn: a typed reply before it is stale (#325)."""
+        self.last_speech_turn_id = max(self.last_speech_turn_id, self.turn_id)
+
+    def accept_typed_reply(self, reply: VoiceTurnReply) -> VoiceTurnReply | None:
+        """Accept the approved reply to a typed turn (#325) while it is still current.
+
+        `reply.turn_id` is the last spoken turn the typed turn followed. The reply is
+        refused when a newer generation was accepted, when its generation was
+        cancelled or already spoken, or when the learner has spoken in a later turn,
+        settled or not. Accepted, it becomes the active generation, so the player
+        speaks it and a newer spoken turn supersedes it like any other reply.
+        """
+        if not reply.is_typed_receipt():
+            return None
+        assert reply.generation_id is not None  # is_typed_receipt checked it
+        if reply.generation_id in self.cancelled_generations:
+            return None
+        if (
+            self.active_generation_id is not None
+            and reply.generation_id <= self.active_generation_id
+        ):
+            return None
+        if self.last_speech_turn_id > reply.turn_id:
             return None
         self.active_generation_id = reply.generation_id
         return reply
@@ -530,6 +572,30 @@ class PhoenixClient:
 _IMPRESSO_FIELDS = ("request_id", "decision", "newly_released", "feedback_message")
 
 
+def parse_typed_reply(data: bytes, session_id: str) -> VoiceTurnReply | None:
+    """The reply Phoenix sends for a typed turn (#325), or None when it is not one.
+
+    The payload carries `session_id`, `turn_id`, `generation_id` and `text`, and in a
+    station with a companion `speaker` and `voice`.
+    """
+    try:
+        payload = json.loads(data)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("session_id") != session_id:
+        return None
+    speaker = _label(payload.get("speaker"))
+    reply = VoiceTurnReply(
+        turn_id=payload.get("turn_id"),  # type: ignore[arg-type]  # checked below
+        status="typed",
+        generation_id=payload.get("generation_id"),
+        reply_text=payload.get("text"),
+        speaker=speaker,
+        voice=_label(payload.get("voice")) if speaker is not None else None,
+    )
+    return reply if reply.is_typed_receipt() else None
+
+
 def _impresso_outcome(result: dict) -> dict | None:
     if result.get("status") != "impresso_requested":
         return None
@@ -637,6 +703,7 @@ class TurnManager:
             supersedes = bool(self.tracker._text(speech_event))
         if not supersedes:
             return None
+        self.tracker.heard_speech()
         self._notify_barge_in(self.tracker.turn_id - 1)
         if self.pending_turn_id is not None and not self.tracker.is_turn_stale(
             self.pending_turn_id
@@ -867,7 +934,8 @@ class TurnManager:
                 self.pending_turn_id = None
 
     def _notify_barge_in(self, turn_id: int) -> None:
-        if self.on_barge_in is not None and turn_id > 0:
+        # Turn 0 is a typed reply spoken before any spoken turn (#325).
+        if self.on_barge_in is not None and turn_id >= 0:
             self.on_barge_in(turn_id)
 
     def _notify_cancel(self, turn_id: int) -> None:
