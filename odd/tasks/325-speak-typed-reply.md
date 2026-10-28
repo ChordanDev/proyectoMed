@@ -31,7 +31,7 @@ Derived technical decisions (this session, 2026-10-28):
 |----|-------|-------|--------|-------------------|
 | T1 | S2, S6, S6a, S6b | inline | done | 67e1bfe; RED 5 tests (send_data/room_admin_token undefined, nothing sent), GREEN backend 2505/2505 |
 | T2 | S3, S5, S7, S7a | inline | done | 2ee7e33; RED import of `on_typed_reply`, GREEN worker 260 OK, ruff + pyright clean |
-| T3 | S1, S3, S3a, S4 | inline | done | see commit; RED `lets the patient speak a typed turn's reply after the learner spoke over it` (0 != 1), GREEN `ProyectoMed.StationRun.Unit` 27/27, unit suites 52/52, voice stack `StationVoice.Stack` 6/6 (+ `StationRun.Voice`, `PatientVoice` in the first stack run) |
+| T3 | S1, S3, S3a, S4 | inline | done | c929b63; RED `lets the patient speak a typed turn's reply after the learner spoke over it` (0 != 1), GREEN `ProyectoMed.StationRun.Unit` 27/27, unit suites 52/52, voice stack `StationVoice.Stack` 6/6 (+ `StationRun.Voice`, `PatientVoice` in the first stack run) |
 
 - T1 Phoenix: typed-turn fence, `RoomService.send_data`, send after approval.
 - T2 Worker: receive, fence and speak typed replies.
@@ -47,4 +47,5 @@ Route evidence: one understood change per component, no writer reason (no parall
 - L4 (2026-10-28) T2: a typed reply carries turn 0 before any spoken turn, so `TurnManager` now also tells its barge-in consumer about turn 0 (it skipped it before). Edge kept fail-safe: a learner utterance with interim text that never became a turn also makes a typed reply after it stale; the text is still shown.
 - L5 (2026-10-28) Side effect to report: the web harness in a realtime voice session now also hears typed replies (no text event is added, so no duplicate line).
 - L6 (2026-10-28) T3: the first stack run failed only the new typed spec because another worktree's dev Phoenix (port 4364, `LIVEKIT_URL=ws://127.0.0.1:7880`) swept the stack's room as an orphan (ListRooms + DeleteRoom 40 ms after SendData; the worker had already synthesized the 18 characters). Rerun clean: 6/6. Not run here: `StationClient.Phoenix` and `StationRun.Phoenix` (scripted Phoenix); the flow change they would touch is pinned by `StationRun.Unit.PhoenixLoss`.
+- L7 (2026-10-28) Verification: independent verifier (item 2, security) found no blockers; advisories: a typed reply accepted first drops a concurrent older spoken reply (newer supersedes, S7); `speak_typed_reply` runs synchronously before the HTTP answer (up to the 3 s adapter timeout) with no rescue around the adapter; a reply may be sent to a room being deleted when the timer completes the run during resolve; uncommitted speech makes later typed replies text-only (S7a, fail-safe). Native review (RDD) granted by the user, lenses risk/resilience/reliability over `origin/develop..c929b63`: approved with 5 informational findings (the same themes), acknowledged as lineage `review-1095c3ab75e84ae0`. PR ChordanDev/proyectoMed#415, CI 2/2 green.
 
