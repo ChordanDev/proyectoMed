@@ -8,11 +8,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND_DIR = path.resolve(__dirname, "../../../backend");
 const MAX_PROCESS_LOG_BYTES = 64 * 1024; // 64 KB rolling tail
 const MAX_MOCK_BODY_BYTES = 64 * 1024; // 64 KB cap for mock request payload
+// Recorded learner audio is larger than a chat request: a few seconds of opus.
+const MAX_MOCK_AUDIO_BODY_BYTES = 2 * 1024 * 1024;
+
+const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
+const TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions";
+const SPEECH_PATH = "/v1/audio/speech";
 
 export interface E2EHarnessOptions {
   mockOpenAIReplies?: string[];
   mockOpenAIFailureStatus?: number;
+  /** Text the mock speech-to-text provider returns for every recording. */
+  mockTranscriptionText?: string;
+  mockTranscriptionFailureStatus?: number;
+  mockSpeechFailureStatus?: number;
   conversationTimeoutMs?: number;
+  /** Station duration (E2E_STATION_DURATION_MS); the backend default is 10 minutes. */
+  stationDurationMs?: number;
+  /** VOICE_MODE; unset keeps the backend's own resolution from the environment. */
+  voiceMode?: "realtime" | "turn" | "off";
   startupTimeoutMs?: number;
 }
 
@@ -97,13 +111,44 @@ export async function compileBackend(
   });
 }
 
+// One silent MPEG-1 Layer III frame (128 kbps, 44.1 kHz): a 4-byte header and a
+// zeroed body, which decoders play as silence. Enough frames make a short clip
+// the browser can decode without a fixture file.
+const MP3_FRAME_BYTES = 417;
+const MP3_FRAME_HEADER = [0xff, 0xfb, 0x90, 0x64];
+
+export function silentMp3(frames = 40): Buffer {
+  const audio = Buffer.alloc(MP3_FRAME_BYTES * frames);
+  for (let frame = 0; frame < frames; frame++) {
+    audio.set(MP3_FRAME_HEADER, frame * MP3_FRAME_BYTES);
+  }
+  return audio;
+}
+
+function sendProviderFailure(res: http.ServerResponse, status: number): void {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      error: {
+        message: "Deterministic upstream failure",
+        type: "server_error",
+      },
+    }),
+  );
+}
+
 export async function startE2EHarness(
   options: E2EHarnessOptions = {},
 ): Promise<E2EHarnessInstance> {
   const {
     mockOpenAIReplies = ["A dor começou durante uma caminhada."],
     mockOpenAIFailureStatus,
+    mockTranscriptionText = "Quando começou a dor no peito?",
+    mockTranscriptionFailureStatus,
+    mockSpeechFailureStatus,
     conversationTimeoutMs,
+    stationDurationMs,
+    voiceMode,
     startupTimeoutMs = 25_000,
   } = options;
 
@@ -111,13 +156,15 @@ export async function startE2EHarness(
 
   // 1. Start Mock OpenAI server listening directly on port 0 (eliminates TOCTOU port race for mock)
   const mockServer = http.createServer((req, res) => {
-    // CDD-001: Validate expected method and path from Backend.StationAI.OpenAIAdapter
-    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+    // CDD-001: Validate expected method and path from the backend's OpenAI clients
+    // (Backend.StationAI.OpenAIAdapter, Backend.Stations.Transcription and TTS).
+    const knownPaths = [CHAT_COMPLETIONS_PATH, TRANSCRIPTIONS_PATH, SPEECH_PATH];
+    if (req.method !== "POST" || !knownPaths.includes(req.url ?? "")) {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
           error: {
-            message: `Mock OpenAI received unexpected request: ${req.method} ${req.url}. Expected POST /v1/chat/completions.`,
+            message: `Mock OpenAI received unexpected request: ${req.method} ${req.url}. Expected POST ${knownPaths.join(", ")}.`,
             type: "invalid_request_error",
           },
         }),
@@ -125,12 +172,16 @@ export async function startE2EHarness(
       return;
     }
 
+    const maxBodyBytes =
+      req.url === TRANSCRIPTIONS_PATH
+        ? MAX_MOCK_AUDIO_BODY_BYTES
+        : MAX_MOCK_BODY_BYTES;
     let bytesReceived = 0;
     let payloadExceeded = false;
 
     req.on("data", (chunk: Buffer) => {
       bytesReceived += chunk.length;
-      if (bytesReceived > MAX_MOCK_BODY_BYTES) {
+      if (bytesReceived > maxBodyBytes) {
         payloadExceeded = true;
         req.destroy();
       }
@@ -143,18 +194,28 @@ export async function startE2EHarness(
         return;
       }
 
+      if (req.url === TRANSCRIPTIONS_PATH) {
+        if (mockTranscriptionFailureStatus !== undefined) {
+          sendProviderFailure(res, mockTranscriptionFailureStatus);
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ text: mockTranscriptionText, duration: 1.5 }));
+        return;
+      }
+
+      if (req.url === SPEECH_PATH) {
+        if (mockSpeechFailureStatus !== undefined) {
+          sendProviderFailure(res, mockSpeechFailureStatus);
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "audio/mpeg" });
+        res.end(silentMp3());
+        return;
+      }
+
       if (mockOpenAIFailureStatus !== undefined) {
-        res.writeHead(mockOpenAIFailureStatus, {
-          "Content-Type": "application/json",
-        });
-        res.end(
-          JSON.stringify({
-            error: {
-              message: "Deterministic upstream failure",
-              type: "server_error",
-            },
-          }),
-        );
+        sendProviderFailure(res, mockOpenAIFailureStatus);
         return;
       }
 
@@ -210,6 +271,12 @@ export async function startE2EHarness(
   };
   if (conversationTimeoutMs !== undefined) {
     phxEnv.CONVERSATION_TIMEOUT_MS = String(conversationTimeoutMs);
+  }
+  if (stationDurationMs !== undefined) {
+    phxEnv.E2E_STATION_DURATION_MS = String(stationDurationMs);
+  }
+  if (voiceMode !== undefined) {
+    phxEnv.VOICE_MODE = voiceMode;
   }
 
   let phxProcess: ChildProcess;
