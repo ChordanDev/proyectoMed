@@ -670,6 +670,45 @@ provider mock. It covers these scenarios and expected outcomes:
   session_expired` (or `404 session_not_found` after purge), serves no stale
   result, and permits a fresh recovery session.
 
+### Browser E2E (Playwright)
+
+A separate suite drives the learner journey in a real Chromium: notice, start,
+text and voice turns, manual and timer finish, result, discard, and the
+invalidated, expired and cancelled attempts. It is not part of
+`bash scripts/test.sh` and reports its results on its own.
+
+Prerequisites, on top of "Prerequisites and install":
+
+- Postgres running for the local `backend_dev` database, as for `mix
+  phx.server`.
+- Playwright's Chromium, installed once:
+
+  ```sh
+  npx --prefix web playwright install chromium
+  ```
+
+Run it:
+
+```sh
+npm --prefix web run test:browser
+```
+
+It compiles the backend once, then each spec file boots its own Phoenix
+(`MIX_ENV=dev`) and Vite dev server on free ports, with the deterministic
+provider doubles of `web/src/integration/harness.ts`: a fixed patient reply, a
+fixed transcription and a silent MP3 for speech. Chromium uses a synthetic
+microphone (`--use-fake-device-for-media-stream`), so no production credential
+and no audio hardware is needed. The timer scenario shortens the station with
+`E2E_STATION_DURATION_MS`, which `backend/config/runtime.exs` honors only in
+`dev`; do not set it outside the suite.
+
+The command exits non-zero when a scenario fails. Failures keep a trace, a
+screenshot and a video under `web/test-results/browser/`, and an HTML report
+under `web/playwright-report/`. The scenarios, and the human smoke checkpoint
+for what fake media cannot prove (a real microphone, audible playback,
+keyboard and screen-reader use, browser permission prompts), are in
+[docs/operations/browser-e2e-smoke.md](docs/operations/browser-e2e-smoke.md).
+
 ### E2E-only Jev adapter
 
 Jev has no live provider yet, and its default adapter
