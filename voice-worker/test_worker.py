@@ -381,7 +381,8 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         stream = self.tts.streams[0]
         stream.queue.put_nowait(chunk("a1"))
         await settle()
-        self.assertEqual(self.tracker.last_accepted_turn_id, 1)  # settled, still speaking
+        # Settled, still speaking.
+        self.assertEqual(self.tracker.last_accepted_turn_id, 1)
 
         self.queue.put_nowait(event(INTERIM, "espera"))
         await asyncio.sleep(0.01)
