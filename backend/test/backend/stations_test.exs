@@ -1123,6 +1123,9 @@ defmodule Backend.StationsTest do
       @behaviour Backend.Stations.LiveKit.RoomService
 
       @impl true
+      def send_data(_room, _data, _opts), do: :ok
+
+      @impl true
       def delete_room(room) do
         send(Backend.StationsTest.cleanup_test_pid(), {:deleted_room, room})
         :ok
@@ -1134,6 +1137,9 @@ defmodule Backend.StationsTest do
 
     defmodule FailingRoomService do
       @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def send_data(_room, _data, _opts), do: :ok
 
       @impl true
       def delete_room(_room), do: {:error, :livekit_unavailable}
@@ -1200,6 +1206,129 @@ defmodule Backend.StationsTest do
 
       assert {:ok, _} = Stations.complete_session(session.session_id, :user)
       refute_receive {:deleted_room, _room}, 50
+    end
+  end
+
+  describe "typed replies spoken by the voice worker (#325)" do
+    defmodule SendingRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: :ok
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+
+      @impl true
+      def send_data(room, data, opts) do
+        send(Backend.StationsTest.cleanup_test_pid(), {:sent_data, room, data, opts})
+        :ok
+      end
+    end
+
+    defmodule FailingSendRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: :ok
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+
+      @impl true
+      def send_data(_room, _data, _opts), do: {:error, :livekit_unavailable}
+    end
+
+    setup do
+      Application.put_env(:backend, :livekit_url, "wss://revalida.livekit.cloud")
+      Application.put_env(:backend, :livekit_api_key, "test-api-key")
+      Application.put_env(:backend, :livekit_api_secret, "test-api-secret")
+      Application.put_env(:backend, :livekit_room_service, SendingRoomService)
+      Process.put(:stations_cleanup_test_pid, self())
+
+      on_exit(fn ->
+        Application.delete_env(:backend, :livekit_url)
+        Application.delete_env(:backend, :livekit_api_key)
+        Application.delete_env(:backend, :livekit_api_secret)
+        Application.delete_env(:backend, :livekit_room_service)
+      end)
+
+      :ok
+    end
+
+    defp type_turn(session_id, text) do
+      Stations.create_message(session_id, %{role: "learner", modality: "text", text: text})
+    end
+
+    test "an approved typed reply goes to the voice worker of the session's room" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{reply_text: reply, reply_audio_url: nil}} =
+               type_turn(session.session_id, "Olá, o que você está sentindo?")
+
+      assert_receive {:sent_data, room, data, opts}
+      assert room == "station-session-" <> session.session_id
+      assert opts == [topic: "typed-reply", destination_identities: ["voice-worker"]]
+
+      # No spoken turn yet: the typed turn follows turn 0 and takes the first generation.
+      assert Jason.decode!(data) == %{
+               "session_id" => session.session_id,
+               "turn_id" => 0,
+               "generation_id" => 1,
+               "text" => reply
+             }
+    end
+
+    test "a typed turn follows the last spoken turn and fences generations with it" do
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{turn_id: 1, generation_id: spoken_generation}} =
+               Stations.process_voice_turn(session.session_id, 1, "Quando a dor começou?")
+
+      assert {:ok, _reply} = type_turn(session.session_id, "E a dor irradia?")
+      assert_receive {:sent_data, _room, data, _opts}
+      typed = Jason.decode!(data)
+      assert typed["turn_id"] == 1
+      assert typed["generation_id"] > spoken_generation
+
+      # A later spoken turn supersedes the typed reply's generation.
+      assert {:ok, %{generation_id: later_generation}} =
+               Stations.process_voice_turn(session.session_id, 2, "Tem febre?")
+
+      assert later_generation > typed["generation_id"]
+    end
+
+    test "a run without audio consent keeps text-only replies" do
+      session = Stations.create_session(%{audio_consent: false})
+
+      assert {:ok, %{reply_text: reply}} = type_turn(session.session_id, "Olá")
+      assert is_binary(reply)
+      refute_receive {:sent_data, _room, _data, _opts}, 50
+    end
+
+    test "nothing is sent when LiveKit is not configured" do
+      Application.delete_env(:backend, :livekit_url)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, _reply} = type_turn(session.session_id, "Olá")
+      refute_receive {:sent_data, _room, _data, _opts}, 50
+    end
+
+    test "a LiveKit failure never fails the typed turn" do
+      Application.put_env(:backend, :livekit_room_service, FailingSendRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:ok, %{reply_text: reply}} = type_turn(session.session_id, "Olá")
+      assert is_binary(reply)
+    end
+
+    test "a typed turn with no patient reply sends nothing" do
+      Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
+      on_exit(fn -> Application.delete_env(:backend, :station_ai_adapter) end)
+      session = Stations.create_session(%{audio_consent: true})
+
+      assert {:error, :station_ai_unavailable} = type_turn(session.session_id, "Olá")
+      refute_receive {:sent_data, _room, _data, _opts}, 50
     end
   end
 

@@ -93,6 +93,9 @@ defmodule Backend.Stations.LiveKit.RoomServiceTest do
       @behaviour Backend.Stations.LiveKit.RoomService
 
       @impl true
+      def send_data(_room, _data, _opts), do: :ok
+
+      @impl true
       def delete_room(_room), do: :ok
 
       @impl true

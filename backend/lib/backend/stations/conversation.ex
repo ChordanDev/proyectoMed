@@ -118,8 +118,16 @@ defmodule Backend.Stations.Conversation do
 
   @type turn_token :: reference()
 
+  @typedoc """
+  Where a typed turn sits among the voice turns (#325): `turn_id` is the last
+  spoken turn it follows, and `generation_id` the generation it took when it
+  began, from the same counter as spoken turns.
+  """
+  @type turn_fence :: %{turn_id: non_neg_integer(), generation_id: pos_integer()}
+
   @typep turn :: %{
            token: turn_token(),
+           fence: turn_fence(),
            learner_message: message(),
            waiters: [GenServer.from()],
            first_reason: term() | nil,
@@ -176,6 +184,10 @@ defmodule Backend.Stations.Conversation do
 
   The deadline grants one grace window per session: it also covers a voice
   generation in flight, see `begin_voice_turn/3` and `resolve_patient_reply/4`.
+
+  The turn also takes the next generation id and the voice-turn floor, which
+  `turn_fence/2` reads while it is pending (#325). Neither moves the voice
+  cursors, so the worker's next spoken turn id stays valid.
   """
   @spec begin_turn(String.t(), map()) ::
           {:ok, session(), turn_token()}
@@ -200,6 +212,15 @@ defmodule Backend.Stations.Conversation do
           {:ok, session()} | {:error, :station_time_elapsed | :not_found | :expired}
   def resolve_turn(session_id, token, resolution) do
     GenServer.call(__MODULE__, {:resolve_turn, session_id, token, resolution}, call_timeout_ms())
+  end
+
+  @doc """
+  The fence of the pending turn `token` (#325): see `t:turn_fence/0`. Returns
+  `{:error, :not_pending}` once the turn is resolved or unknown.
+  """
+  @spec turn_fence(String.t(), turn_token()) :: {:ok, turn_fence()} | {:error, :not_pending}
+  def turn_fence(session_id, token) do
+    GenServer.call(__MODULE__, {:turn_fence, session_id, token})
   end
 
   @spec fetch(String.t()) :: {:ok, session()} | {:error, :not_found | :expired}
@@ -609,13 +630,29 @@ defmodule Backend.Stations.Conversation do
           {:reply, {:error, :station_time_elapsed}, state}
         else
           message = Map.put(message, :at, now)
-          updated = %{session | messages: session.messages ++ [message]}
+          generation_id = Map.get(session, :next_generation_id, 1)
+
+          updated =
+            session
+            |> Map.put(:messages, session.messages ++ [message])
+            |> Map.put(:next_generation_id, generation_id + 1)
+
           true = :ets.insert(__MODULE__, {session_id, updated})
 
           token = make_ref()
 
+          fence = %{
+            turn_id:
+              max(
+                Map.get(session, :last_voice_turn_id, 0),
+                Map.get(session, :cancelled_voice_turn_id, 0)
+              ),
+            generation_id: generation_id
+          }
+
           turn = %{
             token: token,
+            fence: fence,
             learner_message: message,
             waiters: [],
             first_reason: nil,
@@ -628,6 +665,13 @@ defmodule Backend.Stations.Conversation do
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:turn_fence, session_id, token}, _from, state) do
+    case get_in(state, [:turns, session_id]) do
+      %{token: ^token, fence: fence} -> {:reply, {:ok, fence}, state}
+      _ -> {:reply, {:error, :not_pending}, state}
     end
   end
 

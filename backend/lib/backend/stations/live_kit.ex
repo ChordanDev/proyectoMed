@@ -12,6 +12,9 @@ defmodule Backend.Stations.LiveKit do
     * `server_token/1` — a short-lived, backend-only token carrying
       `roomCreate`/`roomList` grants for the RoomService adapter. It is never
       sent to a client.
+    * `room_admin_token/2` — a short-lived, backend-only token that administers
+      exactly one room, so the RoomService adapter can send data into it (#325).
+      It is never sent to a client.
   """
 
   @default_join_ttl_ms :timer.seconds(120)
@@ -81,6 +84,19 @@ defmodule Backend.Stations.LiveKit do
     now = DateTime.utc_now()
     exp = DateTime.add(now, @server_token_ttl_seconds, :second)
     video = %{"roomCreate" => true, "roomList" => true}
+    sign(api_key, api_secret, "backend-room-service", video, now, exp)
+  end
+
+  @doc """
+  Builds and signs a server-side token that administers only `room` (#325):
+  no join, no other room, no room creation or listing. Never exposed to a
+  client; used solely by the RoomService adapter to send data into that room.
+  """
+  @spec room_admin_token(config(), String.t()) :: String.t()
+  def room_admin_token(%{api_key: api_key, api_secret: api_secret}, room) do
+    now = DateTime.utc_now()
+    exp = DateTime.add(now, @server_token_ttl_seconds, :second)
+    video = %{"roomAdmin" => true, "room" => room}
     sign(api_key, api_secret, "backend-room-service", video, now, exp)
   end
 
