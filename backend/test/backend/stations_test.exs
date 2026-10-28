@@ -1261,6 +1261,22 @@ defmodule Backend.StationsTest do
       end
     end
 
+    defmodule ExitingSendRoomService do
+      @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def delete_room(_room), do: :ok
+
+      @impl true
+      def list_rooms, do: {:ok, []}
+
+      @impl true
+      def send_data(_room, data, _opts) do
+        send(Backend.StationsTest.typed_reply_test_pid(), {:send_started, self()})
+        exit({:livekit_closed, data})
+      end
+    end
+
     # Blocks until the test releases it, like a LiveKit call hanging up to its timeout.
     defmodule SlowSendRoomService do
       @behaviour Backend.Stations.LiveKit.RoomService
@@ -1391,6 +1407,29 @@ defmodule Backend.StationsTest do
 
       assert {:ok, %{messages: [_learner, %{role: :patient}]}} =
                Stations.get_session(session.session_id)
+    end
+
+    test "an exiting LiveKit adapter never fails the typed turn and logs no content" do
+      Application.put_env(:backend, :livekit_room_service, ExitingSendRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+
+      {reply, log} =
+        with_log(fn ->
+          assert {:ok, %{reply_text: reply}} = type_turn(session.session_id, "Olá")
+
+          # The exit reason carries the payload; the send process catches it and ends normally.
+          assert_receive {:send_started, sender}
+          ref = Process.monitor(sender)
+          assert_receive {:DOWN, ^ref, :process, ^sender, reason}
+          assert reason in [:normal, :noproc]
+          reply
+        end)
+
+      assert log =~
+               "typed reply not sent to the voice worker for session #{session.session_id}: :exit"
+
+      refute log =~ reply
+      refute log =~ "livekit_closed"
     end
 
     test "a slow LiveKit adapter does not delay the typed-turn answer" do
