@@ -767,12 +767,21 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenRunning(Done, [this, Done]()
 		{
+			TSharedRef<int32> Silenced = MakeShared<int32>(0);
+			TSharedRef<int32> Resumed = MakeShared<int32>(0);
+			FStationPatientOutput Patient;
+			Patient.Silence = [Silenced]() { ++*Silenced; };
+			Patient.Resume = [Resumed]() { ++*Resumed; };
+			Flow->SetPatientOutput(MoveTemp(Patient));
+
 			// The local timer has not run out: Phoenix refuses a timer finish this early.
 			Flow->ExpireTimer();
 			TestEqual("finishing", Flow->GetStep(), EStationRunStep::Finishing);
-			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+			TestEqual("the patient stops with the finish", *Silenced, 1);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done, Resumed]()
 			{
 				TestEqual("running again", Flow->GetStep(), EStationRunStep::Running);
+				TestEqual("the patient may speak again (#193)", *Resumed, 1);
 				TestTrue("no error shown", Flow->GetErrorText().IsEmpty());
 				TestTrue("can send a turn", Flow->CanSendTurn());
 				if (TestNotNull("session", Client->GetSession()))
