@@ -1407,6 +1407,37 @@ defmodule Backend.StationsTest do
       send(sender, :release)
     end
 
+    test "the send process holds the reply payload, not the session" do
+      Application.put_env(:backend, :livekit_room_service, SlowSendRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+      # Long enough to live off-heap, so any process referencing it lists it.
+      question = "Doutor, " <> String.duplicate("a", 589) <> "?"
+
+      assert {:ok, _reply} = type_turn(session.session_id, question)
+      assert_receive {:send_started, sender}
+
+      {:binary, binaries} = Process.info(sender, :binary)
+      refute Enum.any?(binaries, fn {_id, size, _refs} -> size == byte_size(question) end)
+      send(sender, :release)
+    end
+
+    test "a failed send keeps the request id of the typed turn in its warning" do
+      Application.put_env(:backend, :livekit_room_service, FailingSendRoomService)
+      session = Stations.create_session(%{audio_consent: true})
+      Logger.metadata(request_id: "req-416")
+
+      log =
+        capture_log([metadata: [:request_id]], fn ->
+          assert {:ok, _reply} = type_turn(session.session_id, "Olá")
+          assert_receive {:send_started, sender}
+          ref = Process.monitor(sender)
+          assert_receive {:DOWN, ^ref, :process, ^sender, _reason}
+        end)
+
+      assert log =~ "request_id=req-416"
+      assert log =~ "typed reply not sent to the voice worker for session #{session.session_id}"
+    end
+
     test "a typed turn with no patient reply sends nothing" do
       Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
       on_exit(fn -> Application.delete_env(:backend, :station_ai_adapter) end)

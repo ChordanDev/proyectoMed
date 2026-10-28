@@ -858,7 +858,16 @@ defmodule Backend.Stations do
         |> put_voice(session_package(session), speaker)
         |> Jason.encode!()
 
-      {:ok, _pid} = Task.start(fn -> send_typed_reply(session.session_id, payload) end)
+      # The task captures only what it sends, plus the caller's log metadata
+      # (request_id), never the whole session.
+      session_id = session.session_id
+      metadata = Logger.metadata()
+
+      {:ok, _pid} =
+        Task.start(fn ->
+          Logger.metadata(metadata)
+          send_typed_reply(session_id, payload)
+        end)
     end
 
     :ok
