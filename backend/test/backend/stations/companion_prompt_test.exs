@@ -93,6 +93,33 @@ defmodule Backend.Stations.CompanionPromptTest do
       refute companion_facts =~ "(choro)"
     end
 
+    test "answers the current state, a fact in other words and numbers as the patient prompt does",
+         %{prompt: prompt} do
+      single = StationAI.system_prompt(parse!(@reference_case))
+
+      for rule <- [
+            "Uma pergunta sobre como algo está agora pede só o estado atual:",
+            ~s(Por exemplo, se a dor mudou de lugar, "Onde dói?" e "Onde é a dor?" perguntam onde ela dói agora),
+            "Se um fato da lista responde à pergunta, mesmo com outras palavras",
+            "Diga números, escalas e medidas de um fato só quando a pergunta pedir o número;",
+            "Por exemplo, se perguntarem se a dor é forte, diga que é bem forte;"
+          ] do
+        assert single =~ rule
+        assert prompt =~ rule
+      end
+    end
+
+    test "personal data outside each profile, the context and the list gets only the refusal",
+         %{prompt: prompt} do
+      assert prompt =~
+               ~s(Qualquer outro dado pessoal de quem fala que não esteja no seu perfil, no Contexto nem na sua lista, como de onde é, onde nasceu, a sua família ou os seus gostos, também está fora da lista: responda só "Não consta no script.", sem inventar uma resposta antes dela.)
+    end
+
+    test "lets the patient give only the chief complaint to an open question", %{prompt: prompt} do
+      assert prompt =~
+               "Quando o estudante perguntar ao paciente o que ele sente, o que o traz à consulta ou como ele está, o paciente diz só o motivo da consulta que aparece no Contexto, em uma frase simples, sem dizer há quanto tempo começou, onde exatamente é, quão forte é nem o que mais ele sente: cada um desses detalhes é um fato que o estudante precisa perguntar."
+    end
+
     test "asks for one of the three markers", %{prompt: prompt} do
       assert prompt =~ "[PACIENTE], [ACOMPANHANTE], [EXAMINADOR:EXAME] ou [EXAMINADOR]"
       assert prompt =~ "Use [EXAMINADOR:EXAME]"

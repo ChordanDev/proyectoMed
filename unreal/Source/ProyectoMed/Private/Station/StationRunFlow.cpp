@@ -487,6 +487,8 @@ void UStationRunFlow::ContinueFinish()
 				// keep the run going until the timer reads zero once more.
 				UE_LOG(LogStationRun, Log, TEXT("Phoenix's deadline is not reached yet; the run goes on."));
 				Self->Step = EStationRunStep::Running;
+				// The finish silenced the patient; the run goes on, so it may speak again.
+				Self->ResumePatient();
 				Self->TimerRetryNotBefore = FPlatformTime::Seconds() + 1.0;
 				Self->Client->RefreshSession([WeakThis](const TStationResult<FStationSession>&)
 				{
