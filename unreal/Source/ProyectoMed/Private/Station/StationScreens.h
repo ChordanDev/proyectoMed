@@ -43,6 +43,7 @@ private:
 	void HandleNotNow();
 };
 struct FStationCriterionResult;
+struct FStationResult;
 
 UCLASS()
 class UStationNoticeWidget : public UUserWidget
@@ -107,6 +108,10 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UVerticalBox> TaskList;
+
+	/** Under the scrolling brief, so the trainings stay in view however long it runs. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> FooterBox;
 
 	UPROPERTY()
 	TObjectPtr<UButton> TextButton;
@@ -353,6 +358,7 @@ protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	void AddSummary(const FStationResult& Result);
 	void AddCriterion(int32 Ordinal, const FStationCriterionResult& Criterion);
 
 	UFUNCTION()
@@ -375,6 +381,10 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> SessionNote;
+
+	/** Under the scrolling result, so the restart stays in view however many criteria there are. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> FooterBox;
 
 	UPROPERTY()
 	TObjectPtr<UButton> RestartButton;
