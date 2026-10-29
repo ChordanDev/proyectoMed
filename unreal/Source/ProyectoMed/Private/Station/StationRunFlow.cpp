@@ -1079,14 +1079,14 @@ bool UStationRunFlow::IsPatientAnswering() const
 	return bAwaitingReply || FPlatformTime::Seconds() - PatientHeardAt->load() < PatientVoiceQuietSeconds;
 }
 
-bool UStationRunFlow::PressTalkKey(bool bForExam)
+bool UStationRunFlow::PressTalkKey(bool bForExam, EStationTalkInput Input)
 {
 	if (!CanTalk() || (bForExam && !CanAskExamAloud()))
 	{
 		return false;
 	}
 	const bool bAnswering = IsPatientAnswering();
-	if (!TalkKey.Press(FPlatformTime::Seconds(), bAnswering))
+	if (!TalkKey.Press(FPlatformTime::Seconds(), bAnswering, Input))
 	{
 		return false;
 	}
@@ -1104,13 +1104,13 @@ bool UStationRunFlow::PressTalkKey(bool bForExam)
 	return true;
 }
 
-void UStationRunFlow::ReleaseTalkKey()
+void UStationRunFlow::ReleaseTalkKey(EStationTalkInput Input)
 {
 	const bool bWasHeld = TalkKey.IsHeld();
-	TalkKey.Release(FPlatformTime::Seconds());
-	if (!bWasHeld)
+	TalkKey.Release(FPlatformTime::Seconds(), Input);
+	if (!bWasHeld || TalkKey.IsHeld())
 	{
-		return; // the first tap of a cut, or a press that opened nothing
+		return; // the first tap of a cut, a press that opened nothing, or another input's hold
 	}
 	if (bTalkKeyForExam)
 	{

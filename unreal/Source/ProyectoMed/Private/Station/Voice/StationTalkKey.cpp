@@ -1,12 +1,13 @@
 #include "Station/StationTalkKey.h"
 
-bool FStationTalkKey::Press(double Now, bool bPatientAnswering)
+bool FStationTalkKey::Press(double Now, bool bPatientAnswering, EStationTalkInput Input)
 {
 	if (bDown)
 	{
-		return false; // the key repeats while held
+		return false; // the key repeats while held, or another input holds it
 	}
 	bDown = true;
+	DownInput = Input;
 	bOpened = !bPatientAnswering || Now - TapReleasedAt <= DoubleTapSeconds;
 	if (bOpened)
 	{
@@ -15,9 +16,9 @@ bool FStationTalkKey::Press(double Now, bool bPatientAnswering)
 	return bOpened;
 }
 
-void FStationTalkKey::Release(double Now)
+void FStationTalkKey::Release(double Now, EStationTalkInput Input)
 {
-	if (!bDown)
+	if (!bDown || Input != DownInput)
 	{
 		return;
 	}

@@ -136,6 +136,22 @@ void FStationHudUnitSpec::Define()
 		Hud->HandleReleaseExamAloud();
 	});
 
+	// #419: the space bar, the talk button and the exam button share one talk key.
+	It("leaves a hold of the space bar alone when the exam button is pressed and released", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		UStationHudWidget* Hud = MakeHud(Flow);
+		Flow->TalkKey.Press(FPlatformTime::Seconds(), false); // the space bar is held
+
+		Hud->HandleAskExamAloud();
+		Hud->HandleReleaseExamAloud();
+		TestTrue(TEXT("the space bar still holds the talk key"), Flow->IsTalking());
+
+		Hud->HandlePressTalk();
+		Hud->HandleReleaseTalk();
+		TestTrue(TEXT("nor does the talk button end it"), Flow->IsTalking());
+	});
+
 	It("records while a press the flow took is held", [this]()
 	{
 		// Phoenix armed the mode for this press: the flow listens for the request.

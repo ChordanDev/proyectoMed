@@ -190,13 +190,14 @@ public:
 	 * is said goes to the impresso request (#364); it needs `CanAskExamAloud`. True
 	 * when the press opened the microphone.
 	 */
-	bool PressTalkKey(bool bForExam = false);
+	bool PressTalkKey(bool bForExam = false, EStationTalkInput Input = EStationTalkInput::Keyboard);
 
 	/**
-	 * The learner released the talk key. The microphone closes a moment later, so the
-	 * last word still reaches the worker, and the worker then ends the turn at once.
+	 * The learner released the talk key on `Input`. The microphone closes a moment later,
+	 * so the last word still reaches the worker, and the worker then ends the turn at
+	 * once. A release on an input that does not hold the key changes nothing.
 	 */
-	void ReleaseTalkKey();
+	void ReleaseTalkKey(EStationTalkInput Input = EStationTalkInput::Keyboard);
 
 	/** The talk key is held and the microphone open. */
 	bool IsTalking() const { return TalkKey.IsHeld(); }

@@ -1120,7 +1120,7 @@ void UStationHudWidget::HandlePressTalk()
 {
 	if (Flow)
 	{
-		Flow->PressTalkKey();
+		Flow->PressTalkKey(/*bForExam*/ false, EStationTalkInput::TalkButton);
 	}
 	RefreshTalk();
 }
@@ -1129,7 +1129,7 @@ void UStationHudWidget::HandleReleaseTalk()
 {
 	if (Flow)
 	{
-		Flow->ReleaseTalkKey();
+		Flow->ReleaseTalkKey(EStationTalkInput::TalkButton);
 	}
 	RefreshTalk();
 }
@@ -1139,7 +1139,7 @@ void UStationHudWidget::HandleAskExamAloud()
 	bMicrophoneHeld = true;
 	// The exam push-to-talk (#419): refused while the previous spoken request still
 	// waits for Phoenix, and while the patient answers unless the press follows a tap.
-	bMicrophoneAccepted = Flow && Flow->PressTalkKey(/*bForExam*/ true);
+	bMicrophoneAccepted = Flow && Flow->PressTalkKey(/*bForExam*/ true, EStationTalkInput::ExamButton);
 	RefreshMicrophone();
 }
 
@@ -1147,10 +1147,11 @@ void UStationHudWidget::HandleReleaseExamAloud()
 {
 	bMicrophoneHeld = false;
 	bMicrophoneAccepted = false;
-	// Every press is released to the flow: a refused one may be the first tap of a cut (#419).
+	// Every press is released to the flow: a refused one may be the first tap of a cut,
+	// and the flow ignores the release when another input holds the talk key (#419).
 	if (Flow)
 	{
-		Flow->ReleaseTalkKey();
+		Flow->ReleaseTalkKey(EStationTalkInput::ExamButton);
 	}
 	RefreshMicrophone();
 }

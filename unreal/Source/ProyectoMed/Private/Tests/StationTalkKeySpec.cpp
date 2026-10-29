@@ -78,6 +78,23 @@ void FStationTalkKeySpec::Define()
 		TestTrue("the next press still opens", Key.Press(1.2, false));
 	});
 
+	It("lets only the input that holds the key let it go", [this]()
+	{
+		TestTrue("the space bar opens", Key.Press(1.0, false, EStationTalkInput::Keyboard));
+		TestFalse("a button pressed meanwhile opens nothing", Key.Press(1.1, false, EStationTalkInput::ExamButton));
+		Key.Release(1.2, EStationTalkInput::ExamButton);
+		TestTrue("its release leaves the space bar's hold", Key.IsHeld());
+		Key.Release(1.3, EStationTalkInput::Keyboard);
+		TestFalse("the space bar's release ends it", Key.IsHeld());
+	});
+
+	It("keeps the first tap of a cut with the input that made it", [this, Gap]()
+	{
+		Key.Press(1.0, true, EStationTalkInput::ExamButton);
+		Key.Release(1.1, EStationTalkInput::ExamButton);
+		TestTrue("the exam button's second press opens", Key.Press(1.1 + Gap * 0.5, true, EStationTalkInput::ExamButton));
+	});
+
 	It("forgets a held key on reset", [this]()
 	{
 		Key.Press(1.0, false);
