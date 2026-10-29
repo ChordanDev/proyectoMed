@@ -75,7 +75,8 @@ All operations are methods of `UStationClient`. Each one takes a
 | Method | Phoenix route | Value on success | Main consumer |
 | --- | --- | --- | --- |
 | `FetchActiveStation` | `GET /api/stations/active` | `FStationSummary`: title, candidate brief, voice mode | #190 |
-| `StartSession(bAudioConsent)` | `POST /api/stations/active/sessions` | `FStationSession`; starts the Station Timer | #190 |
+| `StartSession(bAudioConsent)` | `POST /api/stations/active/sessions` | `FStationSession`, a training; starts the Station Timer | #190 |
+| `StartSession(bAudioConsent, Mode)` | `POST /api/stations/active/sessions` | `FStationSession` in the chosen Station Mode (`EStationSessionMode`: `Training` or `SimulatedExam`); a simulated exam needs `bAudioConsent` | #421 |
 | `RefreshSession` | `GET .../sessions/:id` | `FStationSession` with status and transcript (`Messages`) | #195, #196 |
 | `RequestVoiceCredential` | `POST .../sessions/:id/voice` | `FStationVoiceCredential` for one LiveKit room | #190, #191 |
 | `SendTurn(Text, Modality)` | `POST .../sessions/:id/messages` | `FStationTurnReply`: the approved patient reply, or an examiner acknowledgement (it releases nothing; see [exam requests in the dialogue](#exam-requests-in-the-dialogue-issue-351)) | #191, #192, #194 |
@@ -114,6 +115,9 @@ no session ──StartSession──▶ active ──FinishSession──▶ compl
   taken the turn, and after `reply_verification_failed` it may have kept it
   without a reply: call `RefreshSession` and check the transcript before resending.
 - `RefreshSession` skips transcript lines whose speaker the client does not know.
+- `FStationSession::Mode` is the Station Mode Phoenix recorded (#421). It is fixed
+  for the whole run; a body without `mode` reads as `Training`, and one with an
+  unknown mode fails with `invalid_response`.
 - `RefreshSession` never reopens a run this client saw finish: an answer read
   before the finish keeps the run completed, with its completion time.
 
@@ -180,6 +184,7 @@ can come with different statuses from different routes.
 | `session_completed` | 422, 409 | `SendTurn` and `RequestVoiceCredential` (422); `RequestImpresso` and `POST .../exam-mode` (409) |
 | `station_time_elapsed` | 409 | `SendTurn` after the deadline |
 | `deadline_not_reached` | 409 | `FinishSession(Timer)` called early |
+| `audio_consent_required` | 400 | `StartSession` of a `SimulatedExam` without audio consent (#421) |
 | `no_consent` | 403 | `RequestVoiceCredential` and `POST .../exam-mode` on a run without audio consent |
 | `voice_unavailable` | 503 | `RequestVoiceCredential` when Phoenix has no LiveKit set up |
 | `rate_limited` | 429 | every session route that calls a paid provider, past its per-session or per-learner limit (see [Rate limits](#rate-limits-issue-395)); `RequestVoiceCredential` also more than 5 times a minute |
@@ -352,6 +357,15 @@ below.
 | `{"random": true, "area": "Pediatria", "audio_consent": false}` | A random published station of that `area` (the catalog's `area`). |
 | `{"random": true, "audio_consent": false}` | A random published station of any area. A blank `area` means any area. |
 
+- **Station Mode (#421):** an optional `mode`, fixed for the whole run and
+  returned by every session response (start, `GET .../sessions/:id` and
+  `POST .../finish`):
+
+| `mode` | Starts |
+| --- | --- |
+| absent, `null` or `"training"` | A training, as before the mode existed, so older clients keep working. |
+| `"simulated_exam"` | A simulated exam ("Prova simulada", #318). It needs `"audio_consent": true`. |
+
 - **Response:** `201` with the session. `station_id` is the catalog id and
   `station_version` the published version (both integers, as in the catalog);
   `station` carries what the learner sees before the first turn.
@@ -375,6 +389,7 @@ below.
     ]
   },
   "audio_consent": true,
+  "mode": "training",
   "status": "active",
   "voice_mode": "realtime",
   "started_at": "2026-10-25T15:00:00Z",
@@ -392,7 +407,8 @@ below.
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_parameters` | 400 | No station choice, both `station_id` and `random`, a `station_id` that is not a positive integer, a non-string `area`, or a missing or non-boolean `audio_consent`. |
+| `invalid_parameters` | 400 | No station choice, both `station_id` and `random`, a `station_id` that is not a positive integer, a non-string `area`, a missing or non-boolean `audio_consent`, or a `mode` other than `"training"` or `"simulated_exam"`. |
+| `audio_consent_required` | 400 | A `"simulated_exam"` without `"audio_consent": true`. No session starts. |
 | `subscription_required` | 402 | The learner has no active subscription (#339). |
 | `station_not_found` | 404 | No published station has that `station_id` (unknown, pending or disapproved case). |
 | `no_published_station` | 404 | Nothing is published in that `area` (or at all, without one). |
@@ -530,6 +546,9 @@ only from the database), so `GET /api/stations/active` and
 `POST`/`DELETE /api/stations/active/sessions/:id/exam-mode` (#364) is the
 alias this client uses for the spoken exam request until it has the device
 login; then every call moves to `/sessions/:id/...` together.
+
+`POST /api/stations/active/sessions` takes the same optional `mode` and answers
+the same `invalid_parameters` and `audio_consent_required` errors.
 
 The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
 which serves the language and speech-to-text keyterms of the session's own
@@ -991,10 +1010,13 @@ STATION_HUD_SNAPSHOT_DIR=/tmp/hud "/Users/Shared/Epic Games/UE_5.8/Engine/Binari
 
 `ProyectoMed.StationCards.Snapshot` (in `StationCardSnapshotSpec.cpp`) does the
 same for the full-screen cards around the run: the microphone disclosure, the
-Pre-Station Notice, the brief (loaded, microphone blocked, loading, failed), the
-invalidated run and the feedback (grading, graded, scrolled to the end). It
-writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it with
-`-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
+main menu (#421), the Pre-Station Notice, a training's brief (loaded, microphone
+blocked, loading, failed), a simulated exam's brief (ready, microphone blocked,
+no realtime voice), the invalidated run and the feedback (grading, graded,
+scrolled to the end). It writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it
+with `-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
+`ProyectoMed.StationCards.Unit` (in `StationBriefSpec.cpp`) checks what the main
+menu and each mode's brief offer, and needs nothing else.
 
 The stack test checks four things:
 

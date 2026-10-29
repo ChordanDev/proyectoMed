@@ -36,6 +36,13 @@ defmodule Backend.Stations.Conversation do
     :station_theme
   ]
 
+  @typedoc """
+  The Station Mode the learner chose before entering (#421): a training or a
+  simulated exam ("Prova simulada"). It is fixed when the session starts and
+  never changes during the run.
+  """
+  @type mode :: :training | :simulated_exam
+
   @type session :: %{
           optional(:completed_at) => DateTime.t(),
           optional(:completion_reason) => term(),
@@ -67,6 +74,7 @@ defmodule Backend.Stations.Conversation do
           station_id: String.t() | pos_integer(),
           station_version: String.t() | pos_integer(),
           audio_consent: boolean(),
+          mode: mode(),
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
           deadline_at: DateTime.t(),
@@ -147,7 +155,8 @@ defmodule Backend.Stations.Conversation do
 
   @doc """
   Starts a session. `:audio_consent` defaults to `false`: audio transcription is
-  refused until the learner explicitly grants it.
+  refused until the learner explicitly grants it. `:mode` defaults to
+  `:training`, so a caller that names no mode starts a training (#421).
 
   A session started on a published Station version (issue #334) also carries
   its pinned `:package` and the version's `:station_version_id`,
@@ -589,12 +598,15 @@ defmodule Backend.Stations.Conversation do
     audio_consent =
       Map.get(attrs, :audio_consent, Map.get(attrs, "audio_consent", false)) == true
 
+    mode = if Map.get(attrs, :mode) == :simulated_exam, do: :simulated_exam, else: :training
+
     session = %{
       session_id: session_id(),
       owner_machine_id: Drain.machine_id(),
       station_id: station_id,
       station_version: station_version,
       audio_consent: audio_consent,
+      mode: mode,
       started_at: now,
       expires_at: DateTime.add(now, timeout_ms(), :millisecond),
       deadline_at: DateTime.add(now, station_duration_ms(), :millisecond),

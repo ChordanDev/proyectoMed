@@ -32,11 +32,18 @@ public:
 	void FetchActiveStation(TStationCallback<FStationSummary> OnDone);
 
 	/**
-	 * `POST /api/stations/active/sessions`: starts a run, and with it the Station
-	 * Timer. Fails with `session_in_progress` while this client holds a session
-	 * or is already starting one.
+	 * `POST /api/stations/active/sessions`: starts a training, and with it the
+	 * Station Timer. Fails with `session_in_progress` while this client holds a
+	 * session or is already starting one.
 	 */
 	void StartSession(bool bAudioConsent, TStationCallback<FStationSession> OnDone);
+
+	/**
+	 * Starts a run in the chosen Station Mode (#421), as `StartSession` above.
+	 * Phoenix refuses a simulated exam without audio consent with
+	 * `audio_consent_required`.
+	 */
+	void StartSession(bool bAudioConsent, EStationSessionMode Mode, TStationCallback<FStationSession> OnDone);
 
 	/**
 	 * `GET .../sessions/:id`: reloads the current session and re-anchors the

@@ -13,6 +13,21 @@ bool IsVoiceTrainingAvailable(const FStationSummary& Station)
 	return Station.VoiceMode == EStationVoiceMode::Realtime;
 }
 
+FText SimulatedExamUnavailableText(const FStationSummary& Station, EStationMicPermission Permission)
+{
+	if (!IsVoiceTrainingAvailable(Station))
+	{
+		return LOCTEXT("SimulatedExamNoVoice",
+			"A prova simulada é feita só por voz, que não está disponível agora. Você ainda pode fazer um treino.");
+	}
+	if (Permission == EStationMicPermission::Denied)
+	{
+		return LOCTEXT("SimulatedExamMicrophoneBlocked",
+			"A prova simulada é feita só por voz e o microfone está bloqueado. Libere o acesso nos ajustes de privacidade do sistema e abra o app de novo. Você ainda pode fazer um treino.");
+	}
+	return FText::GetEmpty();
+}
+
 namespace
 {
 	/** Phoenix ended the run itself, at its deadline: the run is over for this client too. */
@@ -73,7 +88,7 @@ void UStationRunFlow::Begin(UStationClient* InClient, FStationMicrophoneSetup In
 {
 	Client = InClient;
 	Microphone = MoveTemp(InMicrophone);
-	Step = Microphone.WasDisclosureShown() ? EStationRunStep::Notice : EStationRunStep::Microphone;
+	Step = Microphone.WasDisclosureShown() ? EStationRunStep::Menu : EStationRunStep::Microphone;
 	LoadStation();
 }
 
@@ -86,7 +101,7 @@ void UStationRunFlow::AnswerMicrophone(bool bAllow)
 	Microphone.RememberDisclosureShown();
 	if (!bAllow)
 	{
-		Step = EStationRunStep::Notice;
+		Step = EStationRunStep::Menu;
 		OnChanged.Broadcast();
 		return;
 	}
@@ -95,7 +110,7 @@ void UStationRunFlow::AnswerMicrophone(bool bAllow)
 	{
 		if (UStationRunFlow* Self = WeakThis.Get(); Self && Self->Step == EStationRunStep::Microphone)
 		{
-			Self->Step = EStationRunStep::Notice;
+			Self->Step = EStationRunStep::Menu;
 			Self->OnChanged.Broadcast();
 		}
 	});
@@ -106,19 +121,54 @@ EStationMicPermission UStationRunFlow::GetMicrophonePermission() const
 	return Microphone.GetPermission ? Microphone.GetPermission() : EStationMicPermission::Denied;
 }
 
+void UStationRunFlow::ChooseMode(EStationSessionMode InMode)
+{
+	if (Step != EStationRunStep::Menu)
+	{
+		return;
+	}
+	SessionMode = InMode;
+	ForgetModeError();
+	Step = bNoticeAcknowledged ? EStationRunStep::Brief : EStationRunStep::Notice;
+	OnChanged.Broadcast();
+}
+
 void UStationRunFlow::AcknowledgeNotice()
 {
 	if (Step != EStationRunStep::Notice)
 	{
 		return;
 	}
+	bNoticeAcknowledged = true;
 	Step = EStationRunStep::Brief;
 	OnChanged.Broadcast();
 }
 
+void UStationRunFlow::BackToMenu()
+{
+	if (Step != EStationRunStep::Notice && Step != EStationRunStep::Brief)
+	{
+		return;
+	}
+	ForgetModeError();
+	Step = EStationRunStep::Menu;
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::ForgetModeError()
+{
+	// Without a station the error says why it did not load: the brief still shows it,
+	// beside the retry. Once it loaded, an error belongs to the mode left behind.
+	if (Station.IsSet())
+	{
+		ErrorText = FText::GetEmpty();
+	}
+}
+
 void UStationRunFlow::RetryLoadStation()
 {
-	if (!bLoadingStation && (Step == EStationRunStep::Notice || Step == EStationRunStep::Brief))
+	if (!bLoadingStation
+		&& (Step == EStationRunStep::Menu || Step == EStationRunStep::Notice || Step == EStationRunStep::Brief))
 	{
 		LoadStation();
 	}
@@ -127,6 +177,7 @@ void UStationRunFlow::RetryLoadStation()
 bool UStationRunFlow::CanEnter(EStationTrainingMode InMode) const
 {
 	return Step == EStationRunStep::Brief
+		&& SessionMode == EStationSessionMode::Training
 		&& Station.IsSet()
 		&& (InMode == EStationTrainingMode::Text
 			|| (IsVoiceTrainingAvailable(Station.GetValue()) && GetMicrophonePermission() != EStationMicPermission::Denied));
@@ -134,13 +185,33 @@ bool UStationRunFlow::CanEnter(EStationTrainingMode InMode) const
 
 void UStationRunFlow::Enter(EStationTrainingMode InMode)
 {
-	if (!CanEnter(InMode))
+	if (CanEnter(InMode))
 	{
-		return;
+		BeginEntry(InMode, EStationSessionMode::Training);
 	}
+}
 
+bool UStationRunFlow::CanEnterSimulatedExam() const
+{
+	return Step == EStationRunStep::Brief
+		&& SessionMode == EStationSessionMode::SimulatedExam
+		&& Station.IsSet()
+		&& SimulatedExamUnavailableText(Station.GetValue(), GetMicrophonePermission()).IsEmpty();
+}
+
+void UStationRunFlow::EnterSimulatedExam()
+{
+	if (CanEnterSimulatedExam())
+	{
+		BeginEntry(EStationTrainingMode::Voice, EStationSessionMode::SimulatedExam);
+	}
+}
+
+void UStationRunFlow::BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode)
+{
 	ResetRun();
 	Mode = InMode;
+	SessionMode = InSessionMode;
 	Step = EStationRunStep::Starting;
 	OnChanged.Broadcast();
 
@@ -158,7 +229,10 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 			if (Permission != EStationMicPermission::Granted)
 			{
 				Self->Step = EStationRunStep::Brief;
-				Self->ErrorText = LOCTEXT("MicrophoneBlocked", "Sem acesso ao microfone, o treino por voz não pode começar.");
+				Self->ErrorText = Self->SessionMode == EStationSessionMode::SimulatedExam
+					? LOCTEXT("SimulatedExamMicrophoneRefused",
+						"Sem acesso ao microfone, a prova simulada não pode começar. Você ainda pode fazer um treino.")
+					: LOCTEXT("MicrophoneBlocked", "Sem acesso ao microfone, o treino por voz não pode começar.");
 				Self->OnChanged.Broadcast();
 				return;
 			}
@@ -173,7 +247,7 @@ void UStationRunFlow::StartSession()
 {
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
 	const uint32 ThisRun = Run;
-	Client->StartSession(Mode == EStationTrainingMode::Voice, [WeakThis, ThisRun](const TStationResult<FStationSession>& Started)
+	Client->StartSession(Mode == EStationTrainingMode::Voice, SessionMode, [WeakThis, ThisRun](const TStationResult<FStationSession>& Started)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
 		if (!Self || Self->Run != ThisRun)
@@ -767,7 +841,7 @@ void UStationRunFlow::Discard()
 			return;
 		}
 		Self->ResetRun();
-		Self->Step = EStationRunStep::Brief;
+		Self->Step = EStationRunStep::Menu;
 		Self->OnChanged.Broadcast();
 	});
 }

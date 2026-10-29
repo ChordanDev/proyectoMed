@@ -1,5 +1,5 @@
-// Renders the full-screen cards around the run (microphone disclosure, notice,
-// brief, invalidated run, feedback) to PNG files, to look at their design
+// Renders the full-screen cards around the run (microphone disclosure, main
+// menu, notice, the brief of each mode, invalidated run, feedback) to PNG files, to look at their design
 // without playing a run to each one. Runs only with an RHI and
 // when $STATION_HUD_SNAPSHOT_DIR names the folder for the images:
 //   STATION_HUD_SNAPSHOT_DIR=/tmp/hud UnrealEditor ProyectoMed.uproject \
@@ -30,13 +30,14 @@ BEGIN_DEFINE_SPEC(FStationCardSnapshotSpec, "ProyectoMed.StationCards.Snapshot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	FString OutDir;
 
-	UStationRunFlow* MakeFlow(EStationMicPermission Permission) const;
+	UStationRunFlow* MakeFlow(EStationMicPermission Permission,
+		EStationSessionMode SessionMode = EStationSessionMode::Training) const;
 	UStationBriefWidget* MakeBrief(UStationRunFlow* Flow) const;
 	UStationFeedbackWidget* MakeFeedback(UStationRunFlow* Flow) const;
 	void Save(UUserWidget* Screen, const FString& Name);
 END_DEFINE_SPEC(FStationCardSnapshotSpec)
 
-UStationRunFlow* FStationCardSnapshotSpec::MakeFlow(EStationMicPermission Permission) const
+UStationRunFlow* FStationCardSnapshotSpec::MakeFlow(EStationMicPermission Permission, EStationSessionMode SessionMode) const
 {
 	// The brief of the reference station (backend/priv/stations/acute-appendicitis).
 	FStationSummary Station;
@@ -54,6 +55,7 @@ UStationRunFlow* FStationCardSnapshotSpec::MakeFlow(EStationMicPermission Permis
 
 	UStationRunFlow* Flow = NewObject<UStationRunFlow>();
 	Flow->Step = EStationRunStep::Brief;
+	Flow->SessionMode = SessionMode;
 	Flow->Station = Station;
 	Flow->Microphone.GetPermission = [Permission]() { return Permission; };
 	return Flow;
@@ -126,6 +128,7 @@ void FStationCardSnapshotSpec::Define()
 
 		UWorld* World = GEngine->GetWorldContexts()[0].World();
 		Save(CreateWidget<UStationMicrophoneWidget>(World), TEXT("pre-1-microphone"));
+		Save(CreateWidget<UStationMenuWidget>(World), TEXT("pre-1b-menu"));
 		Save(CreateWidget<UStationNoticeWidget>(World), TEXT("pre-2-notice"));
 		Save(MakeBrief(MakeFlow(EStationMicPermission::NotDetermined)), TEXT("pre-3-brief"));
 		Save(MakeBrief(MakeFlow(EStationMicPermission::Denied)), TEXT("pre-4-brief-microphone-blocked"));
@@ -139,6 +142,14 @@ void FStationCardSnapshotSpec::Define()
 		Failed->Station.Reset();
 		Failed->ErrorText = FText::FromString(TEXT("Não foi possível carregar o cenário e as tarefas da estação."));
 		Save(MakeBrief(Failed), TEXT("pre-6-brief-error"));
+
+		// A simulated exam's brief, and why it cannot start when it cannot (#421).
+		Save(MakeBrief(MakeFlow(EStationMicPermission::Granted, EStationSessionMode::SimulatedExam)), TEXT("pre-7-exam-brief"));
+		Save(MakeBrief(MakeFlow(EStationMicPermission::Denied, EStationSessionMode::SimulatedExam)),
+			TEXT("pre-8-exam-brief-microphone-blocked"));
+		UStationRunFlow* NoVoice = MakeFlow(EStationMicPermission::Granted, EStationSessionMode::SimulatedExam);
+		NoVoice->Station->VoiceMode = EStationVoiceMode::Off;
+		Save(MakeBrief(NoVoice), TEXT("pre-9-exam-brief-no-voice"));
 	});
 
 	It("renders the invalidated run and the feedback", [this]()
