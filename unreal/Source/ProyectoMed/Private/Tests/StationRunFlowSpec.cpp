@@ -607,6 +607,8 @@ void FStationRunUnitSpec::Define()
 		TestTrue("the learner may ask again", Flow->CanAskExamAloud());
 		TestFalse("told it failed", Flow->GetExamErrorText().IsEmpty());
 		TestEqual("not a dialogue line", Flow->GetTranscript().Num(), 0);
+		// #419: nobody answers a failed request, so the next press of a talk key opens.
+		TestFalse("the patient does not answer it", Flow->IsPatientAnswering());
 	});
 
 	It("moves an utterance that took the mode before it was known out of the conversation", [this, Spoken, ImpressoOutcome]()

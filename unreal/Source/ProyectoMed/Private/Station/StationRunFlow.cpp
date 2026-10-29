@@ -962,8 +962,9 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 	if (Event.TurnId == SpokenExamTurn && Event.Kind == EStationVoiceEventKind::TurnFailure)
 	{
 		// The request may or may not have reached Phoenix: the learner may ask again,
-		// and what Phoenix released is read again.
+		// and what Phoenix released is read again. Nobody answers the failed turn (#419).
 		ResetSpokenExam();
+		bVoiceTurnFailed = true;
 		ExamErrorText = LOCTEXT("ExamRequestFailed", "Não foi possível enviar sua solicitação. Tente novamente.");
 		ReloadReleasedImpressos();
 		OnChanged.Broadcast();
@@ -1113,17 +1114,19 @@ void UStationRunFlow::ReleaseTalkKey()
 		bTalkKeyForExam = false;
 		ReleaseExamAloud();
 	}
+	// Checked every frame: a delayed ticker may fire just before the tail ends and
+	// then wait a whole delay more.
 	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
 	TalkTailTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateWeakLambda(this, [this](float)
 	{
-		ApplyTalkKey();
 		const bool bInTail = !TalkKey.IsHeld() && TalkKey.IsOpen(FPlatformTime::Seconds());
 		if (!bInTail)
 		{
+			ApplyTalkKey();
 			TalkTailTicker.Reset();
 		}
 		return bInTail;
-	}), FStationTalkKey::TailSeconds);
+	}));
 	OnChanged.Broadcast();
 }
 

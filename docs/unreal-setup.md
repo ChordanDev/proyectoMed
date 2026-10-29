@@ -208,9 +208,9 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   single press does nothing and the button reads "Toque e segure para
   interromper"; tap and then hold to cut the patient and talk. The exam
   microphone and Shift + space bar follow the same rule. While the typed-reply box has the keyboard focus the space
-  bar types a space; click the scene to give it back to the talk key. During
-  the run the space bar no longer presses the focused button (Enter still
-  does), and switching to another app releases a held key.
+  bar types a space; click the scene to give it back to the talk key. In the
+  station client the space bar never presses the focused button, on any of its
+  screens (Enter still does), and switching to another app releases a held key.
 - The voice status under the timer reads "Conectando a voz..." until the
   worker joins, then "Voz conectada". While LiveKit retries the connection or
   the worker is gone it reads "Reconectando a voz..." and the microphone stops.

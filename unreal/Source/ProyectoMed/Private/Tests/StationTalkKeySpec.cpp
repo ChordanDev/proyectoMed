@@ -56,7 +56,7 @@ void FStationTalkKeySpec::Define()
 		TestTrue("the second press opens", Key.Press(1.1 + Gap * 0.5, true));
 		TestTrue("held", Key.IsHeld());
 		Key.Release(3.0);
-		TestFalse("a single press after it opens nothing again", Key.Press(3.0 + Gap * 2.0, true));
+		TestFalse("the tap is used up: a press soon after opens nothing", Key.Press(3.0 + Gap * 0.5, true));
 	});
 
 	It("needs the second press within the double-tap gap", [this, Gap]()
