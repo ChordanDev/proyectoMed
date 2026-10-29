@@ -353,6 +353,261 @@ void FStationRunUnitSpec::Define()
 		TestEqual("a later sentence stays silent", *Resumed, 1);
 	});
 
+	// Spoken exam requests (#364): the "Exames" button armed the exam mode, so the
+	// learner's next utterance went to the impresso request.
+	auto ImpressoOutcome = [](int32 TurnId, EStationImpressoDecision Decision, const TCHAR* Feedback)
+	{
+		FStationVoiceEvent Event;
+		Event.Kind = EStationVoiceEventKind::ExaminerImpresso;
+		Event.TurnId = TurnId;
+		Event.Impresso.RequestId = FString::Printf(TEXT("voice-exam-%d"), TurnId);
+		Event.Impresso.Decision = Decision;
+		Event.Impresso.FeedbackMessage = Feedback;
+		if (Decision == EStationImpressoDecision::Released)
+		{
+			FStationImpresso& Released = Event.Impresso.NewlyReleased.AddDefaulted_GetRef();
+			Released.Id = TEXT("lab");
+			Released.Title = TEXT("IMPRESSO — EXAMES LABORATORIAIS");
+			Released.Category = TEXT("laboratory");
+		}
+		return Event;
+	};
+	auto ArmExamAloud = [](UStationRunFlow* Flow)
+	{
+		Flow->Step = EStationRunStep::Running;
+		Flow->Mode = EStationTrainingMode::Voice;
+		Flow->SpokenExamExpiresAt = FPlatformTime::Seconds() + 20.0;
+	};
+
+	It("shows a spoken exam request and its outcome in the exam panel, not in the conversation", [this, Spoken, ImpressoOutcome, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		TestTrue("listening for the request", Flow->IsListeningForExam());
+
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito")));
+		TestTrue("the request is heard", Flow->IsSpokenExamInFlight());
+		TestEqual("as the learner speaks", Flow->GetSpokenExamText(), FString(TEXT("Solicito")));
+		TestTrue("no live caption in the conversation", Flow->GetVoice().LearnerText.IsEmpty());
+		TestFalse("the mode went to this utterance", Flow->IsListeningForExam());
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		TestEqual("the whole request", Flow->GetSpokenExamText(), FString(TEXT("Solicito hemograma")));
+		TestEqual("not a dialogue line", Flow->GetTranscript().Num(), 0);
+
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+		TestFalse("answered", Flow->IsSpokenExamInFlight());
+		TestFalse("the mode is used", Flow->IsListeningForExam());
+		TestEqual("still not a dialogue line", Flow->GetTranscript().Num(), 0);
+		const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+		if (TestEqual("one exam request, as a typed one", Requests.Num(), 1))
+		{
+			TestEqual("what the learner asked for", Requests[0].Text, FString(TEXT("Solicito hemograma")));
+			TestEqual("released", Requests[0].Reply.Decision, EStationImpressoDecision::Released);
+			TestEqual("Phoenix's feedback", Requests[0].Reply.FeedbackMessage, FString(TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+			TestEqual("what it released", Requests[0].Reply.NewlyReleased.Num(), 1);
+		}
+
+		// An outcome settles the turn (#193): speaking again keeps it, and is dialogue.
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Onde dói?"), INDEX_NONE, true));
+		TestEqual("the request stays", Flow->GetExamRequests().Num(), 1);
+		if (TestEqual("the next utterance is dialogue", Flow->GetTranscript().Num(), 1))
+		{
+			TestEqual("its line", Flow->GetTranscript()[0].Text, FString(TEXT("Onde dói?")));
+		}
+	});
+
+	It("shows a spoken exam request Phoenix declines as declined, with nothing released", [this, Spoken, ImpressoOutcome, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 3, TEXT("Solicito ressonância"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(ImpressoOutcome(3, EStationImpressoDecision::Unavailable, TEXT("Não consta no script.")));
+
+		const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+		if (TestEqual("one exam request", Requests.Num(), 1))
+		{
+			TestEqual("what the learner asked for", Requests[0].Text, FString(TEXT("Solicito ressonância")));
+			TestEqual("declined", Requests[0].Reply.Decision, EStationImpressoDecision::Unavailable);
+			TestEqual("the examiner's answer", Requests[0].Reply.FeedbackMessage, FString(TEXT("Não consta no script.")));
+		}
+		TestEqual("nothing released", Flow->GetReleasedImpressos().Num(), 0);
+		TestEqual("not a dialogue line", Flow->GetTranscript().Num(), 0);
+	});
+
+	It("puts an utterance Phoenix answered as dialogue in the conversation, before the reply", [this, Spoken, ArmExamAloud]()
+	{
+		// The learner finished speaking after the mode expired, so Phoenix sent it to the patient.
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Qual é a sua idade?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Trinta anos.")));
+		const TArray<FStationMessage>& Lines = Flow->GetTranscript();
+		if (TestEqual("the turn and its reply", Lines.Num(), 2))
+		{
+			TestEqual("the learner first", Lines[0].Speaker, EStationSpeaker::Learner);
+			TestEqual("what the learner said", Lines[0].Text, FString(TEXT("Qual é a sua idade?")));
+			TestEqual("then the patient", Lines[1].Text, FString(TEXT("Trinta anos.")));
+		}
+		TestFalse("no request waits", Flow->IsSpokenExamInFlight());
+		TestEqual("no exam request", Flow->GetExamRequests().Num(), 0);
+
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Vou examinar o abdome."), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::ExaminerAcknowledged, 2));
+		TestEqual("an examiner note joins the conversation too", Flow->GetTranscript().Num(), 3);
+		TestTrue("noted", Flow->GetVoice().bExaminerNoted);
+	});
+
+	It("releases nothing for an exam asked in the dialogue without the button (#351)", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		TestFalse("not listening for an exam", Flow->IsListeningForExam());
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		TestFalse("no exam request waits", Flow->IsSpokenExamInFlight());
+		Flow->HandleVoiceEvent(Spoken(EKind::ExaminerAcknowledged, 1));
+		TestEqual("a dialogue line", Flow->GetTranscript().Num(), 1);
+		TestEqual("no exam request", Flow->GetExamRequests().Num(), 0);
+		TestEqual("nothing released", Flow->GetReleasedImpressos().Num(), 0);
+	});
+
+	It("lets the next utterance take the mode when the learner spoke over the request", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito")));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Solicito um hemograma")));
+		TestEqual("the newer utterance is the request", Flow->GetSpokenExamText(), FString(TEXT("Solicito um hemograma")));
+		TestEqual("nothing in the conversation", Flow->GetTranscript().Num(), 0);
+		TestEqual("no exam request yet", Flow->GetExamRequests().Num(), 0);
+	});
+
+	It("ends an unused exam mode when it expires, and forgets it with the run", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->Step = EStationRunStep::Brief; // CheckStationTimer reads the Station Timer only while running
+		Flow->SpokenExamExpiresAt = FPlatformTime::Seconds() - 1.0;
+		Flow->CheckStationTimer();
+		TestFalse("no longer listening", Flow->IsListeningForExam());
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		TestEqual("the next utterance is dialogue", Flow->GetTranscript().Num(), 1);
+
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Solicito")));
+		Flow->ResetRun();
+		TestFalse("not listening after a reset", Flow->IsListeningForExam());
+		TestFalse("no request after a reset", Flow->IsSpokenExamInFlight());
+	});
+
+	It("keeps the request the learner started before releasing the button", [this, Spoken, ImpressoOutcome, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito")));
+		Flow->ReleaseExamAloud();
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+		TestEqual("the request", Flow->GetExamRequests().Num(), 1);
+		TestEqual("not a dialogue line", Flow->GetTranscript().Num(), 0);
+	});
+
+	It("gives a released button a moment to catch the request, then goes back to the dialogue", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->ReleaseExamAloud();
+		TestTrue("still listening for the first caption", Flow->IsListeningForExam());
+		TestTrue("for two seconds at most", Flow->SpokenExamExpiresAt <= FPlatformTime::Seconds() + 2.0);
+		TestTrue("pressing again re-arms it", Flow->CanAskExamAloud());
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Hemograma")));
+		TestTrue("a caption within the grace is the request", Flow->IsSpokenExamInFlight());
+
+		UStationRunFlow* Later = NewObject<UStationRunFlow>();
+		ArmExamAloud(Later);
+		Later->ReleaseExamAloud();
+		Later->Step = EStationRunStep::Brief; // CheckStationTimer reads the Station Timer only while running
+		Later->SpokenExamExpiresAt = FPlatformTime::Seconds() - 1.0;
+		Later->CheckStationTimer();
+		TestFalse("no longer listening", Later->IsListeningForExam());
+		Later->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		TestEqual("the next utterance is dialogue", Later->GetTranscript().Num(), 1);
+	});
+
+	It("frees the exam button when the spoken request's turn fails", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		FStationVoiceEvent Failed = Spoken(EKind::TurnFailure, 1);
+		Failed.Failure = TEXT("turn_failed");
+		Flow->HandleVoiceEvent(Failed);
+		TestFalse("no request waits", Flow->IsSpokenExamInFlight());
+		TestTrue("the learner may ask again", Flow->CanAskExamAloud());
+		TestFalse("told it failed", Flow->GetExamErrorText().IsEmpty());
+		TestEqual("not a dialogue line", Flow->GetTranscript().Num(), 0);
+	});
+
+	It("moves an utterance that took the mode before it was known out of the conversation", [this, Spoken, ImpressoOutcome]()
+	{
+		// The learner spoke before Phoenix's answer to the press arrived here.
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		TestEqual("shown as dialogue first", Flow->GetTranscript().Num(), 1);
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+		TestEqual("then out of the conversation", Flow->GetTranscript().Num(), 0);
+		if (TestEqual("an exam request", Flow->GetExamRequests().Num(), 1))
+		{
+			TestEqual("with what the learner said", Flow->GetExamRequests()[0].Text, FString(TEXT("Solicito hemograma")));
+		}
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 2, TEXT("Aqui.")));
+		TestEqual("later turns join as usual", Flow->GetTranscript().Num(), 2);
+	});
+
+	It("asks for exams aloud instead of typing only while the voice training's voice works", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		Flow->Mode = EStationTrainingMode::Text;
+		TestFalse("typed in a text training", Flow->ShouldRequestExamsAloud());
+		Flow->Mode = EStationTrainingMode::Voice;
+		TestTrue("aloud in a voice training", Flow->ShouldRequestExamsAloud());
+		Flow->bVoiceFallback = true;
+		TestFalse("typed once it fell back to text", Flow->ShouldRequestExamsAloud());
+		Flow->bVoiceFallback = false;
+		Flow->Voice.bMicrophoneUnavailable = true;
+		TestFalse("typed without a microphone", Flow->ShouldRequestExamsAloud());
+		Flow->Voice.bMicrophoneUnavailable = false;
+		Flow->Voice.bLost = true;
+		TestFalse("typed once the voice is lost", Flow->ShouldRequestExamsAloud());
+	});
+
+	It("asks aloud only in a running voice training whose voice is not lost", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		TestFalse("not before the run", Flow->CanAskExamAloud());
+		TestFalse("refused", Flow->AskExamAloud());
+
+		Flow->Step = EStationRunStep::Running;
+		Flow->Mode = EStationTrainingMode::Text;
+		TestFalse("not in a text training", Flow->CanAskExamAloud());
+		Flow->Mode = EStationTrainingMode::Voice;
+		Flow->bVoiceFallback = true;
+		TestFalse("not in a voice training that fell back to text", Flow->CanAskExamAloud());
+		Flow->bVoiceFallback = false;
+		Flow->Voice.bLost = true;
+		TestFalse("not once the voice is lost", Flow->CanAskExamAloud());
+		Flow->Voice.bLost = false;
+		TestTrue("in a running voice training", Flow->CanAskExamAloud());
+		Flow->SpokenExamExpiresAt = FPlatformTime::Seconds() + 20.0;
+		TestFalse("not while already listening", Flow->CanAskExamAloud());
+	});
+
 	It("neither finishes nor discards before the run is running", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
@@ -570,6 +825,71 @@ void FStationRunPhoenixSpec::Define()
 			TestNull("no session", Client->GetSession());
 			TestTrue("text training still offered", Flow->CanEnter(EStationTrainingMode::Text));
 			Done.Execute();
+		});
+	});
+
+	LatentIt("listens for a spoken exam request once Phoenix arms the exam mode, a moment past the release", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			if (!TestTrue(TEXT("voice offered (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnter(EStationTrainingMode::Voice)))
+			{
+				Done.Execute();
+				return;
+			}
+			Flow->Enter(EStationTrainingMode::Voice);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+				[this, Done]()
+				{
+					if (!TestTrue("can ask aloud", Flow->AskExamAloud()))
+					{
+						Done.Execute();
+						return;
+					}
+					TestTrue("arming", Flow->IsArmingExamAloud());
+					TestFalse("one at a time", Flow->AskExamAloud());
+					WhenFlow(Flow, [this]() { return !Flow->IsArmingExamAloud(); }, [this, Done]()
+					{
+						TestTrue("no error", Flow->GetExamErrorText().IsEmpty());
+						TestTrue("listening", Flow->IsListeningForExam());
+						Flow->ReleaseExamAloud();
+						TestTrue("still listening for the first caption", Flow->IsListeningForExam());
+						Done.Execute();
+					});
+				});
+		});
+	});
+
+	LatentIt("stops listening soon after the learner releases the button while Phoenix arms the mode", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			Flow->Enter(EStationTrainingMode::Voice);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+				[this, Done]()
+				{
+					if (!TestTrue("can ask aloud", Flow->AskExamAloud()))
+					{
+						Done.Execute();
+						return;
+					}
+					Flow->ReleaseExamAloud();
+					const double Released = FPlatformTime::Seconds();
+					// The interface checks the mode every frame; so does this ticker.
+					FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Done, Released](float)
+					{
+						Flow->CheckStationTimer();
+						if (Flow->IsArmingExamAloud() || Flow->IsListeningForExam())
+						{
+							return true;
+						}
+						TestTrue("within the grace, not Phoenix's twenty seconds", FPlatformTime::Seconds() - Released < 10.0);
+						Done.Execute();
+						return false;
+					}));
+				});
 		});
 	});
 

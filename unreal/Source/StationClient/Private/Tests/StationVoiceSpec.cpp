@@ -142,6 +142,40 @@ void FStationVoiceUnitSpec::Define()
 			TestFalse("unknown status", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"other"})")).IsSet());
 		});
 
+		It("reads the outcome of a spoken exam request (#364)", [this]()
+		{
+			const TOptional<FStationVoiceEvent> Released = Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-4","decision":"released","newly_released":[{"id":"lab","title":"IMPRESSO — EXAMES LABORATORIAIS","category":"laboratory"}],"feedback_message":"Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS"})"));
+			if (TestTrue("released", Released.IsSet()))
+			{
+				TestEqual("kind", Released->Kind, EStationVoiceEventKind::ExaminerImpresso);
+				TestEqual("turn", Released->TurnId, 4);
+				TestEqual("request id", Released->Impresso.RequestId, TEXT("voice-exam-4"));
+				TestEqual("decision", Released->Impresso.Decision, EStationImpressoDecision::Released);
+				TestEqual("feedback", Released->Impresso.FeedbackMessage, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS"));
+				if (TestEqual("newly released", Released->Impresso.NewlyReleased.Num(), 1))
+				{
+					TestEqual("id", Released->Impresso.NewlyReleased[0].Id, TEXT("lab"));
+					TestEqual("title", Released->Impresso.NewlyReleased[0].Title, TEXT("IMPRESSO — EXAMES LABORATORIAIS"));
+					TestEqual("category", Released->Impresso.NewlyReleased[0].Category, TEXT("laboratory"));
+					TestTrue("no content in the event", Released->Impresso.NewlyReleased[0].Content.IsEmpty());
+				}
+				TestTrue("no text", Released->Text.IsEmpty());
+			}
+			const TOptional<FStationVoiceEvent> Declined = Parse(TEXT(R"({"session_id":"s1","turn_id":5,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-5","decision":"unavailable","newly_released":[],"feedback_message":"Não consta no script."})"));
+			if (TestTrue("declined", Declined.IsSet()))
+			{
+				TestEqual("decision", Declined->Impresso.Decision, EStationImpressoDecision::Unavailable);
+				TestEqual("feedback", Declined->Impresso.FeedbackMessage, TEXT("Não consta no script."));
+				TestEqual("nothing released", Declined->Impresso.NewlyReleased.Num(), 0);
+			}
+			const TOptional<FStationVoiceEvent> Again = Parse(TEXT(R"({"session_id":"s1","turn_id":6,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-6","decision":"already_released","newly_released":[],"feedback_message":""})"));
+			TestTrue("already released", Again.IsSet() && Again->Impresso.Decision == EStationImpressoDecision::AlreadyReleased);
+			TestFalse("unknown decision", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-4","decision":"maybe","newly_released":[],"feedback_message":""})")).IsSet());
+			TestFalse("no decision", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-4","newly_released":[],"feedback_message":""})")).IsSet());
+			TestFalse("released not an array", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-4","decision":"released","newly_released":{},"feedback_message":""})")).IsSet());
+			TestFalse("released item without a title", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-4","decision":"released","newly_released":[{"id":"lab","category":"laboratory"}],"feedback_message":""})")).IsSet());
+		});
+
 		It("compares the session, role and status exactly, as the web parser does", [this]()
 		{
 			TestFalse("session in another case", Parse(TEXT(R"({"session_id":"S1","turn_id":3,"final":true,"text":"Oi"})")).IsSet());

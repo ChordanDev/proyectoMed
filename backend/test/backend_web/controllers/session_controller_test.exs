@@ -657,6 +657,38 @@ defmodule BackendWeb.SessionControllerTest do
                |> json_response(409)
     end
 
+    test "the deprecated active-station alias arms and disarms it for the Unreal client",
+         %{conn: conn, start: start} do
+      armed = start.(true)
+
+      assert %{"status" => "armed", "expires_at" => _, "server_now" => _} =
+               conn
+               |> recycle()
+               |> post(~p"/api/stations/active/sessions/#{armed}/exam-mode")
+               |> json_response(200)
+
+      assert {:ok, {:impresso, %{request_id: "voice-exam-1"}}} =
+               Stations.process_voice_turn(armed, 1, @imaging_request)
+
+      disarmed = start.(true)
+      conn |> recycle() |> post(~p"/api/stations/active/sessions/#{disarmed}/exam-mode")
+
+      assert %{"status" => "disarmed"} =
+               conn
+               |> recycle()
+               |> delete(~p"/api/stations/active/sessions/#{disarmed}/exam-mode")
+               |> json_response(200)
+
+      assert {:ok, {:kept, %{addressee: :examiner}}} =
+               Stations.process_voice_turn(disarmed, 1, @imaging_request)
+
+      assert %{"error" => "no_consent"} =
+               conn
+               |> recycle()
+               |> post(~p"/api/stations/active/sessions/#{start.(false)}/exam-mode")
+               |> json_response(403)
+    end
+
     test "an unknown session is session_not_found", %{conn: conn} do
       for method <- [:post, :delete] do
         conn = conn |> recycle() |> dispatch(@endpoint, method, "/sessions/nope/exam-mode", %{})

@@ -188,6 +188,18 @@ defmodule BackendWeb.SessionAuthTest do
         assert %{"error" => "missing_token"} = conn |> request(:get, path) |> json_response(401)
       end
 
+      for method <- [:post, :delete] do
+        assert %{"error" => "missing_token"} =
+                 conn
+                 |> request(method, "/api/stations/active/sessions/#{session_id}/exam-mode")
+                 |> json_response(401)
+
+        assert %{"error" => "session_not_found"} =
+                 stranger
+                 |> request(method, "/api/stations/active/sessions/#{session_id}/exam-mode")
+                 |> json_response(404)
+      end
+
       assert %{"error" => "session_not_found"} =
                stranger
                |> request(:get, "/api/stations/active/sessions/#{session_id}")

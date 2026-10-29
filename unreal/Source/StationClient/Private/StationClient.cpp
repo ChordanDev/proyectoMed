@@ -277,6 +277,33 @@ void UStationClient::ListImpressos(TStationCallback<TArray<FStationImpresso>> On
 		&StationJson::ParseImpressoList, MoveTemp(OnDone));
 }
 
+void UStationClient::ArmExamMode(TStationCallback<FStationExamMode> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+	SendSessionRequest<FStationExamMode>(TEXT("POST"), SessionUrl(TEXT("/exam-mode")), nullptr,
+		&StationJson::ParseExamMode, MoveTemp(OnDone));
+}
+
+void UStationClient::CancelExamMode(TStationCallback<FStationNone> OnDone)
+{
+	if (!Session.IsSet())
+	{
+		OnDone(MakeError(NoSessionError()));
+		return;
+	}
+	SendSessionRequest<FStationNone>(TEXT("DELETE"), SessionUrl(TEXT("/exam-mode")), nullptr,
+		[](const FJsonObject& Json, FStationNone&)
+		{
+			FString Status;
+			return Json.TryGetStringField(TEXT("status"), Status) && Status == TEXT("disarmed");
+		},
+		MoveTemp(OnDone));
+}
+
 void UStationClient::FinishSession(EStationFinishReason Reason, TStationCallback<FStationSession> OnDone)
 {
 	if (!Session.IsSet())

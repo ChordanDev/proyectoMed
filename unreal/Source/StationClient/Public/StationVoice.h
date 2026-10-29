@@ -22,6 +22,11 @@ enum class EStationVoiceEventKind : uint8
 	ExaminerAcknowledged,
 	/** The patient reply was refused; Phoenix kept the learner turn without one. */
 	PatientUnanswered,
+	/**
+	 * The turn was the spoken exam request of an armed exam mode (#364): Phoenix
+	 * sent it to the impresso request, not to the patient. Nothing is spoken.
+	 */
+	ExaminerImpresso,
 	/** A failure of one turn, for example `synthesis_failed`; the run goes on. */
 	TurnFailure,
 	/** The worker stopped listening to this run. */
@@ -41,6 +46,12 @@ struct STATIONCLIENT_API FStationVoiceEvent
 	FString Text;
 	/** `TurnFailure` and `Fatal`: the failure code. */
 	FString Failure;
+	/**
+	 * `ExaminerImpresso`: Phoenix's decision, as `RequestImpresso` answers it but
+	 * without `ReleasedImpressos`, and `NewlyReleased` without `Content`; read
+	 * both with `ListImpressos`.
+	 */
+	FStationImpressoReply Impresso;
 };
 
 /**

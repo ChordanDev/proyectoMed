@@ -286,6 +286,46 @@ public:
 	/** The last exam request failure, in Brazilian Portuguese; empty when there is none. */
 	const FText& GetExamErrorText() const { return ExamErrorText; }
 
+	/**
+	 * In a voice training whose voice and microphone work, exam requests are said
+	 * aloud while a button is held (#364); otherwise they are typed.
+	 */
+	bool ShouldRequestExamsAloud() const;
+
+	/**
+	 * True while the run is running, `ShouldRequestExamsAloud` holds and no spoken
+	 * exam request is being armed, listened for or answered. A released button whose
+	 * grace still runs may be pressed again.
+	 */
+	bool CanAskExamAloud() const;
+
+	/**
+	 * The learner pressed the exam button to say the request aloud. Phoenix arms an
+	 * exam mode: the learner's next utterance goes to the impresso request instead
+	 * of the patient, and its outcome joins `GetExamRequests` as a typed request's
+	 * does. Returns false, and asks nothing, when `CanAskExamAloud` is false.
+	 */
+	bool AskExamAloud();
+
+	/** True while Phoenix arms the exam mode. */
+	bool IsArmingExamAloud() const { return bArmingSpokenExam; }
+
+	/** True while the armed exam mode waits for the learner to start speaking. */
+	bool IsListeningForExam() const;
+
+	/**
+	 * The learner released the button: the dialogue goes on. A request the learner
+	 * started stays the request. If nothing was heard yet, the mode waits two more
+	 * seconds for the first caption, then Phoenix disarms it.
+	 */
+	void ReleaseExamAloud();
+
+	/** True while the spoken exam request is heard or waits for its outcome. */
+	bool IsSpokenExamInFlight() const { return SpokenExamTurn != 0; }
+
+	/** What the learner said in that request so far; empty when there is none. */
+	const FString& GetSpokenExamText() const { return SpokenExamText; }
+
 	/** True while the run is running. */
 	bool CanFinish() const;
 
@@ -304,7 +344,10 @@ public:
 	 */
 	void ExpireTimer();
 
-	/** Calls `ExpireTimer` once the Station Timer reads zero. The interface calls it every frame. */
+	/**
+	 * Calls `ExpireTimer` once the Station Timer reads zero, and ends an exam mode the
+	 * learner did not speak into once it expires. The interface calls it every frame.
+	 */
 	void CheckStationTimer();
 
 	/** The feedback of the ended run; null until Phoenix serves it. */
@@ -342,6 +385,9 @@ private:
 	// Test access to the voice event handling (StationRunFlowSpec.cpp).
 	friend class FStationRunUnitSpec;
 	friend class FStationRunPhoenixLossSpec;
+	friend class FStationHudSnapshotSpec;
+	friend class FStationHudUnitSpec;
+	friend class FStationCardSnapshotSpec;
 
 	void LoadStation();
 	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);
@@ -378,6 +424,24 @@ private:
 
 	void SilencePatient();
 	void ResumePatient();
+
+	/**
+	 * Phoenix answered the spoken exam turn as dialogue after all (the learner finished
+	 * it after the mode expired): its learner line joins the conversation.
+	 */
+	void ReleaseSpokenExamAsDialogue();
+
+	/** The outcome of the spoken exam request joins the exam requests. */
+	void TakeSpokenExamOutcome(const FStationVoiceEvent& Event);
+
+	/** Asks Phoenix to disarm the exam mode. */
+	void DisarmSpokenExam();
+
+	/** Forgets the exam mode and the spoken exam request, if any. */
+	void ResetSpokenExam();
+
+	/** Reads the released impressos again, after a request this client did not send. */
+	void ReloadReleasedImpressos();
 
 	void SetExamError(const FStationClientError& Error);
 
@@ -429,6 +493,17 @@ private:
 	TArray<FStationImpresso> ReleasedImpressos;
 	FString UnsentExamRequest;
 	FText ExamErrorText;
+	bool bArmingSpokenExam = false;
+	/** The learner released the button while Phoenix armed the mode, at `SpokenExamReleasedAt`. */
+	bool bReleasedWhileArming = false;
+	/** The button was released while the armed mode still listens. */
+	bool bSpokenExamReleased = false;
+	double SpokenExamReleasedAt = 0.0;
+	/** `FPlatformTime::Seconds()` at which the armed exam mode expires; 0 while none is armed. */
+	double SpokenExamExpiresAt = 0.0;
+	/** The spoken turn the armed exam mode went to; 0 while there is none. */
+	int32 SpokenExamTurn = 0;
+	FString SpokenExamText;
 	EStationFinishReason FinishReason = EStationFinishReason::User;
 	TOptional<FStationResult> Result;
 	/** `FPlatformTime::Seconds()` before which the timer does not end the run again after Phoenix refused it. */

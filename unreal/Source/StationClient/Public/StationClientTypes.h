@@ -216,6 +216,24 @@ struct STATIONCLIENT_API FStationVoiceCredential
 	FDateTime ExpiresAt;
 };
 
+/**
+ * The exam mode Phoenix armed for the learner's next utterance (#364): that
+ * utterance goes to the impresso request, not to the patient.
+ */
+USTRUCT(BlueprintType)
+struct STATIONCLIENT_API FStationExamMode
+{
+	GENERATED_BODY()
+
+	/** UTC, by Phoenix's clock. An utterance finished later is a dialogue turn. */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	FDateTime ExpiresAt;
+
+	/** Phoenix's clock when it armed the mode. */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	FDateTime ServerNow;
+};
+
 /** A document Phoenix released during the run: an impresso or exam findings. */
 USTRUCT(BlueprintType)
 struct STATIONCLIENT_API FStationImpresso
