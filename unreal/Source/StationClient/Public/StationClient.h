@@ -85,6 +85,18 @@ public:
 	void ListImpressos(TStationCallback<TArray<FStationImpresso>> OnDone);
 
 	/**
+	 * `POST .../sessions/:id/exam-mode` (#364): the learner's next utterance in
+	 * the room goes to the impresso request instead of the patient, until
+	 * `ExpiresAt`. The voice worker sends its outcome as an `ExaminerImpresso`
+	 * event. Phoenix refuses it with `no_consent` on a run without audio consent.
+	 * Pressing again re-arms it and restarts the expiry.
+	 */
+	void ArmExamMode(TStationCallback<FStationExamMode> OnDone);
+
+	/** `DELETE .../sessions/:id/exam-mode`: disarms it; succeeds when nothing was armed too. */
+	void CancelExamMode(TStationCallback<FStationNone> OnDone);
+
+	/**
 	 * `POST .../sessions/:id/finish`: ends the run for good. With `Timer`, Phoenix
 	 * answers `deadline_not_reached` when called early; refresh and keep counting.
 	 */

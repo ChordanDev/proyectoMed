@@ -261,24 +261,41 @@ bool StationJson::ParseImpressoReply(const FJsonObject& Json, FStationImpressoRe
 	{
 		return false;
 	}
-	if (Decision == TEXT("released"))
-	{
-		Out.Decision = EStationImpressoDecision::Released;
-	}
-	else if (Decision == TEXT("already_released"))
-	{
-		Out.Decision = EStationImpressoDecision::AlreadyReleased;
-	}
-	else if (Decision == TEXT("unavailable"))
-	{
-		Out.Decision = EStationImpressoDecision::Unavailable;
-	}
-	else
+	if (!ParseImpressoDecision(Decision, Out.Decision))
 	{
 		return false;
 	}
 	Out.FeedbackMessage = OptionalString(Json, TEXT("feedback_message"));
 	return true;
+}
+
+bool StationJson::ParseImpressoDecision(const FString& Text, EStationImpressoDecision& Out)
+{
+	if (Text == TEXT("released"))
+	{
+		Out = EStationImpressoDecision::Released;
+	}
+	else if (Text == TEXT("already_released"))
+	{
+		Out = EStationImpressoDecision::AlreadyReleased;
+	}
+	else if (Text == TEXT("unavailable"))
+	{
+		Out = EStationImpressoDecision::Unavailable;
+	}
+	else
+	{
+		return false;
+	}
+	return true;
+}
+
+bool StationJson::ParseExamMode(const FJsonObject& Json, FStationExamMode& Out)
+{
+	FString Status;
+	return Json.TryGetStringField(TEXT("status"), Status) && Status == TEXT("armed")
+		&& ParseDate(Json, TEXT("expires_at"), Out.ExpiresAt)
+		&& ParseDate(Json, TEXT("server_now"), Out.ServerNow);
 }
 
 bool StationJson::ParseImpressoList(const FJsonObject& Json, TArray<FStationImpresso>& Out)

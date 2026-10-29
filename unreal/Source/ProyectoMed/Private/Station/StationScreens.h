@@ -10,6 +10,7 @@
 
 #include "StationScreens.generated.h"
 
+class UBorder;
 class UButton;
 class UEditableTextBox;
 class UOverlay;
@@ -17,6 +18,10 @@ class UScrollBox;
 class UStationRunFlow;
 class UTextBlock;
 class UVerticalBox;
+class UWidget;
+enum class EStationSpeaker : uint8;
+struct FStationExamRequest;
+struct FStationImpresso;
 
 UCLASS()
 class UStationMicrophoneWidget : public UUserWidget
@@ -113,6 +118,20 @@ private:
 	TObjectPtr<UTextBlock> VoiceNote;
 };
 
+/** The "open" link of one released document: tells the HUD which one to show. */
+UCLASS()
+class UStationDocumentLink : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	TWeakObjectPtr<class UStationHudWidget> Hud;
+	FString ImpressoId;
+
+	UFUNCTION()
+	void HandleClicked();
+};
+
 UCLASS()
 class UStationHudWidget : public UUserWidget
 {
@@ -124,17 +143,44 @@ public:
 	/** Re-reads the training mode, the voice fallback notice, the conversation and the exam panel. */
 	void Refresh();
 
+	/** Shows a released document in the reader over the scene. */
+	void OpenDocument(const FString& ImpressoId);
+
+	/** Opens the side panel of the exam requests, in place of its tab. */
+	void OpenExams();
+
+	/** Closes the side panel of the exam requests and shows its tab again. */
+	void CloseExams();
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
+	// Test access: the HUD's states as images (StationHudSnapshotSpec.cpp) and
+	// what it shows (StationHudSpec.cpp).
+	friend class FStationHudSnapshotSpec;
+	friend class FStationHudUnitSpec;
+
 	void BuildConversation(UOverlay& Root);
 	void RefreshConversation();
-	void AddTranscriptLine(const FText& Text, const FLinearColor& Color);
+	/** One message of the conversation; `bInProgress` for a turn still being said or sent. */
+	void AddMessage(EStationSpeaker Speaker, const FString& Text, bool bInProgress);
 	void SendTypedTurn();
-	void BuildExams(UOverlay& Root);
+	void BuildExamTab(UOverlay& Root);
+	void BuildExamDrawer(UOverlay& Root);
+	void BuildMicrophone(UVerticalBox& Footer);
+	void BuildDocumentViewer(UOverlay& Root);
 	void RefreshExams();
+	/** Rebuilds the request cards, only when what they show changed, so a hovered card keeps its state. */
+	void RefreshExamCards();
+	void AddExamCard(const FStationExamRequest& Request);
+	void AddPendingExamCard(const FString& Text);
+	/** A link that opens `Impresso`, labelled with its title unless `Label` is given. */
+	void AddDocumentLink(UVerticalBox& Parent, const FStationImpresso& Impresso, const FText& Label = FText::GetEmpty());
+
+	/** The microphone's look: idle, arming or recording, with the recording time. */
+	void RefreshMicrophone();
 	void RequestExam();
 
 	UFUNCTION()
@@ -144,10 +190,22 @@ private:
 	void HandleTurnCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 
 	UFUNCTION()
-	void HandleToggleExams();
+	void HandleOpenExams();
+
+	UFUNCTION()
+	void HandleCloseExams();
+
+	UFUNCTION()
+	void HandleCloseDocument();
 
 	UFUNCTION()
 	void HandleRequestExam();
+
+	UFUNCTION()
+	void HandleAskExamAloud();
+
+	UFUNCTION()
+	void HandleReleaseExamAloud();
 
 	UFUNCTION()
 	void HandleExamCommitted(const FText& Text, ETextCommit::Type CommitMethod);
@@ -174,25 +232,74 @@ private:
 	TObjectPtr<UButton> SendButton;
 
 	UPROPERTY()
-	TObjectPtr<UVerticalBox> ExamPanel;
+	TObjectPtr<UButton> ExamTab;
 
 	UPROPERTY()
-	TObjectPtr<UVerticalBox> ExamRequestBox;
+	TObjectPtr<UTextBlock> ExamTabText;
 
 	UPROPERTY()
-	TObjectPtr<UVerticalBox> DocumentBox;
+	TObjectPtr<UWidget> ExamDrawer;
 
 	UPROPERTY()
-	TObjectPtr<UTextBlock> NoDocumentText;
+	TObjectPtr<UVerticalBox> ExamCardBox;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> ExamErrorText;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> ExamTypedRow;
 
 	UPROPERTY()
 	TObjectPtr<UEditableTextBox> ExamInput;
 
 	UPROPERTY()
 	TObjectPtr<UButton> ExamButton;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> MicrophoneBox;
+
+	UPROPERTY()
+	TObjectPtr<UButton> AskAloudButton;
+
+	UPROPERTY()
+	TObjectPtr<UBorder> MicrophoneRing;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ExamAloudText;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> DocumentViewer;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> DocumentCategoryText;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> DocumentTitleText;
+
+	UPROPERTY()
+	TObjectPtr<UScrollBox> DocumentScroll;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> DocumentBody;
+
+	/** One per "open" link of the current cards; rebuilt with them. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStationDocumentLink>> DocumentLinks;
+
+	/** What the conversation last showed (`RefreshConversation`). */
+	FString ConversationKey;
+
+	/** What the request cards last showed (`RefreshExamCards`). */
+	FString ExamCardsKey;
+
+	/** The learner holds the microphone button. */
+	bool bMicrophoneHeld = false;
+
+	enum class EMicrophoneLook : uint8 { Idle, Arming, Recording };
+	EMicrophoneLook MicrophoneLook = EMicrophoneLook::Idle;
+
+	/** `FPlatformTime::Seconds()` when the current recording started. */
+	double RecordingSince = 0.0;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> ModeText;

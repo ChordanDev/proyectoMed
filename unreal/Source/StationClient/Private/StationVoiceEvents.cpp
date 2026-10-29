@@ -1,6 +1,7 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "StationJson.h"
 #include "StationVoice.h"
 
 namespace
@@ -36,6 +37,35 @@ namespace
 	bool ReadNonBlank(const FJsonObject& Object, const TCHAR* Field, FString& Out)
 	{
 		return ReadString(Object, Field, Out) && !Out.TrimStartAndEnd().IsEmpty();
+	}
+
+	/** The outcome of a spoken exam request (#364): its `newly_released` items carry no `content`. */
+	bool ReadImpressoOutcome(const FJsonObject& Object, FStationImpressoReply& Out)
+	{
+		FString Decision;
+		const TArray<TSharedPtr<FJsonValue>>* Released = nullptr;
+		if (!ReadNonBlank(Object, TEXT("request_id"), Out.RequestId)
+			|| !ReadString(Object, TEXT("decision"), Decision)
+			|| !StationJson::ParseImpressoDecision(Decision, Out.Decision)
+			|| !Object.TryGetArrayField(TEXT("newly_released"), Released))
+		{
+			return false;
+		}
+		for (const TSharedPtr<FJsonValue>& Item : *Released)
+		{
+			const TSharedPtr<FJsonObject>* Impresso = nullptr;
+			FStationImpresso& Read = Out.NewlyReleased.AddDefaulted_GetRef();
+			if (!Item.IsValid() || !Item->TryGetObject(Impresso)
+				|| !ReadNonBlank(**Impresso, TEXT("id"), Read.Id)
+				|| !ReadString(**Impresso, TEXT("title"), Read.Title)
+				|| !ReadString(**Impresso, TEXT("category"), Read.Category))
+			{
+				return false;
+			}
+		}
+		// Phoenix always sends it; a missing one shows nothing rather than dropping the outcome.
+		ReadString(Object, TEXT("feedback_message"), Out.FeedbackMessage);
+		return true;
 	}
 }
 
@@ -109,6 +139,15 @@ TOptional<FStationVoiceEvent> ParseStationVoiceEvent(TConstArrayView<uint8> Payl
 			if (Status.Equals(TEXT("kept"), ESearchCase::CaseSensitive))
 			{
 				Event.Kind = EStationVoiceEventKind::PatientUnanswered;
+				return Event;
+			}
+			if (Status.Equals(TEXT("impresso_requested"), ESearchCase::CaseSensitive))
+			{
+				if (!ReadImpressoOutcome(*Body, Event.Impresso))
+				{
+					return {};
+				}
+				Event.Kind = EStationVoiceEventKind::ExaminerImpresso;
 				return Event;
 			}
 		}

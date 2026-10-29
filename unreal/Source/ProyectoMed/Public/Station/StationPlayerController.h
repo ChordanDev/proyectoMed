@@ -78,4 +78,7 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStationPatientVoice> PatientVoice;
+
+	/** The input mode last applied: game and UI during a run, UI only around it. */
+	TOptional<bool> bAppliedRunInputMode;
 };

@@ -139,7 +139,9 @@ defmodule BackendWeb.SessionRateLimitTest do
       {:session_transcribe, :post, "/api/stations/active/sessions", "/transcribe", %{}},
       {:session_synthesize, :post, "/api/stations/active/sessions", "/synthesize",
        %{"text" => "Bom dia."}},
-      {:session_voice, :post, "/api/stations/active/sessions", "/voice", %{}}
+      {:session_voice, :post, "/api/stations/active/sessions", "/voice", %{}},
+      {:session_exam_mode, :post, "/api/stations/active/sessions", "/exam-mode", %{}},
+      {:session_exam_mode, :delete, "/api/stations/active/sessions", "/exam-mode", %{}}
     ]
 
     for {action, method, prefix, suffix, params} <- @aliases do
@@ -149,7 +151,7 @@ defmodule BackendWeb.SessionRateLimitTest do
       @suffix suffix
       @params params
 
-      test "the deprecated alias #{prefix}/:id#{suffix} shares the session's #{action} counter",
+      test "the deprecated alias #{method} #{prefix}/:id#{suffix} shares the session's #{action} counter",
            %{conn: conn, kase: kase} do
         enable_rate_limit([{@action, session: {1, 60_000}}])
         learner = learner_conn(conn)

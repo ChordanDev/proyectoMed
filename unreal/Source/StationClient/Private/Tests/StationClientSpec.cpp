@@ -201,6 +201,25 @@ void FStationClientUnitSpec::Define()
 			TestFalse("parsed", StationJson::ParseVoiceCredential(*Json, Credential));
 		});
 
+		It("parses an armed exam mode", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(
+				R"({"status":"armed","expires_at":"2026-10-25T14:03:31.204000Z","server_now":"2026-10-25T14:03:11.204000Z"})"));
+			FStationExamMode Mode;
+			TestTrue("parsed", StationJson::ParseExamMode(*Json, Mode));
+			TestEqual("expires", Mode.ExpiresAt, FDateTime(2026, 10, 25, 14, 3, 31, 204));
+			TestEqual("server now", Mode.ServerNow, FDateTime(2026, 10, 25, 14, 3, 11, 204));
+		});
+
+		It("rejects an exam mode that is not armed", [this]()
+		{
+			FStationExamMode Mode;
+			TestFalse("disarmed", StationJson::ParseExamMode(*ParseObject(TEXT(
+				R"({"status":"disarmed","expires_at":"2026-10-25T14:03:31Z","server_now":"2026-10-25T14:03:11Z"})")), Mode));
+			TestFalse("no expiry", StationJson::ParseExamMode(*ParseObject(TEXT(
+				R"({"status":"armed","server_now":"2026-10-25T14:03:11Z"})")), Mode));
+		});
+
 		It("parses a patient reply", [this]()
 		{
 			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(
@@ -397,7 +416,9 @@ void FStationClientUnitSpec::Define()
 			Client->ListImpressos(Record);
 			Client->FinishSession(EStationFinishReason::User, Record);
 			Client->FetchResult(Record);
-			TestEqual("calls", Codes.Num(), 6);
+			Client->ArmExamMode(Record);
+			Client->CancelExamMode(Record);
+			TestEqual("calls", Codes.Num(), 8);
 			for (const FString& Code : Codes)
 			{
 				TestEqual("code", Code, TEXT("no_session"));
@@ -639,6 +660,55 @@ void FStationClientPhoenixSpec::Define()
 						Done.Execute();
 					});
 				});
+		});
+	});
+
+	LatentIt("arms the exam mode for the next utterance of a voice run, and cancels it", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(true, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->ArmExamMode([this, Done](const TStationResult<FStationExamMode>& Armed)
+			{
+				if (!TestFalse("arm", Armed.HasError()))
+				{
+					Done.Execute();
+					return;
+				}
+				// Phoenix reads its clock again for `server_now`, a moment after the expiry.
+				const FTimespan Left = Armed.GetValue().ExpiresAt - Armed.GetValue().ServerNow;
+				TestTrue("about twenty seconds", Left > FTimespan::FromSeconds(19) && Left <= FTimespan::FromSeconds(20));
+				Client->CancelExamMode([this, Done](const TStationResult<FStationNone>& Cancelled)
+				{
+					TestFalse("cancel", Cancelled.HasError());
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("gets no exam mode without audio consent", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->ArmExamMode([this, Done](const TStationResult<FStationExamMode>& Armed)
+			{
+				if (TestTrue("refused", Armed.HasError()))
+				{
+					TestEqual("status", Armed.GetError().HttpStatus, 403);
+					TestEqual("code", Armed.GetError().Code, TEXT("no_consent"));
+				}
+				Done.Execute();
+			});
 		});
 	});
 
