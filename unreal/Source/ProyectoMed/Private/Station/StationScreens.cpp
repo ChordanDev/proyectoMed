@@ -265,10 +265,17 @@ TSharedRef<SWidget> UStationMenuWidget::RebuildWidget()
 {
 	if (WidgetTree && !WidgetTree->RootWidget)
 	{
-		// A dark band on the left, like a game's title screen; the consultation room
-		// shows through on the right.
+		// A dark band on the left, like a game's title screen. Until the doctor's office
+		// behind the menu exists (#431), a solid blue hides the scene, patient included.
 		UOverlay* Screen = WidgetTree->ConstructWidget<UOverlay>();
 		WidgetTree->RootWidget = Screen;
+		Backdrop = WidgetTree->ConstructWidget<UBorder>();
+		Backdrop->SetBrushColor(StationUi::MenuBackdrop);
+		if (UOverlaySlot* BackdropSlot = Screen->AddChildToOverlay(Backdrop))
+		{
+			BackdropSlot->SetHorizontalAlignment(HAlign_Fill);
+			BackdropSlot->SetVerticalAlignment(VAlign_Fill);
+		}
 		USizeBox* BandSize = WidgetTree->ConstructWidget<USizeBox>();
 		BandSize->SetWidthOverride(640.f);
 		if (UOverlaySlot* BandSlot = Screen->AddChildToOverlay(BandSize))

@@ -1001,10 +1001,13 @@ STATION_HUD_SNAPSHOT_DIR=/tmp/hud "/Users/Shared/Epic Games/UE_5.8/Engine/Binari
 
 `ProyectoMed.StationCards.Snapshot` (in `StationCardSnapshotSpec.cpp`) does the
 same for the full-screen cards around the run: the microphone disclosure, the
-Pre-Station Notice, the brief (loaded, microphone blocked, loading, failed), the
-invalidated run and the feedback (grading, graded, scrolled to the end). It
-writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it with
-`-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
+main menu (#421), the Pre-Station Notice, a training's brief (loaded, microphone
+blocked, loading, failed), a simulated exam's brief (ready, microphone blocked,
+no realtime voice), the invalidated run and the feedback (grading, graded,
+scrolled to the end). It writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it
+with `-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
+`ProyectoMed.StationCards.Unit` (in `StationBriefSpec.cpp`) checks what the main
+menu and each mode's brief offer, and needs nothing else.
 
 The stack test checks four things:
 

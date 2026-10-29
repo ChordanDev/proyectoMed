@@ -9,6 +9,7 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/HorizontalBox.h"
 #include "Components/TextBlock.h"
@@ -105,6 +106,15 @@ void FStationBriefUnitSpec::Define()
 		TestTrue("voice only", Exam.Contains(TEXT("Só voz")));
 		TestTrue("no help", Exam.Contains(TEXT("Sem ajuda")));
 		TestTrue("ten minutes", Exam.Contains(TEXT("10 minutos")));
+	});
+
+	It("hides the scene behind a solid background until the office behind the menu exists (#431)", [this]()
+	{
+		UStationMenuWidget* Menu = CreateWidget<UStationMenuWidget>(GEngine->GetWorldContexts()[0].World());
+		Menu->TakeWidget();
+
+		TestTrue("the background", IsShown(Menu->Backdrop));
+		TestEqual("opaque, so no patient shows behind the cards", Menu->Backdrop->GetBrushColor().A, 1.f);
 	});
 
 	It("offers a way out of the app, and the settings only as coming soon", [this]()

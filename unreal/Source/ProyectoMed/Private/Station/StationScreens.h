@@ -77,6 +77,10 @@ private:
 	UFUNCTION()
 	void HandleQuit();
 
+	/** A solid background that hides the scene until the office behind the menu exists (#431). */
+	UPROPERTY()
+	TObjectPtr<UBorder> Backdrop;
+
 	UPROPERTY()
 	TObjectPtr<UButton> TrainingButton;
 

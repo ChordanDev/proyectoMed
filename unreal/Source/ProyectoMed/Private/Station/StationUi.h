@@ -61,6 +61,8 @@ namespace StationUi
 	const FLinearColor ExamFill(FColor(0x4E, 0x2A, 0x0C));
 	const FLinearColor ExamHover(FColor(0x66, 0x37, 0x12));
 	const FLinearColor ExamAccent(FColor(0xF2, 0xB6, 0x61));
+	/** Behind the main menu until the doctor's office shows there (#431). */
+	const FLinearColor MenuBackdrop(FColor(0x0E, 0x24, 0x40));
 
 	/** A rounded box of `Fill`, outlined in `Outline` when `OutlineWidth` is above 0. */
 	FSlateBrush RoundedBrush(const FLinearColor& Fill, float Radius,
