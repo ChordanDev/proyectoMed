@@ -249,6 +249,27 @@ defmodule Backend.Stations do
     end
   end
 
+  @doc """
+  Whether the session accepts typed input (#422): a typed message
+  (`modality: :text`) or a typed impresso request. A simulated exam is
+  performed only by voice, so it answers `{:error, :typed_input_not_allowed}`;
+  a training answers `:ok`. An unknown or expired session answers as
+  `Conversation.fetch/1` does.
+
+  Callers at the typed HTTP boundary check it before `create_message/2` or
+  `request_impresso/2`. The spoken exam capture (#364) calls
+  `request_impresso/2` internally and never goes through this check.
+  """
+  @spec ensure_typed_input_allowed(String.t()) ::
+          :ok | {:error, :typed_input_not_allowed | :not_found | :expired}
+  def ensure_typed_input_allowed(session_id) do
+    case Conversation.fetch(session_id) do
+      {:ok, %{mode: :simulated_exam}} -> {:error, :typed_input_not_allowed}
+      {:ok, _session} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # A simulated exam is performed only by voice (#318 business rule 2).
   defp ensure_mode_allowed(%{mode: :simulated_exam, audio_consent: true}), do: :ok
   defp ensure_mode_allowed(%{mode: :simulated_exam}), do: {:error, :audio_consent_required}

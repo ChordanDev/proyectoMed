@@ -104,6 +104,7 @@ defmodule BackendWeb.StationController do
 
     with :ok <- validate_message_params(role, modality, text),
          parsed_modality = parse_modality(modality),
+         :ok <- ensure_modality_allowed(session_id, parsed_modality),
          {:ok, reply} <-
            Stations.create_message(session_id, %{
              role: :learner,
@@ -119,6 +120,14 @@ defmodule BackendWeb.StationController do
           error: "invalid_message",
           message:
             "Mensagem inválida: 'role' deve ser 'learner', 'modality' deve ser 'voice' ou 'text', e 'text' não pode ser vazio."
+        })
+
+      {:error, :typed_input_not_allowed} ->
+        conn
+        |> put_status(:forbidden)
+        |> json(%{
+          error: "typed_input_not_allowed",
+          message: "A prova simulada é feita só por voz: o texto digitado não é aceito."
         })
 
       {:error, :message_too_long} ->
@@ -220,6 +229,13 @@ defmodule BackendWeb.StationController do
         })
     end
   end
+
+  # A simulated exam is performed only by voice (#422): a typed message is
+  # refused before it enters the conversation; a voice message is not checked.
+  defp ensure_modality_allowed(session_id, :text),
+    do: Stations.ensure_typed_input_allowed(session_id)
+
+  defp ensure_modality_allowed(_session_id, _modality), do: :ok
 
   # An examiner-addressed turn (#274) is acknowledged with the kept learner
   # turn and no reply. It releases nothing (`newly_released` stays `[]`, #351)
@@ -412,14 +428,24 @@ defmodule BackendWeb.StationController do
   def request_impresso(conn, %{"id" => session_id} = params) do
     request_params = %{"text" => params["text"], "request_id" => params["request_id"]}
 
-    case Stations.request_impresso(session_id, request_params) do
-      {:ok, result} ->
-        json(conn, %{
-          request_id: result.request_id,
-          decision: result.decision,
-          released_impressos: result.released_impressos,
-          newly_released: result.newly_released,
-          feedback_message: result.feedback_message
+    # A simulated exam requests impressos only by voice (#422); the spoken
+    # capture (#364) reaches `Stations.request_impresso/2` without this check.
+    with :ok <- Stations.ensure_typed_input_allowed(session_id),
+         {:ok, result} <- Stations.request_impresso(session_id, request_params) do
+      json(conn, %{
+        request_id: result.request_id,
+        decision: result.decision,
+        released_impressos: result.released_impressos,
+        newly_released: result.newly_released,
+        feedback_message: result.feedback_message
+      })
+    else
+      {:error, :typed_input_not_allowed} ->
+        conn
+        |> put_status(:forbidden)
+        |> json(%{
+          error: "typed_input_not_allowed",
+          message: "Na prova simulada os impressos são pedidos por voz, pelo botão Exames."
         })
 
       {:error, :invalid_request} ->

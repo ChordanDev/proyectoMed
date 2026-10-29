@@ -1503,6 +1503,85 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  describe "typed input in a simulated exam (#422)" do
+    setup do
+      snapshot = AppEnvHelpers.snapshot(:station_ai_adapter)
+      on_exit(fn -> AppEnvHelpers.restore(:station_ai_adapter, snapshot) end)
+      Application.put_env(:backend, :station_ai_adapter, TestSuccessAdapter)
+      :ok
+    end
+
+    test "a typed message is refused with 403 typed_input_not_allowed and is not kept", %{
+      conn: conn
+    } do
+      session = start_session(:simulated_exam)
+
+      conn = post_learner_text(conn, session, "Bom dia, o que você está sentindo?")
+
+      assert json_response(conn, 403) == %{
+               "error" => "typed_input_not_allowed",
+               "message" => "A prova simulada é feita só por voz: o texto digitado não é aceito."
+             }
+
+      {:ok, stored} = Conversation.fetch(session.session_id)
+      assert stored.messages == []
+    end
+
+    test "a typed impresso request is refused with 403 typed_input_not_allowed and releases nothing",
+         %{conn: conn} do
+      session = start_session(:simulated_exam)
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request", %{
+          "text" => "quero ver os sinais vitais"
+        })
+
+      assert json_response(conn, 403) == %{
+               "error" => "typed_input_not_allowed",
+               "message" =>
+                 "Na prova simulada os impressos são pedidos por voz, pelo botão Exames."
+             }
+
+      {:ok, stored} = Conversation.fetch(session.session_id)
+      assert stored.impresso_requests == []
+      assert stored.released_impressos == []
+    end
+
+    test "an unknown session still answers 404 session_not_found", %{conn: conn} do
+      conn =
+        post(conn, ~p"/api/stations/active/sessions/nonexistent/messages", %{
+          "role" => "learner",
+          "modality" => "text",
+          "text" => "Bom dia"
+        })
+
+      assert %{"error" => "session_not_found"} = json_response(conn, 404)
+    end
+
+    test "a training keeps typed messages and typed impresso requests", %{conn: conn} do
+      session = start_session(:training)
+
+      assert %{"outcome" => "patient_reply"} =
+               conn
+               |> post_learner_text(session, "Bom dia, o que você está sentindo?")
+               |> json_response(200)
+
+      assert %{"decision" => "released"} =
+               conn
+               |> recycle()
+               |> post(
+                 ~p"/api/stations/active/sessions/#{session.session_id}/impressos/request",
+                 %{"text" => "quero ver os sinais vitais"}
+               )
+               |> json_response(200)
+    end
+
+    defp start_session(mode) do
+      {:ok, session} = Stations.start_active_session(%{audio_consent: true, mode: mode})
+      session
+    end
+  end
+
   describe "GET /api/stations/active/sessions/:id/impressos" do
     setup do
       pkg = StationLoader.active_package()
