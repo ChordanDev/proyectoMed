@@ -211,6 +211,11 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   bar types a space; click the scene to give it back to the talk key. In the
   station client the space bar never presses the focused button, on any of its
   screens (Enter still does), and switching to another app releases a held key.
+- When the editor loads a run the CPU can pass 70%. A local `livekit-server`
+  started without `agents: target_load: 2` then sends the job to no worker
+  (its log reads `no servers available`) and the run reads "A voz caiu"; start
+  it as the README's real-time voice runbook shows. `scripts/run-voice-stack.sh`
+  already does.
 - The voice status under the timer reads "Conectando a voz..." until the
   worker joins, then "Voz conectada". While LiveKit retries the connection or
   the worker is gone it reads "Reconectando a voz..." and the microphone stops.

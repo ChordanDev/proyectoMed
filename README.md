@@ -232,8 +232,10 @@ LiveKit token.
 ### 4. Start the four processes, in this order
 
 ```sh
-# Terminal 1 — LiveKit (dev keys devkey/secret on ws://127.0.0.1:7880).
-livekit-server --dev
+# Terminal 1 — LiveKit (dev keys devkey/secret on ws://127.0.0.1:7880). The worker
+# reports its real CPU load and LiveKit sends a job only to workers below its target
+# load (0.7 by default), so a busy machine (the Unreal editor) needs a higher one.
+livekit-server --dev --bind 127.0.0.1 --config-body "$(printf 'keys:\n  devkey: secret\nagents:\n  target_load: 2\n')"
 
 # Terminal 2 — Phoenix on http://localhost:4000.
 set -a; source .env; set +a
@@ -778,7 +780,8 @@ cover the fakes in `test_fake_providers.py`.
 `scripts/run-voice-stack.sh` starts the whole stack with no paid provider and
 never reads `.env`:
 
-- `livekit-server --dev` on `ws://127.0.0.1:7880`;
+- `livekit-server --dev` on `ws://127.0.0.1:7880`, with an agents target load of 2 so a
+  busy editor never keeps the worker out of the room;
 - a mock OpenAI (`scripts/voice-stack/mock_openai.py`) that answers every
   patient turn with `VOICE_STACK_PATIENT_REPLY` (default `Meu nome é Carlos.`);
 - Phoenix in `dev` with `VOICE_MODE=realtime` and the E2E-only approving Jev
