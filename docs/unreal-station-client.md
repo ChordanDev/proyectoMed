@@ -81,6 +81,8 @@ All operations are methods of `UStationClient`. Each one takes a
 | `SendTurn(Text, Modality)` | `POST .../sessions/:id/messages` | `FStationTurnReply`: the approved patient reply, or an examiner acknowledgement (it releases nothing; see [exam requests in the dialogue](#exam-requests-in-the-dialogue-issue-351)) | #191, #192, #194 |
 | `RequestImpresso(Text, RequestId)` | `POST .../sessions/:id/impressos/request` | `FStationImpressoReply`: the decision and what was released | #194 |
 | `ListImpressos` | `GET .../sessions/:id/impressos` | Every impresso released so far | #194 |
+| `ArmExamMode` | `POST .../sessions/:id/exam-mode` | `FStationExamMode`: the learner's next utterance is the [spoken exam request](#spoken-exam-requests-issue-364), until `ExpiresAt` | #364 |
+| `CancelExamMode` | `DELETE .../sessions/:id/exam-mode` | Nothing; the mode is disarmed | #364 |
 | `FinishSession(Reason)` | `POST .../sessions/:id/finish` | `FStationSession` marked completed | #195 |
 | `FetchResult` | `GET /api/v2/.../sessions/:id/result` | `FStationResult`: criteria with transcript evidence | #195 |
 | `DiscardSession` | `POST .../sessions/:id/discard` | Nothing; the local session is cleared only after Phoenix confirms | #195, #196 |
@@ -481,7 +483,7 @@ the ones of the operations table above.
 | `POST /sessions/:id/messages` | A learner turn (`SendTurn`). |
 | `POST /sessions/:id/impressos/request` | An impresso request (`RequestImpresso`). |
 | `GET /sessions/:id/impressos` | Released impressos (`ListImpressos`). |
-| `POST /sessions/:id/exam-mode`, `DELETE /sessions/:id/exam-mode` | Arm or cancel the [spoken exam request](#spoken-exam-requests-issue-364) (no `UStationClient` method yet). |
+| `POST /sessions/:id/exam-mode`, `DELETE /sessions/:id/exam-mode` | Arm or cancel the [spoken exam request](#spoken-exam-requests-issue-364) (`ArmExamMode`, `CancelExamMode`). |
 | `POST /sessions/:id/voice` | LiveKit credential (`RequestVoiceCredential`). |
 | `POST /sessions/:id/transcribe`, `POST /sessions/:id/synthesize` | Turn-based voice (legacy HTTP audio). |
 | `POST /sessions/:id/finish` | Finish (`FinishSession`). |
@@ -525,6 +527,9 @@ harness and the E2E suite); in production they need the access token, and the
 per-session aliases serve only the learner's own sessions. In production there is no active station (stations come
 only from the database), so `GET /api/stations/active` and
 `POST /api/stations/active/sessions` answer `404 no_active_station` there.
+`POST`/`DELETE /api/stations/active/sessions/:id/exam-mode` (#364) is the
+alias this client uses for the spoken exam request until it has the device
+login; then every call moves to `/sessions/:id/...` together.
 
 The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
 which serves the language and speech-to-text keyterms of the session's own
@@ -816,6 +821,26 @@ worker, nothing spoken):
 - When the room event is lost (a publish error or a barge-in that dropped the
   receipt), the request is still recorded: `ListImpressos` shows it.
 
+`ParseStationVoiceEvent` reads this event as `ExaminerImpresso`, with the
+decision in `Impresso` (no `ReleasedImpressos`, and `NewlyReleased` without
+`Content`). In `UStationRunFlow`, a text training types its exam requests;
+a voice training whose voice and microphone work says them aloud
+(`ShouldRequestExamsAloud`) while the learner holds the microphone in the
+"Exames solicitados" panel: pressing arms the mode (`AskExamAloud`),
+releasing goes back to the dialogue (`ReleaseExamAloud`). A request already
+started when the button is released stays the request; if nothing was heard
+yet, the mode listens two more seconds for the first caption and is then
+disarmed. The utterance that takes the mode shows in the exam panel as a
+card marked "Solicitando...", never in the conversation; its
+outcome joins `GetExamRequests` as a typed request's does, and the flow reads
+`ListImpressos` again. A press while that request still waits is refused
+(`AskExamAloud` returns false) and the HUD shows it as waiting, never as
+recording. If the voice is lost while a spoken request waits, its outcome can
+no longer arrive: the request is let go, as a superseded one is, and
+`ListImpressos` is read again. If Phoenix answers that utterance as dialogue instead
+(it ended after `expires_at`), its learner line joins the conversation before
+the reply.
+
 - Errors: `403 no_consent` on a run without audio consent (a typed request
   needs no exam mode), `409 session_completed`, `404 session_not_found`,
   `410 session_expired`.
@@ -940,6 +965,31 @@ that answers nothing. It covers each failure of a training that loses Phoenix
 HTTP listeners, so an editor already open on the same machine makes it fail
 with "HttpListener unable to bind to 127.0.0.1:8000" (the Model Context
 Protocol server): close that editor first.
+
+`ProyectoMed.StationHud.Unit` (in `StationHudSpec.cpp`) needs nothing else: it
+checks what the in-run HUD shows for a given run, such as the exam panel's
+empty hint after the voice is lost, the request cards' document links, the
+document reader's lines, and that the conversation is redrawn only when it
+changes.
+
+`ProyectoMed.StationHud.Snapshot` (in `StationHudSnapshotSpec.cpp`) renders the
+in-run HUD in chosen states (exam panel closed and open, recording, the
+document reader, a text training) to PNG files, to judge its look without
+playing a run to each state. It asserts nothing about the look, needs an RHI
+(the runner's `-nullrhi` skips it), and writes only when
+`STATION_HUD_SNAPSHOT_DIR` names a folder:
+
+```bash
+STATION_HUD_SNAPSHOT_DIR=/tmp/hud "/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor.app/Contents/MacOS/UnrealEditor" \
+  "$PWD/unreal/ProyectoMed.uproject" -ExecCmds="Automation RunTests ProyectoMed.StationHud.Snapshot; Quit" -unattended -nosplash -nosound
+```
+
+`ProyectoMed.StationCards.Snapshot` (in `StationCardSnapshotSpec.cpp`) does the
+same for the full-screen cards around the run: the microphone disclosure, the
+Pre-Station Notice, the brief (loaded, microphone blocked, loading, failed), the
+invalidated run and the feedback (grading, graded, scrolled to the end). It
+writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it with
+`-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
 
 The stack test checks four things:
 

@@ -28,6 +28,12 @@ namespace StationJson
 	/** `GET .../impressos`. */
 	bool ParseImpressoList(const FJsonObject& Json, TArray<FStationImpresso>& Out);
 
+	/** `released`, `already_released` or `unavailable`. */
+	bool ParseImpressoDecision(const FString& Text, EStationImpressoDecision& Out);
+
+	/** `POST .../exam-mode`: only an armed mode. */
+	bool ParseExamMode(const FJsonObject& Json, FStationExamMode& Out);
+
 	/** `POST .../finish`: updates the status, reason and completion time of `InOut`. */
 	bool ParseFinish(const FJsonObject& Json, FStationSession& InOut);
 

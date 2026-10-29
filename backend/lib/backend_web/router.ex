@@ -203,6 +203,14 @@ defmodule BackendWeb.Router do
       post "/impressos/request", StationController, :request_impresso
     end
 
+    # The Unreal client has no device login yet and reaches the exam mode (#364)
+    # here; it moves to `/sessions/:id/exam-mode` with its other calls.
+    scope "/active/sessions/:id" do
+      pipe_through :limit_session_exam_mode
+      post "/exam-mode", SessionController, :arm_exam_mode
+      delete "/exam-mode", SessionController, :cancel_exam_mode
+    end
+
     scope "/active/sessions/:id" do
       pipe_through :limit_session_transcribe
       post "/transcribe", TranscriptionController, :create

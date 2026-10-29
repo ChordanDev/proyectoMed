@@ -103,13 +103,20 @@ void AStationPlayerController::Render()
 	Feedback->Refresh();
 	UpdateMicrophone();
 
-	if (bRunning)
+	// Only when the run starts or ends: applying an input mode releases the mouse
+	// capture and moves the focus, which would let go of a held button (#364) or
+	// leave a text box mid-word on every change of the run.
+	if (!bAppliedRunInputMode.IsSet() || *bAppliedRunInputMode != bRunning)
 	{
-		SetInputMode(FInputModeGameAndUI());
-	}
-	else
-	{
-		SetInputMode(FInputModeUIOnly());
+		bAppliedRunInputMode = bRunning;
+		if (bRunning)
+		{
+			SetInputMode(FInputModeGameAndUI());
+		}
+		else
+		{
+			SetInputMode(FInputModeUIOnly());
+		}
 	}
 }
 
