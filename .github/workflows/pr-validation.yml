@@ -110,3 +110,81 @@ jobs:
 
       - name: Dialyzer static analysis
         run: ( cd backend && mix dialyzer --format short )
+
+  # The Playwright suite (#136) in its own job, so its result is reported apart
+  # from Vitest, ExUnit and the HTTP/API harness. A failing scenario fails this
+  # job; it is not a required status check, so it does not block merging.
+  browser-e2e:
+    name: Browser E2E (Playwright)
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    # Phoenix runs under MIX_ENV=dev, against the backend_dev database.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          version-file: backend/.tool-versions
+          version-type: strict
+
+      # Restore only: the validate job saves this cache on develop.
+      - name: Restore backend dependencies and build
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            backend/deps
+            backend/_build
+          key: >-
+            mix-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{
+            steps.beam.outputs.elixir-version }}-${{ hashFiles('backend/mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Install Playwright Chromium
+        run: npx --prefix web playwright install --with-deps chromium
+
+      - name: Install backend dependencies
+        run: ( cd backend && mix deps.get )
+
+      - name: Create and migrate the dev database
+        run: ( cd backend && MIX_ENV=dev mix ecto.create && MIX_ENV=dev mix ecto.migrate )
+
+      - name: Browser E2E
+        run: npm --prefix web run test:browser
+
+      - name: Upload Playwright report and traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-report
+          path: |
+            web/playwright-report/
+            web/test-results/browser/
+          retention-days: 7

@@ -25,6 +25,11 @@ dist/
 # TypeScript build info.
 *.tsbuildinfo
 
+# Playwright browser E2E output (#136).
+web/test-results/
+web/playwright-report/
+web/blob-report/
+
 # ---------------------------------------------------------------------------
 # Backend (Phoenix / Elixir) — defensive mirrors of backend/.gitignore
 # ---------------------------------------------------------------------------

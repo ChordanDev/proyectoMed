@@ -4,3 +4,9 @@ dist/
 .vitest/
 *.local
 *.tsbuildinfo
+
+# Playwright browser E2E (#136)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
