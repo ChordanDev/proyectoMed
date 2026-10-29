@@ -30,6 +30,7 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, c
 from livekit.plugins import cartesia, deepgram
 
 from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
+from push_to_talk import PushToTalk
 from speech import SpeechPlayer
 from transcripts import (
     DEFAULT_TURN_RETRIES,
@@ -600,6 +601,8 @@ async def transcribe(
             sample_rate=16000,
         )
     stream = stt.stream()
+    push_to_talk = PushToTalk(stream)
+    stop_following = follow_push_to_talk(room, learner, push_to_talk)
 
     async def pump() -> None:
         async for frame_event in audio:
@@ -618,7 +621,7 @@ async def transcribe(
         if voice is not None:
             # The learner left: nobody is listening to the reply being spoken.
             await voice.stop()
-        for resource in (audio, stream):
+        for resource in (audio, push_to_talk, stream):
             try:
                 if hasattr(resource, "aclose"):
                     await resource.aclose()
@@ -647,7 +650,7 @@ async def transcribe(
 
     try:
         await process_speech_stream(
-            stream,
+            push_to_talk,
             tracker,
             phoenix,
             on_publish=lambda event: publish(room, event),
@@ -661,12 +664,49 @@ async def transcribe(
             on_barge_in=voice.cancel_turn if voice is not None else None,
         )
     finally:
+        stop_following()
         primary = sys.exception()
         try:
             await close_resources()
         except (Exception, asyncio.CancelledError):
             if primary is None:
                 raise
+
+
+def follow_push_to_talk(room, learner, push_to_talk: PushToTalk):
+    """Hears the learner's microphone mutes as push-to-talk (#419); returns the undo.
+
+    The Unreal client unmutes its microphone only while the talk key is held. The
+    mute is the release signal because the learner token cannot publish data (#364).
+    """
+
+    def is_learner_microphone(participant, publication) -> bool:
+        return (
+            learner is not None
+            and participant.identity == learner.identity
+            and publication.source == rtc.TrackSource.SOURCE_MICROPHONE
+        )
+
+    def on_muted(participant, publication) -> None:
+        if is_learner_microphone(participant, publication):
+            push_to_talk.release()
+
+    def on_unmuted(participant, publication) -> None:
+        if is_learner_microphone(participant, publication):
+            push_to_talk.press()
+
+    room.on("track_muted", on_muted)
+    room.on("track_unmuted", on_unmuted)
+    if learner is not None:
+        for publication in list(learner.track_publications.values()):
+            if publication.muted:
+                on_muted(learner, publication)
+
+    def stop() -> None:
+        room.off("track_muted", on_muted)
+        room.off("track_unmuted", on_unmuted)
+
+    return stop
 
 
 async def publish(room: rtc.Room, payload: dict) -> None:

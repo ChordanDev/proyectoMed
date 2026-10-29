@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
 
+from livekit import rtc
 from livekit.agents import APIConnectionError
 from livekit.agents.stt import SpeechEvent
 
@@ -119,11 +120,11 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.sources.append(source)
         return source
 
-    def connect(self, voice="default") -> asyncio.Task:
+    def connect(self, voice="default", learner=None) -> asyncio.Task:
         return asyncio.create_task(
             transcribe(
                 self.room,
-                learner=None,
+                learner=learner,
                 context={"language": "pt-BR", "keyterms": []},
                 tracker=self.tracker,
                 phoenix=self.client,
@@ -137,6 +138,20 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.queue.put_nowait(event(FINAL, text))
         self.queue.put_nowait(event(END))
         await asyncio.sleep(0.01)
+
+    def learner(self, muted: bool = False) -> SimpleNamespace:
+        microphone = SimpleNamespace(
+            source=rtc.TrackSource.SOURCE_MICROPHONE, muted=muted
+        )
+        return SimpleNamespace(
+            identity="learner-s1", track_publications={"TR_mic": microphone}
+        )
+
+    def set_microphone(self, learner, muted: bool) -> None:
+        microphone = learner.track_publications["TR_mic"]
+        microphone.muted = muted
+        handler = self.room.handlers["track_muted" if muted else "track_unmuted"]
+        handler(learner, microphone)
 
     async def disconnect(self, task: asyncio.Task) -> None:
         self.queue.put_nowait(None)
@@ -425,6 +440,69 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         # Phoenix stored the reply: nothing is cancelled there.
         self.assertEqual(self.client.cancel_calls, [])
         await self.disconnect(task)
+
+    # Issue #419: the Unreal client holds its microphone open only while the
+    # learner holds the talk key; the worker hears the mutes as push-to-talk.
+    async def test_muting_the_held_microphone_commits_the_turn_without_end_of_speech(
+        self,
+    ):
+        learner = self.learner()
+        with patch("push_to_talk.RELEASE_QUIET_S", 0.01):
+            task = self.connect(learner=learner)
+            await settle()
+            self.set_microphone(learner, muted=True)
+            self.set_microphone(learner, muted=False)
+            await self.say("onde dói")
+
+            self.assertEqual(self.client.commit_calls, [])
+
+            self.set_microphone(learner, muted=True)
+            await asyncio.sleep(0.05)
+
+        self.assertEqual(self.client.commit_calls, [(1, "onde dói")])
+        self.assertEqual(self.stream.flushes, 1)
+        await self.disconnect(task)
+
+    async def test_unmuting_the_microphone_stops_the_patient_at_once(self):
+        learner = self.learner()
+        task = self.connect(learner=learner)
+        await self.say("primeira")
+        stream = self.tts.streams[0]
+        stream.queue.put_nowait(chunk("a1"))
+        await settle()
+        self.set_microphone(learner, muted=True)
+
+        self.set_microphone(learner, muted=False)
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertEqual(self.sources[0].cleared, 1)
+        await self.disconnect(task)
+
+    async def test_a_microphone_muted_before_the_worker_joined_is_push_to_talk(self):
+        learner = self.learner(muted=True)
+        task = self.connect(learner=learner)
+        await self.say("onde dói")
+
+        self.assertEqual(self.client.commit_calls, [])
+        await self.disconnect(task)
+
+    async def test_only_the_connected_learner_microphone_mutes_count(self):
+        learner = self.learner()
+        task = self.connect(learner=learner)
+        await settle()
+        someone_else = SimpleNamespace(identity="learner-s2", track_publications={})
+        self.room.handlers["track_muted"](
+            someone_else, learner.track_publications["TR_mic"]
+        )
+        camera = SimpleNamespace(source=rtc.TrackSource.SOURCE_CAMERA, muted=True)
+        self.room.handlers["track_muted"](learner, camera)
+        await self.say("onde dói")
+
+        self.assertEqual(self.client.commit_calls, [(1, "onde dói")])
+        await self.disconnect(task)
+        self.assertNotIn("track_muted", self.room.handlers)
+        self.assertNotIn("track_unmuted", self.room.handlers)
 
     async def test_newer_accepted_turn_supersedes_playback(self):
         task = self.connect()
