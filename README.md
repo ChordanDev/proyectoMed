@@ -232,8 +232,10 @@ LiveKit token.
 ### 4. Start the four processes, in this order
 
 ```sh
-# Terminal 1 — LiveKit (dev keys devkey/secret on ws://127.0.0.1:7880).
-livekit-server --dev
+# Terminal 1 — LiveKit (dev keys devkey/secret on ws://127.0.0.1:7880). The worker
+# reports its real CPU load and LiveKit sends a job only to workers below its target
+# load (0.7 by default), so a busy machine (the Unreal editor) needs a higher one.
+livekit-server --dev --bind 127.0.0.1 --config-body "$(printf 'keys:\n  devkey: secret\nagents:\n  target_load: 2\n')"
 
 # Terminal 2 — Phoenix on http://localhost:4000.
 set -a; source .env; set +a
@@ -505,9 +507,26 @@ pending turn, a stale result or the learner disconnecting stops the provider str
 clears the buffered audio and drops any frame that arrives late. Phoenix remains the
 only text authority; the worker never composes, edits or retries reply text. Learner
 speech over an answer that is already playing stops it at once, also when Phoenix has
-already settled the turn (#193); a settled reply's text stays stored. Only transcribed
+already settled the turn (#193); a settled reply's text stays stored. The outcome of a
+spoken exam request (`impresso_requested`, #364) is the exception: Phoenix recorded the
+request before answering, so the worker publishes that outcome even when the learner
+spoke over the pending turn, and nothing is spoken for it (#432). Only transcribed
 words count as speaking over the patient: Deepgram's voice activity events are off,
-because noise and breath also raised them and cancelled the learner's own turn. With `VOICE_MODE=realtime`
+because noise and breath also raised them and cancelled the learner's own turn.
+
+**Push-to-talk (#419).** The Unreal client publishes its microphone as `push-to-talk`,
+muted, and unmutes it only while the learner holds the talk key. Only a learner microphone
+with that name is on push-to-talk; the web client's keeps its default name, so nothing
+below changes for it, not even when the browser mutes its track on its own
+(livekit-client pauses a track muted for 5 s, as during a phone call). On push-to-talk: an unmute counts as the start of speech, so it stops the patient at once
+(the client unmutes over the patient only on a tap followed by a press), and Deepgram's
+end of speech no longer ends a turn while the key is held. A mute is the release: the
+worker sends Deepgram `Finalize` and ends the turn once the transcript has been quiet for
+0.3 s, at most 1.5 s after the release (Deepgram does not promise an answer to
+`Finalize`, so a last interim that never became final stands in for it). Transcript that
+arrives after that, before the next press, belongs to the ended turn and is dropped;
+pressing again before the turn ends continues it. The mute is the only signal because the
+learner token cannot publish data. With `VOICE_MODE=realtime`
 the web renders these events in the station transcript (#270): it shows the stored
 patient reply (the full verified text, as on the text path) for each patient event,
 "Anotado." for a kept learner turn, and failures as notices; the patient audio plays
@@ -750,7 +769,8 @@ or Cartesia. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
 - Every learner utterance becomes one final transcript,
   `VOICE_WORKER_FAKE_TRANSCRIPT` (default `Qual é o seu nome?`). An utterance
   starts when the microphone is loud and ends after 500 ms of quiet, like the
-  Deepgram endpointing.
+  Deepgram endpointing, or at once when the worker finalizes it on a
+  push-to-talk release, like Deepgram's `Finalize`.
 - Every approved reply is spoken as a 220 Hz tone, 80 ms per character, from
   0.4 s to 3 s.
 - Rooms, Phoenix calls, turn tracking and the `transcript` events are the real
@@ -764,7 +784,8 @@ cover the fakes in `test_fake_providers.py`.
 `scripts/run-voice-stack.sh` starts the whole stack with no paid provider and
 never reads `.env`:
 
-- `livekit-server --dev` on `ws://127.0.0.1:7880`;
+- `livekit-server --dev` on `ws://127.0.0.1:7880`, with an agents target load of 2 so a
+  busy editor never keeps the worker out of the room;
 - a mock OpenAI (`scripts/voice-stack/mock_openai.py`) that answers every
   patient turn with `VOICE_STACK_PATIENT_REPLY` (default `Meu nome é Carlos.`);
 - Phoenix in `dev` with `VOICE_MODE=realtime` and the E2E-only approving Jev

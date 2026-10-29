@@ -1,6 +1,8 @@
 // The learner's way through a station run: on first launch the microphone
-// disclosure, then the Pre-Station Notice, then the brief Phoenix serves with the
-// choice of a text or a voice training, then the run, where typed turns are
+// disclosure, then the main menu, where the learner chooses a training or a
+// simulated exam (#421), then the Pre-Station Notice once per launch, then the
+// brief Phoenix serves with that mode's way in (a text or a voice training, or
+// the simulated exam by voice), then the run, where typed turns are
 // always available and exam and impresso requests have their own channel, then
 // the feedback once the learner or the Station Timer ends it. A run that loses
 // Phoenix is invalidated instead (#196). Interface code renders it; only the
@@ -8,11 +10,15 @@
 
 #pragma once
 
+#include "Containers/Ticker.h"
 #include "CoreMinimal.h"
 #include "Station/StationMicPermission.h"
+#include "Station/StationTalkKey.h"
 #include "StationClientTypes.h"
 #include "StationVoice.h"
 #include "UObject/Object.h"
+
+#include <atomic>
 
 #include "StationRunFlow.generated.h"
 
@@ -23,9 +29,14 @@ enum class EStationRunStep : uint8
 {
 	/** First launch: what the microphone is used for, and the system permission. */
 	Microphone,
+	/** The main menu: the learner chooses a training or a simulated exam (#421). */
+	Menu,
 	/** The Pre-Station Notice is shown and not yet acknowledged. */
 	Notice,
-	/** The brief is shown; the learner picks a text or a voice training. */
+	/**
+	 * The brief is shown with the chosen mode's way in: a text or a voice training, or
+	 * the simulated exam.
+	 */
 	Brief,
 	/** Phoenix is creating the session. */
 	Starting,
@@ -65,6 +76,13 @@ struct PROYECTOMED_API FStationExamRequest
 
 /** A voice training needs Phoenix to serve realtime voice. */
 PROYECTOMED_API bool IsVoiceTrainingAvailable(const FStationSummary& Station);
+
+/**
+ * Why a simulated exam cannot start, in Brazilian Portuguese, for the brief to
+ * show; empty when it can. A simulated exam is performed only by voice, so it
+ * needs realtime voice and a microphone the system has not blocked (#421).
+ */
+PROYECTOMED_API FText SimulatedExamUnavailableText(const FStationSummary& Station, EStationMicPermission Permission);
 
 /**
  * The learner-facing text for a failed call. Phoenix's message is shown only when
@@ -128,26 +146,39 @@ class PROYECTOMED_API UStationRunFlow : public UObject
 
 public:
 	/**
-	 * Shows the microphone disclosure on first launch, otherwise the notice, and
+	 * Shows the microphone disclosure on first launch, otherwise the main menu, and
 	 * loads the active station in the background.
 	 */
 	void Begin(UStationClient* InClient, FStationMicrophoneSetup InMicrophone = FStationMicrophoneSetup::System());
 
 	/**
-	 * Microphone to notice. `bAllow` asks the system for the microphone now; the
+	 * Microphone to menu. `bAllow` asks the system for the microphone now; the
 	 * disclosure counts as shown either way, so it is not shown again.
 	 */
 	void AnswerMicrophone(bool bAllow);
 
+	/**
+	 * Menu to the chosen Station Mode (#421): the notice the first time in this launch,
+	 * otherwise straight to the brief. Does nothing on any other step. Why the station
+	 * did not load stays shown; any other error is cleared.
+	 */
+	void ChooseMode(EStationSessionMode InMode);
+
 	/** Notice to brief. Does nothing on any other step. */
 	void AcknowledgeNotice();
+
+	/**
+	 * Notice or brief back to the menu. Does nothing on any other step. Why the station
+	 * did not load stays shown; any other error is cleared.
+	 */
+	void BackToMenu();
 
 	/** Reloads the station after a failed load. */
 	void RetryLoadStation();
 
 	/**
-	 * True on the brief once the station is loaded. Voice also needs Phoenix to serve
-	 * realtime voice and a microphone the system has not blocked.
+	 * True on a training's brief once the station is loaded. Voice also needs Phoenix to
+	 * serve realtime voice and a microphone the system has not blocked.
 	 */
 	bool CanEnter(EStationTrainingMode Mode) const;
 
@@ -158,6 +189,20 @@ public:
 	 * run continues as text and `IsVoiceFallback` is true.
 	 */
 	void Enter(EStationTrainingMode Mode);
+
+	/**
+	 * True on a simulated exam's brief once the station is loaded, when
+	 * `SimulatedExamUnavailableText` is empty. Trainings stay available from the menu.
+	 */
+	bool CanEnterSimulatedExam() const;
+
+	/**
+	 * Starts a simulated exam ("Prova simulada", #421): a voice run with audio consent
+	 * that Phoenix records as a simulated exam for the whole run. The microphone is
+	 * asked for first if the system never did; without it the brief stays, with the
+	 * reason. Until #422-#426, the run itself behaves like a voice training.
+	 */
+	void EnterSimulatedExam();
 
 	/** The microphone as the system allows it now. */
 	EStationMicPermission GetMicrophonePermission() const;
@@ -178,6 +223,40 @@ public:
 	void ReportMicrophoneUnavailable();
 
 	/**
+	 * Push-to-talk (#419): the learner pressed the talk key, the space bar or the
+	 * HUD's talk button. The voice worker hears the learner only while it is held.
+	 * While the patient answers, a single press does nothing: a tap followed by a
+	 * press opens the microphone and cuts the patient at once. With `bForExam` (the
+	 * exam button, or Shift + space bar) the press also arms the exam mode, so what
+	 * is said goes to the impresso request (#364); it needs `CanAskExamAloud`. True
+	 * when the press opened the microphone.
+	 */
+	bool PressTalkKey(bool bForExam = false, EStationTalkInput Input = EStationTalkInput::Keyboard);
+
+	/**
+	 * The learner released the talk key on `Input`. The microphone closes a moment later,
+	 * so the last word still reaches the worker, and the worker then ends the turn at
+	 * once. A release on an input that does not hold the key changes nothing.
+	 */
+	void ReleaseTalkKey(EStationTalkInput Input = EStationTalkInput::Keyboard);
+
+	/** The talk key is held and the microphone open. */
+	bool IsTalking() const { return TalkKey.IsHeld(); }
+
+	/** The talk key is held for an exam request. */
+	bool IsTalkingForExam() const { return TalkKey.IsHeld() && bTalkKeyForExam; }
+
+	/** A press of the talk key can open the microphone: the voice of a running voice training is ready. */
+	bool CanTalk() const;
+
+	/**
+	 * The patient is answering: the learner's spoken or typed turn waits for its reply,
+	 * a typed turn's reply is about to be spoken, or the patient's voice was heard in
+	 * the last half second.
+	 */
+	bool IsPatientAnswering() const;
+
+	/**
 	 * Receives the patient's voice; set it before entering. The flow silences it when
 	 * the learner speaks over the patient or the run ends (#193), and lets it play
 	 * again with the text of the next reply, which the worker sends before its voice.
@@ -191,6 +270,8 @@ public:
 	bool IsStationLoading() const { return bLoadingStation; }
 	const FStationSummary* GetStation() const { return Station.GetPtrOrNull(); }
 	EStationTrainingMode GetMode() const { return Mode; }
+	/** The Station Mode last chosen on the menu; a training until the learner first chooses one. */
+	EStationSessionMode GetSessionMode() const { return SessionMode; }
 	bool IsVoiceFallback() const { return bVoiceFallback; }
 
 	/** For #191 to join the room. Secret: never log or display the token. */
@@ -335,7 +416,7 @@ public:
 
 	/**
 	 * Asks Phoenix to forget the run. Once it confirms, everything this run
-	 * held is cleared and the brief is shown, ready for a new run; until then
+	 * held is cleared and the menu is shown, ready for a new run; until then
 	 * no new run can start.
 	 */
 	void Discard();
@@ -365,8 +446,13 @@ private:
 	friend class FStationHudSnapshotSpec;
 	friend class FStationHudUnitSpec;
 	friend class FStationCardSnapshotSpec;
+	friend class FStationBriefUnitSpec;
 
 	void LoadStation();
+	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);
+
+	/** Clears the last mode's failure on the way through the menu, but not why the station did not load. */
+	void ForgetModeError();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
 	void StartSession();
 	void ConnectVoice();
@@ -400,6 +486,16 @@ private:
 
 	void SilencePatient();
 	void ResumePatient();
+
+	/** The learner cut the patient with the talk key: its voice stops and the turn it answers is dropped. */
+	void CutPatient();
+	/**
+	 * Stamps `HeardAt` when `Samples` of the patient's voice are loud and would play,
+	 * that is unless the patient is silenced. Any thread.
+	 */
+	static void NotePatientVoice(TConstArrayView<int16> Samples, std::atomic<double>& HeardAt, const std::atomic<bool>& bSilenced);
+	/** Opens or closes the voice link's microphone to match the talk key. */
+	void ApplyTalkKey();
 
 	/**
 	 * Phoenix answered the spoken exam turn as dialogue after all (the learner finished
@@ -450,6 +546,9 @@ private:
 
 	EStationRunStep Step = EStationRunStep::Notice;
 	EStationTrainingMode Mode = EStationTrainingMode::Text;
+	EStationSessionMode SessionMode = EStationSessionMode::Training;
+	/** The Pre-Station Notice was acknowledged in this launch; it is not shown again. */
+	bool bNoticeAcknowledged = false;
 	TOptional<FStationSummary> Station;
 	TOptional<FStationVoiceCredential> VoiceCredential;
 	TOptional<FString> PendingTurn;
@@ -501,6 +600,21 @@ private:
 	 */
 	bool bVoiceOutcome = false;
 	FStationPatientOutput Patient;
+	FStationTalkKey TalkKey;
+	/** The held talk key arms the exam mode: its release releases the exam button too. */
+	bool bTalkKeyForExam = false;
+	/** Closes the microphone once the release tail is over. */
+	FTSTicker::FDelegateHandle TalkTailTicker;
+	/** `FPlatformTime::Seconds()` when the patient's voice was last heard; written on a LiveKit thread. */
+	TSharedRef<std::atomic<double>, ESPMode::ThreadSafe> PatientHeardAt = MakeShared<std::atomic<double>, ESPMode::ThreadSafe>(0.0);
+	/** The patient is silenced (`SilencePatient`) until its next reply resumes it; read on a LiveKit thread. */
+	TSharedRef<std::atomic<bool>, ESPMode::ThreadSafe> PatientSilenced = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
+	/** The spoken turn the learner cut with the talk key; its late events are dropped. */
+	int32 CutVoiceTurnId = 0;
+	/** `FPlatformTime::Seconds()` until which a typed turn's reply, already shown, waits for its voice. */
+	double TypedReplyVoiceUntil = 0.0;
+	/** The current spoken turn failed, for example its synthesis: the patient will not answer it. */
+	bool bVoiceTurnFailed = false;
 	/**
 	 * Changes with every new, discarded or invalidated run. A Phoenix answer for an
 	 * earlier one is dropped.

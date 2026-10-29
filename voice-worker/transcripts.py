@@ -907,6 +907,15 @@ class TurnManager:
                     # A committed result the tracker refuses is a stale generation.
                     self._notify_cancel(turn_id)
                 return accepted
+            if reply.turn_id == turn_id and reply.is_impresso_receipt():
+                # The learner spoke again after Phoenix recorded this spoken exam
+                # request (#364, #432): nothing is spoken for it, and its outcome
+                # is published all the same. The turn stays stale.
+                if self.on_reply is not None:
+                    result = self.on_reply(reply)
+                    if asyncio.iscoroutine(result):
+                        await result
+                return reply
             return None
         except asyncio.CancelledError as exc:
             # A consumer may deliberately cancel while handling a reply. Propagate that

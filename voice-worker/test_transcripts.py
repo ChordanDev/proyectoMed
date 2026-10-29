@@ -962,6 +962,7 @@ class MockParticipant:
     def __init__(self, identity: str = "voice-worker"):
         self.identity = identity
         self.published_data: list[tuple[str, str, bool]] = []
+        self.track_publications: dict[str, object] = {}
 
     async def publish_data(
         self, data: str, topic: str = "transcript", reliable: bool = True
@@ -981,11 +982,19 @@ class MockRoom:
     def on(self, event_name: str, handler) -> None:
         self.handlers[event_name] = handler
 
+    def off(self, event_name: str, handler) -> None:
+        if self.handlers.get(event_name) is handler:
+            del self.handlers[event_name]
+
 
 class MockStream:
     def __init__(self, queue: asyncio.Queue[SpeechEvent | None]):
         self.queue = queue
         self.closed = False
+        self.flushes = 0
+
+    def flush(self) -> None:
+        self.flushes += 1
 
     def __aiter__(self):
         return self
@@ -994,6 +1003,8 @@ class MockStream:
         item = await self.queue.get()
         if item is None:
             raise StopAsyncIteration
+        if isinstance(item, Exception):
+            raise item
         return item
 
     async def aclose(self) -> None:
@@ -2932,6 +2943,82 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         client.commit_delays[1].set()
         queue.put_nowait(None)
         await stream_task
+
+    async def _reply_after_the_learner_spoke_again(
+        self, reply: VoiceTurnReply
+    ) -> tuple[list[VoiceTurnReply], list[int]]:
+        """Phoenix answers turn 1 only after the learner spoke over it (#193)."""
+        client = ControllablePhoenixClient()
+        client.replies[1] = reply
+        client.commit_delays[1] = asyncio.Event()
+        client.commit_events[1] = asyncio.Event()
+        client.cancel_events[1] = asyncio.Event()
+        tracker = TurnTracker("s1", last_turn_id=0)
+        replies: list[VoiceTurnReply] = []
+        cancelled: list[int] = []
+        queue: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
+
+        stream_task = asyncio.create_task(
+            process_speech_stream(
+                MockStream(queue),
+                tracker,
+                client,
+                on_reply=replies.append,
+                on_cancel=cancelled.append,
+            )
+        )
+        queue.put_nowait(event(FINAL, "solicito um hemograma"))
+        queue.put_nowait(event(END))
+        await client.commit_events[1].wait()
+        queue.put_nowait(event(SpeechEventType.START_OF_SPEECH))
+        await client.cancel_events[1].wait()
+        self.assertTrue(tracker.is_turn_stale(1))
+
+        client.commit_delays[1].set()
+        queue.put_nowait(None)
+        await asyncio.wait_for(stream_task, timeout=2)
+        return replies, cancelled
+
+    async def test_a_stale_turn_still_publishes_the_impresso_outcome_phoenix_recorded(
+        self,
+    ):
+        # Issue #432: Phoenix decided the spoken exam request (#364) before the
+        # learner spoke again; the decision is still shown.
+        outcome = {
+            "request_id": "voice-exam-1",
+            "decision": "released",
+            "newly_released": [
+                {"id": "imp-1", "title": "Hemograma", "category": "laboratory"}
+            ],
+            "feedback_message": "Liberado",
+        }
+        receipt = VoiceTurnReply(
+            turn_id=1, status="impresso_requested", impresso=outcome
+        )
+
+        replies, cancelled = await self._reply_after_the_learner_spoke_again(receipt)
+
+        self.assertEqual(len(replies), 1)
+        self.assertTrue(replies[0].is_impresso_receipt())
+        self.assertEqual(replies[0].turn_id, 1)
+        self.assertEqual(replies[0].impresso, outcome)
+        self.assertEqual(cancelled, [1])
+
+    async def test_a_stale_turn_still_drops_the_patient_reply(self):
+        # The barge-in rules of #193 hold for every patient reply (#432).
+        for reply in (
+            VoiceTurnReply(
+                turn_id=1, status="committed", generation_id=1, reply_text="Dói aqui."
+            ),
+            VoiceTurnReply(turn_id=1, status="kept", generation_id=1),
+        ):
+            with self.subTest(status=reply.status):
+                replies, cancelled = await self._reply_after_the_learner_spoke_again(
+                    reply
+                )
+
+                self.assertEqual(replies, [])
+                self.assertEqual(cancelled, [1])
 
     async def test_stale_generation_result_notifies_the_cancel_consumer(self):
         client = ControllablePhoenixClient()

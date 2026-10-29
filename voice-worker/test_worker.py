@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
 
+from livekit import rtc
 from livekit.agents import APIConnectionError
 from livekit.agents.stt import SpeechEvent
 
@@ -119,11 +120,11 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.sources.append(source)
         return source
 
-    def connect(self, voice="default") -> asyncio.Task:
+    def connect(self, voice="default", learner=None) -> asyncio.Task:
         return asyncio.create_task(
             transcribe(
                 self.room,
-                learner=None,
+                learner=learner,
                 context={"language": "pt-BR", "keyterms": []},
                 tracker=self.tracker,
                 phoenix=self.client,
@@ -137,6 +138,23 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.queue.put_nowait(event(FINAL, text))
         self.queue.put_nowait(event(END))
         await asyncio.sleep(0.01)
+
+    def learner(
+        self, muted: bool = False, track_name: str = "push-to-talk"
+    ) -> SimpleNamespace:
+        # The Unreal client names its push-to-talk microphone; the web's keeps the default.
+        microphone = SimpleNamespace(
+            source=rtc.TrackSource.SOURCE_MICROPHONE, muted=muted, name=track_name
+        )
+        return SimpleNamespace(
+            identity="learner-s1", track_publications={"TR_mic": microphone}
+        )
+
+    def set_microphone(self, learner, muted: bool) -> None:
+        microphone = learner.track_publications["TR_mic"]
+        microphone.muted = muted
+        handler = self.room.handlers["track_muted" if muted else "track_unmuted"]
+        handler(learner, microphone)
 
     async def disconnect(self, task: asyncio.Task) -> None:
         self.queue.put_nowait(None)
@@ -425,6 +443,135 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         # Phoenix stored the reply: nothing is cancelled there.
         self.assertEqual(self.client.cancel_calls, [])
         await self.disconnect(task)
+
+    # Issue #419: the Unreal client holds its microphone open only while the
+    # learner holds the talk key; the worker hears the mutes as push-to-talk.
+    async def test_muting_the_held_microphone_commits_the_turn_without_end_of_speech(
+        self,
+    ):
+        learner = self.learner(muted=True)
+        with patch("push_to_talk.RELEASE_QUIET_S", 0.01):
+            task = self.connect(learner=learner)
+            await settle()
+            self.set_microphone(learner, muted=False)
+            await self.say("onde dói")
+
+            self.assertEqual(self.client.commit_calls, [])
+
+            self.set_microphone(learner, muted=True)
+            await asyncio.sleep(0.05)
+
+        self.assertEqual(self.client.commit_calls, [(1, "onde dói")])
+        self.assertEqual(self.stream.flushes, 1)
+        await self.disconnect(task)
+
+    async def test_unmuting_the_microphone_stops_the_patient_at_once(self):
+        learner = self.learner(muted=True)
+        with patch("push_to_talk.RELEASE_QUIET_S", 0.01):
+            task = self.connect(learner=learner)
+            await settle()
+            self.set_microphone(learner, muted=False)
+            await self.say("primeira")
+            self.set_microphone(learner, muted=True)
+            await asyncio.sleep(0.05)
+        stream = self.tts.streams[0]
+        stream.queue.put_nowait(chunk("a1"))
+        await settle()
+
+        self.set_microphone(learner, muted=False)
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(stream.closed, 1)
+        self.assertEqual(self.sources[0].cleared, 1)
+        await self.disconnect(task)
+
+    async def test_a_microphone_muted_before_the_worker_joined_is_push_to_talk(self):
+        learner = self.learner(muted=True)
+        task = self.connect(learner=learner)
+        await self.say("onde dói")
+
+        self.assertEqual(self.client.commit_calls, [])
+        await self.disconnect(task)
+
+    async def test_a_web_microphone_the_browser_paused_keeps_ending_turns_at_end_of_speech(
+        self,
+    ):
+        # livekit-client mutes a browser track that stayed muted for 5 s (a phone
+        # call); the web learner is never on push-to-talk.
+        learner = self.learner(track_name="microphone")
+        task = self.connect(learner=learner)
+        await settle()
+        self.set_microphone(learner, muted=True)
+        self.set_microphone(learner, muted=False)
+        await self.say("onde dói")
+
+        self.assertEqual(self.client.commit_calls, [(1, "onde dói")])
+        self.assertEqual(self.stream.flushes, 0)
+        await self.disconnect(task)
+
+    async def test_a_push_to_talk_microphone_first_seen_open_is_held(self):
+        # The worker joined while the learner held the talk key.
+        learner = self.learner(muted=False)
+        with patch("push_to_talk.RELEASE_QUIET_S", 0.01):
+            task = self.connect(learner=learner)
+            await self.say("onde dói")
+
+            self.assertEqual(self.client.commit_calls, [])
+
+            self.set_microphone(learner, muted=True)
+            await asyncio.sleep(0.05)
+
+        self.assertEqual(self.client.commit_calls, [(1, "onde dói")])
+        await self.disconnect(task)
+
+    async def test_a_microphone_published_muted_is_push_to_talk(self):
+        learner = self.learner(muted=True)
+        microphone = learner.track_publications.pop("TR_mic")
+        task = self.connect(learner=learner)
+        await settle()
+        learner.track_publications["TR_mic"] = microphone
+        self.room.handlers["track_published"](microphone, learner)
+        await self.say("onde dói")
+
+        self.assertEqual(self.client.commit_calls, [])
+        await self.disconnect(task)
+
+    async def test_a_failed_microphone_scan_leaves_no_handler_behind(self):
+        class BrokenPublications(dict):
+            def values(self):
+                raise RuntimeError("participant gone")
+
+        learner = SimpleNamespace(
+            identity="learner-s1", track_publications=BrokenPublications()
+        )
+
+        with self.assertRaises(RuntimeError):
+            worker.follow_push_to_talk(self.room, learner, push_to_talk=None)
+        self.assertNotIn("track_muted", self.room.handlers)
+
+    async def test_only_the_connected_learner_microphone_mutes_count(self):
+        learner = self.learner(muted=True)
+        with patch("push_to_talk.RELEASE_QUIET_S", 0.01):
+            task = self.connect(learner=learner)
+            await settle()
+            someone_else = SimpleNamespace(identity="learner-s2", track_publications={})
+            self.room.handlers["track_unmuted"](
+                someone_else, learner.track_publications["TR_mic"]
+            )
+            camera = SimpleNamespace(
+                source=rtc.TrackSource.SOURCE_CAMERA, muted=False, name="push-to-talk"
+            )
+            self.room.handlers["track_unmuted"](learner, camera)
+            await self.say("onde dói")
+            # Were either unmute a press, this release would send the turn.
+            self.set_microphone(learner, muted=True)
+            await asyncio.sleep(0.05)
+
+        self.assertEqual(self.client.commit_calls, [])
+        await self.disconnect(task)
+        self.assertNotIn("track_muted", self.room.handlers)
+        self.assertNotIn("track_unmuted", self.room.handlers)
+        self.assertNotIn("track_published", self.room.handlers)
 
     async def test_newer_accepted_turn_supersedes_playback(self):
         task = self.connect()
@@ -717,6 +864,43 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.room.patient_events()[1]["role"], "patient")
         self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 2"])
         self.assertEqual(self.client.cancel_calls, [])
+
+    async def test_spoken_exam_request_spoken_over_still_publishes_its_outcome(self):
+        # Issue #432: Phoenix recorded the request (#364) before the learner spoke
+        # again. The barge-in leaves turn 1 stale, and its outcome still shows.
+        outcome = {
+            "request_id": "voice-exam-1",
+            "decision": "unavailable",
+            "newly_released": [],
+            "feedback_message": "Não disponível",
+        }
+        self.client.replies[1] = VoiceTurnReply(
+            turn_id=1, status="impresso_requested", impresso=outcome
+        )
+        self.client.commit_delays[1] = asyncio.Event()
+        task = self.connect()
+        await self.say("solicito tomografia")  # held in Phoenix: turn 1 is pending
+        self.queue.put_nowait(event(INTERIM, "doutor"))
+        await asyncio.sleep(0.01)
+        self.assertIn({"generation_id": None, "turn_id": 1}, self.client.cancel_calls)
+
+        self.client.commit_delays[1].set()
+        await settle()
+        await self.disconnect(task)
+
+        self.assertEqual(
+            self.room.patient_events(),
+            [
+                {
+                    "session_id": "s1",
+                    "turn_id": 1,
+                    "role": "examiner",
+                    "status": "impresso_requested",
+                    **outcome,
+                }
+            ],
+        )
+        self.assertEqual(self.tts.texts, [])
 
     async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
         self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")

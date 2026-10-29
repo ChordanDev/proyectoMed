@@ -30,6 +30,16 @@ The case-bound patient or actor that receives learner input during a station. It
 
 The MVP station accepts both voice and text from the learner. Voice is transcribed for the station interaction; text is an equal input path and the fallback when voice is unavailable.
 
+## Station Mode
+
+The kind of station run the learner chooses before entering the station: a **training** ("Treino") or a **simulated exam** ("Prova simulada"). It is fixed when the run starts and never changes during it. A run whose mode was not chosen is a training.
+_Avoid_: exam mode (the exam button's spoken request), game mode
+
+## Simulated Exam
+
+A station run performed only by voice, without help, and with rigorous time and scoring, kept as close as possible to the Revalida practical exam (decided in #318). Its learner-facing Brazilian Portuguese name is "Prova simulada". It needs the microphone and the learner's audio consent; a learner without them can still do trainings. Its result is still an unofficial educational estimate, never an official Revalida grade.
+_Avoid_: real test, prova real, official exam
+
 ## Actionable Feedback
 
 The educational station result identifies actions performed correctly, relevant omissions, why they matter within the station, and what the learner should practice next. It does not state pass/fail or claim Revalida readiness.
@@ -56,7 +66,7 @@ The MVP is planned as four coordinated work streams: API contract and case/rubri
 
 ## Station Timer
 
-The MVP station has a visible ten-minute countdown. It is not an official examination or certification signal. In a real test (#318) it provides Revalida-like time pressure and ends the run at zero. In a training (decided 2026-10-23, built in #323) it marks the expected time and does not end the run: at zero the client shows that the expected time is over and then counts the overtime up, until a hard cap 20 minutes after start. A session without a mode is a training.
+The MVP station has a visible ten-minute countdown. It is not an official examination or certification signal. In a simulated exam (#318) it provides Revalida-like time pressure and ends the run at zero. In a training (decided 2026-10-23, built in #323) it marks the expected time and does not end the run: at zero the client shows that the expected time is over and then counts the overtime up, until a hard cap 20 minutes after start. A run whose Station Mode was not chosen is a training.
 
 ## Technical Failure
 
@@ -100,7 +110,7 @@ A versioned structured package: clinical context, facts the Station AI may revea
 
 ## Station Completion
 
-The learner may finish a station at any time. In a real test, the ten-minute timer also ends it automatically. In a training, the run ends when the learner finishes or, at the latest, at the 20-minute cap, which Phoenix applies with its own completion reason (decided 2026-10-23, built in #323). Every path ends the interaction permanently for that run and transitions directly to actionable feedback.
+The learner may finish a station at any time. In a simulated exam, the ten-minute timer also ends it automatically. In a training, the run ends when the learner finishes or, at the latest, at the 20-minute cap, which Phoenix applies with its own completion reason (decided 2026-10-23, built in #323). Every path ends the interaction permanently for that run and transitions directly to actionable feedback.
 
 ## Feedback Evidence Display
 
@@ -160,4 +170,4 @@ Optional rubric fields of the Station Package that code, not Jev, applies after 
 
 ## Educational Point Estimate (implemented)
 
-A numeric, PEP-shaped estimate computed only from authored rubric points on assessed criteria. Points are multiples of 0.025 held as integer fortieths, so sums are exact (widened on 2026-10-07 from multiples of 0.125 to follow PEP 2025/2 tenths, amending ADR-012, #124); no probability multiplies points and no partial total is rescaled. The estimate reports the scored subtotal and scored maximum over assessed criteria (`scored_subtotal`, `scored_max`) and the eligible maximum over every criterion that is not excluded (`eligible_max`). A numeric `total` exists only when at least one such criterion exists and every one is assessed; otherwise it is null, and the unresolved criteria are listed. The v2 result serializes points as exact decimal strings. A real test ("Prova simulada", ADR-012 amendment on #124, decided in #318, not built yet) is the one exception: it always shows a numeric total over the assessed criteria only, scaled to the full maximum (`scored_subtotal / scored_max × eligible_max`, decided 2026-10-29), never counting an unassessed criterion as zero, with a certainty level from 1 to 5 and no total at level 1. It is an unofficial AI-generated educational estimate — never an official Revalida grade, pass/fail verdict, or readiness claim. #129 shows it to learners in the web client, with the pt-BR disclaimer on the Pre-Station Notice and on the result screen; this exposure is not clinical validation. Overtime never changes this estimate. A training result adds a separate training score (decided 2026-10-23, built in #323): the `total` minus 0.25 points per started minute of overtime, at most 2.5, floored at zero, and null when `total` is null. Real tests have no overtime penalty.
+A numeric, PEP-shaped estimate computed only from authored rubric points on assessed criteria. Points are multiples of 0.025 held as integer fortieths, so sums are exact (widened on 2026-10-07 from multiples of 0.125 to follow PEP 2025/2 tenths, amending ADR-012, #124); no probability multiplies points and no partial total is rescaled. The estimate reports the scored subtotal and scored maximum over assessed criteria (`scored_subtotal`, `scored_max`) and the eligible maximum over every criterion that is not excluded (`eligible_max`). A numeric `total` exists only when at least one such criterion exists and every one is assessed; otherwise it is null, and the unresolved criteria are listed. The v2 result serializes points as exact decimal strings. A simulated exam ("Prova simulada", ADR-012 amendment on #124, decided in #318, not built yet) is the one exception: it always shows a numeric total over the assessed criteria only, scaled to the full maximum (`scored_subtotal / scored_max × eligible_max`, decided 2026-10-29), never counting an unassessed criterion as zero, with a certainty level from 1 to 5 and no total at level 1. It is an unofficial AI-generated educational estimate — never an official Revalida grade, pass/fail verdict, or readiness claim. #129 shows it to learners in the web client, with the pt-BR disclaimer on the Pre-Station Notice and on the result screen; this exposure is not clinical validation. Overtime never changes this estimate. A training result adds a separate training score (decided 2026-10-23, built in #323): the `total` minus 0.25 points per started minute of overtime, at most 2.5, floored at zero, and null when `total` is null. Simulated exams have no overtime penalty.

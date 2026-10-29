@@ -2,7 +2,9 @@ defmodule BackendWeb.SessionController do
   @moduledoc """
   Starts a session on a published station (issue #334, ADR-013 amendment on
   #209): `POST /sessions` with `station_id` (the catalog id, the case number)
-  or `random: true` and an optional `area`, plus the boolean `audio_consent`.
+  or `random: true` and an optional `area`, plus the boolean `audio_consent`
+  and an optional Station Mode, `mode`: `"training"` (the default, also for a
+  null mode) or `"simulated_exam"`, which needs audio consent (#421).
   Every later operation is addressed by the session under `/sessions/:id`.
   The session belongs to the learner of the device access token (#337), who
   needs an active subscription: without one it answers `402
@@ -37,9 +39,11 @@ defmodule BackendWeb.SessionController do
   def create(conn, params) do
     with {:ok, selection} <- selection(params),
          {:ok, audio_consent} <- audio_consent(params),
+         {:ok, mode} <- session_mode(params),
          {:ok, session} <-
            Stations.start_station_session(selection, %{
              audio_consent: audio_consent,
+             mode: mode,
              user_id: conn.assigns.current_scope.user.id
            }) do
       conn
@@ -52,7 +56,16 @@ defmodule BackendWeb.SessionController do
           :bad_request,
           "invalid_parameters",
           "Parâmetros inválidos: informe 'station_id' (número da estação) ou 'random': true " <>
-            "com 'area' opcional, e 'audio_consent' booleano."
+            "com 'area' opcional, 'audio_consent' booleano e 'mode' opcional " <>
+            "(\"training\" ou \"simulated_exam\")."
+        )
+
+      {:error, :audio_consent_required} ->
+        error(
+          conn,
+          :bad_request,
+          "audio_consent_required",
+          "A prova simulada é feita só por voz: é preciso consentir com o uso do áudio."
         )
 
       {:error, :draining} ->
@@ -195,6 +208,14 @@ defmodule BackendWeb.SessionController do
   defp audio_consent(%{"audio_consent" => consent}) when is_boolean(consent), do: {:ok, consent}
   defp audio_consent(_params), do: {:error, :invalid_parameters}
 
+  # A missing or null mode is a training, so clients that predate the Station
+  # Mode keep starting trainings.
+  defp session_mode(%{"mode" => "simulated_exam"}), do: {:ok, :simulated_exam}
+  defp session_mode(%{"mode" => "training"}), do: {:ok, :training}
+  defp session_mode(%{"mode" => nil}), do: {:ok, :training}
+  defp session_mode(%{"mode" => _other}), do: {:error, :invalid_parameters}
+  defp session_mode(_params), do: {:ok, :training}
+
   defp session_json(session) do
     %{
       session_id: session.session_id,
@@ -202,6 +223,7 @@ defmodule BackendWeb.SessionController do
       station_version: session.station_version,
       station: Stations.session_station(session),
       audio_consent: session.audio_consent,
+      mode: Atom.to_string(session.mode),
       status: to_string(session.status),
       voice_mode: Application.get_env(:backend, :voice_mode, "turn"),
       started_at: DateTime.to_iso8601(session.started_at),

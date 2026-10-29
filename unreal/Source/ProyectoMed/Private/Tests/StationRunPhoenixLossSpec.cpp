@@ -449,7 +449,7 @@ void FStationRunPhoenixLossSpec::Define()
 			Flow->Discard();
 			WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
 			{
-				TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
+				TestEqual("back on the menu (#421)", Flow->GetStep(), EStationRunStep::Menu);
 				TestNull("session forgotten", Client->GetSession());
 				Done.Execute();
 			});

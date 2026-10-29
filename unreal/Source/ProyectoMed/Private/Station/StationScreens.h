@@ -1,5 +1,5 @@
 // The station's native UMG screens: the first-launch microphone disclosure,
-// Pre-Station Notice, brief, the in-run HUD with the Station Timer, the voice
+// the main menu (#421), Pre-Station Notice, brief, the in-run HUD with the Station Timer, the voice
 // status, the conversation and the exam panel, and the feedback once the run
 // ends. They render UStationRunFlow and never call the network.
 
@@ -13,6 +13,7 @@
 class UBorder;
 class UButton;
 class UEditableTextBox;
+class UHorizontalBox;
 class UOverlay;
 class UScrollBox;
 class UStationRunFlow;
@@ -21,6 +22,7 @@ class UVerticalBox;
 class UWidget;
 enum class EStationSpeaker : uint8;
 struct FStationExamRequest;
+enum class EStationSessionMode : uint8;
 struct FStationImpresso;
 
 UCLASS()
@@ -44,6 +46,54 @@ private:
 };
 struct FStationCriterionResult;
 struct FStationResult;
+
+/**
+ * The main menu, like a game's title screen (#421): the learner chooses a training
+ * or a simulated exam, over the consultation room seen from the menu camera.
+ */
+UCLASS()
+class UStationMenuWidget : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	TDelegate<void(EStationSessionMode)> OnModeChosen;
+
+	/** The learner leaves the app. */
+	FSimpleDelegate OnQuit;
+
+protected:
+	virtual TSharedRef<SWidget> RebuildWidget() override;
+
+private:
+	friend class FStationBriefUnitSpec;
+
+	UFUNCTION()
+	void HandleTraining();
+
+	UFUNCTION()
+	void HandleSimulatedExam();
+
+	UFUNCTION()
+	void HandleQuit();
+
+	/** A solid background that hides the scene until the office behind the menu exists (#431). */
+	UPROPERTY()
+	TObjectPtr<UBorder> Backdrop;
+
+	UPROPERTY()
+	TObjectPtr<UButton> TrainingButton;
+
+	UPROPERTY()
+	TObjectPtr<UButton> SimulatedExamButton;
+
+	/** Shown, disabled, until the settings exist. */
+	UPROPERTY()
+	TObjectPtr<UButton> SettingsButton;
+
+	UPROPERTY()
+	TObjectPtr<UButton> QuitButton;
+};
 
 UCLASS()
 class UStationNoticeWidget : public UUserWidget
@@ -69,18 +119,29 @@ class UStationBriefWidget : public UUserWidget
 public:
 	void SetFlow(UStationRunFlow* InFlow) { Flow = InFlow; }
 
-	/** Re-reads the flow: loading, error, the station brief, and which trainings can start. */
+	/**
+	 * Re-reads the flow: loading, error, the station brief, and the chosen mode's way
+	 * in: which trainings can start, or whether the simulated exam can and why not (#421).
+	 */
 	void Refresh();
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	friend class FStationBriefUnitSpec;
+
 	UFUNCTION()
 	void HandleTextTraining();
 
 	UFUNCTION()
 	void HandleVoiceTraining();
+
+	UFUNCTION()
+	void HandleSimulatedExam();
+
+	UFUNCTION()
+	void HandleBackToMenu();
 
 	UFUNCTION()
 	void HandleRetry();
@@ -112,6 +173,26 @@ private:
 	/** Under the scrolling brief, so the trainings stay in view however long it runs. */
 	UPROPERTY()
 	TObjectPtr<UVerticalBox> FooterBox;
+
+	/** Back to the main menu (#421). */
+	UPROPERTY()
+	TObjectPtr<UButton> MenuButton;
+
+	/** Names the chosen mode. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> HeadingText;
+
+	/** A training's two ways in: by text and by voice. */
+	UPROPERTY()
+	TObjectPtr<UHorizontalBox> TrainingsRow;
+
+	/** A simulated exam's one way in ("Prova simulada", #421), by voice. */
+	UPROPERTY()
+	TObjectPtr<UButton> SimulatedExamButton;
+
+	/** What a simulated exam is, or why it cannot start. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> SimulatedExamNote;
 
 	UPROPERTY()
 	TObjectPtr<UButton> TextButton;
@@ -186,6 +267,8 @@ private:
 
 	/** The microphone's look: idle, arming or recording, with the recording time. */
 	void RefreshMicrophone();
+	/** The talk button's label and look (#419): idle, talking, or how to cut the patient. */
+	void RefreshTalk();
 	void RequestExam();
 
 	UFUNCTION()
@@ -205,6 +288,12 @@ private:
 
 	UFUNCTION()
 	void HandleRequestExam();
+
+	UFUNCTION()
+	void HandlePressTalk();
+
+	UFUNCTION()
+	void HandleReleaseTalk();
 
 	UFUNCTION()
 	void HandleAskExamAloud();
@@ -235,6 +324,16 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UButton> SendButton;
+
+	/** Push-to-talk (#419): held, like the space bar, to talk to the patient. */
+	UPROPERTY()
+	TObjectPtr<UButton> TalkButton;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> TalkText;
+
+	/** Whether the talk button is styled as talking; unset before its first style. */
+	TOptional<bool> TalkLookTalking;
 
 	UPROPERTY()
 	TObjectPtr<UButton> ExamTab;
