@@ -818,8 +818,13 @@ worker, nothing spoken):
 - Show the outcome as after a typed request: `feedback_message`, then
   `ListImpressos` for what was released.
 - The event carries no `generation_id` and no `text`; no audio follows it.
-- When the room event is lost (a publish error or a barge-in that dropped the
-  receipt), the request is still recorded: `ListImpressos` shows it.
+- A barge-in does not drop it: when the learner speaks again before Phoenix's
+  answer reaches the worker, the worker still publishes the event of the
+  earlier turn (#432), so it can arrive after a `Learner` event of a newer turn.
+  `UStationRunFlow` ignores it there, as a late event of an earlier turn, and
+  reads `ListImpressos` again instead.
+- When the room event is lost (a publish error), the request is still
+  recorded: `ListImpressos` shows it.
 
 `ParseStationVoiceEvent` reads this event as `ExaminerImpresso`, with the
 decision in `Impresso` (no `ReleasedImpressos`, and `NewlyReleased` without
