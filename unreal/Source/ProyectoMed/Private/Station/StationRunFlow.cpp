@@ -128,7 +128,7 @@ void UStationRunFlow::ChooseMode(EStationSessionMode InMode)
 		return;
 	}
 	SessionMode = InMode;
-	ErrorText = FText::GetEmpty();
+	ForgetModeError();
 	Step = bNoticeAcknowledged ? EStationRunStep::Brief : EStationRunStep::Notice;
 	OnChanged.Broadcast();
 }
@@ -150,9 +150,19 @@ void UStationRunFlow::BackToMenu()
 	{
 		return;
 	}
-	ErrorText = FText::GetEmpty();
+	ForgetModeError();
 	Step = EStationRunStep::Menu;
 	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::ForgetModeError()
+{
+	// Without a station the error says why it did not load: the brief still shows it,
+	// beside the retry. Once it loaded, an error belongs to the mode left behind.
+	if (Station.IsSet())
+	{
+		ErrorText = FText::GetEmpty();
+	}
 }
 
 void UStationRunFlow::RetryLoadStation()

@@ -155,14 +155,18 @@ public:
 
 	/**
 	 * Menu to the chosen Station Mode (#421): the notice the first time in this launch,
-	 * otherwise straight to the brief. Does nothing on any other step.
+	 * otherwise straight to the brief. Does nothing on any other step. Why the station
+	 * did not load stays shown; any other error is cleared.
 	 */
 	void ChooseMode(EStationSessionMode InMode);
 
 	/** Notice to brief. Does nothing on any other step. */
 	void AcknowledgeNotice();
 
-	/** Notice or brief back to the menu. Does nothing on any other step. */
+	/**
+	 * Notice or brief back to the menu. Does nothing on any other step. Why the station
+	 * did not load stays shown; any other error is cleared.
+	 */
 	void BackToMenu();
 
 	/** Reloads the station after a failed load. */
@@ -408,6 +412,9 @@ private:
 
 	void LoadStation();
 	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);
+
+	/** Clears the last mode's failure on the way through the menu, but not why the station did not load. */
+	void ForgetModeError();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
 	void StartSession();
 	void ConnectVoice();

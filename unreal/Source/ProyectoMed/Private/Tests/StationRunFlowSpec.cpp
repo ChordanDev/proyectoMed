@@ -167,6 +167,57 @@ void FStationRunUnitSpec::Define()
 		TestEqual("the new mode", Flow->GetSessionMode(), EStationSessionMode::Training);
 	});
 
+	LatentIt("keeps why the station did not load on the way through the menu", FTimespan::FromSeconds(20),
+		[this](const FDoneDelegate& Done)
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->AddToRoot();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->AddToRoot();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		WhenFlow(Flow, [Flow]() { return !Flow->IsStationLoading(); }, [this, Client, Flow, Done]()
+		{
+			TestEqual("on the menu", Flow->GetStep(), EStationRunStep::Menu);
+			TestFalse("the station did not load", Flow->GetErrorText().IsEmpty());
+
+			Flow->ChooseMode(EStationSessionMode::Training);
+			Flow->AcknowledgeNotice();
+			TestEqual("on the brief", Flow->GetStep(), EStationRunStep::Brief);
+			TestNull("no station", Flow->GetStation());
+			TestFalse("the brief says why", Flow->GetErrorText().IsEmpty());
+
+			Flow->BackToMenu();
+			Flow->ChooseMode(EStationSessionMode::SimulatedExam);
+			TestFalse("still said after going back to the menu", Flow->GetErrorText().IsEmpty());
+
+			Flow->RemoveFromRoot();
+			Client->RemoveFromRoot();
+			Done.Execute();
+		});
+	});
+
+	It("forgets a mode's own failure on the way back to the menu", [this]()
+	{
+		FStationSummary Station;
+		Station.VoiceMode = EStationVoiceMode::Realtime;
+		const TSharedRef<FFakeMicrophone> Fake = MakeShared<FFakeMicrophone>();
+		Fake->Permission = EStationMicPermission::NotDetermined;
+		Fake->Answer = EStationMicPermission::Denied;
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(NewObject<UStationClient>(), MicrophoneSetup(Fake));
+		Flow->Station = Station;
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		Flow->Step = EStationRunStep::Brief;
+
+		Flow->EnterSimulatedExam();
+		TestFalse("the microphone was refused", Flow->GetErrorText().IsEmpty());
+		Flow->BackToMenu();
+		TestTrue("forgotten on the menu", Flow->GetErrorText().IsEmpty());
+		Flow->ChooseMode(EStationSessionMode::Training);
+		TestTrue("not shown on a training's brief", Flow->GetErrorText().IsEmpty());
+	});
+
 	It("goes back to the menu only from the notice or the brief", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
