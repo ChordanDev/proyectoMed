@@ -127,6 +127,55 @@ void FStationHudUnitSpec::Define()
 		TestFalse(TEXT("the request's document only once"), Shown.Contains(TEXT("IMPRESSO 2 — Hemograma completo  ›")));
 	});
 
+	It("wraps every text of the request cards at a fixed width, so a rebuilt list never jumps", [this]()
+	{
+		// Auto wrap lays a new text out unwrapped for one frame, wider and shorter
+		// than it ends, so the whole list jumped when an answer rebuilt it.
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		FStationImpresso Physical;
+		Physical.Id = TEXT("exame-fisico");
+		Physical.Title = TEXT("IMPRESSO 1 — EXAME FÍSICO SEGMENTAR");
+		FStationImpresso Other;
+		Other.Id = TEXT("ecg");
+		Other.Title = TEXT("IMPRESSO 4 — ELETROCARDIOGRAMA");
+		FStationExamRequest& Released = Flow->ExamRequests.AddDefaulted_GetRef();
+		Released.Text = TEXT("Solicito exame físico do abdome e dos membros inferiores");
+		Released.Reply.Decision = EStationImpressoDecision::Released;
+		Released.Reply.NewlyReleased.Add(Physical);
+		FStationExamRequest& Declined = Flow->ExamRequests.AddDefaulted_GetRef();
+		Declined.Text = TEXT("Solicito bonecografia");
+		Declined.Reply.Decision = EStationImpressoDecision::Unavailable;
+		Declined.Reply.FeedbackMessage = TEXT("Não consta no script.");
+		Flow->ReleasedImpressos = {Physical, Other};
+		Flow->SpokenExamTurn = 3;
+		Flow->SpokenExamText = TEXT("Solicito exame físico");
+		UStationHudWidget* Hud = MakeHud(Flow);
+
+		int32 Checked = 0;
+		TArray<FString> Wrapped;
+		UWidgetTree::ForWidgetAndChildren(Hud->ExamCardBox, [this, &Checked, &Wrapped](UWidget* Widget)
+		{
+			if (const UTextBlock* Text = Cast<UTextBlock>(Widget))
+			{
+				++Checked;
+				const FString Shown = Text->GetText().ToString();
+				TestFalse(*FString::Printf(TEXT("'%s' is not auto wrapped"), *Shown), Text->GetAutoWrapText());
+				if (Text->GetWrapTextAt() > 0.f)
+				{
+					Wrapped.Add(Shown);
+				}
+			}
+		});
+		TestTrue(TEXT("the cards' texts were checked"), Checked >= 8);
+		// The status labels stay on one line; every longer text wraps at a fixed width.
+		for (const TCHAR* Long : {TEXT("Solicito exame físico do abdome e dos membros inferiores"),
+			TEXT("Não consta no script."), TEXT("Ver documento  ›"), TEXT("Outros documentos liberados"),
+			TEXT("IMPRESSO 4 — ELETROCARDIOGRAMA  ›")})
+		{
+			TestTrue(*FString::Printf(TEXT("'%s' wraps at a fixed width"), Long), Wrapped.Contains(FString(Long)));
+		}
+	});
+
 	It("shows a released document's headings, labels and items in Phoenix's order and words", [this]()
 	{
 		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Text);
