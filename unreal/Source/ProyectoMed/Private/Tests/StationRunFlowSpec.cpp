@@ -748,6 +748,94 @@ void FStationRunUnitSpec::Define()
 		TestEqual("no exam request yet", Flow->GetExamRequests().Num(), 0);
 	});
 
+	// The learner spoke again before the outcome of a spoken exam request arrived. Phoenix
+	// may have recorded the request, and then the worker still sends its outcome (#432).
+	It("shows the outcome of a spoken exam request that arrives after the learner spoke again (#434)", [this, Spoken, ImpressoOutcome, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		Flow->SpokenExamExpiresAt = FPlatformTime::Seconds() - 1.0; // the released button's moment is over
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Onde dói?"), INDEX_NONE, true));
+		TestFalse("the request no longer waits", Flow->IsSpokenExamInFlight());
+		TestEqual("the newer utterance is dialogue", Flow->GetTranscript().Num(), 1);
+		// Other late events of the request's turn still change nothing.
+		Flow->HandleVoiceEvent(Spoken(EKind::ExaminerAcknowledged, 1));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Resposta atrasada.")));
+		TestEqual("no late line", Flow->GetTranscript().Num(), 1);
+		TestTrue("no late reply text", Flow->GetVoice().PatientText.IsEmpty());
+		TestFalse("no late examiner note", Flow->GetVoice().bExaminerNoted);
+		TestEqual("no exam request yet", Flow->GetExamRequests().Num(), 0);
+
+		const FStationVoiceEvent Outcome = ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS"));
+		Flow->HandleVoiceEvent(Outcome);
+		const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+		if (TestEqual("the late outcome shows, as a typed request's", Requests.Num(), 1))
+		{
+			TestEqual("what the learner asked for", Requests[0].Text, FString(TEXT("Solicito hemograma")));
+			TestEqual("released", Requests[0].Reply.Decision, EStationImpressoDecision::Released);
+			TestEqual("Phoenix's feedback", Requests[0].Reply.FeedbackMessage, FString(TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+			TestEqual("what it released", Requests[0].Reply.NewlyReleased.Num(), 1);
+		}
+		TestEqual("the dialogue line stays", Flow->GetTranscript().Num(), 1);
+		Flow->HandleVoiceEvent(Outcome);
+		TestEqual("taken once", Flow->GetExamRequests().Num(), 1);
+
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 2, TEXT("Dói aqui.")));
+		TestEqual("the newer turn goes on: its reply shows", Flow->GetTranscript().Num(), 2);
+	});
+
+	It("shows a late declined outcome while the next utterance holds the exam mode (#434)", [this, Spoken, ImpressoOutcome, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito tomografia"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Solicito um hemograma")));
+		TestEqual("the mode passed to the newer utterance", Flow->GetSpokenExamText(), FString(TEXT("Solicito um hemograma")));
+
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Unavailable, TEXT("Não consta no script.")));
+		const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
+		if (TestEqual("the late outcome shows", Requests.Num(), 1))
+		{
+			TestEqual("what the learner asked for", Requests[0].Text, FString(TEXT("Solicito tomografia")));
+			TestEqual("declined", Requests[0].Reply.Decision, EStationImpressoDecision::Unavailable);
+			TestEqual("Phoenix's feedback", Requests[0].Reply.FeedbackMessage, FString(TEXT("Não consta no script.")));
+		}
+		TestTrue("the newer utterance still waits", Flow->IsSpokenExamInFlight());
+		TestEqual("as it was", Flow->GetSpokenExamText(), FString(TEXT("Solicito um hemograma")));
+
+		// Phoenix took the mode for the first request, so it answers this one as dialogue.
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Solicito um hemograma"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 2, TEXT("Como assim, doutor?")));
+		TestEqual("it joins the conversation with its reply", Flow->GetTranscript().Num(), 2);
+		TestEqual("one exam request", Flow->GetExamRequests().Num(), 1);
+	});
+
+	It("shows the late outcome of a spoken exam request after the learner cut a later reply (#434)", [this, Spoken, ImpressoOutcome, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		Flow->SpokenExamExpiresAt = FPlatformTime::Seconds() - 1.0;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 2, TEXT("Dói aqui."), 0));
+		Flow->CutPatient();
+
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+		TestEqual("an exam request's outcome is always kept (#364)", Flow->GetExamRequests().Num(), 1);
+	});
+
+	It("still ignores a late outcome of a turn that was no spoken exam request (#434)", [this, Spoken, ImpressoOutcome]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Desde quando?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS")));
+		TestEqual("no exam request is made up", Flow->GetExamRequests().Num(), 0);
+		TestEqual("the dialogue line stays", Flow->GetTranscript().Num(), 1);
+	});
+
 	It("ends an unused exam mode when it expires, and forgets it with the run", [this, Spoken, ArmExamAloud]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();

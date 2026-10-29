@@ -840,8 +840,10 @@ worker, nothing spoken):
 - A barge-in does not drop it: when the learner speaks again before Phoenix's
   answer reaches the worker, the worker still publishes the event of the
   earlier turn (#432), so it can arrive after a `Learner` event of a newer turn.
-  `UStationRunFlow` ignores it there, as a late event of an earlier turn, and
-  reads `ListImpressos` again instead.
+  `UStationRunFlow` remembers each spoken exam request that newer speech
+  superseded, with what the learner asked for, and takes that late event as the
+  request's outcome, even after the learner cut a later reply (#434). It still
+  ignores every other late event of an earlier turn.
 - When the room event is lost (a publish error), the request is still
   recorded: `ListImpressos` shows it.
 
@@ -859,11 +861,15 @@ card marked "Solicitando...", never in the conversation; its
 outcome joins `GetExamRequests` as a typed request's does, and the flow reads
 `ListImpressos` again. A press while that request still waits is refused
 (`AskExamAloud` returns false) and the HUD shows it as waiting, never as
-recording. If the voice is lost while a spoken request waits, its outcome can
-no longer arrive: the request is let go, as a superseded one is, and
-`ListImpressos` is read again. If Phoenix answers that utterance as dialogue instead
-(it ended after `expires_at`), its learner line joins the conversation before
-the reply.
+recording. A request superseded by newer speech is let go: the panel stops
+showing it as waiting, `ListImpressos` is read again, and the mode passes to
+the next utterance while it still listens. Its outcome still joins
+`GetExamRequests` if it arrives later (#434); the newer utterance keeps its own
+state, and Phoenix answers it as dialogue when the first request used the mode.
+If the voice is lost while a spoken request waits, its outcome can no longer
+arrive: the request is let go, and `ListImpressos` is read again. If Phoenix
+answers that utterance as dialogue instead (it ended after `expires_at`), its
+learner line joins the conversation before the reply.
 
 - Errors: `403 no_consent` on a run without audio consent (a typed request
   needs no exam mode), `409 session_completed`, `404 session_not_found`,

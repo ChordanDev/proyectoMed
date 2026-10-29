@@ -884,6 +884,7 @@ void UStationRunFlow::ResetRun()
 	PendingExamRequest.Reset();
 	UnansweredExamRequest.Reset();
 	ExamRequests.Reset();
+	SupersededExamRequests.Reset();
 	ReleasedImpressos.Reset();
 	UnsentExamRequest.Reset();
 	ExamErrorText = FText::GetEmpty();
@@ -1000,6 +1001,14 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 	{
 		// The worker stopped, for example because the transcription failed.
 		LoseVoice();
+		OnChanged.Broadcast();
+		return;
+	}
+	if (Event.Kind == EStationVoiceEventKind::ExaminerImpresso && SupersededExamRequests.Contains(Event.TurnId))
+	{
+		// The learner spoke again before this request's outcome arrived, and the
+		// worker still sent it (#432): it shows as a typed request's does (#434).
+		AddSpokenExamOutcome(SupersededExamRequests.FindAndRemoveChecked(Event.TurnId), Event);
 		OnChanged.Broadcast();
 		return;
 	}
@@ -1261,7 +1270,9 @@ void UStationRunFlow::DropSupersededVoiceTurn()
 	if (SpokenExamTurn != 0)
 	{
 		// The armed mode passes to the next utterance unless Phoenix already took
-		// this one, whose outcome then never arrives: its impressos are read again.
+		// this one, whose outcome may then still arrive (#434): its impressos are
+		// read again now.
+		SupersededExamRequests.Add(SpokenExamTurn, SpokenExamText);
 		SpokenExamTurn = 0;
 		SpokenExamText.Reset();
 		ReloadReleasedImpressos();
@@ -1328,7 +1339,11 @@ void UStationRunFlow::TakeSpokenExamOutcome(const FStationVoiceEvent& Event)
 	Voice.LearnerText.Reset();
 	// Phoenix used the mode for this request.
 	ResetSpokenExam();
+	AddSpokenExamOutcome(Text, Event);
+}
 
+void UStationRunFlow::AddSpokenExamOutcome(const FString& Text, const FStationVoiceEvent& Event)
+{
 	FStationExamRequest& Answered = ExamRequests.AddDefaulted_GetRef();
 	Answered.Text = Text;
 	Answered.Reply = Event.Impresso;
