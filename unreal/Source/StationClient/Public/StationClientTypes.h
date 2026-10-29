@@ -21,6 +21,19 @@ enum class EStationVoiceMode : uint8
 	Off,
 };
 
+/**
+ * The Station Mode the learner chose before entering (#421), as `mode` in the
+ * session responses. Fixed for the whole run.
+ */
+UENUM(BlueprintType)
+enum class EStationSessionMode : uint8
+{
+	/** "Treino". A session Phoenix serves without a mode is a training. */
+	Training,
+	/** "Prova simulada": performed only by voice, which needs audio consent. */
+	SimulatedExam,
+};
+
 UENUM(BlueprintType)
 enum class EStationSessionStatus : uint8
 {
@@ -142,6 +155,9 @@ struct STATIONCLIENT_API FStationSession
 
 	UPROPERTY(BlueprintReadOnly, Category = "Station")
 	bool bAudioConsent = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	EStationSessionMode Mode = EStationSessionMode::Training;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Station")
 	EStationSessionStatus Status = EStationSessionStatus::Active;

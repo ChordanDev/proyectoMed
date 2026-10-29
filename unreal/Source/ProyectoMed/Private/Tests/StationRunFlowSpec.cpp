@@ -111,6 +111,37 @@ void FStationRunUnitSpec::Define()
 		TestFalse("off", IsVoiceTrainingAvailable(Station));
 	});
 
+	It("says why a simulated exam cannot start, in Brazilian Portuguese", [this]()
+	{
+		FStationSummary Station;
+		Station.VoiceMode = EStationVoiceMode::Realtime;
+		TestTrue("available with realtime voice and the microphone",
+			SimulatedExamUnavailableText(Station, EStationMicPermission::Granted).IsEmpty());
+		TestTrue("available before the system was asked",
+			SimulatedExamUnavailableText(Station, EStationMicPermission::NotDetermined).IsEmpty());
+
+		const FString Blocked = SimulatedExamUnavailableText(Station, EStationMicPermission::Denied).ToString();
+		TestTrue("blocked microphone", Blocked.Contains(TEXT("microfone está bloqueado")));
+		TestTrue("trainings still offered", Blocked.Contains(TEXT("treino")));
+
+		Station.VoiceMode = EStationVoiceMode::Turn;
+		const FString NoVoice = SimulatedExamUnavailableText(Station, EStationMicPermission::Granted).ToString();
+		TestTrue("no realtime voice", NoVoice.Contains(TEXT("só por voz")));
+		TestTrue("trainings still offered without voice", NoVoice.Contains(TEXT("treino")));
+	});
+
+	It("offers no simulated exam before the brief", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		TestFalse("on the notice", Flow->CanEnterSimulatedExam());
+		Flow->EnterSimulatedExam();
+		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("a training until a simulated exam starts", Flow->GetSessionMode(), EStationSessionMode::Training);
+	});
+
 	It("asks for the microphone once, on first launch, before the notice", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
@@ -411,9 +442,11 @@ void FStationRunPhoenixSpec::Define()
 				[this, Done]()
 				{
 					TestEqual("running", Flow->GetStep(), EStationRunStep::Running);
+					TestEqual("flow mode (#421)", Flow->GetSessionMode(), EStationSessionMode::Training);
 					if (TestNotNull("session", Client->GetSession()))
 					{
 						TestFalse("no audio consent", Client->GetSession()->bAudioConsent);
+						TestEqual("a training (#421)", Client->GetSession()->Mode, EStationSessionMode::Training);
 					}
 					TestTrue("timer counting", Client->GetRemainingTime() > FTimespan::FromMinutes(9.5));
 					TestNull("no credential", Flow->GetVoiceCredential());
@@ -457,10 +490,86 @@ void FStationRunPhoenixSpec::Define()
 					if (TestNotNull("session", Client->GetSession()) && TestNotNull("credential", Flow->GetVoiceCredential()))
 					{
 						TestTrue("audio consent", Client->GetSession()->bAudioConsent);
+						TestEqual("a training (#421)", Client->GetSession()->Mode, EStationSessionMode::Training);
 						TestEqual("room", Flow->GetVoiceCredential()->Room, TEXT("station-session-") + Client->GetSession()->SessionId);
 					}
 					Done.Execute();
 				});
+		});
+	});
+
+	LatentIt("starts a simulated exam: a voice run with audio consent that Phoenix records as one", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			if (!TestTrue(TEXT("simulated exam offered (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnterSimulatedExam()))
+			{
+				Done.Execute();
+				return;
+			}
+			TestTrue("trainings offered too", Flow->CanEnter(EStationTrainingMode::Text));
+			Flow->EnterSimulatedExam();
+			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
+				[this, Done]()
+				{
+					TestEqual("running", Flow->GetStep(), EStationRunStep::Running);
+					TestEqual("flow mode", Flow->GetSessionMode(), EStationSessionMode::SimulatedExam);
+					TestEqual("by voice", Flow->GetMode(), EStationTrainingMode::Voice);
+					if (TestNotNull("session", Client->GetSession()))
+					{
+						TestEqual("Phoenix's mode", Client->GetSession()->Mode, EStationSessionMode::SimulatedExam);
+						TestTrue("audio consent", Client->GetSession()->bAudioConsent);
+					}
+					Client->RefreshSession([this, Done](const TStationResult<FStationSession>& Refreshed)
+					{
+						if (TestFalse("refreshed", Refreshed.HasError()))
+						{
+							TestEqual("kept by Phoenix", Refreshed.GetValue().Mode, EStationSessionMode::SimulatedExam);
+						}
+						Done.Execute();
+					});
+				});
+		});
+	});
+
+	LatentIt("offers no simulated exam when the system blocks the microphone, and still offers trainings", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		Microphone->Permission = EStationMicPermission::Denied;
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			TestFalse("simulated exam blocked", Flow->CanEnterSimulatedExam());
+			TestTrue("text training still offered", Flow->CanEnter(EStationTrainingMode::Text));
+			Flow->EnterSimulatedExam();
+			TestEqual("stays on the brief", Flow->GetStep(), EStationRunStep::Brief);
+			TestNull("no session", Client->GetSession());
+			Done.Execute();
+		});
+	});
+
+	LatentIt("asks for the microphone on entering a simulated exam, and starts nothing when refused", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		Microphone->Permission = EStationMicPermission::NotDetermined;
+		Microphone->Answer = EStationMicPermission::Denied;
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			if (!TestTrue(TEXT("simulated exam offered (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnterSimulatedExam()))
+			{
+				Done.Execute();
+				return;
+			}
+			Flow->EnterSimulatedExam();
+			TestEqual("asked once", Microphone->Requests, 1);
+			TestEqual("back on the brief", Flow->GetStep(), EStationRunStep::Brief);
+			TestTrue("told why", Flow->GetErrorText().ToString().Contains(TEXT("prova simulada")));
+			TestNull("no session", Client->GetSession());
+			TestTrue("text training still offered", Flow->CanEnter(EStationTrainingMode::Text));
+			Done.Execute();
 		});
 	});
 

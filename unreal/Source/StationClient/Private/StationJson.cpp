@@ -25,6 +25,34 @@ namespace
 		return true;
 	}
 
+	// A missing or null mode is a training: Phoenix served no mode before #421.
+	bool ParseSessionMode(const FJsonObject& Json, EStationSessionMode& Out)
+	{
+		const TSharedPtr<FJsonValue> Value = Json.TryGetField(TEXT("mode"));
+		FString Text;
+		if (!Value.IsValid() || Value->IsNull())
+		{
+			Out = EStationSessionMode::Training;
+		}
+		else if (!Value->TryGetString(Text))
+		{
+			return false;
+		}
+		else if (Text == TEXT("training"))
+		{
+			Out = EStationSessionMode::Training;
+		}
+		else if (Text == TEXT("simulated_exam"))
+		{
+			Out = EStationSessionMode::SimulatedExam;
+		}
+		else
+		{
+			return false;
+		}
+		return true;
+	}
+
 	bool ParseSpeaker(const FString& Text, EStationSpeaker& Out)
 	{
 		if (Text == TEXT("learner"))
@@ -186,6 +214,7 @@ bool StationJson::ParseSession(const FJsonObject& Json, FStationSession& Out, FD
 		|| !Json.TryGetStringField(TEXT("station_id"), Out.StationId)
 		|| !Json.TryGetStringField(TEXT("station_version"), Out.StationVersion)
 		|| !Json.TryGetBoolField(TEXT("audio_consent"), Out.bAudioConsent)
+		|| !ParseSessionMode(Json, Out.Mode)
 		|| !ParseDate(Json, TEXT("started_at"), Out.StartedAt)
 		|| !ParseDate(Json, TEXT("deadline_at"), Out.DeadlineAt)
 		|| !ParseDate(Json, TEXT("expires_at"), Out.ExpiresAt)

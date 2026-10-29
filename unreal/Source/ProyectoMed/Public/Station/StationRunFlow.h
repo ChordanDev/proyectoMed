@@ -1,6 +1,6 @@
 // The learner's way through a station run: on first launch the microphone
 // disclosure, then the Pre-Station Notice, then the brief Phoenix serves with the
-// choice of a text or a voice training, then the run, where typed turns are
+// choice of a text or a voice training or a simulated exam (#421), then the run, where typed turns are
 // always available and exam and impresso requests have their own channel, then
 // the feedback once the learner or the Station Timer ends it. A run that loses
 // Phoenix is invalidated instead (#196). Interface code renders it; only the
@@ -25,7 +25,7 @@ enum class EStationRunStep : uint8
 	Microphone,
 	/** The Pre-Station Notice is shown and not yet acknowledged. */
 	Notice,
-	/** The brief is shown; the learner picks a text or a voice training. */
+	/** The brief is shown; the learner picks a text or a voice training, or a simulated exam. */
 	Brief,
 	/** Phoenix is creating the session. */
 	Starting,
@@ -65,6 +65,13 @@ struct PROYECTOMED_API FStationExamRequest
 
 /** A voice training needs Phoenix to serve realtime voice. */
 PROYECTOMED_API bool IsVoiceTrainingAvailable(const FStationSummary& Station);
+
+/**
+ * Why a simulated exam cannot start, in Brazilian Portuguese, for the brief to
+ * show; empty when it can. A simulated exam is performed only by voice, so it
+ * needs realtime voice and a microphone the system has not blocked (#421).
+ */
+PROYECTOMED_API FText SimulatedExamUnavailableText(const FStationSummary& Station, EStationMicPermission Permission);
 
 /**
  * The learner-facing text for a failed call. Phoenix's message is shown only when
@@ -159,6 +166,20 @@ public:
 	 */
 	void Enter(EStationTrainingMode Mode);
 
+	/**
+	 * True on the brief once the station is loaded, when `SimulatedExamUnavailableText`
+	 * is empty. Trainings stay available either way.
+	 */
+	bool CanEnterSimulatedExam() const;
+
+	/**
+	 * Starts a simulated exam ("Prova simulada", #421): a voice run with audio consent
+	 * that Phoenix records as a simulated exam for the whole run. The microphone is
+	 * asked for first if the system never did; without it the brief stays, with the
+	 * reason. Until #422-#426, the run itself behaves like a voice training.
+	 */
+	void EnterSimulatedExam();
+
 	/** The microphone as the system allows it now. */
 	EStationMicPermission GetMicrophonePermission() const;
 
@@ -191,6 +212,8 @@ public:
 	bool IsStationLoading() const { return bLoadingStation; }
 	const FStationSummary* GetStation() const { return Station.GetPtrOrNull(); }
 	EStationTrainingMode GetMode() const { return Mode; }
+	/** The Station Mode of the current or last run; a training until a simulated exam starts. */
+	EStationSessionMode GetSessionMode() const { return SessionMode; }
 	bool IsVoiceFallback() const { return bVoiceFallback; }
 
 	/** For #191 to join the room. Secret: never log or display the token. */
@@ -321,6 +344,7 @@ private:
 	friend class FStationRunPhoenixLossSpec;
 
 	void LoadStation();
+	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);
 	void SetError(const FStationClientError& Error, const FText& Fallback);
 	void StartSession();
 	void ConnectVoice();
@@ -386,6 +410,7 @@ private:
 
 	EStationRunStep Step = EStationRunStep::Notice;
 	EStationTrainingMode Mode = EStationTrainingMode::Text;
+	EStationSessionMode SessionMode = EStationSessionMode::Training;
 	TOptional<FStationSummary> Station;
 	TOptional<FStationVoiceCredential> VoiceCredential;
 	TOptional<FString> PendingTurn;

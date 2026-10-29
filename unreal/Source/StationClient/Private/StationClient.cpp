@@ -76,6 +76,11 @@ void UStationClient::FetchActiveStation(TStationCallback<FStationSummary> OnDone
 
 void UStationClient::StartSession(bool bAudioConsent, TStationCallback<FStationSession> OnDone)
 {
+	StartSession(bAudioConsent, EStationSessionMode::Training, MoveTemp(OnDone));
+}
+
+void UStationClient::StartSession(bool bAudioConsent, EStationSessionMode Mode, TStationCallback<FStationSession> OnDone)
+{
 	if (Session.IsSet() || bStartInFlight)
 	{
 		OnDone(MakeError(StationHttp::ClientError(TEXT("session_in_progress"),
@@ -85,6 +90,8 @@ void UStationClient::StartSession(bool bAudioConsent, TStationCallback<FStationS
 
 	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetBoolField(TEXT("audio_consent"), bAudioConsent);
+	Body->SetStringField(TEXT("mode"),
+		Mode == EStationSessionMode::SimulatedExam ? TEXT("simulated_exam") : TEXT("training"));
 
 	bStartInFlight = true;
 	StationHttp::Send(TEXT("POST"), PhoenixBaseUrl + SessionsPath, Body,

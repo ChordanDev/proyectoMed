@@ -13,6 +13,21 @@ bool IsVoiceTrainingAvailable(const FStationSummary& Station)
 	return Station.VoiceMode == EStationVoiceMode::Realtime;
 }
 
+FText SimulatedExamUnavailableText(const FStationSummary& Station, EStationMicPermission Permission)
+{
+	if (!IsVoiceTrainingAvailable(Station))
+	{
+		return LOCTEXT("SimulatedExamNoVoice",
+			"A prova simulada é feita só por voz, que não está disponível agora. Você ainda pode fazer um treino.");
+	}
+	if (Permission == EStationMicPermission::Denied)
+	{
+		return LOCTEXT("SimulatedExamMicrophoneBlocked",
+			"A prova simulada é feita só por voz e o microfone está bloqueado. Libere o acesso nos ajustes de privacidade do sistema e abra o app de novo. Você ainda pode fazer um treino.");
+	}
+	return FText::GetEmpty();
+}
+
 namespace
 {
 	/** Phoenix ended the run itself, at its deadline: the run is over for this client too. */
@@ -128,13 +143,32 @@ bool UStationRunFlow::CanEnter(EStationTrainingMode InMode) const
 
 void UStationRunFlow::Enter(EStationTrainingMode InMode)
 {
-	if (!CanEnter(InMode))
+	if (CanEnter(InMode))
 	{
-		return;
+		BeginEntry(InMode, EStationSessionMode::Training);
 	}
+}
 
+bool UStationRunFlow::CanEnterSimulatedExam() const
+{
+	return Step == EStationRunStep::Brief
+		&& Station.IsSet()
+		&& SimulatedExamUnavailableText(Station.GetValue(), GetMicrophonePermission()).IsEmpty();
+}
+
+void UStationRunFlow::EnterSimulatedExam()
+{
+	if (CanEnterSimulatedExam())
+	{
+		BeginEntry(EStationTrainingMode::Voice, EStationSessionMode::SimulatedExam);
+	}
+}
+
+void UStationRunFlow::BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode)
+{
 	ResetRun();
 	Mode = InMode;
+	SessionMode = InSessionMode;
 	Step = EStationRunStep::Starting;
 	OnChanged.Broadcast();
 
@@ -152,7 +186,10 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 			if (Permission != EStationMicPermission::Granted)
 			{
 				Self->Step = EStationRunStep::Brief;
-				Self->ErrorText = LOCTEXT("MicrophoneBlocked", "Sem acesso ao microfone, o treino por voz não pode começar.");
+				Self->ErrorText = Self->SessionMode == EStationSessionMode::SimulatedExam
+					? LOCTEXT("SimulatedExamMicrophoneRefused",
+						"Sem acesso ao microfone, a prova simulada não pode começar. Você ainda pode fazer um treino.")
+					: LOCTEXT("MicrophoneBlocked", "Sem acesso ao microfone, o treino por voz não pode começar.");
 				Self->OnChanged.Broadcast();
 				return;
 			}
@@ -167,7 +204,7 @@ void UStationRunFlow::StartSession()
 {
 	TWeakObjectPtr<UStationRunFlow> WeakThis(this);
 	const uint32 ThisRun = Run;
-	Client->StartSession(Mode == EStationTrainingMode::Voice, [WeakThis, ThisRun](const TStationResult<FStationSession>& Started)
+	Client->StartSession(Mode == EStationTrainingMode::Voice, SessionMode, [WeakThis, ThisRun](const TStationResult<FStationSession>& Started)
 	{
 		UStationRunFlow* Self = WeakThis.Get();
 		if (!Self || Self->Run != ThisRun)

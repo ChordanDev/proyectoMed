@@ -4,6 +4,7 @@
 // docs/unreal-station-client.md for how to run them.
 
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "Misc/AutomationTest.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -143,6 +144,45 @@ void FStationClientUnitSpec::Define()
 			TestEqual("deadline", Session.DeadlineAt, FDateTime(2026, 10, 21, 12, 10, 0, 123));
 			TestEqual("expires", Session.ExpiresAt, FDateTime(2026, 10, 21, 12, 30, 0, 123));
 			TestEqual("server now", ServerNow, FDateTime(2026, 10, 21, 12, 0, 0, 200));
+		});
+
+		It("reads a session without a mode as a training, as Phoenix served it before #421", [this]()
+		{
+			FStationSession Session;
+			FDateTime ServerNow;
+			TestTrue("parsed", StationJson::ParseSession(*ParseObject(SessionJson), Session, ServerNow));
+			TestEqual("mode", Session.Mode, EStationSessionMode::Training);
+
+			const TSharedRef<FJsonObject> Json = ParseObject(SessionJson);
+			Json->SetField(TEXT("mode"), MakeShared<FJsonValueNull>());
+			TestTrue("parsed null", StationJson::ParseSession(*Json, Session, ServerNow));
+			TestEqual("null mode", Session.Mode, EStationSessionMode::Training);
+		});
+
+		It("maps every Station Mode", [this]()
+		{
+			const TPair<const TCHAR*, EStationSessionMode> Cases[] = {
+				{TEXT("training"), EStationSessionMode::Training},
+				{TEXT("simulated_exam"), EStationSessionMode::SimulatedExam},
+			};
+			for (const TPair<const TCHAR*, EStationSessionMode>& Case : Cases)
+			{
+				const TSharedRef<FJsonObject> Json = ParseObject(SessionJson);
+				Json->SetStringField(TEXT("mode"), Case.Key);
+				FStationSession Session;
+				FDateTime ServerNow;
+				TestTrue(FString::Printf(TEXT("parsed %s"), Case.Key), StationJson::ParseSession(*Json, Session, ServerNow));
+				TestEqual(FString::Printf(TEXT("mode %s"), Case.Key), Session.Mode, Case.Value);
+			}
+		});
+
+		It("rejects a session with a mode it does not know", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(SessionJson);
+			Json->SetStringField(TEXT("mode"), TEXT("exam"));
+			FStationSession Session;
+			FDateTime ServerNow;
+			TestFalse("parsed", StationJson::ParseSession(*Json, Session, ServerNow));
 		});
 
 		It("reads the status and completion reason of a shown session", [this]()
@@ -472,6 +512,75 @@ void FStationClientPhoenixSpec::Define()
 				const FTimespan Remaining = Client->GetRemainingTime();
 				TestTrue("timer started", Remaining <= FTimespan::FromMinutes(10) && Remaining > FTimespan::FromMinutes(9.5));
 			}
+			Done.Execute();
+		});
+	});
+
+	LatentIt("starts a training when no Station Mode is given, as before #421", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			TestEqual("mode", Started.GetValue().Mode, EStationSessionMode::Training);
+			TestFalse("consent", Started.GetValue().bAudioConsent);
+			Client->RefreshSession([this, Done](const TStationResult<FStationSession>& Refreshed)
+			{
+				if (TestFalse("refresh", Refreshed.HasError()))
+				{
+					TestEqual("mode kept", Refreshed.GetValue().Mode, EStationSessionMode::Training);
+				}
+				Done.Execute();
+			});
+		});
+	});
+
+	LatentIt("starts a simulated exam that keeps its Station Mode for the whole run", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(true, EStationSessionMode::SimulatedExam, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			TestEqual("mode", Started.GetValue().Mode, EStationSessionMode::SimulatedExam);
+			TestEqual("held by the client", Client->GetSession() ? Client->GetSession()->Mode : EStationSessionMode::Training,
+				EStationSessionMode::SimulatedExam);
+			Client->RefreshSession([this, Done](const TStationResult<FStationSession>& Refreshed)
+			{
+				if (!TestFalse("refresh", Refreshed.HasError()))
+				{
+					Done.Execute();
+					return;
+				}
+				TestEqual("mode kept on refresh", Refreshed.GetValue().Mode, EStationSessionMode::SimulatedExam);
+				Client->FinishSession(EStationFinishReason::User, [this, Done](const TStationResult<FStationSession>& Finished)
+				{
+					if (TestFalse("finish", Finished.HasError()))
+					{
+						TestEqual("mode kept on finish", Finished.GetValue().Mode, EStationSessionMode::SimulatedExam);
+					}
+					Done.Execute();
+				});
+			});
+		});
+	});
+
+	LatentIt("is refused a simulated exam without audio consent", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(false, EStationSessionMode::SimulatedExam, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (TestTrue("refused", Started.HasError()))
+			{
+				TestEqual("status", Started.GetError().HttpStatus, 400);
+				TestEqual("code", Started.GetError().Code, TEXT("audio_consent_required"));
+				TestFalse("message for the learner", Started.GetError().Message.IsEmpty());
+			}
+			TestNull("no session held", Client->GetSession());
 			Done.Execute();
 		});
 	});
