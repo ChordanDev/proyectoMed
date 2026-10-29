@@ -53,10 +53,11 @@ void FStationTalkKeySpec::Define()
 	{
 		Key.Press(1.0, true);
 		Key.Release(1.1);
-		TestTrue("the second press opens", Key.Press(1.1 + Gap * 0.5, true));
+		TestTrue("the second press opens", Key.Press(1.1 + Gap * 0.25, true));
 		TestTrue("held", Key.IsHeld());
-		Key.Release(3.0);
-		TestFalse("the tap is used up: a press soon after opens nothing", Key.Press(3.0 + Gap * 0.5, true));
+		Key.Release(1.1 + Gap * 0.5);
+		// Still within the gap of the first tap's release: the tap was used up.
+		TestFalse("a press right after opens nothing", Key.Press(1.1 + Gap * 0.75, true));
 	});
 
 	It("needs the second press within the double-tap gap", [this, Gap]()
