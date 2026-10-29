@@ -362,6 +362,7 @@ private:
 	// Test access to the voice event handling (StationRunFlowSpec.cpp).
 	friend class FStationRunUnitSpec;
 	friend class FStationRunPhoenixLossSpec;
+	friend class FStationHudSnapshotSpec;
 
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);

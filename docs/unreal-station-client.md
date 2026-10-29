@@ -825,13 +825,13 @@ worker, nothing spoken):
 decision in `Impresso` (no `ReleasedImpressos`, and `NewlyReleased` without
 `Content`). In `UStationRunFlow`, a text training types its exam requests;
 a voice training whose voice and microphone work says them aloud
-(`ShouldRequestExamsAloud`) while the learner holds "Segure para falar a
-solicitação" in the "Exames" panel: pressing arms the mode (`AskExamAloud`),
+(`ShouldRequestExamsAloud`) while the learner holds the microphone in the
+"Exames solicitados" panel: pressing arms the mode (`AskExamAloud`),
 releasing goes back to the dialogue (`ReleaseExamAloud`). A request already
 started when the button is released stays the request; if nothing was heard
 yet, the mode listens two more seconds for the first caption and is then
-disarmed. The utterance that takes the mode shows in the exam panel
-("Você solicitou: ... (solicitando...)"), never in the conversation; its
+disarmed. The utterance that takes the mode shows in the exam panel as a
+card marked "Solicitando...", never in the conversation; its
 outcome joins `GetExamRequests` as a typed request's does, and the flow reads
 `ListImpressos` again. If Phoenix answers that utterance as dialogue instead
 (it ended after `expires_at`), its learner line joins the conversation before
@@ -960,6 +960,18 @@ that answers nothing. It covers each failure of a training that loses Phoenix
 HTTP listeners, so an editor already open on the same machine makes it fail
 with "HttpListener unable to bind to 127.0.0.1:8000" (the Model Context
 Protocol server): close that editor first.
+
+`ProyectoMed.StationHud.Snapshot` (in `StationHudSnapshotSpec.cpp`) renders the
+in-run HUD in chosen states (exam panel closed and open, recording, the
+document reader, a text training) to PNG files, to judge its look without
+playing a run to each state. It asserts nothing about the look, needs an RHI
+(the runner's `-nullrhi` skips it), and writes only when
+`STATION_HUD_SNAPSHOT_DIR` names a folder:
+
+```bash
+STATION_HUD_SNAPSHOT_DIR=/tmp/hud "/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor.app/Contents/MacOS/UnrealEditor" \
+  "$PWD/unreal/ProyectoMed.uproject" -ExecCmds="Automation RunTests ProyectoMed.StationHud.Snapshot; Quit" -unattended -nosplash -nosound
+```
 
 The stack test checks four things:
 
