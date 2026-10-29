@@ -117,7 +117,10 @@ only code that talks to it, and its interface is documented in
 2. Open the editor and press **Play**. The learner sees the Pre-Station Notice,
    then the brief Phoenix serves, where they pick "Treino por texto" or "Treino
    por voz", then the patient and the ten-minute Station Timer. The voice option
-   only appears when Phoenix serves `voice_mode: realtime`.
+   only appears when Phoenix serves `voice_mode: realtime`. These screens, like
+   the feedback and "Treino invalidado", are cards in the style of the in-run
+   panels: opaque, rounded and outlined, with rounded buttons. The brief's
+   scenario and tasks scroll above a footer that keeps both trainings in view.
 3. A voice training logs `LogStationRun: Voice credential received for room
    station-session-<id>`; the token itself is never logged.
 4. In either training, the "Conversa" panel down the left edge takes typed turns
@@ -146,7 +149,11 @@ only code that talks to it, and its interface is documented in
 6. "Finalizar estação" under the timer ends the run early; at 00:00 the Station
    Timer ends it. Either way no turn or exam request can be sent any more, and
    the feedback screen shows each criterion with the transcript excerpts that
-   support it, under the unofficial educational result notice. "Reiniciar
+   support it, under the unofficial educational result notice. The coverage
+   counts lead as colored tiles; each criterion is a card with its status as a
+   colored label ("Avaliado", "Incerto", "Não observável", "Excluído pelo
+   autor"), its points or why it has none, and its excerpts as chat bubbles;
+   "Reiniciar estação" stays in a footer under the scrolling result. "Reiniciar
    estação" asks Phoenix to forget the run and, once it confirms, goes back to
    the brief for a new run. Grading needs Phoenix's text provider
    (`LLM_PROVIDER` and its key); for a local check only,

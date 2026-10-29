@@ -979,6 +979,13 @@ STATION_HUD_SNAPSHOT_DIR=/tmp/hud "/Users/Shared/Epic Games/UE_5.8/Engine/Binari
   "$PWD/unreal/ProyectoMed.uproject" -ExecCmds="Automation RunTests ProyectoMed.StationHud.Snapshot; Quit" -unattended -nosplash -nosound
 ```
 
+`ProyectoMed.StationCards.Snapshot` (in `StationCardSnapshotSpec.cpp`) does the
+same for the full-screen cards around the run: the microphone disclosure, the
+Pre-Station Notice, the brief (loaded, microphone blocked, loading, failed), the
+invalidated run and the feedback (grading, graded, scrolled to the end). It
+writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it with
+`-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
+
 The stack test checks four things:
 
 - The worker transcribes the pushed speech.
