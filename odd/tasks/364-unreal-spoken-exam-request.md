@@ -27,9 +27,9 @@ Server side (Phoenix route, worker routing and room event) is done in PR #396 an
 | T1 | S5 | inline | done | 18304e3; RED 4 controller/limit/auth tests (404), GREEN 57/57 |
 | T2 | S6 | inline | done | RED 4 client/voice specs on stubs, GREEN 117/117 (see L5) |
 | T3 | S1, S2, S3, S7, S8 | inline | done | RED 5 flow specs on stubs, GREEN 117/117 (see L5) |
-| T4 | S1-S3, S7 by eye (human) | human | pending | |
+| T4 | S1-S3, S7 by eye (human) | human | done | User in the editor: "funciona bien" (L12), "ya funciona, se pone rojo mientras lo mantengo" (L15) |
 | T5 | S7, S8 | inline | done | RED 2 fails + editor crash on release (immediate disarm), GREEN see L9 |
-| T6 | S9 | inline | done | HUD snapshots reviewed with the user (L13-L15); unit specs green |
+| T6 | S9 | inline | done | cd71d8c, d67a866, 173cd87; snapshots approved by the user (L13-L15); RDD approved (L16); unit specs 90/90 |
 
 - T1 Phoenix: deprecated aliases of the exam-mode routes, tests, docs.
 - T2 Station client: `ArmExamMode`, `CancelExamMode`, the `impresso_requested` voice event; client specs.
