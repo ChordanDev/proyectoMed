@@ -52,6 +52,23 @@ namespace
 	/** The widest a chat bubble's text runs, so it wraps inside the panel. */
 	constexpr float BubbleWrapWidth =
 		SidePanelWidth - 2.f * SidePanelPadding - BubbleIndent - 2.f * BubblePadding - ScrollBarAllowance;
+	/** The widest a text runs in the exam panel's list, outside a card. */
+	constexpr float ExamListWrapWidth = SidePanelWidth - 2.f * SidePanelPadding - ScrollBarAllowance;
+	constexpr float CardPadding = 14.f;
+	/** The widest a text runs inside a request card. */
+	constexpr float CardWrapWidth = ExamListWrapWidth - 2.f * CardPadding;
+	/** A card's title leaves room beside it for the widest status label, "Não disponível". */
+	constexpr float CardTitleWrapWidth = CardWrapWidth - 150.f;
+
+	/**
+	 * Wraps `Text` at a fixed width. Auto wrap lays a new text out unwrapped for
+	 * one frame, so a list rebuilt with it jumps before it settles.
+	 */
+	void WrapAt(UTextBlock& Text, float Width)
+	{
+		Text.SetAutoWrapText(false);
+		Text.SetWrapTextAt(Width);
+	}
 
 	/** Phoenix's category of a released document, as the learner reads it. */
 	FText DocumentCategoryName(const FString& Category)
@@ -1132,10 +1149,10 @@ void UStationHudWidget::RefreshExamCards()
 	}
 	if (ExamCardBox->GetChildrenCount() == 0)
 	{
-		StationUi::AddText(*WidgetTree, *ExamCardBox, bAloud
+		WrapAt(*StationUi::AddText(*WidgetTree, *ExamCardBox, bAloud
 			? LOCTEXT("NoExamsAloud", "Nenhum exame solicitado ainda. Segure o microfone e diga o que você solicita.")
 			: LOCTEXT("NoExamsTyped", "Nenhum exame solicitado ainda. Descreva abaixo o que você solicita."),
-			15, false, StationUi::Muted, 0.f);
+			15, false, StationUi::Muted, 0.f), ExamListWrapWidth);
 	}
 
 	// Documents released outside these requests, by a turn to the examiner.
@@ -1149,8 +1166,8 @@ void UStationHudWidget::RefreshExamCards()
 	}
 	if (Others.Num() > 0)
 	{
-		StationUi::AddText(*WidgetTree, *ExamCardBox, LOCTEXT("OtherDocuments", "Outros documentos liberados"), 15, true,
-			StationUi::Muted, 10.f);
+		WrapAt(*StationUi::AddText(*WidgetTree, *ExamCardBox, LOCTEXT("OtherDocuments", "Outros documentos liberados"), 15,
+			true, StationUi::Muted, 10.f), ExamListWrapWidth);
 		for (const FStationImpresso* Impresso : Others)
 		{
 			AddDocumentLink(*ExamCardBox, *Impresso);
@@ -1175,7 +1192,7 @@ namespace
 	/** A card's column, with the request and its status label in the first row. */
 	UVerticalBox* AddCard(UWidgetTree& Tree, UVerticalBox& Parent, const FString& Text, UBorder* Chip)
 	{
-		UBorder* Card = StationUi::MakeRounded(Tree, StationUi::Raised, 8.f, FMargin(14.f, 12.f));
+		UBorder* Card = StationUi::MakeRounded(Tree, StationUi::Raised, 8.f, FMargin(CardPadding, 12.f));
 		if (UVerticalBoxSlot* CardSlot = Parent.AddChildToVerticalBox(Card))
 		{
 			CardSlot->SetPadding(FMargin(0.f, Parent.GetChildrenCount() > 1 ? 10.f : 0.f, 0.f, 0.f));
@@ -1188,7 +1205,7 @@ namespace
 		Title->SetText(FText::FromString(Text));
 		Title->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 16));
 		Title->SetColorAndOpacity(FSlateColor(StationUi::Ink));
-		Title->SetAutoWrapText(true);
+		WrapAt(*Title, CardTitleWrapWidth);
 		if (UHorizontalBoxSlot* TitleSlot = Row->AddChildToHorizontalBox(Title))
 		{
 			TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -1227,7 +1244,8 @@ void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
 	}
 	if (Reply.NewlyReleased.Num() == 0 && !Reply.FeedbackMessage.IsEmpty())
 	{
-		StationUi::AddText(*WidgetTree, *Column, FText::FromString(Reply.FeedbackMessage), 14, false, StationUi::Muted, 6.f);
+		WrapAt(*StationUi::AddText(*WidgetTree, *Column, FText::FromString(Reply.FeedbackMessage), 14, false,
+			StationUi::Muted, 6.f), CardWrapWidth);
 	}
 }
 
@@ -1244,7 +1262,8 @@ void UStationHudWidget::AddDocumentLink(UVerticalBox& Parent, const FStationImpr
 		15, StationUi::Link, true);
 	if (UTextBlock* Text = Cast<UTextBlock>(Open->GetChildAt(0)))
 	{
-		Text->SetAutoWrapText(true);
+		// Less the link's own margins, so "›" stays on the label's line.
+		WrapAt(*Text, CardWrapWidth - 12.f);
 	}
 	if (UVerticalBoxSlot* LinkSlot = Parent.AddChildToVerticalBox(Open))
 	{
