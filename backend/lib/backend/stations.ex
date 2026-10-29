@@ -190,8 +190,9 @@ defmodule Backend.Stations do
   changes a session in progress. `attrs` takes `:audio_consent`, `:user_id`,
   the learner the session belongs to (#337), and `:mode`, the Station Mode
   (#421): `:training` when absent, or `:simulated_exam`, which needs audio
-  consent and otherwise answers `{:error, :audio_consent_required}` before any
-  other check.
+  consent. A simulated exam without it answers
+  `{:error, :audio_consent_required}`; this request check runs first, before the
+  node-level gates below.
 
   The session's `station_id` is the case number and `station_version` the
   published version number; `station_slug`, `station_area` and
@@ -208,7 +209,7 @@ defmodule Backend.Stations do
   session holds one slot until it is graded or expires.
 
   A node draining for a deploy (`start_draining/0`, #344) answers
-  `{:error, :draining}` before any other check, and a node at its
+  `{:error, :draining}` before any other node check, and a node at its
   concurrent-session cap (`MAX_CONCURRENT_SESSIONS`, `Backend.Stations.Capacity`)
   answers `{:error, :capacity_exhausted}`.
   """
@@ -248,13 +249,13 @@ defmodule Backend.Stations do
     end
   end
 
-  # The node-level gates come first (#344): a draining node or a full one
-  # refuses before any entitlement, quota or station work.
   # A simulated exam is performed only by voice (#318 business rule 2).
   defp ensure_mode_allowed(%{mode: :simulated_exam, audio_consent: true}), do: :ok
   defp ensure_mode_allowed(%{mode: :simulated_exam}), do: {:error, :audio_consent_required}
   defp ensure_mode_allowed(_attrs), do: :ok
 
+  # The node-level gates (#344) run before any entitlement, quota or station
+  # work: a draining node or a full one refuses without touching them.
   defp admit_new_session do
     if Drain.draining?(),
       do: {:error, :draining},

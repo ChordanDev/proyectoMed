@@ -142,7 +142,7 @@ class PROYECTOMED_API UStationRunFlow : public UObject
 
 public:
 	/**
-	 * Shows the microphone disclosure on first launch, otherwise the notice, and
+	 * Shows the microphone disclosure on first launch, otherwise the main menu, and
 	 * loads the active station in the background.
 	 */
 	void Begin(UStationClient* InClient, FStationMicrophoneSetup InMicrophone = FStationMicrophoneSetup::System());
@@ -232,7 +232,7 @@ public:
 	bool IsStationLoading() const { return bLoadingStation; }
 	const FStationSummary* GetStation() const { return Station.GetPtrOrNull(); }
 	EStationTrainingMode GetMode() const { return Mode; }
-	/** The Station Mode chosen on the menu; a training until the learner chooses. */
+	/** The Station Mode last chosen on the menu; a training until the learner first chooses one. */
 	EStationSessionMode GetSessionMode() const { return SessionMode; }
 	bool IsVoiceFallback() const { return bVoiceFallback; }
 
