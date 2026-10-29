@@ -438,6 +438,11 @@ private:
 
 	/** The learner cut the patient with the talk key: its voice stops and the turn it answers is dropped. */
 	void CutPatient();
+	/**
+	 * Stamps `HeardAt` when `Samples` of the patient's voice are loud and would play,
+	 * that is unless the patient is silenced. Any thread.
+	 */
+	static void NotePatientVoice(TConstArrayView<int16> Samples, std::atomic<double>& HeardAt, const std::atomic<bool>& bSilenced);
 	/** Opens or closes the voice link's microphone to match the talk key. */
 	void ApplyTalkKey();
 
@@ -548,6 +553,8 @@ private:
 	FTSTicker::FDelegateHandle TalkTailTicker;
 	/** `FPlatformTime::Seconds()` when the patient's voice was last heard; written on a LiveKit thread. */
 	TSharedRef<std::atomic<double>, ESPMode::ThreadSafe> PatientHeardAt = MakeShared<std::atomic<double>, ESPMode::ThreadSafe>(0.0);
+	/** The patient is silenced (`SilencePatient`) until its next reply resumes it; read on a LiveKit thread. */
+	TSharedRef<std::atomic<bool>, ESPMode::ThreadSafe> PatientSilenced = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
 	/** The spoken turn the learner cut with the talk key; its late events are dropped. */
 	int32 CutVoiceTurnId = 0;
 	/** The current spoken turn failed, for example its synthesis: the patient will not answer it. */

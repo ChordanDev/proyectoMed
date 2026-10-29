@@ -364,6 +364,25 @@ void FStationRunUnitSpec::Define()
 		TestEqual("the learner's next turn is kept", Flow->GetTranscript().Num(), 1);
 	});
 
+	It("does not count the patient's voice still arriving after a cut, until its next reply", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		TArray<int16> Loud;
+		Loud.Init(8000, 480);
+		UStationRunFlow::NotePatientVoice(Loud, *Flow->PatientHeardAt, *Flow->PatientSilenced);
+		TestTrue("the patient's voice plays", Flow->IsPatientAnswering());
+
+		Flow->CutPatient();
+		UStationRunFlow::NotePatientVoice(Loud, *Flow->PatientHeardAt, *Flow->PatientSilenced);
+		TestFalse("a frame sent before the worker stopped it is silenced here", Flow->IsPatientAnswering());
+
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui.")));
+		UStationRunFlow::NotePatientVoice(Loud, *Flow->PatientHeardAt, *Flow->PatientSilenced);
+		TestTrue("the next reply's voice counts again", Flow->IsPatientAnswering());
+	});
+
 	It("keeps a reply Phoenix settled when the learner cuts its voice", [this, Spoken]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
@@ -593,6 +612,7 @@ void FStationRunUnitSpec::Define()
 		TestFalse("its outcome still arrives", Flow->IsSpokenExamInFlight());
 		TestEqual("and joins the exam requests", Flow->GetExamRequests().Num(), 1);
 		TestTrue("the learner may ask again", Flow->CanAskExamAloud());
+		TestFalse("nobody answers the settled request", Flow->IsPatientAnswering());
 	});
 
 	It("frees the exam button when the spoken request's turn fails", [this, Spoken, ArmExamAloud]()

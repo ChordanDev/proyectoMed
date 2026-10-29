@@ -795,6 +795,7 @@ void UStationRunFlow::ResetRun()
 	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
 	TalkTailTicker.Reset();
 	PatientHeardAt->store(0.0);
+	PatientSilenced->store(false);
 	CutVoiceTurnId = 0;
 	bVoiceTurnFailed = false;
 	PendingTurn.Reset();
@@ -860,16 +861,10 @@ void UStationRunFlow::ConnectVoice()
 		}
 	};
 	// Runs on a LiveKit thread: copy the handler so the flow is never touched there.
-	Handlers.OnPatientPcm = [PatientAudio = Patient.Audio, HeardAt = PatientHeardAt](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
+	Handlers.OnPatientPcm = [PatientAudio = Patient.Audio, HeardAt = PatientHeardAt, Silenced = PatientSilenced](
+		TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 	{
-		for (const int16 Sample : Samples)
-		{
-			if (FMath::Abs(int32(Sample)) > PatientVoiceLevel)
-			{
-				HeardAt->store(FPlatformTime::Seconds());
-				break;
-			}
-		}
+		NotePatientVoice(Samples, *HeardAt, *Silenced);
 		if (PatientAudio)
 		{
 			PatientAudio(Samples, SampleRate, NumChannels);
@@ -1065,7 +1060,7 @@ void UStationRunFlow::ReportMicrophoneUnavailable()
 bool UStationRunFlow::CanTalk() const
 {
 	const FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr;
-	return IsListening() && Link->GetState() == EStationVoiceState::Ready;
+	return Link && IsListening() && Link->GetState() == EStationVoiceState::Ready;
 }
 
 bool UStationRunFlow::IsPatientAnswering() const
@@ -1146,6 +1141,22 @@ void UStationRunFlow::CutPatient()
 	CutVoiceTurnId = VoiceTurnId;
 }
 
+void UStationRunFlow::NotePatientVoice(TConstArrayView<int16> Samples, std::atomic<double>& HeardAt, const std::atomic<bool>& bSilenced)
+{
+	if (bSilenced)
+	{
+		return; // frames still in flight after a cut never play, so the patient is not answering
+	}
+	for (const int16 Sample : Samples)
+	{
+		if (FMath::Abs(int32(Sample)) > PatientVoiceLevel)
+		{
+			HeardAt.store(FPlatformTime::Seconds());
+			return;
+		}
+	}
+}
+
 void UStationRunFlow::ApplyTalkKey()
 {
 	if (FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr)
@@ -1174,6 +1185,7 @@ void UStationRunFlow::DropSupersededVoiceTurn()
 
 void UStationRunFlow::SilencePatient()
 {
+	PatientSilenced->store(true);
 	if (Patient.Silence)
 	{
 		Patient.Silence();
@@ -1183,9 +1195,13 @@ void UStationRunFlow::SilencePatient()
 void UStationRunFlow::ResumePatient()
 {
 	// Until Phoenix closes the run the room stays, and its sentences still arrive.
-	if (Step == EStationRunStep::Running && Patient.Resume)
+	if (Step == EStationRunStep::Running)
 	{
-		Patient.Resume();
+		PatientSilenced->store(false);
+		if (Patient.Resume)
+		{
+			Patient.Resume();
+		}
 	}
 }
 
