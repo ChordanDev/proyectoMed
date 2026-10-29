@@ -427,6 +427,44 @@ void FStationRunUnitSpec::Define()
 		TestTrue("noted", Flow->GetVoice().bExaminerNoted);
 	});
 
+	It("shows a held request Phoenix kept as dialogue without a reply at once", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		ArmExamAloud(Flow);
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Qual é a sua idade?"), INDEX_NONE, true));
+		int32 Changes = 0;
+		Flow->OnChanged.AddLambda([&Changes]() { ++Changes; });
+
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientUnanswered, 1));
+		TestEqual("the interface is told", Changes, 1);
+		TestFalse("no request waits", Flow->IsSpokenExamInFlight());
+		const TArray<FStationMessage>& Lines = Flow->GetTranscript();
+		if (TestEqual("the learner's line joins the conversation", Lines.Num(), 1))
+		{
+			TestEqual("what the learner said", Lines[0].Text, FString(TEXT("Qual é a sua idade?")));
+		}
+	});
+
+	It("lets go of a spoken exam request in flight when the voice is lost", [this, Spoken, ArmExamAloud]()
+	{
+		UStationRunFlow* Stopped = NewObject<UStationRunFlow>();
+		ArmExamAloud(Stopped);
+		Stopped->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		TestTrue("a request in flight", Stopped->IsSpokenExamInFlight());
+		Stopped->HandleVoiceEvent(Spoken(EKind::Fatal, 1));
+		TestTrue("the worker stopped: the voice is lost", Stopped->GetVoice().bLost);
+		TestFalse("no longer waits for an outcome that cannot come", Stopped->IsSpokenExamInFlight());
+		TestEqual("nothing joins the conversation", Stopped->GetTranscript().Num(), 0);
+		TestEqual("no exam request is made up", Stopped->GetExamRequests().Num(), 0);
+
+		UStationRunFlow* Failed = NewObject<UStationRunFlow>();
+		ArmExamAloud(Failed);
+		Failed->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Solicito hemograma"), INDEX_NONE, true));
+		Failed->HandleVoiceState(EStationVoiceState::Failed);
+		TestTrue("the link failed: the voice is lost", Failed->GetVoice().bLost);
+		TestFalse("nor after the link failed", Failed->IsSpokenExamInFlight());
+	});
+
 	It("releases nothing for an exam asked in the dialogue without the button (#351)", [this, Spoken]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();

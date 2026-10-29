@@ -833,7 +833,11 @@ yet, the mode listens two more seconds for the first caption and is then
 disarmed. The utterance that takes the mode shows in the exam panel as a
 card marked "Solicitando...", never in the conversation; its
 outcome joins `GetExamRequests` as a typed request's does, and the flow reads
-`ListImpressos` again. If Phoenix answers that utterance as dialogue instead
+`ListImpressos` again. A press while that request still waits is refused
+(`AskExamAloud` returns false) and the HUD shows it as waiting, never as
+recording. If the voice is lost while a spoken request waits, its outcome can
+no longer arrive: the request is let go, as a superseded one is, and
+`ListImpressos` is read again. If Phoenix answers that utterance as dialogue instead
 (it ended after `expires_at`), its learner line joins the conversation before
 the reply.
 

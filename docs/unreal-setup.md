@@ -136,7 +136,9 @@ only code that talks to it, and its interface is documented in
    ("exame físico", "eletrocardiograma"); a voice training holds the round
    microphone at the bottom of the panel and says it (#364): the microphone
    turns amber while Phoenix arms the request, then red with a pulse and
-   "Gravando 0:03 · solte para enviar" while it records. Either way the request
+   "Gravando 0:03 · solte para enviar" while it records. While the previous spoken
+   request still waits for Phoenix, holding it records nothing and reads
+   "Aguarde a resposta do pedido anterior". Either way the request
    goes to Phoenix's impresso route, never to the patient, and never joins the
    conversation. Each request is a card with its status ("Solicitando...",
    "Liberado", "Já liberado", "Não disponível"); a released one has "Ver

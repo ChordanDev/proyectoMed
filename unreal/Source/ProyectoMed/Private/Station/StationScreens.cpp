@@ -776,6 +776,7 @@ void UStationHudWidget::RefreshExams()
 	if (!Flow->CanFinish())
 	{
 		bMicrophoneHeld = false;
+		bMicrophoneAccepted = false;
 	}
 	RefreshMicrophone();
 
@@ -968,6 +969,7 @@ void UStationHudWidget::RefreshMicrophone()
 		return;
 	}
 	const EMicrophoneLook Look = !bMicrophoneHeld ? EMicrophoneLook::Idle
+		: !bMicrophoneAccepted ? EMicrophoneLook::Waiting
 		: Flow && Flow->IsArmingExamAloud() ? EMicrophoneLook::Arming
 		: Flow && (Flow->IsListeningForExam() || Flow->IsSpokenExamInFlight()) ? EMicrophoneLook::Recording
 		: EMicrophoneLook::Idle;
@@ -981,6 +983,7 @@ void UStationHudWidget::RefreshMicrophone()
 		const FLinearColor Fill = Look == EMicrophoneLook::Recording ? StationUi::Recording : StationUi::Raised;
 		const FLinearColor Edge = Look == EMicrophoneLook::Recording ? StationUi::RecordingInk
 			: Look == EMicrophoneLook::Arming ? StationUi::Caution
+			: Look == EMicrophoneLook::Waiting ? StationUi::PanelEdge
 			: StationUi::Quiet;
 		FButtonStyle Style;
 		Style.SetNormal(StationUi::RoundedBrush(Fill, 42.f, Edge, 2.5f));
@@ -1006,6 +1009,11 @@ void UStationHudWidget::RefreshMicrophone()
 	{
 		ExamAloudText->SetText(LOCTEXT("ExamAloudArming", "Conectando..."));
 		ExamAloudText->SetColorAndOpacity(FSlateColor(StationUi::Caution));
+	}
+	else if (Look == EMicrophoneLook::Waiting)
+	{
+		ExamAloudText->SetText(LOCTEXT("ExamAloudWaiting", "Aguarde a resposta do pedido anterior"));
+		ExamAloudText->SetColorAndOpacity(FSlateColor(StationUi::NeutralInk));
 	}
 	else
 	{
@@ -1072,20 +1080,20 @@ void UStationHudWidget::HandleCloseDocument()
 void UStationHudWidget::HandleAskExamAloud()
 {
 	bMicrophoneHeld = true;
-	if (Flow)
-	{
-		Flow->AskExamAloud();
-	}
+	// Refused while the previous spoken request still waits for Phoenix.
+	bMicrophoneAccepted = Flow && Flow->AskExamAloud();
 	RefreshMicrophone();
 }
 
 void UStationHudWidget::HandleReleaseExamAloud()
 {
 	bMicrophoneHeld = false;
-	if (Flow)
+	// Only the press the flow took is released to it.
+	if (Flow && bMicrophoneAccepted)
 	{
 		Flow->ReleaseExamAloud();
 	}
+	bMicrophoneAccepted = false;
 	RefreshMicrophone();
 }
 

@@ -295,7 +295,11 @@ private:
 	/** The learner holds the microphone button. */
 	bool bMicrophoneHeld = false;
 
-	enum class EMicrophoneLook : uint8 { Idle, Arming, Recording };
+	/** The flow took the current press; a refused one never records. */
+	bool bMicrophoneAccepted = false;
+
+	/** `Waiting`: held while the previous spoken request still waits for Phoenix. */
+	enum class EMicrophoneLook : uint8 { Idle, Waiting, Arming, Recording };
 	EMicrophoneLook MicrophoneLook = EMicrophoneLook::Idle;
 
 	/** `FPlatformTime::Seconds()` when the current recording started. */

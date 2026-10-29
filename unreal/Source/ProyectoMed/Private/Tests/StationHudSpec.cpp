@@ -72,6 +72,37 @@ void FStationHudUnitSpec::Define()
 			AfterLoss.Contains(TEXT("Nenhum exame solicitado ainda. Segure o microfone e diga o que você solicita.")));
 	});
 
+	It("does not show a press the flow refused as recording", [this]()
+	{
+		// The previous spoken request still waits for Phoenix's answer.
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SpokenExamTurn = 1;
+		Flow->SpokenExamText = TEXT("Solicito hemograma");
+		UStationHudWidget* Hud = MakeHud(Flow);
+
+		Hud->HandleAskExamAloud();
+		TestFalse(TEXT("not the recording look"), Hud->MicrophoneLook == UStationHudWidget::EMicrophoneLook::Recording);
+		TestEqual(TEXT("tells the learner to wait"), Hud->ExamAloudText->GetText().ToString(),
+			FString(TEXT("Aguarde a resposta do pedido anterior")));
+
+		Hud->HandleReleaseExamAloud();
+		TestEqual(TEXT("idle once released"), Hud->ExamAloudText->GetText().ToString(),
+			FString(TEXT("Segure para pedir um exame")));
+	});
+
+	It("records while a press the flow took is held", [this]()
+	{
+		// Phoenix armed the mode for this press: the flow listens for the request.
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SpokenExamExpiresAt = FPlatformTime::Seconds() + 20.0;
+		UStationHudWidget* Hud = MakeHud(Flow);
+		Hud->bMicrophoneHeld = true;
+		Hud->bMicrophoneAccepted = true;
+		Hud->RefreshMicrophone();
+		TestTrue(TEXT("the recording look"), Hud->MicrophoneLook == UStationHudWidget::EMicrophoneLook::Recording);
+		TestTrue(TEXT("says it records"), Hud->ExamAloudText->GetText().ToString().StartsWith(TEXT("Gravando")));
+	});
+
 	It("links a request's document from its card and lists a document a turn to the examiner released apart", [this]()
 	{
 		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Text);
