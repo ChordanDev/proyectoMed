@@ -842,8 +842,9 @@ defmodule Backend.Stations do
   # Best effort (#325): in a run with patient voice, the approved reply of a
   # typed turn goes to the voice worker of the session's room, which speaks it
   # while its generation is still current. Only the worker receives it; the
-  # learner already has the text from the HTTP reply. A LiveKit failure never
-  # fails the turn and is logged without content.
+  # learner already has the text from the HTTP reply. The send runs in its own
+  # process, so the typed-turn answer never waits on LiveKit; a LiveKit failure,
+  # raise or exit never fails the turn and is logged without content.
   defp speak_typed_reply(session, {:ok, fence}, text, speaker) do
     if session.audio_consent == true and LiveKit.configured?() do
       payload =
@@ -855,26 +856,44 @@ defmodule Backend.Stations do
         }
         |> put_speaker(speaker)
         |> put_voice(session_package(session), speaker)
+        |> Jason.encode!()
 
-      case RoomService.send_data(LiveKit.room_name(session.session_id), Jason.encode!(payload),
-             topic: "typed-reply",
-             destination_identities: ["voice-worker"]
-           ) do
-        :ok ->
-          :ok
+      # The task captures only what it sends, plus the caller's log metadata
+      # (request_id), never the whole session.
+      session_id = session.session_id
+      metadata = Logger.metadata()
 
-        {:error, reason} ->
-          Logger.warning(
-            "typed reply not sent to the voice worker for session #{session.session_id}: " <>
-              inspect(reason)
-          )
-      end
+      {:ok, _pid} =
+        Task.start(fn ->
+          Logger.metadata(metadata)
+          send_typed_reply(session_id, payload)
+        end)
     end
 
     :ok
   end
 
   defp speak_typed_reply(_session, {:error, :not_pending}, _text, _speaker), do: :ok
+
+  defp send_typed_reply(session_id, payload) do
+    case RoomService.send_data(LiveKit.room_name(session_id), payload,
+           topic: "typed-reply",
+           destination_identities: ["voice-worker"]
+         ) do
+      :ok -> :ok
+      {:error, reason} -> warn_typed_reply_not_sent(session_id, inspect(reason))
+    end
+  rescue
+    error -> warn_typed_reply_not_sent(session_id, inspect(error.__struct__))
+  catch
+    kind, _reason -> warn_typed_reply_not_sent(session_id, inspect(kind))
+  end
+
+  defp warn_typed_reply_not_sent(session_id, reason) do
+    Logger.warning(
+      "typed reply not sent to the voice worker for session #{session_id}: " <> reason
+    )
+  end
 
   # Rolls back the pending learner turn. A turn already settled by the deadline
   # grace timer reports `:station_time_elapsed`, which wins over `reason`.
