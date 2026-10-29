@@ -24,7 +24,11 @@ const TCHAR* FStationVoiceLink::PatientTrackName = TEXT("patient-voice");
 namespace
 {
 	const char* TranscriptTopic = "transcript";
-	const char* MicrophoneTrackName = "microphone";
+	/**
+	 * The voice worker treats only a learner microphone with this name as push-to-talk
+	 * (#419); the web client's keeps the default name, and its browser mutes it on its own.
+	 */
+	const char* MicrophoneTrackName = "push-to-talk";
 
 	std::string ToStd(const FString& Value)
 	{

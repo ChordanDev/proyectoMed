@@ -1,7 +1,8 @@
 """The learner's microphone as push-to-talk (#419).
 
-The Unreal client publishes its microphone muted, unmutes it while the learner
-holds the talk key and mutes it again on release. `PushToTalk` sits between the
+The Unreal client publishes its microphone as `PUSH_TO_TALK_TRACK`, muted, unmutes
+it while the learner holds the talk key and mutes it again on release. `PushToTalk`
+sits between the
 transcription stream and `process_speech_stream` and turns those mutes into the
 speech events the turn handling already knows:
 
@@ -14,8 +15,10 @@ speech events the turn handling already knows:
 - transcript that arrives after that end, and before the next press, belongs to the
   ended turn and is dropped. Pressing again before the end continues the turn.
 
-A microphone that is never muted (the web client) keeps Deepgram's end of speech:
-every event passes through unchanged.
+Any other microphone (the web client's) keeps Deepgram's end of speech: every
+event passes through unchanged, and its mutes mean nothing here, since the browser
+mutes a track on its own (livekit-client pauses one muted for 5 s, as during a
+phone call).
 """
 
 import asyncio
@@ -27,6 +30,9 @@ from enum import Enum
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 
 logger = logging.getLogger("voice-worker")
+
+# The name the Unreal client publishes its push-to-talk microphone with.
+PUSH_TO_TALK_TRACK = "push-to-talk"
 
 RELEASE_QUIET_S = 0.3
 RELEASE_MAX_SETTLE_S = 1.5

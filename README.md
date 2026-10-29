@@ -514,10 +514,11 @@ spoke over the pending turn, and nothing is spoken for it (#432). Only transcrib
 words count as speaking over the patient: Deepgram's voice activity events are off,
 because noise and breath also raised them and cancelled the learner's own turn.
 
-**Push-to-talk (#419).** The Unreal client publishes its microphone muted and unmutes it
-only while the learner holds the talk key; the web client never mutes, so nothing below
-changes for it. A learner whose microphone was muted is on push-to-talk for that
-connection: an unmute counts as the start of speech, so it stops the patient at once
+**Push-to-talk (#419).** The Unreal client publishes its microphone as `push-to-talk`,
+muted, and unmutes it only while the learner holds the talk key. Only a learner microphone
+with that name is on push-to-talk; the web client's keeps its default name, so nothing
+below changes for it, not even when the browser mutes its track on its own
+(livekit-client pauses a track muted for 5 s, as during a phone call). On push-to-talk: an unmute counts as the start of speech, so it stops the patient at once
 (the client unmutes over the patient only on a tap followed by a press), and Deepgram's
 end of speech no longer ends a turn while the key is held. A mute is the release: the
 worker sends Deepgram `Finalize` and ends the turn once the transcript has been quiet for

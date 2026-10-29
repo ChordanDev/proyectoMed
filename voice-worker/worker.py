@@ -30,7 +30,7 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, c
 from livekit.plugins import cartesia, deepgram
 
 from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
-from push_to_talk import PushToTalk
+from push_to_talk import PUSH_TO_TALK_TRACK, PushToTalk
 from speech import SpeechPlayer
 from transcripts import (
     DEFAULT_TURN_RETRIES,
@@ -674,40 +674,46 @@ async def transcribe(
 
 
 def follow_push_to_talk(room, learner, push_to_talk: PushToTalk):
-    """Hears the learner's microphone mutes as push-to-talk (#419); returns the undo.
+    """Hears the learner's push-to-talk microphone mutes (#419); returns the undo.
 
-    The Unreal client unmutes its microphone only while the talk key is held. The
-    mute is the release signal because the learner token cannot publish data (#364).
+    The Unreal client names its microphone `PUSH_TO_TALK_TRACK` and unmutes it only
+    while the talk key is held. The mute is the release signal because the learner
+    token cannot publish data (#364). Any other microphone's mutes are ignored: the
+    browser mutes the web client's track on its own.
     """
 
-    def is_learner_microphone(participant, publication) -> bool:
+    def is_push_to_talk(participant, publication) -> bool:
         return (
             learner is not None
             and participant.identity == learner.identity
             and publication.source == rtc.TrackSource.SOURCE_MICROPHONE
+            and getattr(publication, "name", "") == PUSH_TO_TALK_TRACK
         )
 
     def on_muted(participant, publication) -> None:
-        if is_learner_microphone(participant, publication):
+        if is_push_to_talk(participant, publication):
             push_to_talk.release()
 
     def on_unmuted(participant, publication) -> None:
-        if is_learner_microphone(participant, publication):
+        if is_push_to_talk(participant, publication):
             push_to_talk.press()
 
     def on_published(publication, participant) -> None:
-        if publication.muted:
-            on_muted(participant, publication)
+        if is_push_to_talk(participant, publication):
+            # Released, then pressed again if the learner already holds the key.
+            push_to_talk.release()
+            if not publication.muted:
+                push_to_talk.press()
 
     # Read before listening: a failed read then leaves no handler behind.
-    muted = []
+    published = []
     if learner is not None:
-        muted = [p for p in learner.track_publications.values() if p.muted]
+        published = list(learner.track_publications.values())
     room.on("track_muted", on_muted)
     room.on("track_unmuted", on_unmuted)
     room.on("track_published", on_published)
-    for publication in muted:
-        on_muted(learner, publication)
+    for publication in published:
+        on_published(publication, learner)
 
     def stop() -> None:
         room.off("track_muted", on_muted)
