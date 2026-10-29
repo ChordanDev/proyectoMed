@@ -1781,6 +1781,7 @@ void FStationRunVoiceSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			Flow->Enter(EStationTrainingMode::Voice);
 			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
@@ -1814,6 +1815,7 @@ void FStationRunVoiceSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			Flow->Enter(EStationTrainingMode::Voice);
 			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
