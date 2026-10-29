@@ -818,8 +818,13 @@ worker, nothing spoken):
 - Show the outcome as after a typed request: `feedback_message`, then
   `ListImpressos` for what was released.
 - The event carries no `generation_id` and no `text`; no audio follows it.
-- When the room event is lost (a publish error or a barge-in that dropped the
-  receipt), the request is still recorded: `ListImpressos` shows it.
+- A barge-in does not drop it: when the learner speaks again before Phoenix's
+  answer reaches the worker, the worker still publishes the event of the
+  earlier turn (#432), so it can arrive after a `Learner` event of a newer turn.
+  `UStationRunFlow` ignores it there, as a late event of an earlier turn, and
+  reads `ListImpressos` again instead.
+- When the room event is lost (a publish error), the request is still
+  recorded: `ListImpressos` shows it.
 
 `ParseStationVoiceEvent` reads this event as `ExaminerImpresso`, with the
 decision in `Impresso` (no `ReleasedImpressos`, and `NewlyReleased` without
@@ -833,7 +838,11 @@ yet, the mode listens two more seconds for the first caption and is then
 disarmed. The utterance that takes the mode shows in the exam panel as a
 card marked "Solicitando...", never in the conversation; its
 outcome joins `GetExamRequests` as a typed request's does, and the flow reads
-`ListImpressos` again. If Phoenix answers that utterance as dialogue instead
+`ListImpressos` again. A press while that request still waits is refused
+(`AskExamAloud` returns false) and the HUD shows it as waiting, never as
+recording. If the voice is lost while a spoken request waits, its outcome can
+no longer arrive: the request is let go, as a superseded one is, and
+`ListImpressos` is read again. If Phoenix answers that utterance as dialogue instead
 (it ended after `expires_at`), its learner line joins the conversation before
 the reply.
 
@@ -980,6 +989,13 @@ playing a run to each state. It asserts nothing about the look, needs an RHI
 STATION_HUD_SNAPSHOT_DIR=/tmp/hud "/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor.app/Contents/MacOS/UnrealEditor" \
   "$PWD/unreal/ProyectoMed.uproject" -ExecCmds="Automation RunTests ProyectoMed.StationHud.Snapshot; Quit" -unattended -nosplash -nosound
 ```
+
+`ProyectoMed.StationCards.Snapshot` (in `StationCardSnapshotSpec.cpp`) does the
+same for the full-screen cards around the run: the microphone disclosure, the
+Pre-Station Notice, the brief (loaded, microphone blocked, loading, failed), the
+invalidated run and the feedback (grading, graded, scrolled to the end). It
+writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it with
+`-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
 
 The stack test checks four things:
 

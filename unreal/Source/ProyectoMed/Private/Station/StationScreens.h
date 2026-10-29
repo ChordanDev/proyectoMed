@@ -43,6 +43,7 @@ private:
 	void HandleNotNow();
 };
 struct FStationCriterionResult;
+struct FStationResult;
 
 UCLASS()
 class UStationNoticeWidget : public UUserWidget
@@ -107,6 +108,10 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UVerticalBox> TaskList;
+
+	/** Under the scrolling brief, so the trainings stay in view however long it runs. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> FooterBox;
 
 	UPROPERTY()
 	TObjectPtr<UButton> TextButton;
@@ -313,7 +318,11 @@ private:
 	/** The learner holds the microphone button. */
 	bool bMicrophoneHeld = false;
 
-	enum class EMicrophoneLook : uint8 { Idle, Arming, Recording };
+	/** The flow took the current press; a refused one never records. */
+	bool bMicrophoneAccepted = false;
+
+	/** `Waiting`: held while the previous spoken request still waits for Phoenix. */
+	enum class EMicrophoneLook : uint8 { Idle, Waiting, Arming, Recording };
 	EMicrophoneLook MicrophoneLook = EMicrophoneLook::Idle;
 
 	/** `FPlatformTime::Seconds()` when the current recording started. */
@@ -367,6 +376,7 @@ protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	void AddSummary(const FStationResult& Result);
 	void AddCriterion(int32 Ordinal, const FStationCriterionResult& Criterion);
 
 	UFUNCTION()
@@ -389,6 +399,10 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> SessionNote;
+
+	/** Under the scrolling result, so the restart stays in view however many criteria there are. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> FooterBox;
 
 	UPROPERTY()
 	TObjectPtr<UButton> RestartButton;

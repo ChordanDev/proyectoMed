@@ -822,6 +822,43 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 2"])
         self.assertEqual(self.client.cancel_calls, [])
 
+    async def test_spoken_exam_request_spoken_over_still_publishes_its_outcome(self):
+        # Issue #432: Phoenix recorded the request (#364) before the learner spoke
+        # again. The barge-in leaves turn 1 stale, and its outcome still shows.
+        outcome = {
+            "request_id": "voice-exam-1",
+            "decision": "unavailable",
+            "newly_released": [],
+            "feedback_message": "Não disponível",
+        }
+        self.client.replies[1] = VoiceTurnReply(
+            turn_id=1, status="impresso_requested", impresso=outcome
+        )
+        self.client.commit_delays[1] = asyncio.Event()
+        task = self.connect()
+        await self.say("solicito tomografia")  # held in Phoenix: turn 1 is pending
+        self.queue.put_nowait(event(INTERIM, "doutor"))
+        await asyncio.sleep(0.01)
+        self.assertIn({"generation_id": None, "turn_id": 1}, self.client.cancel_calls)
+
+        self.client.commit_delays[1].set()
+        await settle()
+        await self.disconnect(task)
+
+        self.assertEqual(
+            self.room.patient_events(),
+            [
+                {
+                    "session_id": "s1",
+                    "turn_id": 1,
+                    "role": "examiner",
+                    "status": "impresso_requested",
+                    **outcome,
+                }
+            ],
+        )
+        self.assertEqual(self.tts.texts, [])
+
     async def test_duplicate_turn_without_reply_text_speaks_nothing(self):
         self.client.replies[1] = VoiceTurnReply(turn_id=1, status="duplicate")
         task = self.connect()

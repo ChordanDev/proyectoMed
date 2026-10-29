@@ -897,6 +897,13 @@ void UStationRunFlow::LoseVoice()
 		return;
 	}
 	Voice.bLost = true;
+	if (IsSpokenExamInFlight())
+	{
+		// Its outcome can no longer arrive: the request is let go as a superseded one
+		// is, and what Phoenix released is read again (#364).
+		ResetSpokenExam();
+		ReloadReleasedImpressos();
+	}
 	// In a training the learner goes on in writing (#196), which needs Phoenix.
 	if (Step == EStationRunStep::Running && Client)
 	{
@@ -1019,9 +1026,10 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		bVoiceOutcome = true;
 		break;
 	case EStationVoiceEventKind::PatientUnanswered:
-		// Phoenix kept the turn without a reply; nothing new is shown.
+		// Phoenix kept the turn without a reply. A held exam request it took as
+		// dialogue just joined the conversation, so the interface is told.
 		bVoiceOutcome = true;
-		return;
+		break;
 	case EStationVoiceEventKind::ExaminerImpresso:
 		if (bVoiceOutcome)
 		{

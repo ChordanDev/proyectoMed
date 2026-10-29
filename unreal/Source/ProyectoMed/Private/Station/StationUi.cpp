@@ -12,7 +12,7 @@
 #include "Components/Widget.h"
 #include "Styling/CoreStyle.h"
 
-UVerticalBox* StationUi::MakeCenteredCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight, bool bScrollable)
+UVerticalBox* StationUi::MakeCenteredCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight)
 {
 	UBorder* Screen = Tree.ConstructWidget<UBorder>();
 	Screen->SetBrushColor(Backdrop);
@@ -26,21 +26,35 @@ UVerticalBox* StationUi::MakeCenteredCard(UWidgetTree& Tree, float MaxWidth, flo
 	Screen->SetContent(Size);
 
 	UBorder* CardBorder = Tree.ConstructWidget<UBorder>();
-	CardBorder->SetBrushColor(Card);
+	CardBorder->SetBrush(RoundedBrush(Panel, 12.f, PanelEdge, 1.f));
 	CardBorder->SetPadding(FMargin(40.f, 32.f));
 	Size->SetContent(CardBorder);
 
 	UVerticalBox* Column = Tree.ConstructWidget<UVerticalBox>();
-	if (bScrollable)
+	CardBorder->SetContent(Column);
+	return Column;
+}
+
+UVerticalBox* StationUi::MakeFooterCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight, UVerticalBox*& OutFooter)
+{
+	UVerticalBox* Card = MakeCenteredCard(Tree, MaxWidth, MaxHeight);
+	UScrollBox* Scroll = Tree.ConstructWidget<UScrollBox>();
+	if (UVerticalBoxSlot* ScrollSlot = Card->AddChildToVerticalBox(Scroll))
 	{
-		UScrollBox* Scroll = Tree.ConstructWidget<UScrollBox>();
-		CardBorder->SetContent(Scroll);
-		Scroll->AddChild(Column);
+		ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	}
-	else
+	UVerticalBox* Column = Tree.ConstructWidget<UVerticalBox>();
+	Scroll->AddChild(Column);
+
+	OutFooter = Tree.ConstructWidget<UVerticalBox>();
+	if (UVerticalBoxSlot* FooterSlot = Card->AddChildToVerticalBox(OutFooter))
 	{
-		CardBorder->SetContent(Column);
+		FooterSlot->SetPadding(FMargin(0.f, 18.f, 0.f, 0.f));
 	}
+	UBorder* Rule = Tree.ConstructWidget<UBorder>();
+	Rule->SetBrushColor(PanelEdge);
+	Rule->SetPadding(FMargin(0.f, 0.5f));
+	OutFooter->AddChild(Rule);
 	return Column;
 }
 
@@ -100,12 +114,13 @@ UBorder* StationUi::MakeRounded(UWidgetTree& Tree, const FLinearColor& Fill, flo
 
 namespace
 {
-	void MakeFilled(UButton& Button, const FLinearColor& Fill, const FLinearColor& Hover)
+	void MakeFilled(UButton& Button, const FLinearColor& Fill, const FLinearColor& Hover,
+		const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.f)
 	{
 		FButtonStyle Style;
-		Style.SetNormal(StationUi::RoundedBrush(Fill, 8.f));
-		Style.SetHovered(StationUi::RoundedBrush(Hover, 8.f));
-		Style.SetPressed(StationUi::RoundedBrush(Fill, 8.f));
+		Style.SetNormal(StationUi::RoundedBrush(Fill, 8.f, Outline, OutlineWidth));
+		Style.SetHovered(StationUi::RoundedBrush(Hover, 8.f, Outline, OutlineWidth));
+		Style.SetPressed(StationUi::RoundedBrush(Fill, 8.f, Outline, OutlineWidth));
 		Style.SetDisabled(StationUi::RoundedBrush(StationUi::Raised, 8.f));
 		Button.SetStyle(Style);
 		Button.SetBackgroundColor(FLinearColor::White);
@@ -119,6 +134,11 @@ namespace
 void StationUi::MakePrimary(UButton& Button)
 {
 	MakeFilled(Button, Action, ActionHover);
+}
+
+void StationUi::MakeSecondary(UButton& Button)
+{
+	MakeFilled(Button, Raised, RaisedHover, PanelEdge, 1.f);
 }
 
 void StationUi::MakeDanger(UButton& Button)

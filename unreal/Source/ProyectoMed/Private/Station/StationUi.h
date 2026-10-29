@@ -19,7 +19,6 @@ class UWidgetTree;
 namespace StationUi
 {
 	const FLinearColor Backdrop(0.01f, 0.012f, 0.016f, 0.92f);
-	const FLinearColor Card(0.06f, 0.07f, 0.085f, 1.f);
 	const FLinearColor Ink(0.94f, 0.95f, 0.96f, 1.f);
 	const FLinearColor Muted(0.62f, 0.66f, 0.72f, 1.f);
 	const FLinearColor Accent(0.13f, 0.45f, 0.86f, 1.f);
@@ -66,6 +65,9 @@ namespace StationUi
 	/** Restyles a button from `AddButton` as the panel's main, rounded action. */
 	void MakePrimary(UButton& Button);
 
+	/** Restyles a button from `AddButton` as a rounded, quieter alternative to the primary one. */
+	void MakeSecondary(UButton& Button);
+
 	/** Restyles a button from `AddButton` as a rounded red one, for ending the run. */
 	void MakeDanger(UButton& Button);
 
@@ -75,8 +77,17 @@ namespace StationUi
 	/** A button with no box of its own: only its content shows, lighter while hovered. */
 	UButton* MakeFlatButton(UWidgetTree& Tree, const FText& Label, int32 Size, const FLinearColor& Color, bool bBold = false);
 
-	/** A full-screen dimmed backdrop that centers one card of at most `MaxWidth`; returns the card's column. */
-	UVerticalBox* MakeCenteredCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight, bool bScrollable);
+	/**
+	 * A full-screen dimmed backdrop that centers one card of at most `MaxWidth`, in the
+	 * in-run panels' look (opaque, rounded and outlined); returns the card's column.
+	 */
+	UVerticalBox* MakeCenteredCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight);
+
+	/**
+	 * `MakeCenteredCard` whose content scrolls above a footer that stays in view,
+	 * set off by a rule. Returns the scrolling column; `OutFooter` is the footer.
+	 */
+	UVerticalBox* MakeFooterCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight, UVerticalBox*& OutFooter);
 
 	UTextBlock* AddText(UWidgetTree& Tree, UPanelWidget& Parent, const FText& Text, int32 Size,
 		bool bBold = false, const FLinearColor& Color = Ink, float SpaceAbove = 12.f);

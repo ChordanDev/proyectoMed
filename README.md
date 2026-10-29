@@ -507,7 +507,10 @@ pending turn, a stale result or the learner disconnecting stops the provider str
 clears the buffered audio and drops any frame that arrives late. Phoenix remains the
 only text authority; the worker never composes, edits or retries reply text. Learner
 speech over an answer that is already playing stops it at once, also when Phoenix has
-already settled the turn (#193); a settled reply's text stays stored. Only transcribed
+already settled the turn (#193); a settled reply's text stays stored. The outcome of a
+spoken exam request (`impresso_requested`, #364) is the exception: Phoenix recorded the
+request before answering, so the worker publishes that outcome even when the learner
+spoke over the pending turn, and nothing is spoken for it (#432). Only transcribed
 words count as speaking over the patient: Deepgram's voice activity events are off,
 because noise and breath also raised them and cancelled the learner's own turn.
 
