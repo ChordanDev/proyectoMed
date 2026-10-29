@@ -197,6 +197,53 @@ class PushToTalkTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.next_events(2), [(FINAL, "onde dói"), (END, None)])
         self.assertEqual(self.stream.flushes, 1)
 
+    async def test_a_press_as_the_wait_ends_continues_the_turn(self):
+        await self.on_push_to_talk()
+        self.ptt.press()
+        self.hear(FINAL, "onde")
+        await self.next_events(2)
+        self.ptt.release()
+        deadline = time.monotonic() + QUIET_S
+        reader = asyncio.ensure_future(self.next_events(2))
+        asyncio.get_running_loop().call_at(deadline, self.ptt.press)
+        await asyncio.sleep(QUIET_S * 2)
+        self.hear(FINAL, "dói")
+
+        self.assertEqual(await reader, [(START, None), (FINAL, "dói")])
+
+    async def test_a_final_waiting_when_the_bound_passes_still_joins_the_turn(self):
+        await self.on_push_to_talk()
+        self.ptt.press()
+        self.hear(INTERIM, "dor no")
+        await self.next_events(2)
+        self.ptt.release()
+        # The reader is busy past the bound while the final arrives.
+        await asyncio.sleep(MAX_SETTLE_S + QUIET_S)
+        self.hear(FINAL, "dor no peito")
+        await asyncio.sleep(0.01)
+
+        self.assertEqual(
+            await self.next_events(2), [(FINAL, "dor no peito"), (END, None)]
+        )
+
+    async def test_a_release_after_the_transcription_input_ended_still_counts(self):
+        class EndedStream(MockStream):
+            def flush(self) -> None:
+                raise RuntimeError("input ended")
+
+        ptt = PushToTalk(
+            EndedStream(self.queue), quiet_s=QUIET_S, max_settle_s=MAX_SETTLE_S
+        )
+        ptt.release()
+        ptt.press()
+        self.assertEqual(described(await anext(ptt)), (START, None))
+
+        ptt.release()
+        ptt.press()
+
+        self.assertEqual(described(await anext(ptt)), (START, None))
+        await ptt.aclose()
+
     async def test_the_end_of_the_transcription_ends_the_stream(self):
         self.queue.put_nowait(None)
 

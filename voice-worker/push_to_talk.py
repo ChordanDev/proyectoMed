@@ -80,7 +80,10 @@ class PushToTalk:
     def release(self) -> None:
         """The learner released the talk key: the microphone was muted."""
         if self._state is _State.HELD or (self._state is _State.OPEN and self._heard):
-            self._stream.flush()
+            try:
+                self._stream.flush()
+            except RuntimeError:
+                pass  # the transcription input already ended: nothing is left to finalize
             self._state = _State.SETTLING
             self._released_at = time.monotonic()
             self._wake()
@@ -101,12 +104,16 @@ class PushToTalk:
         while not self._ready:
             if self._ended:
                 raise StopAsyncIteration
-            wait = self._settle_in()
-            try:
-                item = await asyncio.wait_for(self._items.get(), wait)
-            except TimeoutError:
-                self._settle()
-                continue
+            if not self._items.empty():
+                item = self._items.get_nowait()
+            else:
+                try:
+                    item = await asyncio.wait_for(self._items.get(), self._settle_in())
+                except TimeoutError:
+                    # What arrived as the wait ended still counts before the turn ends.
+                    if self._items.empty():
+                        self._settle()
+                    continue
             if item is _STREAM_END:
                 self._ended = True
             elif isinstance(item, BaseException):
@@ -154,6 +161,9 @@ class PushToTalk:
         return max(0.0, deadline - time.monotonic())
 
     def _settle(self) -> None:
+        # A press, or a new release, may have landed as the wait ended.
+        if self._state is not _State.SETTLING or self._settle_in():
+            return
         if self._pending_interim is not None:
             self._ready.append(
                 SpeechEvent(

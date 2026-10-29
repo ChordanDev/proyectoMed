@@ -487,6 +487,18 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.commit_calls, [])
         await self.disconnect(task)
 
+    async def test_a_microphone_published_muted_is_push_to_talk(self):
+        learner = self.learner()
+        task = self.connect(learner=learner)
+        await settle()
+        microphone = learner.track_publications["TR_mic"]
+        microphone.muted = True
+        self.room.handlers["track_published"](microphone, learner)
+        await self.say("onde dói")
+
+        self.assertEqual(self.client.commit_calls, [])
+        await self.disconnect(task)
+
     async def test_only_the_connected_learner_microphone_mutes_count(self):
         learner = self.learner()
         task = self.connect(learner=learner)
@@ -503,6 +515,7 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         await self.disconnect(task)
         self.assertNotIn("track_muted", self.room.handlers)
         self.assertNotIn("track_unmuted", self.room.handlers)
+        self.assertNotIn("track_published", self.room.handlers)
 
     async def test_newer_accepted_turn_supersedes_playback(self):
         task = self.connect()
