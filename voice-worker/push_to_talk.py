@@ -125,7 +125,9 @@ class PushToTalk:
                 raise item
             elif isinstance(item, tuple):
                 speech_event, after_turn = item
-                if not after_turn:
+                if after_turn:
+                    self._drop_late(speech_event)
+                else:
                     self._hear(speech_event)
         return self._ready.popleft()
 
@@ -143,8 +145,16 @@ class PushToTalk:
     def _wake(self) -> None:
         self._items.put_nowait(None)
 
+    def _drop_late(self, speech_event: SpeechEvent) -> None:
+        # Words that missed their turn, counted to tune the release bound.
+        if speech_event.type in _TRANSCRIPTS and _text(speech_event):
+            logger.info(
+                "push-to-talk dropped transcript that arrived after its turn ended"
+            )
+
     def _hear(self, speech_event: SpeechEvent) -> None:
         if self._state is _State.IDLE:
+            self._drop_late(speech_event)
             return
         if speech_event.type == SpeechEventType.END_OF_SPEECH:
             if self._state is _State.OPEN:

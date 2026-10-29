@@ -148,9 +148,13 @@ class PushToTalkTest(unittest.IsolatedAsyncioTestCase):
         self.ptt.release()
         await self.next_events(3)
 
-        self.hear(FINAL, "tarde")
-        self.hear(END)
-        await self.assert_nothing_within(QUIET_S * 3)
+        with self.assertLogs("voice-worker", level="INFO") as logs:
+            self.hear(FINAL, "tarde")
+            self.hear(END)
+            await self.assert_nothing_within(QUIET_S * 3)
+        # Counted for tuning the release bound, never with its words.
+        self.assertTrue(any("dropped" in line for line in logs.output))
+        self.assertFalse(any("tarde" in line for line in logs.output))
 
         self.ptt.press()
         self.hear(FINAL, "nova")
