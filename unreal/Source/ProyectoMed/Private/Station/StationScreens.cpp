@@ -232,6 +232,18 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 		VoiceNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("VoiceNote",
 			"No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."),
 			14, false, StationUi::Muted, 10.f);
+
+		// The other Station Mode, quieter than the trainings and apart from them (#421).
+		SimulatedExamButton = StationUi::AddButton(*WidgetTree, *FooterBox, LOCTEXT("SimulatedExam", "Prova simulada"), 20.f);
+		SimulatedExamButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleSimulatedExam);
+		StationUi::MakeSecondary(*SimulatedExamButton);
+		if (UVerticalBoxSlot* ExamSlot = Cast<UVerticalBoxSlot>(SimulatedExamButton->Slot))
+		{
+			ExamSlot->SetHorizontalAlignment(HAlign_Left);
+		}
+		SimulatedExamNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("SimulatedExamNote",
+			"Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
+			14, false, StationUi::Muted, 10.f);
 	}
 	return Super::RebuildWidget();
 }
@@ -278,6 +290,13 @@ void UStationBriefWidget::Refresh()
 	VoiceNote->SetText(Flow->GetMicrophonePermission() == EStationMicPermission::Denied
 		? LOCTEXT("VoiceBlocked", "O microfone está bloqueado. Para treinar por voz, libere o acesso nos ajustes de privacidade do sistema e abra o app de novo.")
 		: LOCTEXT("VoiceNote", "No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."));
+
+	// The simulated exam stays in view when it cannot start, so the learner reads why.
+	const FText ExamUnavailable = SimulatedExamUnavailableText(*Station, Flow->GetMicrophonePermission());
+	SimulatedExamButton->SetIsEnabled(Flow->CanEnterSimulatedExam());
+	SimulatedExamNote->SetText(ExamUnavailable.IsEmpty()
+		? LOCTEXT("SimulatedExamNote", "Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida.")
+		: ExamUnavailable);
 }
 
 void UStationBriefWidget::HandleTextTraining()
@@ -293,6 +312,14 @@ void UStationBriefWidget::HandleVoiceTraining()
 	if (Flow)
 	{
 		Flow->Enter(EStationTrainingMode::Voice);
+	}
+}
+
+void UStationBriefWidget::HandleSimulatedExam()
+{
+	if (Flow)
+	{
+		Flow->EnterSimulatedExam();
 	}
 }
 

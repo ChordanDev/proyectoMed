@@ -388,6 +388,7 @@ private:
 	friend class FStationHudSnapshotSpec;
 	friend class FStationHudUnitSpec;
 	friend class FStationCardSnapshotSpec;
+	friend class FStationBriefUnitSpec;
 
 	void LoadStation();
 	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);

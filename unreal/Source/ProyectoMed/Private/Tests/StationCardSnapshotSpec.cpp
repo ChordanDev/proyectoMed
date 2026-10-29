@@ -139,6 +139,11 @@ void FStationCardSnapshotSpec::Define()
 		Failed->Station.Reset();
 		Failed->ErrorText = FText::FromString(TEXT("Não foi possível carregar o cenário e as tarefas da estação."));
 		Save(MakeBrief(Failed), TEXT("pre-6-brief-error"));
+
+		// Without realtime voice the simulated exam stays in view, disabled, with the reason (#421).
+		UStationRunFlow* NoVoice = MakeFlow(EStationMicPermission::Granted);
+		NoVoice->Station->VoiceMode = EStationVoiceMode::Off;
+		Save(MakeBrief(NoVoice), TEXT("pre-7-brief-no-voice"));
 	});
 
 	It("renders the invalidated run and the feedback", [this]()

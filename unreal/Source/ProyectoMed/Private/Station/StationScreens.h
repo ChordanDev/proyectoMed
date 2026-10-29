@@ -69,18 +69,26 @@ class UStationBriefWidget : public UUserWidget
 public:
 	void SetFlow(UStationRunFlow* InFlow) { Flow = InFlow; }
 
-	/** Re-reads the flow: loading, error, the station brief, and which trainings can start. */
+	/**
+	 * Re-reads the flow: loading, error, the station brief, which trainings can start,
+	 * and whether the simulated exam can start or why not (#421).
+	 */
 	void Refresh();
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	friend class FStationBriefUnitSpec;
+
 	UFUNCTION()
 	void HandleTextTraining();
 
 	UFUNCTION()
 	void HandleVoiceTraining();
+
+	UFUNCTION()
+	void HandleSimulatedExam();
 
 	UFUNCTION()
 	void HandleRetry();
@@ -112,6 +120,14 @@ private:
 	/** Under the scrolling brief, so the trainings stay in view however long it runs. */
 	UPROPERTY()
 	TObjectPtr<UVerticalBox> FooterBox;
+
+	/** The simulated exam ("Prova simulada", #421), under the trainings. */
+	UPROPERTY()
+	TObjectPtr<UButton> SimulatedExamButton;
+
+	/** What a simulated exam is, or why it cannot start. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> SimulatedExamNote;
 
 	UPROPERTY()
 	TObjectPtr<UButton> TextButton;
