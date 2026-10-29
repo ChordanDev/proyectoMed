@@ -154,4 +154,16 @@ defmodule Backend.Stations.LiveKitTest do
       assert claims["exp"] - claims["nbf"] <= 60
     end
   end
+
+  describe "room_admin_token/2" do
+    test "administers only the one room, and cannot join, create or list rooms" do
+      {:ok, config} = LiveKit.config()
+
+      token = LiveKit.room_admin_token(config, "station-session-abc")
+      {_header, claims} = decode_and_verify(token, @api_secret)
+
+      assert claims["video"] == %{"roomAdmin" => true, "room" => "station-session-abc"}
+      assert claims["exp"] - claims["nbf"] <= 60
+    end
+  end
 end

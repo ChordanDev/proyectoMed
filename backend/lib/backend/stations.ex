@@ -812,8 +812,12 @@ defmodule Backend.Stations do
         speaker
       )
 
+    # Read while the turn is pending: resolving it forgets the fence.
+    fence = Conversation.turn_fence(session_id, token)
+
     case Conversation.resolve_turn(session_id, token, {:ok, patient_message}) do
       {:ok, session} ->
+        speak_typed_reply(session, fence, verified_text, speaker)
         on_commit.(session)
 
         {:ok,
@@ -834,6 +838,43 @@ defmodule Backend.Stations do
         rollback_turn(session_id, token, :station_ai_unavailable)
     end
   end
+
+  # Best effort (#325): in a run with patient voice, the approved reply of a
+  # typed turn goes to the voice worker of the session's room, which speaks it
+  # while its generation is still current. Only the worker receives it; the
+  # learner already has the text from the HTTP reply. A LiveKit failure never
+  # fails the turn and is logged without content.
+  defp speak_typed_reply(session, {:ok, fence}, text, speaker) do
+    if session.audio_consent == true and LiveKit.configured?() do
+      payload =
+        %{
+          session_id: session.session_id,
+          turn_id: fence.turn_id,
+          generation_id: fence.generation_id,
+          text: text
+        }
+        |> put_speaker(speaker)
+        |> put_voice(session_package(session), speaker)
+
+      case RoomService.send_data(LiveKit.room_name(session.session_id), Jason.encode!(payload),
+             topic: "typed-reply",
+             destination_identities: ["voice-worker"]
+           ) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "typed reply not sent to the voice worker for session #{session.session_id}: " <>
+              inspect(reason)
+          )
+      end
+    end
+
+    :ok
+  end
+
+  defp speak_typed_reply(_session, {:error, :not_pending}, _text, _speaker), do: :ok
 
   # Rolls back the pending learner turn. A turn already settled by the deadline
   # grace timer reports `:station_time_elapsed`, which wins over `reason`.

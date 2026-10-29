@@ -37,6 +37,12 @@ namespace StationVoiceTests
 	const TCHAR* StackTranscript = TEXT("Qual é o seu nome?");
 	const TCHAR* StackPatientReply = TEXT("Meu nome é Carlos.");
 
+	/** Seconds of tone the fake speech provider plays for `Text` (voice-worker/fake_providers.py). */
+	double FakeToneSeconds(const FString& Text)
+	{
+		return FMath::Clamp(Text.TrimStartAndEnd().Len() * 0.08, 0.4, 3.0);
+	}
+
 	/**
 	 * 10 ms of a spoken-like sound at 48 kHz: a 150 Hz voice with harmonics under a
 	 * 4 Hz syllable envelope, or silence. `Index` counts 10 ms chunks.
@@ -371,7 +377,17 @@ BEGIN_DEFINE_SPEC(FStationVoiceStackSpec, "ProyectoMed.StationVoice.Stack",
 	TArray<FStationVoiceEvent> Events;
 	TArray<EStationVoiceState> States;
 	std::atomic<int32> LoudPatientFrames{0};
+	// Mono samples of the patient's voice in loud chunks, and their rate.
+	std::atomic<int64> LoudPatientSamples{0};
+	std::atomic<int32> PatientSampleRate{0};
 	FTSTicker::FDelegateHandle Ticker;
+
+	/** Seconds of the patient's voice heard so far. */
+	double SpokenSeconds() const
+	{
+		const int32 Rate = PatientSampleRate;
+		return Rate > 0 ? double(LoudPatientSamples) / Rate : 0.0;
+	}
 
 	/** Joins the voice stack's room for a new consented run; `Then` runs once the worker is there. */
 	void JoinRoom(const FDoneDelegate& Done, TFunction<void()> Then);
@@ -431,13 +447,15 @@ void FStationVoiceStackSpec::JoinRoom(const FDoneDelegate& Done, TFunction<void(
 			FStationVoiceHandlers Handlers;
 			Handlers.OnEvent = [this](const FStationVoiceEvent& Event) { Events.Add(Event); };
 			Handlers.OnStateChanged = [this](EStationVoiceState State) { States.Add(State); };
-			Handlers.OnPatientPcm = [this](TConstArrayView<int16> Samples, int32, int32)
+			Handlers.OnPatientPcm = [this](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 			{
 				for (const int16 Sample : Samples)
 				{
 					if (FMath::Abs(Sample) > 1000)
 					{
 						++LoudPatientFrames;
+						LoudPatientSamples += Samples.Num() / FMath::Max(1, NumChannels);
+						PatientSampleRate = SampleRate;
 						return;
 					}
 				}
@@ -489,6 +507,8 @@ void FStationVoiceStackSpec::Define()
 		Events.Reset();
 		States.Reset();
 		LoudPatientFrames = 0;
+		LoudPatientSamples = 0;
+		PatientSampleRate = 0;
 		Client = NewObject<UStationClient>();
 		Client->AddToRoot();
 		Client->SetPhoenixBaseUrl(PhoenixUrl());
@@ -555,6 +575,45 @@ void FStationVoiceStackSpec::Define()
 							}
 							Done.Execute();
 						});
+					}, 10.0);
+			});
+		});
+	});
+
+	// #325: the voice worker speaks a typed turn's approved reply too; the turn's own
+	// answer stays text-only.
+	LatentIt("speaks the approved reply to a typed turn with the patient's voice", Timeout, [this](const FDoneDelegate& Done)
+	{
+		JoinRoom(Done, [this, Done]()
+		{
+			Client->SendTurn(TEXT("Como o senhor se chama?"), EStationTurnModality::Text,
+				[this, Done](const TStationResult<FStationTurnReply>& Reply)
+			{
+				if (!TestFalse("typed turn answered", Reply.HasError()))
+				{
+					Done.Execute();
+					return;
+				}
+				const FString Shown = Reply.GetValue().ReplyText;
+				TestEqual("the approved reply is shown", Shown, StackPatientReply);
+				TestTrue("the answer carries no audio", Reply.GetValue().ReplyAudioUrl.IsEmpty());
+				const double Expected = FakeToneSeconds(Shown);
+				WaitUntil(TEXT("the patient's voice"), [this, Expected]() { return SpokenSeconds() >= Expected - 0.1; }, Done,
+					[this, Done, Expected]()
+					{
+						// Let a longer, wrong reply show itself before comparing.
+						const double Settled = FPlatformTime::Seconds() + 1.0;
+						WaitUntil(TEXT("the end of the patient's voice"), [Settled]() { return FPlatformTime::Seconds() >= Settled; },
+							Done, [this, Done, Expected]()
+							{
+								// What was heard is as long as the text shown, so it is that text.
+								TestTrue(FString::Printf(TEXT("spoke %.2f s of the reply's %.2f s"), SpokenSeconds(), Expected),
+									FMath::Abs(SpokenSeconds() - Expected) < 0.25);
+								TestNull("the screen gets the text from the answer, not the room",
+									Find(EStationVoiceEventKind::PatientText));
+								TestNull("no turn failure", Find(EStationVoiceEventKind::TurnFailure));
+								Done.Execute();
+							});
 					}, 10.0);
 			});
 		});

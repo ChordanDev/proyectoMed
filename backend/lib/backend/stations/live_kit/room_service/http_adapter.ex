@@ -2,7 +2,8 @@ defmodule Backend.Stations.LiveKit.RoomService.HTTPAdapter do
   @moduledoc """
   Default `Backend.Stations.LiveKit.RoomService` adapter: LiveKit's Twirp
   RoomService over `Req`, authorized with a short-lived server token that
-  only ever carries `roomCreate`/`roomList` grants.
+  only ever carries `roomCreate`/`roomList` grants, or, to send data, the
+  `roomAdmin` grant of that one room.
   """
 
   @behaviour Backend.Stations.LiveKit.RoomService
@@ -26,15 +27,37 @@ defmodule Backend.Stations.LiveKit.RoomService.HTTPAdapter do
     end
   end
 
+  @impl true
+  def send_data(room, data, opts) do
+    payload =
+      %{
+        "room" => room,
+        "data" => Base.encode64(data),
+        "kind" => "RELIABLE",
+        # LiveKit drops a repeated nonce, so a retried request is delivered once.
+        "nonce" => Base.encode64(:crypto.strong_rand_bytes(16)),
+        "destination_identities" => Keyword.get(opts, :destination_identities, [])
+      }
+      |> maybe_put("topic", Keyword.get(opts, :topic))
+
+    case request("SendData", payload, &LiveKit.room_admin_token(&1, room)) do
+      {:ok, _body} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
   # Bounded so a slow/unreachable LiveKit fails fast instead of holding a
   # caller (e.g. the periodic orphan sweep, or session completion/discard)
   # for Req's much longer 15 s default. Overridable via :livekit_req_options.
   @default_timeout_ms :timer.seconds(3)
 
-  defp request(rpc, payload) do
+  defp request(rpc, payload, sign \\ &LiveKit.server_token/1) do
     with {:ok, config} <- LiveKit.config() do
       url = base_url(config.url) <> "/twirp/livekit.RoomService/" <> rpc
-      token = LiveKit.server_token(config)
+      token = sign.(config)
 
       req_opts =
         [auth: {:bearer, token}, json: payload, retry: false]

@@ -1578,12 +1578,13 @@ defmodule Backend.ConversationTest do
                  text: "Pergunta de texto"
                })
 
-      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+      # The text turn began first and took generation 1 (#325).
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       Process.sleep(150)
 
       assert {:ok, %{status: :active}} =
-               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta de voz")
+               Conversation.resolve_patient_reply(session.session_id, 2, "Resposta de voz")
 
       assert {:ok, resolved} =
                StationConversation.resolve_turn(
@@ -1616,7 +1617,8 @@ defmodule Backend.ConversationTest do
                  text: "Pergunta de texto"
                })
 
-      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+      # The text turn began first and took generation 1 (#325).
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       Process.sleep(150)
 
@@ -1628,7 +1630,7 @@ defmodule Backend.ConversationTest do
                )
 
       assert {:ok, resolved} =
-               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta de voz")
+               Conversation.resolve_patient_reply(session.session_id, 2, "Resposta de voz")
 
       assert resolved.status == :completed
       assert resolved.completion_reason == :timer
@@ -1648,7 +1650,8 @@ defmodule Backend.ConversationTest do
                  text: "Pergunta de texto"
                })
 
-      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+      # The text turn began first and took generation 1 (#325).
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       Process.sleep(300)
 
@@ -1665,7 +1668,7 @@ defmodule Backend.ConversationTest do
                )
 
       assert {:error, :station_time_elapsed} =
-               Conversation.resolve_patient_reply(session.session_id, 1, "Tarde demais")
+               Conversation.resolve_patient_reply(session.session_id, 2, "Tarde demais")
 
       assert {:ok, %{messages: []}} = Conversation.fetch(session.session_id)
     end
@@ -1852,14 +1855,15 @@ defmodule Backend.ConversationTest do
 
         session = Conversation.start()
 
+        # The voice turn begins first so it holds generation 1 (#325).
+        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+
         assert {:ok, _session, token} =
                  StationConversation.begin_turn(session.session_id, %{
                    role: :learner,
                    modality: :text,
                    text: "Pergunta de texto"
                  })
-
-        assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
         Process.sleep(150)
 
@@ -1950,13 +1954,14 @@ defmodule Backend.ConversationTest do
                  text: "Pergunta de texto"
                })
 
-      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
+      # The text turn began first and took generation 1 (#325).
+      assert {:ok, :committed, 2} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       assert {:ok, rolled_back} =
                StationConversation.resolve_turn(session.session_id, token, :rollback)
 
       assert Enum.map(rolled_back.messages, &{&1.modality, &1.text}) == [{:voice, "Fala"}]
-      assert rolled_back.active_generation_id == 1
+      assert rolled_back.active_generation_id == 2
       assert rolled_back.active_generation_message_index == 0
 
       # A stale index would make this unrelated tail pop cancel the generation.
@@ -1968,10 +1973,10 @@ defmodule Backend.ConversationTest do
                })
 
       assert {:ok, ^rolled_back} = Conversation.pop_last_message(session.session_id)
-      assert {:ok, 1} = Conversation.active_generation(session.session_id)
+      assert {:ok, 2} = Conversation.active_generation(session.session_id)
 
       assert {:ok, resolved} =
-               Conversation.resolve_patient_reply(session.session_id, 1, "Resposta de voz")
+               Conversation.resolve_patient_reply(session.session_id, 2, "Resposta de voz")
 
       assert Enum.map(resolved.messages, &{&1.role, &1.text}) == [
                {:learner, "Fala"},

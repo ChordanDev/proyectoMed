@@ -82,6 +82,9 @@ defmodule Backend.Stations.MediaSessionTest do
       @behaviour Backend.Stations.LiveKit.RoomService
 
       @impl true
+      def send_data(_room, _data, _opts), do: :ok
+
+      @impl true
       def delete_room(_room), do: :ok
 
       @impl true
@@ -123,6 +126,9 @@ defmodule Backend.Stations.MediaSessionTest do
   describe "sweep_orphans/0" do
     defmodule ListingRoomService do
       @behaviour Backend.Stations.LiveKit.RoomService
+
+      @impl true
+      def send_data(_room, _data, _opts), do: :ok
 
       @impl true
       def delete_room(room) do
@@ -230,6 +236,9 @@ defmodule Backend.Stations.MediaSessionTest do
     test "logs a warning (session id + reason only) when a room delete fails" do
       defmodule FailingRoomService do
         @behaviour Backend.Stations.LiveKit.RoomService
+
+        @impl true
+        def send_data(_room, _data, _opts), do: :ok
 
         @impl true
         def delete_room(room) do
