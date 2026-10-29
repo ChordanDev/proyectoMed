@@ -93,6 +93,37 @@ void FStationBriefUnitSpec::Define()
 			TArray<EStationSessionMode>{EStationSessionMode::Training, EStationSessionMode::SimulatedExam});
 	});
 
+	It("shows each mode's traits on its card", [this]()
+	{
+		UStationMenuWidget* Menu = CreateWidget<UStationMenuWidget>(GEngine->GetWorldContexts()[0].World());
+		Menu->TakeWidget();
+
+		const TArray<FString> Training = Texts(Menu->TrainingButton);
+		TestTrue("text or voice", Training.Contains(TEXT("Texto ou voz")));
+		TestTrue("the clock in view", Training.Contains(TEXT("Relógio à vista")));
+		const TArray<FString> Exam = Texts(Menu->SimulatedExamButton);
+		TestTrue("voice only", Exam.Contains(TEXT("Só voz")));
+		TestTrue("no help", Exam.Contains(TEXT("Sem ajuda")));
+		TestTrue("ten minutes", Exam.Contains(TEXT("10 minutos")));
+	});
+
+	It("offers a way out of the app, and the settings only as coming soon", [this]()
+	{
+		UStationMenuWidget* Menu = CreateWidget<UStationMenuWidget>(GEngine->GetWorldContexts()[0].World());
+		Menu->TakeWidget();
+		int32 Quits = 0;
+		Menu->OnQuit.BindLambda([&Quits]() { ++Quits; });
+
+		TestTrue("quit", IsShown(Menu->QuitButton) && Menu->QuitButton->GetIsEnabled()
+			&& Texts(Menu->QuitButton).Contains(TEXT("Sair")));
+		Menu->HandleQuit();
+		TestEqual("quit asked once", Quits, 1);
+
+		TestTrue("settings shown", IsShown(Menu->SettingsButton));
+		TestFalse("settings not there yet", Menu->SettingsButton->GetIsEnabled());
+		TestTrue("said so", Texts(Menu->SettingsButton).Contains(TEXT("Ajustes · em breve")));
+	});
+
 	It("offers a training's two ways in, and not the simulated exam, on a training's brief", [this]()
 	{
 		UStationBriefWidget* Brief = MakeBrief(

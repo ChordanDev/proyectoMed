@@ -6,6 +6,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/GameInstance.h"
 #include "EngineUtils.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
 #include "Station/Voice/StationMicrophone.h"
@@ -54,6 +55,7 @@ void AStationPlayerController::BeginPlay()
 	Hud->SetFlow(Flow);
 	Feedback->SetFlow(Flow);
 	Menu->OnModeChosen.BindWeakLambda(this, [this](EStationSessionMode Mode) { Flow->ChooseMode(Mode); });
+	Menu->OnQuit.BindWeakLambda(this, [this]() { UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false); });
 	Notice->OnAcknowledged.BindWeakLambda(this, [this]() { Flow->AcknowledgeNotice(); });
 	MicrophoneScreen->OnAnswered.BindWeakLambda(this, [this](bool bAllow) { Flow->AnswerMicrophone(bAllow); });
 	Invalidated->OnRestart.BindWeakLambda(this, [this]() { Flow->Restart(); });

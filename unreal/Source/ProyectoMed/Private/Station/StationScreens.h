@@ -59,6 +59,9 @@ class UStationMenuWidget : public UUserWidget
 public:
 	TDelegate<void(EStationSessionMode)> OnModeChosen;
 
+	/** The learner leaves the app. */
+	FSimpleDelegate OnQuit;
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
@@ -71,11 +74,21 @@ private:
 	UFUNCTION()
 	void HandleSimulatedExam();
 
+	UFUNCTION()
+	void HandleQuit();
+
 	UPROPERTY()
 	TObjectPtr<UButton> TrainingButton;
 
 	UPROPERTY()
 	TObjectPtr<UButton> SimulatedExamButton;
+
+	/** Shown, disabled, until the settings exist. */
+	UPROPERTY()
+	TObjectPtr<UButton> SettingsButton;
+
+	UPROPERTY()
+	TObjectPtr<UButton> QuitButton;
 };
 
 UCLASS()
