@@ -363,6 +363,7 @@ private:
 	friend class FStationRunUnitSpec;
 	friend class FStationRunPhoenixLossSpec;
 	friend class FStationHudSnapshotSpec;
+	friend class FStationHudUnitSpec;
 
 	void LoadStation();
 	void SetError(const FStationClientError& Error, const FText& Fallback);

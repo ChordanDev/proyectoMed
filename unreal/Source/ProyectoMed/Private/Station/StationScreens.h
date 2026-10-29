@@ -146,16 +146,21 @@ public:
 	/** Shows a released document in the reader over the scene. */
 	void OpenDocument(const FString& ImpressoId);
 
-	/** Opens the side panel of the exam requests. */
+	/** Opens the side panel of the exam requests, in place of its tab. */
 	void OpenExams();
+
+	/** Closes the side panel of the exam requests and shows its tab again. */
+	void CloseExams();
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
-	// Renders the HUD in chosen states to PNG files (StationHudSnapshotSpec.cpp).
+	// Test access: the HUD's states as images (StationHudSnapshotSpec.cpp) and
+	// what it shows (StationHudSpec.cpp).
 	friend class FStationHudSnapshotSpec;
+	friend class FStationHudUnitSpec;
 
 	void BuildConversation(UOverlay& Root);
 	void RefreshConversation();

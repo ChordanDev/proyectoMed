@@ -46,6 +46,15 @@ namespace StationUi
 	const FLinearColor PaperMuted(FColor(0x5F, 0x5E, 0x5A));
 	const FLinearColor PaperEdge(FColor(0xD3, 0xD1, 0xC7));
 
+	// The status labels of the exam requests.
+	const FLinearColor ReleasedFill(FColor(0x27, 0x50, 0x0A));
+	const FLinearColor ReleasedInk(FColor(0xC0, 0xDD, 0x97));
+	const FLinearColor DeclinedFill(FColor(0x63, 0x38, 0x06));
+	const FLinearColor DeclinedInk(FColor(0xFA, 0xC7, 0x75));
+	/** A status that is neither good nor bad news: still waiting, or released before. */
+	const FLinearColor NeutralFill(FColor(0x44, 0x44, 0x41));
+	const FLinearColor NeutralInk(FColor(0xD3, 0xD1, 0xC7));
+
 	/** A rounded box of `Fill`, outlined in `Outline` when `OutlineWidth` is above 0. */
 	FSlateBrush RoundedBrush(const FLinearColor& Fill, float Radius,
 		const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.f);

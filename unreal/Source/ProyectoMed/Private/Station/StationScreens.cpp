@@ -39,8 +39,17 @@ namespace
 		}
 	}
 
-	/** The widest a chat bubble's text runs: the side panel less its padding and the other side's indent. */
-	constexpr float BubbleWrapWidth = 316.f;
+	// The side panels' layout, shared by the conversation and the exam requests.
+	constexpr float SidePanelWidth = 440.f;
+	constexpr float SidePanelPadding = 20.f;
+	/** How far a bubble stays from the other side, so the two speakers read apart. */
+	constexpr float BubbleIndent = 48.f;
+	constexpr float BubblePadding = 12.f;
+	/** Room the conversation's scroll bar takes once it shows. */
+	constexpr float ScrollBarAllowance = 12.f;
+	/** The widest a chat bubble's text runs, so it wraps inside the panel. */
+	constexpr float BubbleWrapWidth =
+		SidePanelWidth - 2.f * SidePanelPadding - BubbleIndent - 2.f * BubblePadding - ScrollBarAllowance;
 
 	/** Phoenix's category of a released document, as the learner reads it. */
 	FText DocumentCategoryName(const FString& Category)
@@ -327,7 +336,7 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 	// right. The typed Station Input stays available for the whole run, in either
 	// training, so the station can be completed without a microphone.
 	USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>();
-	Size->SetWidthOverride(440.f);
+	Size->SetWidthOverride(SidePanelWidth);
 	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Size))
 	{
 		Slot->SetHorizontalAlignment(HAlign_Left);
@@ -335,7 +344,7 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 		Slot->SetPadding(FMargin(24.f, 24.f, 0.f, 24.f));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(20.f, 18.f),
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(SidePanelPadding, 18.f),
 		StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
@@ -446,8 +455,8 @@ void UStationHudWidget::AddMessage(EStationSpeaker Speaker, const FString& Text,
 	UVerticalBox* Message = WidgetTree->ConstructWidget<UVerticalBox>();
 	if (UVerticalBoxSlot* MessageSlot = TranscriptBox->AddChildToVerticalBox(Message))
 	{
-		MessageSlot->SetPadding(FMargin(bLearner ? 48.f : 0.f, TranscriptBox->GetChildrenCount() > 1 ? 12.f : 0.f,
-			bLearner ? 0.f : 48.f, 0.f));
+		MessageSlot->SetPadding(FMargin(bLearner ? BubbleIndent : 0.f, TranscriptBox->GetChildrenCount() > 1 ? 12.f : 0.f,
+			bLearner ? 0.f : BubbleIndent, 0.f));
 		MessageSlot->SetHorizontalAlignment(bLearner ? HAlign_Right : HAlign_Left);
 	}
 	UTextBlock* Who = StationUi::AddText(*WidgetTree, *Message,
@@ -457,7 +466,7 @@ void UStationHudWidget::AddMessage(EStationSpeaker Speaker, const FString& Text,
 		WhoSlot->SetHorizontalAlignment(bLearner ? HAlign_Right : HAlign_Left);
 	}
 	UBorder* Bubble = StationUi::MakeRounded(*WidgetTree, bLearner ? StationUi::LearnerBubble : StationUi::Raised, 10.f,
-		FMargin(12.f, 8.f));
+		FMargin(BubblePadding, 8.f));
 	if (UVerticalBoxSlot* BubbleSlot = Message->AddChildToVerticalBox(Bubble))
 	{
 		BubbleSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
@@ -529,7 +538,7 @@ void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
 	// Exam and impresso requests have their own control and their own Phoenix
 	// route (ADR-008): what is asked here never reaches the patient.
 	USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>();
-	Size->SetWidthOverride(440.f);
+	Size->SetWidthOverride(SidePanelWidth);
 	ExamDrawer = Size;
 	StationUi::SetShown(ExamDrawer, false);
 	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Size))
@@ -539,7 +548,7 @@ void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
 		Slot->SetPadding(FMargin(0.f, 24.f, 24.f, 24.f));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(20.f, 18.f),
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(SidePanelPadding, 18.f),
 		StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
@@ -786,7 +795,10 @@ void UStationHudWidget::RefreshExamCards()
 {
 	const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
 	const TArray<FStationImpresso>& Released = Flow->GetReleasedImpressos();
-	FString Key = FString::Printf(TEXT("%d|%d|"), Requests.Num(), Released.Num());
+	// Everything the cards show: the requests, the documents, the pending request
+	// and the control the empty panel names.
+	const bool bAloud = Flow->ShouldRequestExamsAloud();
+	FString Key = FString::Printf(TEXT("%d|%d|%d|"), Requests.Num(), Released.Num(), bAloud ? 1 : 0);
 	if (Flow->IsExamRequestInFlight())
 	{
 		Key += TEXT("typed:") + Flow->GetPendingExamRequestText();
@@ -823,7 +835,7 @@ void UStationHudWidget::RefreshExamCards()
 	}
 	if (ExamCardBox->GetChildrenCount() == 0)
 	{
-		StationUi::AddText(*WidgetTree, *ExamCardBox, Flow->ShouldRequestExamsAloud()
+		StationUi::AddText(*WidgetTree, *ExamCardBox, bAloud
 			? LOCTEXT("NoExamsAloud", "Nenhum exame solicitado ainda. Segure o microfone e diga o que você solicita.")
 			: LOCTEXT("NoExamsTyped", "Nenhum exame solicitado ainda. Descreva abaixo o que você solicita."),
 			15, false, StationUi::Muted, 0.f);
@@ -892,12 +904,6 @@ namespace
 		return Column;
 	}
 
-	const FLinearColor ReleasedFill(FColor(0x27, 0x50, 0x0A));
-	const FLinearColor ReleasedInk(FColor(0xC0, 0xDD, 0x97));
-	const FLinearColor DeclinedFill(FColor(0x63, 0x38, 0x06));
-	const FLinearColor DeclinedInk(FColor(0xFA, 0xC7, 0x75));
-	const FLinearColor WaitingFill(FColor(0x44, 0x44, 0x41));
-	const FLinearColor WaitingInk(FColor(0xD3, 0xD1, 0xC7));
 }
 
 void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
@@ -906,10 +912,10 @@ void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
 	// was declined and nothing else.
 	const FStationImpressoReply& Reply = Request.Reply;
 	UBorder* Chip = Reply.Decision == EStationImpressoDecision::Released
-		? MakeChip(*WidgetTree, LOCTEXT("ExamReleased", "Liberado"), ReleasedFill, ReleasedInk)
+		? MakeChip(*WidgetTree, LOCTEXT("ExamReleased", "Liberado"), StationUi::ReleasedFill, StationUi::ReleasedInk)
 		: Reply.Decision == EStationImpressoDecision::AlreadyReleased
-		? MakeChip(*WidgetTree, LOCTEXT("ExamAlreadyReleased", "Já liberado"), WaitingFill, WaitingInk)
-		: MakeChip(*WidgetTree, LOCTEXT("ExamUnavailable", "Não disponível"), DeclinedFill, DeclinedInk);
+		? MakeChip(*WidgetTree, LOCTEXT("ExamAlreadyReleased", "Já liberado"), StationUi::NeutralFill, StationUi::NeutralInk)
+		: MakeChip(*WidgetTree, LOCTEXT("ExamUnavailable", "Não disponível"), StationUi::DeclinedFill, StationUi::DeclinedInk);
 	UVerticalBox* Column = AddCard(*WidgetTree, *ExamCardBox, Request.Text, Chip);
 	if (Reply.NewlyReleased.Num() == 1)
 	{
@@ -931,7 +937,7 @@ void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
 void UStationHudWidget::AddPendingExamCard(const FString& Text)
 {
 	AddCard(*WidgetTree, *ExamCardBox, Text,
-		MakeChip(*WidgetTree, LOCTEXT("ExamPending", "Solicitando..."), WaitingFill, WaitingInk));
+		MakeChip(*WidgetTree, LOCTEXT("ExamPending", "Solicitando..."), StationUi::NeutralFill, StationUi::NeutralInk));
 }
 
 void UStationHudWidget::AddDocumentLink(UVerticalBox& Parent, const FStationImpresso& Impresso, const FText& Label)
@@ -1034,6 +1040,12 @@ void UStationHudWidget::OpenExams()
 	StationUi::SetShown(ExamTab, false);
 }
 
+void UStationHudWidget::CloseExams()
+{
+	StationUi::SetShown(ExamDrawer, false);
+	StationUi::SetShown(ExamTab, true);
+}
+
 void UStationHudWidget::RequestExam()
 {
 	if (Flow && ExamInput && Flow->RequestExam(ExamInput->GetText().ToString()))
@@ -1049,8 +1061,8 @@ void UStationHudWidget::HandleOpenExams()
 
 void UStationHudWidget::HandleCloseExams()
 {
-	StationUi::SetShown(ExamDrawer, false);
-	StationUi::SetShown(ExamTab, true);}
+	CloseExams();
+}
 
 void UStationHudWidget::HandleCloseDocument()
 {

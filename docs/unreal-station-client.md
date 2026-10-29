@@ -961,6 +961,12 @@ HTTP listeners, so an editor already open on the same machine makes it fail
 with "HttpListener unable to bind to 127.0.0.1:8000" (the Model Context
 Protocol server): close that editor first.
 
+`ProyectoMed.StationHud.Unit` (in `StationHudSpec.cpp`) needs nothing else: it
+checks what the in-run HUD shows for a given run, such as the exam panel's
+empty hint after the voice is lost, the request cards' document links, the
+document reader's lines, and that the conversation is redrawn only when it
+changes.
+
 `ProyectoMed.StationHud.Snapshot` (in `StationHudSnapshotSpec.cpp`) renders the
 in-run HUD in chosen states (exam panel closed and open, recording, the
 document reader, a text training) to PNG files, to judge its look without
