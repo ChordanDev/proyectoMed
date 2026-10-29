@@ -301,6 +301,81 @@ void FStationRunUnitSpec::Define()
 		TestEqual("the next reply plays", *Resumed, 2);
 	});
 
+	// #419: push-to-talk.
+	It("does not open the microphone outside a voice training", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+
+		TestFalse("no voice to talk to", Flow->CanTalk());
+		TestFalse("a press opens nothing", Flow->PressTalkKey());
+		TestFalse("not talking", Flow->IsTalking());
+		Flow->ReleaseTalkKey();
+		TestFalse("a release changes nothing", Flow->IsTalking());
+	});
+
+	It("counts the patient as answering from the learner's turn until its reply ends", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		TestFalse("nobody answers before a turn", Flow->IsPatientAnswering());
+
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde")));
+		TestFalse("not while the learner speaks", Flow->IsPatientAnswering());
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		TestTrue("from the learner's sent turn", Flow->IsPatientAnswering());
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui."), 0));
+		TestTrue("while the reply streams", Flow->IsPatientAnswering());
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientComplete, 1));
+		TestFalse("until the reply ends", Flow->IsPatientAnswering());
+
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Tem febre?"), INDEX_NONE, true));
+		TestTrue("the next turn waits for its reply", Flow->IsPatientAnswering());
+		FStationVoiceEvent Failed = Spoken(EKind::TurnFailure, 2);
+		Failed.Failure = TEXT("synthesis_failed");
+		Flow->HandleVoiceEvent(Failed);
+		TestFalse("a failed turn gets no answer", Flow->IsPatientAnswering());
+	});
+
+	It("cuts the patient: its voice stops and the unanswered turn leaves the conversation", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		TSharedRef<int32> Silenced = MakeShared<int32>(0);
+		FStationPatientOutput Patient;
+		Patient.Silence = [Silenced]() { ++*Silenced; };
+		Flow->SetPatientOutput(MoveTemp(Patient));
+		Flow->Step = EStationRunStep::Running;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui."), 0));
+		const int32 Before = *Silenced;
+
+		Flow->CutPatient();
+
+		TestEqual("the patient is silenced", *Silenced, Before + 1);
+		TestEqual("neither the turn nor its partial reply stays", Flow->GetTranscript().Num(), 0);
+		TestTrue("no reply in progress", Flow->GetVoice().PatientText.IsEmpty());
+		TestFalse("the patient no longer answers", Flow->IsPatientAnswering());
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Muito."), 1));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientComplete, 1));
+		TestTrue("a late sentence of the cut turn never shows", Flow->GetVoice().PatientText.IsEmpty());
+		TestEqual("nor joins the conversation", Flow->GetTranscript().Num(), 0);
+
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Espera, doutor."), INDEX_NONE, true));
+		TestEqual("the learner's next turn is kept", Flow->GetTranscript().Num(), 1);
+	});
+
+	It("keeps a reply Phoenix settled when the learner cuts its voice", [this, Spoken]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 1, TEXT("Onde dói?"), INDEX_NONE, true));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Dói aqui.")));
+
+		Flow->CutPatient();
+
+		TestEqual("the turn and its reply stay", Flow->GetTranscript().Num(), 2);
+	});
+
 	It("silences the patient as soon as the run ends, for good", [this, Spoken]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
@@ -904,7 +979,40 @@ BEGIN_DEFINE_SPEC(FStationRunVoiceSpec, "ProyectoMed.StationRun.Voice",
 	UStationRunFlow* Flow = nullptr;
 	TSharedPtr<std::atomic<int32>> PatientFrames;
 	FTSTicker::FDelegateHandle Speaker;
+
+	/** Push-to-talk (#419): holds the talk key through one second of speech-like sound and a short tail, in real time. */
+	void SpeakWithTalkKey();
 END_DEFINE_SPEC(FStationRunVoiceSpec)
+
+void FStationRunVoiceSpec::SpeakWithTalkKey()
+{
+	TestTrue("the talk key opens the microphone", Flow->PressTalkKey());
+	TestTrue("talking", Flow->IsTalking() && Client->GetVoice()->IsMicrophoneOpen());
+	const double Start = FPlatformTime::Seconds();
+	TSharedRef<int32> Sent = MakeShared<int32>(0);
+	Speaker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Start, Sent](float)
+	{
+		const int32 Due = FMath::Min(115, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
+		FStationVoiceLink* Voice = Client->GetVoice();
+		for (; *Sent < Due && Voice; ++*Sent)
+		{
+			TArray<float> Chunk;
+			Chunk.SetNumZeroed(480);
+			for (int32 i = 0; *Sent < 100 && i < Chunk.Num(); ++i)
+			{
+				const double T = (*Sent * 480 + i) / 48000.0;
+				Chunk[i] = static_cast<float>(0.3 * (0.6 + 0.4 * FMath::Sin(2.0 * PI * 4.0 * T))
+					* (FMath::Sin(2.0 * PI * 150.0 * T) + 0.5 * FMath::Sin(2.0 * PI * 300.0 * T)));
+			}
+			Voice->PushMicrophonePcm(Chunk, 48000, 1);
+		}
+		if (*Sent == 115 && Voice)
+		{
+			Flow->ReleaseTalkKey();
+		}
+		return *Sent < 115 && Voice != nullptr;
+	}));
+}
 
 void FStationRunVoiceSpec::Define()
 {
@@ -968,33 +1076,7 @@ void FStationRunVoiceSpec::Define()
 						Done.Execute();
 						return;
 					}
-					// Push-to-talk (#419): one second of speech-like sound and a short tail in
-					// real time while the talk key is held, then the key is released.
-					Client->GetVoice()->SetMicrophoneOpen(true);
-					const double Start = FPlatformTime::Seconds();
-					TSharedRef<int32> Sent = MakeShared<int32>(0);
-					Speaker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Start, Sent](float)
-					{
-						const int32 Due = FMath::Min(115, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
-						FStationVoiceLink* Voice = Client->GetVoice();
-						for (; *Sent < Due && Voice; ++*Sent)
-						{
-							TArray<float> Chunk;
-							Chunk.SetNumZeroed(480);
-							for (int32 i = 0; *Sent < 100 && i < Chunk.Num(); ++i)
-							{
-								const double T = (*Sent * 480 + i) / 48000.0;
-								Chunk[i] = static_cast<float>(0.3 * (0.6 + 0.4 * FMath::Sin(2.0 * PI * 4.0 * T))
-									* (FMath::Sin(2.0 * PI * 150.0 * T) + 0.5 * FMath::Sin(2.0 * PI * 300.0 * T)));
-							}
-							Voice->PushMicrophonePcm(Chunk, 48000, 1);
-						}
-						if (*Sent == 115 && Voice)
-						{
-							Voice->SetMicrophoneOpen(false);
-						}
-						return *Sent < 115 && Voice != nullptr;
-					}));
+					SpeakWithTalkKey();
 					// The spoken turn joins the same conversation as typed turns.
 					WhenFlow(Flow, [this]() { return Flow->GetTranscript().Num() >= 2 || Flow->GetVoice().bLost; },
 						[this, Done]()
@@ -1027,6 +1109,39 @@ void FStationRunVoiceSpec::Define()
 									Done.Execute();
 								});
 							});
+						});
+				});
+		});
+	});
+
+	// #419: while the patient answers, only a tap followed by a press opens the microphone.
+	LatentIt("cuts the patient only on a tap followed by a press", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
+		{
+			Flow->AcknowledgeNotice();
+			Flow->Enter(EStationTrainingMode::Voice);
+			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
+				[this, Done]()
+				{
+					if (!TestEqual("voice ready (is scripts/run-voice-stack.sh running?)", Flow->GetVoice().State, EStationVoiceState::Ready))
+					{
+						Done.Execute();
+						return;
+					}
+					SpeakWithTalkKey();
+					WhenFlow(Flow, [this]() { return !Flow->GetVoice().PatientText.IsEmpty() || Flow->GetVoice().bLost; },
+						[this, Done]()
+						{
+							TestTrue("the patient answers", Flow->IsPatientAnswering());
+							TestFalse("a single press opens nothing", Flow->PressTalkKey());
+							TestFalse("the microphone stays closed", Client->GetVoice()->IsMicrophoneOpen());
+							Flow->ReleaseTalkKey();
+							TestTrue("the press after a tap opens the microphone", Flow->PressTalkKey());
+							TestTrue("talking", Flow->IsTalking() && Client->GetVoice()->IsMicrophoneOpen());
+							TestFalse("the patient was cut", Flow->IsPatientAnswering());
+							Flow->ReleaseTalkKey();
+							Done.Execute();
 						});
 				});
 		});

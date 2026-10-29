@@ -186,10 +186,19 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 - To try a voice training without paid providers, start the local stack in a
   terminal with `scripts/run-voice-stack.sh` and open the editor; the stack's
   Phoenix is on the default `http://127.0.0.1:4000`. The fake transcription
-  hears every utterance as "Qual é o seu nome?" and the patient answers "Meu
+  hears every utterance held on the space bar as "Qual é o seu nome?" and the patient answers "Meu
   nome é Carlos." with a tone instead of a voice, so the mouth moves with
   the loudness of the tone. Real speech needs the real-time voice runbook in
   the README.
+- The microphone is push-to-talk (#419): the voice worker hears the learner
+  only while the **space bar** is held, and releasing it sends the turn at
+  once, without waiting for the end of speech. While the patient answers (from
+  the learner's sent turn until the reply ends, or while its voice plays), a
+  single press does nothing; tap the space bar and then hold it to cut the
+  patient and talk. While the typed-reply box has the keyboard focus the space
+  bar types a space; click the scene to give it back to the talk key. During
+  the run the space bar no longer presses the focused button (Enter still
+  does), and switching to another app releases a held key.
 - The voice status under the timer reads "Conectando a voz..." until the
   worker joins, then "Microfone ativo". While LiveKit retries the connection or
   the worker is gone it reads "Reconectando a voz..." and the microphone stops.

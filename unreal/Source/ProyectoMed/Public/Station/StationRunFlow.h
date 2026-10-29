@@ -8,11 +8,15 @@
 
 #pragma once
 
+#include "Containers/Ticker.h"
 #include "CoreMinimal.h"
 #include "Station/StationMicPermission.h"
+#include "Station/StationTalkKey.h"
 #include "StationClientTypes.h"
 #include "StationVoice.h"
 #include "UObject/Object.h"
+
+#include <atomic>
 
 #include "StationRunFlow.generated.h"
 
@@ -176,6 +180,33 @@ public:
 	 * capture is not retried on every change and the HUD says so.
 	 */
 	void ReportMicrophoneUnavailable();
+
+	/**
+	 * Push-to-talk (#419): the learner pressed the talk key, the space bar or the
+	 * HUD's talk button. The voice worker hears the learner only while it is held.
+	 * While the patient answers, a single press does nothing: a tap followed by a
+	 * press opens the microphone and cuts the patient at once. True when the press
+	 * opened the microphone.
+	 */
+	bool PressTalkKey();
+
+	/**
+	 * The learner released the talk key. The microphone closes a moment later, so the
+	 * last word still reaches the worker, and the worker then ends the turn at once.
+	 */
+	void ReleaseTalkKey();
+
+	/** The talk key is held and the microphone open. */
+	bool IsTalking() const { return TalkKey.IsHeld(); }
+
+	/** A press of the talk key can open the microphone: the voice of a running voice training is ready. */
+	bool CanTalk() const;
+
+	/**
+	 * The patient is answering: the learner's spoken turn waits for its reply, or the
+	 * patient's voice was heard in the last half second.
+	 */
+	bool IsPatientAnswering() const;
 
 	/**
 	 * Receives the patient's voice; set it before entering. The flow silences it when
@@ -355,6 +386,11 @@ private:
 	void SilencePatient();
 	void ResumePatient();
 
+	/** The learner cut the patient with the talk key: its voice stops and the turn it answers is dropped. */
+	void CutPatient();
+	/** Opens or closes the voice link's microphone to match the talk key. */
+	void ApplyTalkKey();
+
 	void SetExamError(const FStationClientError& Error);
 
 	void AddLine(EStationSpeaker Speaker, const FString& Text);
@@ -426,6 +462,15 @@ private:
 	 */
 	bool bVoiceOutcome = false;
 	FStationPatientOutput Patient;
+	FStationTalkKey TalkKey;
+	/** Closes the microphone once the release tail is over. */
+	FTSTicker::FDelegateHandle TalkTailTicker;
+	/** `FPlatformTime::Seconds()` when the patient's voice was last heard; written on a LiveKit thread. */
+	TSharedRef<std::atomic<double>, ESPMode::ThreadSafe> PatientHeardAt = MakeShared<std::atomic<double>, ESPMode::ThreadSafe>(0.0);
+	/** The spoken turn the learner cut with the talk key; its late events are dropped. */
+	int32 CutVoiceTurnId = 0;
+	/** The current spoken turn failed, for example its synthesis: the patient will not answer it. */
+	bool bVoiceTurnFailed = false;
 	/**
 	 * Changes with every new, discarded or invalidated run. A Phoenix answer for an
 	 * earlier one is dropped.

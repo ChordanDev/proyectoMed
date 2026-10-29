@@ -582,8 +582,8 @@ void FStationVoiceStackSpec::Define()
 					return;
 				}
 				TestEqual("worker heard the learner", Learner->Text, StackTranscript);
-				// #419: no trailing silence was sent; the release alone ended the turn.
-				TestTrue("the key was released", ReleasedAt > 0.0);
+				// #419: the 150 ms tail is shorter than the end of speech; the release ended the turn.
+				TestTrue("the final transcript came after the release", ReleasedAt > 0.0 && FirstFinalAt >= ReleasedAt);
 				TestEqual("patient text", Patient->Text, StackPatientReply);
 				TestEqual("reply answers the turn", Patient->TurnId, Learner->TurnId);
 				TestEqual("reply end of the same turn", Complete->TurnId, Learner->TurnId);
@@ -639,8 +639,9 @@ void FStationVoiceStackSpec::Define()
 			WaitUntil(TEXT("the learner's final transcript"), [this]() { return FirstFinalAt > 0.0; }, Done, [this, Done]()
 			{
 				TestTrue("the final transcript came after the release", ReleasedAt > 0.0 && FirstFinalAt >= ReleasedAt);
+				// The worker's own bound is 1.5 s; the rest is the mute and the data channel.
 				TestTrue(FString::Printf(TEXT("final transcript %.2f s after the release"), FirstFinalAt - ReleasedAt),
-					FirstFinalAt - ReleasedAt < 1.5);
+					FirstFinalAt - ReleasedAt < 2.5);
 				// Let a second turn show itself.
 				const double Settled = FPlatformTime::Seconds() + 2.0;
 				WaitUntil(TEXT("a settled room"), [Settled]() { return FPlatformTime::Seconds() >= Settled; }, Done,

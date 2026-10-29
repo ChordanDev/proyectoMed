@@ -507,7 +507,20 @@ only text authority; the worker never composes, edits or retries reply text. Lea
 speech over an answer that is already playing stops it at once, also when Phoenix has
 already settled the turn (#193); a settled reply's text stays stored. Only transcribed
 words count as speaking over the patient: Deepgram's voice activity events are off,
-because noise and breath also raised them and cancelled the learner's own turn. With `VOICE_MODE=realtime`
+because noise and breath also raised them and cancelled the learner's own turn.
+
+**Push-to-talk (#419).** The Unreal client publishes its microphone muted and unmutes it
+only while the learner holds the talk key; the web client never mutes, so nothing below
+changes for it. A learner whose microphone was muted is on push-to-talk for that
+connection: an unmute counts as the start of speech, so it stops the patient at once
+(the client unmutes over the patient only on a tap followed by a press), and Deepgram's
+end of speech no longer ends a turn while the key is held. A mute is the release: the
+worker sends Deepgram `Finalize` and ends the turn once the transcript has been quiet for
+0.3 s, at most 1.5 s after the release (Deepgram does not promise an answer to
+`Finalize`, so a last interim that never became final stands in for it). Transcript that
+arrives after that, before the next press, belongs to the ended turn and is dropped;
+pressing again before the turn ends continues it. The mute is the only signal because the
+learner token cannot publish data. With `VOICE_MODE=realtime`
 the web renders these events in the station transcript (#270): it shows the stored
 patient reply (the full verified text, as on the text path) for each patient event,
 "Anotado." for a kept learner turn, and failures as notices; the patient audio plays
@@ -750,7 +763,8 @@ or Cartesia. Start the worker with `VOICE_WORKER_FAKE_PROVIDERS=true`:
 - Every learner utterance becomes one final transcript,
   `VOICE_WORKER_FAKE_TRANSCRIPT` (default `Qual é o seu nome?`). An utterance
   starts when the microphone is loud and ends after 500 ms of quiet, like the
-  Deepgram endpointing.
+  Deepgram endpointing, or at once when the worker finalizes it on a
+  push-to-talk release, like Deepgram's `Finalize`.
 - Every approved reply is spoken as a 220 Hz tone, 80 ms per character, from
   0.4 s to 3 s.
 - Rooms, Phoenix calls, turn tracking and the `transcript` events are the real

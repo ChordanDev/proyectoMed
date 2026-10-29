@@ -30,6 +30,11 @@ namespace
 		return Error.Code == TEXT("network_error") || Error.Code == TEXT("http_502")
 			|| Error.Code == TEXT("http_503") || Error.Code == TEXT("http_504");
 	}
+
+	/** How long after its last sound the patient no longer counts as answering (#419). */
+	constexpr double PatientVoiceQuietSeconds = 0.5;
+	/** An int16 sample louder than this is the patient's voice, not the silence between words. */
+	constexpr int32 PatientVoiceLevel = 500;
 }
 
 FText FormatStationTimer(const FTimespan& Remaining)
@@ -660,6 +665,12 @@ void UStationRunFlow::ResetRun()
 	bVoiceLearnerCommitted = false;
 	VoiceLearnerLine = INDEX_NONE;
 	bVoiceOutcome = false;
+	TalkKey.Reset();
+	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
+	TalkTailTicker.Reset();
+	PatientHeardAt->store(0.0);
+	CutVoiceTurnId = 0;
+	bVoiceTurnFailed = false;
 	PendingTurn.Reset();
 	Transcript.Reset();
 	UnsentTurn.Reset();
@@ -720,8 +731,16 @@ void UStationRunFlow::ConnectVoice()
 		}
 	};
 	// Runs on a LiveKit thread: copy the handler so the flow is never touched there.
-	Handlers.OnPatientPcm = [PatientAudio = Patient.Audio](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
+	Handlers.OnPatientPcm = [PatientAudio = Patient.Audio, HeardAt = PatientHeardAt](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 	{
+		for (const int16 Sample : Samples)
+		{
+			if (FMath::Abs(int32(Sample)) > PatientVoiceLevel)
+			{
+				HeardAt->store(FPlatformTime::Seconds());
+				break;
+			}
+		}
 		if (PatientAudio)
 		{
 			PatientAudio(Samples, SampleRate, NumChannels);
@@ -738,6 +757,8 @@ void UStationRunFlow::ConnectVoice()
 void UStationRunFlow::HandleVoiceState(EStationVoiceState State)
 {
 	Voice.State = State;
+	// The microphone closes while the voice cannot be heard, and opens again for a key still held.
+	ApplyTalkKey();
 	if (State == EStationVoiceState::Failed)
 	{
 		LoseVoice();
@@ -772,9 +793,9 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		OnChanged.Broadcast();
 		return;
 	}
-	if (Event.TurnId < VoiceTurnId)
+	if (Event.TurnId < VoiceTurnId || Event.TurnId <= CutVoiceTurnId)
 	{
-		return; // a late event of an earlier turn
+		return; // a late event of an earlier turn, or of a turn the learner cut
 	}
 	if (Event.TurnId > VoiceTurnId)
 	{
@@ -791,6 +812,7 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		bVoiceLearnerCommitted = false;
 		VoiceLearnerLine = INDEX_NONE;
 		bVoiceOutcome = false;
+		bVoiceTurnFailed = false;
 		Voice.LearnerText.Reset();
 		Voice.PatientText.Reset();
 		Voice.bExaminerNoted = false;
@@ -847,7 +869,9 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		bVoiceOutcome = true;
 		return;
 	default:
-		// A refused reply and a failed synthesis change nothing shown.
+		// A refused reply and a failed synthesis change nothing shown, but the
+		// patient no longer answers a failed turn.
+		bVoiceTurnFailed = bVoiceTurnFailed || Event.Kind == EStationVoiceEventKind::TurnFailure;
 		return;
 	}
 	OnChanged.Broadcast();
@@ -868,6 +892,81 @@ void UStationRunFlow::ReportMicrophoneUnavailable()
 	}
 	Voice.bMicrophoneUnavailable = true;
 	OnChanged.Broadcast();
+}
+
+bool UStationRunFlow::CanTalk() const
+{
+	const FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr;
+	return IsListening() && Link->GetState() == EStationVoiceState::Ready;
+}
+
+bool UStationRunFlow::IsPatientAnswering() const
+{
+	const bool bAwaitingReply = bVoiceLearnerCommitted && !bVoiceOutcome && !bVoiceTurnFailed
+		&& VoiceTurnId > CutVoiceTurnId;
+	return bAwaitingReply || FPlatformTime::Seconds() - PatientHeardAt->load() < PatientVoiceQuietSeconds;
+}
+
+bool UStationRunFlow::PressTalkKey()
+{
+	if (!CanTalk())
+	{
+		return false;
+	}
+	const bool bAnswering = IsPatientAnswering();
+	if (!TalkKey.Press(FPlatformTime::Seconds(), bAnswering))
+	{
+		return false;
+	}
+	if (bAnswering)
+	{
+		CutPatient();
+	}
+	ApplyTalkKey();
+	OnChanged.Broadcast();
+	return true;
+}
+
+void UStationRunFlow::ReleaseTalkKey()
+{
+	const bool bWasHeld = TalkKey.IsHeld();
+	TalkKey.Release(FPlatformTime::Seconds());
+	if (!bWasHeld)
+	{
+		return; // the first tap of a cut, or a press that opened nothing
+	}
+	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
+	TalkTailTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateWeakLambda(this, [this](float)
+	{
+		ApplyTalkKey();
+		const bool bInTail = !TalkKey.IsHeld() && TalkKey.IsOpen(FPlatformTime::Seconds());
+		if (!bInTail)
+		{
+			TalkTailTicker.Reset();
+		}
+		return bInTail;
+	}), FStationTalkKey::TailSeconds);
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::CutPatient()
+{
+	SilencePatient();
+	PatientHeardAt->store(0.0);
+	if (!bVoiceOutcome)
+	{
+		// The worker cancels the turn on the press, and Phoenix keeps nothing of it.
+		DropSupersededVoiceTurn();
+	}
+	CutVoiceTurnId = VoiceTurnId;
+}
+
+void UStationRunFlow::ApplyTalkKey()
+{
+	if (FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr)
+	{
+		Link->SetMicrophoneOpen(CanTalk() && TalkKey.IsOpen(FPlatformTime::Seconds()));
+	}
 }
 
 void UStationRunFlow::DropSupersededVoiceTurn()
