@@ -506,6 +506,9 @@ private:
 	/** The outcome of the spoken exam request joins the exam requests. */
 	void TakeSpokenExamOutcome(const FStationVoiceEvent& Event);
 
+	/** A spoken exam request's outcome joins the exam requests, and the released impressos are read again. */
+	void AddSpokenExamOutcome(const FString& Text, const FStationVoiceEvent& Event);
+
 	/** Asks Phoenix to disarm the exam mode. */
 	void DisarmSpokenExam();
 
@@ -578,6 +581,11 @@ private:
 	/** The spoken turn the armed exam mode went to; 0 while there is none. */
 	int32 SpokenExamTurn = 0;
 	FString SpokenExamText;
+	/**
+	 * Spoken exam requests newer speech superseded before their outcome arrived, by
+	 * turn, with what the learner asked for: Phoenix may have recorded them (#434).
+	 */
+	TMap<int32, FString> SupersededExamRequests;
 	EStationFinishReason FinishReason = EStationFinishReason::User;
 	TOptional<FStationResult> Result;
 	/** `FPlatformTime::Seconds()` before which the timer does not end the run again after Phoenix refused it. */
