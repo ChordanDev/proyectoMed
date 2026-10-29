@@ -350,6 +350,15 @@ below.
 | `{"random": true, "area": "Pediatria", "audio_consent": false}` | A random published station of that `area` (the catalog's `area`). |
 | `{"random": true, "audio_consent": false}` | A random published station of any area. A blank `area` means any area. |
 
+- **Station Mode (#421):** an optional `mode`, fixed for the whole run and
+  returned by every session response (start, `GET .../sessions/:id` and
+  `POST .../finish`):
+
+| `mode` | Starts |
+| --- | --- |
+| absent, `null` or `"training"` | A training, as before the mode existed, so older clients keep working. |
+| `"simulated_exam"` | A simulated exam ("Prova simulada", #318). It needs `"audio_consent": true`. |
+
 - **Response:** `201` with the session. `station_id` is the catalog id and
   `station_version` the published version (both integers, as in the catalog);
   `station` carries what the learner sees before the first turn.
@@ -373,6 +382,7 @@ below.
     ]
   },
   "audio_consent": true,
+  "mode": "training",
   "status": "active",
   "voice_mode": "realtime",
   "started_at": "2026-10-25T15:00:00Z",
@@ -390,7 +400,8 @@ below.
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_parameters` | 400 | No station choice, both `station_id` and `random`, a `station_id` that is not a positive integer, a non-string `area`, or a missing or non-boolean `audio_consent`. |
+| `invalid_parameters` | 400 | No station choice, both `station_id` and `random`, a `station_id` that is not a positive integer, a non-string `area`, a missing or non-boolean `audio_consent`, or a `mode` other than `"training"` or `"simulated_exam"`. |
+| `audio_consent_required` | 400 | A `"simulated_exam"` without `"audio_consent": true`. No session starts. |
 | `subscription_required` | 402 | The learner has no active subscription (#339). |
 | `station_not_found` | 404 | No published station has that `station_id` (unknown, pending or disapproved case). |
 | `no_published_station` | 404 | Nothing is published in that `area` (or at all, without one). |
@@ -525,6 +536,9 @@ harness and the E2E suite); in production they need the access token, and the
 per-session aliases serve only the learner's own sessions. In production there is no active station (stations come
 only from the database), so `GET /api/stations/active` and
 `POST /api/stations/active/sessions` answer `404 no_active_station` there.
+
+`POST /api/stations/active/sessions` takes the same optional `mode` and answers
+the same `invalid_parameters` and `audio_consent_required` errors.
 
 The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
 which serves the language and speech-to-text keyterms of the session's own

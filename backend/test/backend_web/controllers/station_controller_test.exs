@@ -257,6 +257,79 @@ defmodule BackendWeb.StationControllerTest do
                  "Parâmetros inválidos: 'audio_consent' é obrigatório e deve ser um booleano."
              }
     end
+
+    test "a session without a mode is a training, as before (#421)", %{conn: conn} do
+      for params <- [
+            %{"audio_consent" => true},
+            %{"audio_consent" => false},
+            %{"audio_consent" => false, "mode" => nil},
+            %{"audio_consent" => false, "mode" => "training"}
+          ] do
+        response =
+          conn
+          |> recycle()
+          |> post(~p"/api/stations/active/sessions", params)
+          |> json_response(200)
+
+        assert response["mode"] == "training", "params #{inspect(params)}"
+        assert {:ok, %{mode: :training}} = Conversation.fetch(response["session_id"])
+      end
+    end
+
+    test "starts a simulated exam and returns its mode for the whole run (#421)", %{conn: conn} do
+      response =
+        conn
+        |> post(~p"/api/stations/active/sessions", %{
+          "audio_consent" => true,
+          "mode" => "simulated_exam"
+        })
+        |> json_response(200)
+
+      assert %{"session_id" => id, "mode" => "simulated_exam"} = response
+      assert {:ok, %{mode: :simulated_exam}} = Conversation.fetch(id)
+
+      assert %{"mode" => "simulated_exam"} =
+               conn
+               |> recycle()
+               |> get(~p"/api/stations/active/sessions/#{id}")
+               |> json_response(200)
+
+      assert %{"mode" => "simulated_exam"} =
+               conn
+               |> recycle()
+               |> post(~p"/api/stations/active/sessions/#{id}/finish")
+               |> json_response(200)
+    end
+
+    test "refuses a simulated exam without audio consent (#421)", %{conn: conn} do
+      sessions_before = :ets.info(Conversation, :size)
+
+      conn =
+        post(conn, ~p"/api/stations/active/sessions", %{
+          "audio_consent" => false,
+          "mode" => "simulated_exam"
+        })
+
+      assert json_response(conn, 400) == %{
+               "error" => "audio_consent_required",
+               "message" =>
+                 "A prova simulada é feita só por voz: é preciso consentir com o uso do áudio."
+             }
+
+      assert :ets.info(Conversation, :size) == sessions_before
+    end
+
+    test "rejects an unknown mode (#421)", %{conn: conn} do
+      for mode <- ["exam", "", 1, false] do
+        conn =
+          conn
+          |> recycle()
+          |> post(~p"/api/stations/active/sessions", %{"audio_consent" => true, "mode" => mode})
+
+        assert %{"error" => "invalid_parameters"} = json_response(conn, 400),
+               "accepted mode #{inspect(mode)}"
+      end
+    end
   end
 
   describe "GET /api/stations/active/sessions/:id" do

@@ -396,6 +396,129 @@ defmodule BackendWeb.SessionControllerTest do
     end
   end
 
+  describe "Station Mode: training or simulated exam (#421)" do
+    test "a session started without a mode is a training, as before",
+         %{conn: conn, admin: admin, package: package} do
+      kase = publish!(package, admin)
+
+      for consent <- [true, false] do
+        body =
+          conn
+          |> recycle()
+          |> post(~p"/sessions", %{"station_id" => kase.number, "audio_consent" => consent})
+          |> json_response(201)
+
+        assert body["mode"] == "training"
+        assert body["audio_consent"] == consent
+
+        shown =
+          conn |> recycle() |> get(~p"/sessions/#{body["session_id"]}") |> json_response(200)
+
+        assert shown["mode"] == "training"
+        assert {:ok, %{mode: :training}} = Stations.get_session(body["session_id"])
+      end
+    end
+
+    test "a null or explicit training mode is a training",
+         %{conn: conn, admin: admin, package: package} do
+      kase = publish!(package, admin)
+
+      for mode <- [nil, "training"] do
+        body =
+          conn
+          |> recycle()
+          |> post(~p"/sessions", %{
+            "station_id" => kase.number,
+            "audio_consent" => false,
+            "mode" => mode
+          })
+          |> json_response(201)
+
+        assert body["mode"] == "training", "mode #{inspect(mode)}"
+      end
+    end
+
+    test "a simulated exam is recorded, returned and kept for the whole run",
+         %{conn: conn, admin: admin, package: package} do
+      kase = publish!(package, admin)
+
+      body =
+        conn
+        |> post(~p"/sessions", %{
+          "station_id" => kase.number,
+          "audio_consent" => true,
+          "mode" => "simulated_exam"
+        })
+        |> json_response(201)
+
+      assert %{"session_id" => id, "mode" => "simulated_exam", "audio_consent" => true} = body
+      assert {:ok, %{mode: :simulated_exam}} = Stations.get_session(id)
+
+      assert %{"mode" => "simulated_exam"} =
+               conn |> recycle() |> get(~p"/sessions/#{id}") |> json_response(200)
+
+      assert %{"reply_text" => _} =
+               conn
+               |> recycle()
+               |> post(~p"/sessions/#{id}/messages", %{
+                 "role" => "learner",
+                 "modality" => "voice",
+                 "text" => "Quando começou a dor?"
+               })
+               |> json_response(200)
+
+      assert %{"mode" => "simulated_exam"} =
+               conn |> recycle() |> get(~p"/sessions/#{id}") |> json_response(200)
+
+      assert %{"status" => "completed", "mode" => "simulated_exam"} =
+               conn |> recycle() |> post(~p"/sessions/#{id}/finish") |> json_response(200)
+
+      assert %{"status" => "completed", "mode" => "simulated_exam"} =
+               conn |> recycle() |> get(~p"/sessions/#{id}") |> json_response(200)
+    end
+
+    test "a simulated exam cannot start without audio consent",
+         %{conn: conn, admin: admin, package: package} do
+      kase = publish!(package, admin)
+      sessions_before = :ets.info(Backend.Stations.Conversation, :size)
+
+      body =
+        conn
+        |> post(~p"/sessions", %{
+          "station_id" => kase.number,
+          "audio_consent" => false,
+          "mode" => "simulated_exam"
+        })
+        |> json_response(400)
+
+      assert body == %{
+               "error" => "audio_consent_required",
+               "message" =>
+                 "A prova simulada é feita só por voz: é preciso consentir com o uso do áudio."
+             }
+
+      assert :ets.info(Backend.Stations.Conversation, :size) == sessions_before
+    end
+
+    test "rejects an unknown mode", %{conn: conn, admin: admin, package: package} do
+      kase = publish!(package, admin)
+
+      for mode <- ["exam", "Simulated_Exam", "", 1, true, %{"a" => 1}] do
+        body =
+          conn
+          |> recycle()
+          |> post(~p"/sessions", %{
+            "station_id" => kase.number,
+            "audio_consent" => true,
+            "mode" => mode
+          })
+          |> json_response(400)
+
+        assert body["error"] == "invalid_parameters", "accepted mode #{inspect(mode)}"
+      end
+    end
+  end
+
   describe "session routes" do
     test "a running session keeps its version after the case is re-published",
          %{conn: conn, admin: admin, package: package} do
