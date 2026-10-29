@@ -275,6 +275,33 @@ void FStationHudUnitSpec::Define()
 		TestTrue(TEXT("redrawn for the live caption"), Hud->TranscriptBox->GetChildAt(0) != First);
 		TestEqual(TEXT("the line and the caption"), Hud->TranscriptBox->GetChildrenCount(), 2);
 	});
+
+	// #422: a simulated exam is voice only; impressos are asked aloud with "Exames".
+	It("offers no typed turn and no typed exam request in a simulated exam, even once the voice is lost", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		UStationHudWidget* Hud = MakeHud(Flow);
+		TestEqual(TEXT("no typed turn"), Hud->TurnRow->GetVisibility(), ESlateVisibility::Collapsed);
+		TestEqual(TEXT("no typed exam request"), Hud->ExamTypedRow->GetVisibility(), ESlateVisibility::Collapsed);
+		TestEqual(TEXT("the spoken exam request"), Hud->MicrophoneBox->GetVisibility(), ESlateVisibility::Visible);
+
+		Flow->Voice.bLost = true;
+		Hud->Refresh();
+		TestEqual(TEXT("still no typed turn"), Hud->TurnRow->GetVisibility(), ESlateVisibility::Collapsed);
+		TestEqual(TEXT("still no typed exam request"), Hud->ExamTypedRow->GetVisibility(), ESlateVisibility::Collapsed);
+		TestFalse(TEXT("never points to a typed box"),
+			Texts(Hud->ExamCardBox).Contains(TEXT("Nenhum exame solicitado ainda. Descreva abaixo o que você solicita.")));
+	});
+
+	It("keeps the typed turn and the typed exam request in a training", [this]()
+	{
+		UStationHudWidget* Hud = MakeHud(MakeFlow(EStationTrainingMode::Text));
+		TestEqual(TEXT("the typed turn"), Hud->TurnRow->GetVisibility(), ESlateVisibility::Visible);
+		TestTrue(TEXT("its send button"), Hud->SendButton->GetIsEnabled());
+		TestEqual(TEXT("the typed exam request"), Hud->ExamTypedRow->GetVisibility(), ESlateVisibility::Visible);
+		TestTrue(TEXT("its request button"), Hud->ExamButton->GetIsEnabled());
+	});
 }
 
 #endif

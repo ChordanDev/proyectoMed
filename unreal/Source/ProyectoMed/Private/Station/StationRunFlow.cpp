@@ -312,7 +312,7 @@ void UStationRunFlow::StartSession()
 
 bool UStationRunFlow::CanSendTurn() const
 {
-	return Step == EStationRunStep::Running && !PendingTurn.IsSet() && !bReloadingTranscript;
+	return Step == EStationRunStep::Running && AllowsTypedInput() && !PendingTurn.IsSet() && !bReloadingTranscript;
 }
 
 FString UStationRunFlow::TakeUnsentTurn()
@@ -394,7 +394,7 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 
 bool UStationRunFlow::CanRequestExam() const
 {
-	return Step == EStationRunStep::Running && !PendingExamRequest.IsSet();
+	return Step == EStationRunStep::Running && AllowsTypedInput() && !PendingExamRequest.IsSet();
 }
 
 bool UStationRunFlow::ShouldRequestExamsAloud() const

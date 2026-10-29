@@ -684,6 +684,7 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 	}
 
 	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
+	TurnRow = Row;
 	if (UVerticalBoxSlot* RowSlot = Column->AddChildToVerticalBox(Row))
 	{
 		RowSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
@@ -713,6 +714,8 @@ void UStationHudWidget::RefreshConversation()
 {
 	StationUi::SetShown(TurnErrorText, !Flow->GetErrorText().IsEmpty());
 	TurnErrorText->SetText(Flow->GetErrorText());
+	// A simulated exam is voice only (#422).
+	StationUi::SetShown(TurnRow, Flow->AllowsTypedInput());
 	SendButton->SetIsEnabled(Flow->CanSendTurn());
 	RestoreUnsent(*TurnInput, [this]() { return Flow->TakeUnsentTurn(); });
 
@@ -1083,7 +1086,8 @@ void UStationHudWidget::RefreshExams()
 {
 	const bool bAloud = Flow->ShouldRequestExamsAloud();
 	StationUi::SetShown(MicrophoneBox, bAloud);
-	StationUi::SetShown(ExamTypedRow, !bAloud);
+	// A simulated exam asks its exams only aloud (#422), even once the voice is lost.
+	StationUi::SetShown(ExamTypedRow, !bAloud && Flow->AllowsTypedInput());
 	// Disabling a held button would lose its release, so it stays enabled while the run goes on.
 	AskAloudButton->SetIsEnabled(Flow->CanFinish());
 	if (!Flow->CanFinish())
@@ -1110,8 +1114,8 @@ void UStationHudWidget::RefreshExamCards()
 	const TArray<FStationExamRequest>& Requests = Flow->GetExamRequests();
 	const TArray<FStationImpresso>& Released = Flow->GetReleasedImpressos();
 	// Everything the cards show: the requests, the documents, the pending request
-	// and the control the empty panel names.
-	const bool bAloud = Flow->ShouldRequestExamsAloud();
+	// and the control the empty panel names. A simulated exam has no typed box (#422).
+	const bool bAloud = Flow->ShouldRequestExamsAloud() || !Flow->AllowsTypedInput();
 	FString Key = FString::Printf(TEXT("%d|%d|%d|"), Requests.Num(), Released.Num(), bAloud ? 1 : 0);
 	if (Flow->IsExamRequestInFlight())
 	{

@@ -257,6 +257,39 @@ void FStationRunUnitSpec::Define()
 		TestFalse("no training from a simulated exam's brief", Flow->CanEnter(EStationTrainingMode::Voice));
 	});
 
+	// #422: Phoenix refuses typed input in a simulated exam, so the flow sends none.
+	It("sends no typed turn and no typed exam request in a simulated exam, and keeps the spoken one", [this]()
+	{
+		FStationSummary Station;
+		Station.VoiceMode = EStationVoiceMode::Realtime;
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(NewObject<UStationClient>(), MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		Flow->Station = Station;
+		Flow->Step = EStationRunStep::Running;
+		Flow->Mode = EStationTrainingMode::Voice;
+
+		Flow->SessionMode = EStationSessionMode::Training;
+		TestTrue("a training sends typed turns", Flow->CanSendTurn());
+		TestTrue("a training sends typed exam requests", Flow->CanRequestExam());
+
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		TestFalse("no typed turn", Flow->CanSendTurn());
+		TestFalse("a typed turn is not sent", Flow->SendTypedTurn(TEXT("Bom dia, o que o senhor sente?")));
+		TestFalse("no typed exam request", Flow->CanRequestExam());
+		TestFalse("a typed exam request is not sent", Flow->RequestExam(TEXT("Solicito hemograma")));
+		TestFalse("nothing waits for Phoenix", Flow->IsExamRequestInFlight());
+		TestTrue("the exam asked aloud", Flow->CanAskExamAloud());
+	});
+
+	It("shows Phoenix's refusal of typed input in a simulated exam as it words it", [this]()
+	{
+		const FString Refusal = TEXT("A prova simulada é feita só por voz: o texto digitado não é aceito.");
+		TestEqual("Phoenix's words",
+			StationErrorText(FStationClientError{403, TEXT("typed_input_not_allowed"), Refusal},
+				FText::FromString(TEXT("fallback"))).ToString(),
+			Refusal);
+	});
+
 	It("asks for the microphone once, on first launch, before the menu", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();

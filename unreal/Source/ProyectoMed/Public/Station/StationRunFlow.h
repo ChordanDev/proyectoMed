@@ -278,8 +278,16 @@ public:
 	const FStationVoiceCredential* GetVoiceCredential() const { return VoiceCredential.GetPtrOrNull(); }
 
 	/**
-	 * True while the run is running, no typed turn is waiting for Phoenix and the
-	 * transcript is not being reloaded, whatever the microphone does.
+	 * Whether the run takes typed turns and typed exam requests (#422): a training
+	 * does, a simulated exam does not, since it is performed only by voice. Its
+	 * exams are asked aloud (`AskExamAloud`).
+	 */
+	bool AllowsTypedInput() const { return SessionMode != EStationSessionMode::SimulatedExam; }
+
+	/**
+	 * True while the run is running, takes typed input (`AllowsTypedInput`), no
+	 * typed turn is waiting for Phoenix and the transcript is not being reloaded,
+	 * whatever the microphone does.
 	 */
 	bool CanSendTurn() const;
 
@@ -312,9 +320,9 @@ public:
 	const FText& GetErrorText() const { return ErrorText; }
 
 	/**
-	 * True while the run is running and no exam request is waiting for Phoenix.
-	 * Exam requests have their own channel (ADR-008): they never wait for, or
-	 * join, the patient dialogue.
+	 * True while the run is running, takes typed input (`AllowsTypedInput`) and no
+	 * exam request is waiting for Phoenix. Exam requests have their own channel
+	 * (ADR-008): they never wait for, or join, the patient dialogue.
 	 */
 	bool CanRequestExam() const;
 

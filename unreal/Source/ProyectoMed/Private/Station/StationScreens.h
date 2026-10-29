@@ -319,6 +319,10 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> TurnErrorText;
 
+	/** The typed turn: `TurnInput` and `SendButton`, hidden in a simulated exam (#422). */
+	UPROPERTY()
+	TObjectPtr<UWidget> TurnRow;
+
 	UPROPERTY()
 	TObjectPtr<UEditableTextBox> TurnInput;
 
