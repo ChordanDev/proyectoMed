@@ -381,6 +381,10 @@ BEGIN_DEFINE_SPEC(FStationVoiceStackSpec, "ProyectoMed.StationVoice.Stack",
 	std::atomic<int64> LoudPatientSamples{0};
 	std::atomic<int32> PatientSampleRate{0};
 	FTSTicker::FDelegateHandle Ticker;
+	/** `FPlatformTime::Seconds()` when `Speak` released the talk key; 0 before. */
+	double ReleasedAt = 0.0;
+	/** `FPlatformTime::Seconds()` when the first final learner transcript arrived; 0 before. */
+	double FirstFinalAt = 0.0;
 
 	/** Seconds of the patient's voice heard so far. */
 	double SpokenSeconds() const
@@ -391,8 +395,14 @@ BEGIN_DEFINE_SPEC(FStationVoiceStackSpec, "ProyectoMed.StationVoice.Stack",
 
 	/** Joins the voice stack's room for a new consented run; `Then` runs once the worker is there. */
 	void JoinRoom(const FDoneDelegate& Done, TFunction<void()> Then);
-	/** Speaks one second, then a second of silence, in real time. */
-	void Speak();
+	/**
+	 * Push-to-talk (#419): holds the talk key while `Chunks` 10 ms chunks play in real
+	 * time, voiced where `Voiced` says, then releases it. With `bHoldKey` false the
+	 * microphone stays closed.
+	 */
+	void Speak(int32 Chunks, TFunction<bool(int32)> Voiced, bool bHoldKey);
+	/** Holds the talk key for one second of speech and a short tail. */
+	void Speak() { Speak(115, [](int32 Chunk) { return Chunk < 100; }, true); }
 	/** Calls `Then` once `Condition` holds, checking every tick; fails after `Seconds`. */
 	void WaitUntil(const FString& What, TFunction<bool()> Condition, const FDoneDelegate& Done, TFunction<void()> Then, double Seconds = 30.0);
 	const FStationVoiceEvent* Find(EStationVoiceEventKind Kind) const;
@@ -445,7 +455,14 @@ void FStationVoiceStackSpec::JoinRoom(const FDoneDelegate& Done, TFunction<void(
 				return;
 			}
 			FStationVoiceHandlers Handlers;
-			Handlers.OnEvent = [this](const FStationVoiceEvent& Event) { Events.Add(Event); };
+			Handlers.OnEvent = [this](const FStationVoiceEvent& Event)
+			{
+				if (Event.Kind == EStationVoiceEventKind::Learner && Event.bFinal && FirstFinalAt == 0.0)
+				{
+					FirstFinalAt = FPlatformTime::Seconds();
+				}
+				Events.Add(Event);
+			};
 			Handlers.OnStateChanged = [this](EStationVoiceState State) { States.Add(State); };
 			Handlers.OnPatientPcm = [this](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 			{
@@ -480,19 +497,28 @@ void FStationVoiceStackSpec::JoinRoom(const FDoneDelegate& Done, TFunction<void(
 	});
 }
 
-void FStationVoiceStackSpec::Speak()
+void FStationVoiceStackSpec::Speak(int32 Chunks, TFunction<bool(int32)> Voiced, bool bHoldKey)
 {
+	if (bHoldKey)
+	{
+		Client->GetVoice()->SetMicrophoneOpen(true);
+	}
 	const double Start = FPlatformTime::Seconds();
 	TSharedRef<int32> Sent = MakeShared<int32>(0);
-	Ticker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Start, Sent](float)
+	Ticker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Start, Sent, Chunks, Voiced = MoveTemp(Voiced), bHoldKey](float)
 	{
-		const int32 Due = FMath::Min(200, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
+		const int32 Due = FMath::Min(Chunks, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
 		FStationVoiceLink* Voice = Client->GetVoice();
 		for (; *Sent < Due && Voice; ++*Sent)
 		{
-			Voice->PushMicrophonePcm(StationVoiceTests::SpeechChunk(*Sent, *Sent < 100), FStationPcmFramer::SampleRate, 1);
+			Voice->PushMicrophonePcm(StationVoiceTests::SpeechChunk(*Sent, Voiced(*Sent)), FStationPcmFramer::SampleRate, 1);
 		}
-		return *Sent < 200 && Voice != nullptr;
+		if (*Sent == Chunks && Voice && bHoldKey)
+		{
+			Voice->SetMicrophoneOpen(false);
+			ReleasedAt = FPlatformTime::Seconds();
+		}
+		return *Sent < Chunks && Voice != nullptr;
 	}));
 }
 
@@ -509,6 +535,8 @@ void FStationVoiceStackSpec::Define()
 		LoudPatientFrames = 0;
 		LoudPatientSamples = 0;
 		PatientSampleRate = 0;
+		ReleasedAt = 0.0;
+		FirstFinalAt = 0.0;
 		Client = NewObject<UStationClient>();
 		Client->AddToRoot();
 		Client->SetPhoenixBaseUrl(PhoenixUrl());
@@ -554,6 +582,8 @@ void FStationVoiceStackSpec::Define()
 					return;
 				}
 				TestEqual("worker heard the learner", Learner->Text, StackTranscript);
+				// #419: no trailing silence was sent; the release alone ended the turn.
+				TestTrue("the key was released", ReleasedAt > 0.0);
 				TestEqual("patient text", Patient->Text, StackPatientReply);
 				TestEqual("reply answers the turn", Patient->TurnId, Learner->TurnId);
 				TestEqual("reply end of the same turn", Complete->TurnId, Learner->TurnId);
@@ -577,6 +607,53 @@ void FStationVoiceStackSpec::Define()
 						});
 					}, 10.0);
 			});
+		});
+	});
+
+	// #419: the learner's audio reaches the worker only while the talk key is held.
+	LatentIt("sends nothing while the talk key is up", Timeout, [this](const FDoneDelegate& Done)
+	{
+		JoinRoom(Done, [this, Done]()
+		{
+			TestFalse("the microphone starts closed", Client->GetVoice()->IsMicrophoneOpen());
+			// A second of speech, then a second of silence: a turn, were it sent.
+			Speak(200, [](int32 Chunk) { return Chunk < 100; }, false);
+			const double Until = FPlatformTime::Seconds() + 4.0;
+			WaitUntil(TEXT("a quiet room"), [Until]() { return FPlatformTime::Seconds() >= Until; }, Done, [this, Done]()
+			{
+				TestNull("the worker heard nothing", Find(EStationVoiceEventKind::Learner));
+				Done.Execute();
+			}, 10.0);
+		});
+	});
+
+	// #419: the turn ends when the key is released, not at a pause while it is held.
+	LatentIt("keeps one turn across a pause while the talk key is held and ends it on release", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		JoinRoom(Done, [this, Done]()
+		{
+			// Half a second of speech, 0.8 s of silence (longer than the end of speech),
+			// half a second more and the release tail.
+			Speak(195, [](int32 Chunk) { return Chunk < 50 || (Chunk >= 130 && Chunk < 180); }, true);
+			WaitUntil(TEXT("the learner's final transcript"), [this]() { return FirstFinalAt > 0.0; }, Done, [this, Done]()
+			{
+				TestTrue("the final transcript came after the release", ReleasedAt > 0.0 && FirstFinalAt >= ReleasedAt);
+				TestTrue(FString::Printf(TEXT("final transcript %.2f s after the release"), FirstFinalAt - ReleasedAt),
+					FirstFinalAt - ReleasedAt < 1.5);
+				// Let a second turn show itself.
+				const double Settled = FPlatformTime::Seconds() + 2.0;
+				WaitUntil(TEXT("a settled room"), [Settled]() { return FPlatformTime::Seconds() >= Settled; }, Done,
+					[this, Done]()
+					{
+						const int32 Finals = Events.FilterByPredicate([](const FStationVoiceEvent& Event)
+						{
+							return Event.Kind == EStationVoiceEventKind::Learner && Event.bFinal;
+						}).Num();
+						TestEqual("one learner turn", Finals, 1);
+						Done.Execute();
+					}, 10.0);
+			}, 10.0);
 		});
 	});
 

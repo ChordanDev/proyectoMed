@@ -968,12 +968,14 @@ void FStationRunVoiceSpec::Define()
 						Done.Execute();
 						return;
 					}
-					// One second of speech-like sound, then a second of silence, in real time.
+					// Push-to-talk (#419): one second of speech-like sound and a short tail in
+					// real time while the talk key is held, then the key is released.
+					Client->GetVoice()->SetMicrophoneOpen(true);
 					const double Start = FPlatformTime::Seconds();
 					TSharedRef<int32> Sent = MakeShared<int32>(0);
 					Speaker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Start, Sent](float)
 					{
-						const int32 Due = FMath::Min(200, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
+						const int32 Due = FMath::Min(115, FMath::FloorToInt((FPlatformTime::Seconds() - Start) * 100.0));
 						FStationVoiceLink* Voice = Client->GetVoice();
 						for (; *Sent < Due && Voice; ++*Sent)
 						{
@@ -987,7 +989,11 @@ void FStationRunVoiceSpec::Define()
 							}
 							Voice->PushMicrophonePcm(Chunk, 48000, 1);
 						}
-						return *Sent < 200 && Voice != nullptr;
+						if (*Sent == 115 && Voice)
+						{
+							Voice->SetMicrophoneOpen(false);
+						}
+						return *Sent < 115 && Voice != nullptr;
 					}));
 					// The spoken turn joins the same conversation as typed turns.
 					WhenFlow(Flow, [this]() { return Flow->GetTranscript().Num() >= 2 || Flow->GetVoice().bLost; },
