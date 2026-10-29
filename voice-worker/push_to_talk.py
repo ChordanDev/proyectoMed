@@ -20,10 +20,13 @@ every event passes through unchanged.
 
 import asyncio
 import collections
+import logging
 import time
 from enum import Enum
 
 from livekit.agents.stt import SpeechEvent, SpeechEventType
+
+logger = logging.getLogger("voice-worker")
 
 RELEASE_QUIET_S = 0.3
 RELEASE_MAX_SETTLE_S = 1.5
@@ -82,8 +85,10 @@ class PushToTalk:
         if self._state is _State.HELD or (self._state is _State.OPEN and self._heard):
             try:
                 self._stream.flush()
-            except RuntimeError:
-                pass  # the transcription input already ended: nothing is left to finalize
+            except Exception as exc:
+                # The transcription input already ended or failed: nothing is left
+                # to finalize, and the release must still end the turn.
+                logger.warning("push-to-talk finalize failed: %s", type(exc).__name__)
             self._state = _State.SETTLING
             self._released_at = time.monotonic()
             self._wake()
@@ -118,14 +123,18 @@ class PushToTalk:
                 self._ended = True
             elif isinstance(item, BaseException):
                 raise item
-            elif isinstance(item, SpeechEvent):
-                self._hear(item)
+            elif isinstance(item, tuple):
+                speech_event, after_turn = item
+                if not after_turn:
+                    self._hear(speech_event)
         return self._ready.popleft()
 
     async def _read_stream(self) -> None:
         try:
             async for speech_event in self._stream:
-                self._items.put_nowait(speech_event)
+                # Transcript arriving after a turn ended belongs to that turn, even
+                # when the reader takes it only after the next press.
+                self._items.put_nowait((speech_event, self._state is _State.IDLE))
         except Exception as exc:
             self._items.put_nowait(exc)
         else:

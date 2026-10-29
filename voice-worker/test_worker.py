@@ -499,6 +499,19 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.commit_calls, [])
         await self.disconnect(task)
 
+    async def test_a_failed_microphone_scan_leaves_no_handler_behind(self):
+        class BrokenPublications(dict):
+            def values(self):
+                raise RuntimeError("participant gone")
+
+        learner = SimpleNamespace(
+            identity="learner-s1", track_publications=BrokenPublications()
+        )
+
+        with self.assertRaises(RuntimeError):
+            worker.follow_push_to_talk(self.room, learner, push_to_talk=None)
+        self.assertNotIn("track_muted", self.room.handlers)
+
     async def test_only_the_connected_learner_microphone_mutes_count(self):
         learner = self.learner()
         task = self.connect(learner=learner)

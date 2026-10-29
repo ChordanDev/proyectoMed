@@ -9,8 +9,8 @@ from push_to_talk import PushToTalk
 from test_transcripts import END, FINAL, INTERIM, MockStream, event
 
 START = SpeechEventType.START_OF_SPEECH
-QUIET_S = 0.03
-MAX_SETTLE_S = 0.3
+QUIET_S = 0.05
+MAX_SETTLE_S = 0.5
 
 
 def described(speech_event) -> tuple:
@@ -155,6 +155,41 @@ class PushToTalkTest(unittest.IsolatedAsyncioTestCase):
         self.ptt.press()
         self.hear(FINAL, "nova")
         self.assertEqual(await self.next_events(2), [(START, None), (FINAL, "nova")])
+
+    async def test_a_late_transcript_waiting_for_a_busy_reader_stays_out_of_the_next_turn(
+        self,
+    ):
+        await self.on_push_to_talk()
+        self.ptt.press()
+        self.hear(FINAL, "onde dói")
+        self.ptt.release()
+        await self.next_events(3)
+
+        # The reader is busy (publishing the turn) when a late final and the next press arrive.
+        self.hear(FINAL, "tarde")
+        await asyncio.sleep(0.01)
+        self.ptt.press()
+        self.hear(FINAL, "nova")
+
+        self.assertEqual(await self.next_events(2), [(START, None), (FINAL, "nova")])
+
+    async def test_any_failure_to_finalize_still_releases_the_key(self):
+        class ClosedStream(MockStream):
+            def flush(self) -> None:
+                raise ConnectionError("channel closed")
+
+        ptt = PushToTalk(
+            ClosedStream(self.queue), quiet_s=QUIET_S, max_settle_s=MAX_SETTLE_S
+        )
+        ptt.release()
+        ptt.press()
+        self.assertEqual(described(await anext(ptt)), (START, None))
+
+        ptt.release()
+        ptt.press()
+
+        self.assertEqual(described(await anext(ptt)), (START, None))
+        await ptt.aclose()
 
     async def test_pressing_again_before_the_turn_ended_continues_the_same_turn(self):
         await self.on_push_to_talk()

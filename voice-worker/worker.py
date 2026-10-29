@@ -699,13 +699,15 @@ def follow_push_to_talk(room, learner, push_to_talk: PushToTalk):
         if publication.muted:
             on_muted(participant, publication)
 
+    # Read before listening: a failed read then leaves no handler behind.
+    muted = []
+    if learner is not None:
+        muted = [p for p in learner.track_publications.values() if p.muted]
     room.on("track_muted", on_muted)
     room.on("track_unmuted", on_unmuted)
     room.on("track_published", on_published)
-    if learner is not None:
-        for publication in list(learner.track_publications.values()):
-            if publication.muted:
-                on_muted(learner, publication)
+    for publication in muted:
+        on_muted(learner, publication)
 
     def stop() -> None:
         room.off("track_muted", on_muted)
