@@ -209,8 +209,9 @@ public:
 	bool CanTalk() const;
 
 	/**
-	 * The patient is answering: the learner's spoken turn waits for its reply, or the
-	 * patient's voice was heard in the last half second.
+	 * The patient is answering: the learner's spoken or typed turn waits for its reply,
+	 * a typed turn's reply is about to be spoken, or the patient's voice was heard in
+	 * the last half second.
 	 */
 	bool IsPatientAnswering() const;
 
@@ -559,6 +560,8 @@ private:
 	TSharedRef<std::atomic<bool>, ESPMode::ThreadSafe> PatientSilenced = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
 	/** The spoken turn the learner cut with the talk key; its late events are dropped. */
 	int32 CutVoiceTurnId = 0;
+	/** `FPlatformTime::Seconds()` until which a typed turn's reply, already shown, waits for its voice. */
+	double TypedReplyVoiceUntil = 0.0;
 	/** The current spoken turn failed, for example its synthesis: the patient will not answer it. */
 	bool bVoiceTurnFailed = false;
 	/**

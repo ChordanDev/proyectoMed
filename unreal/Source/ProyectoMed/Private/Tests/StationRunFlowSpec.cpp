@@ -337,6 +337,24 @@ void FStationRunUnitSpec::Define()
 		TestFalse("a failed turn gets no answer", Flow->IsPatientAnswering());
 	});
 
+	// #419 (PO, 2026-10-29): a typed turn waiting for its spoken reply is the patient answering too.
+	It("counts a typed turn waiting for its reply as the patient answering", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Running;
+		TestFalse("nobody answers before the turn", Flow->IsPatientAnswering());
+
+		Flow->PendingTurn = TEXT("Ainda dói?");
+		TestTrue("while Phoenix answers the typed turn", Flow->IsPatientAnswering());
+
+		// The shown reply waits for its voice, which the worker sends a moment later.
+		Flow->PendingTurn.Reset();
+		Flow->TypedReplyVoiceUntil = FPlatformTime::Seconds() + 2.0;
+		TestTrue("until its voice starts", Flow->IsPatientAnswering());
+		Flow->CutPatient();
+		TestFalse("a cut ends it", Flow->IsPatientAnswering());
+	});
+
 	It("cuts the patient: its voice stops and the unanswered turn leaves the conversation", [this, Spoken]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();

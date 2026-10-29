@@ -35,6 +35,8 @@ namespace
 	constexpr double PatientVoiceQuietSeconds = 0.5;
 	/** An int16 sample louder than this is the patient's voice, not the silence between words. */
 	constexpr int32 PatientVoiceLevel = 500;
+	/** How long a typed turn's shown reply waits for its first spoken frame (#419). */
+	constexpr double TypedReplyVoiceSeconds = 2.0;
 }
 
 FText FormatStationTimer(const FTimespan& Remaining)
@@ -304,6 +306,8 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 				if (Self->VoiceTurnId == SentAfterVoiceTurn)
 				{
 					Self->ResumePatient();
+					// Until its voice starts, a single press must not fence it (#419).
+					Self->TypedReplyVoiceUntil = FPlatformTime::Seconds() + TypedReplyVoiceSeconds;
 				}
 			}
 			Self->OnChanged.Broadcast();
@@ -797,6 +801,7 @@ void UStationRunFlow::ResetRun()
 	PatientHeardAt->store(0.0);
 	PatientSilenced->store(false);
 	CutVoiceTurnId = 0;
+	TypedReplyVoiceUntil = 0.0;
 	bVoiceTurnFailed = false;
 	PendingTurn.Reset();
 	Transcript.Reset();
@@ -1076,7 +1081,9 @@ bool UStationRunFlow::IsPatientAnswering() const
 	// A spoken exam request waits for the examiner, not the patient.
 	const bool bAwaitingReply = bVoiceLearnerCommitted && !bVoiceOutcome && !bVoiceTurnFailed
 		&& VoiceTurnId > CutVoiceTurnId && VoiceTurnId != SpokenExamTurn;
-	return bAwaitingReply || FPlatformTime::Seconds() - PatientHeardAt->load() < PatientVoiceQuietSeconds;
+	const double Now = FPlatformTime::Seconds();
+	return bAwaitingReply || PendingTurn.IsSet() || Now < TypedReplyVoiceUntil
+		|| Now - PatientHeardAt->load() < PatientVoiceQuietSeconds;
 }
 
 bool UStationRunFlow::PressTalkKey(bool bForExam, EStationTalkInput Input)
@@ -1137,6 +1144,7 @@ void UStationRunFlow::CutPatient()
 {
 	SilencePatient();
 	PatientHeardAt->store(0.0);
+	TypedReplyVoiceUntil = 0.0;
 	if (VoiceTurnId == SpokenExamTurn)
 	{
 		return; // an exam request's outcome is always kept (#364)

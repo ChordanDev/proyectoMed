@@ -213,7 +213,8 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   above the typed box (for touch screens), is held, and releasing it sends the
   turn at once, without waiting for the end of speech. The button reads
   "Falando... solte para enviar" while held. While the patient answers (from
-  the learner's sent turn until the reply ends, or while its voice plays), a
+  the learner's sent turn, spoken or typed, until the reply ends, or while its
+  voice plays), a
   single press does nothing and the button reads "Toque e segure para
   interromper"; tap and then hold to cut the patient and talk. The exam
   microphone and Shift + space bar follow the same rule. While the typed-reply box has the keyboard focus the space
