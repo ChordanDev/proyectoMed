@@ -759,6 +759,13 @@ void FStationRunUnitSpec::Define()
 		Flow->HandleVoiceEvent(Spoken(EKind::Learner, 2, TEXT("Onde dói?"), INDEX_NONE, true));
 		TestFalse("the request no longer waits", Flow->IsSpokenExamInFlight());
 		TestEqual("the newer utterance is dialogue", Flow->GetTranscript().Num(), 1);
+		// Other late events of the request's turn still change nothing.
+		Flow->HandleVoiceEvent(Spoken(EKind::ExaminerAcknowledged, 1));
+		Flow->HandleVoiceEvent(Spoken(EKind::PatientText, 1, TEXT("Resposta atrasada.")));
+		TestEqual("no late line", Flow->GetTranscript().Num(), 1);
+		TestTrue("no late reply text", Flow->GetVoice().PatientText.IsEmpty());
+		TestFalse("no late examiner note", Flow->GetVoice().bExaminerNoted);
+		TestEqual("no exam request yet", Flow->GetExamRequests().Num(), 0);
 
 		const FStationVoiceEvent Outcome = ImpressoOutcome(1, EStationImpressoDecision::Released, TEXT("Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS"));
 		Flow->HandleVoiceEvent(Outcome);

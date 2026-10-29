@@ -867,9 +867,9 @@ the next utterance while it still listens. Its outcome still joins
 `GetExamRequests` if it arrives later (#434); the newer utterance keeps its own
 state, and Phoenix answers it as dialogue when the first request used the mode.
 If the voice is lost while a spoken request waits, its outcome can no longer
-arrive: the request is let go, and `ListImpressos` is read again. If Phoenix answers that utterance as dialogue instead
-(it ended after `expires_at`), its learner line joins the conversation before
-the reply.
+arrive: the request is let go, and `ListImpressos` is read again. If Phoenix
+answers that utterance as dialogue instead (it ended after `expires_at`), its
+learner line joins the conversation before the reply.
 
 - Errors: `403 no_consent` on a run without audio consent (a typed request
   needs no exam mode), `409 session_completed`, `404 session_not_found`,
