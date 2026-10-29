@@ -1,6 +1,8 @@
 // The learner's way through a station run: on first launch the microphone
-// disclosure, then the Pre-Station Notice, then the brief Phoenix serves with the
-// choice of a text or a voice training, then the run, where typed turns are
+// disclosure, then the main menu, where the learner chooses a training or a
+// simulated exam (#421), then the Pre-Station Notice once per launch, then the
+// brief Phoenix serves with that mode's way in (a text or a voice training, or
+// the simulated exam by voice), then the run, where typed turns are
 // always available and exam and impresso requests have their own channel, then
 // the feedback once the learner or the Station Timer ends it. A run that loses
 // Phoenix is invalidated instead (#196). Interface code renders it; only the
@@ -27,9 +29,14 @@ enum class EStationRunStep : uint8
 {
 	/** First launch: what the microphone is used for, and the system permission. */
 	Microphone,
+	/** The main menu: the learner chooses a training or a simulated exam (#421). */
+	Menu,
 	/** The Pre-Station Notice is shown and not yet acknowledged. */
 	Notice,
-	/** The brief is shown; the learner picks a text or a voice training. */
+	/**
+	 * The brief is shown with the chosen mode's way in: a text or a voice training, or
+	 * the simulated exam.
+	 */
 	Brief,
 	/** Phoenix is creating the session. */
 	Starting,
@@ -69,6 +76,13 @@ struct PROYECTOMED_API FStationExamRequest
 
 /** A voice training needs Phoenix to serve realtime voice. */
 PROYECTOMED_API bool IsVoiceTrainingAvailable(const FStationSummary& Station);
+
+/**
+ * Why a simulated exam cannot start, in Brazilian Portuguese, for the brief to
+ * show; empty when it can. A simulated exam is performed only by voice, so it
+ * needs realtime voice and a microphone the system has not blocked (#421).
+ */
+PROYECTOMED_API FText SimulatedExamUnavailableText(const FStationSummary& Station, EStationMicPermission Permission);
 
 /**
  * The learner-facing text for a failed call. Phoenix's message is shown only when
@@ -132,26 +146,39 @@ class PROYECTOMED_API UStationRunFlow : public UObject
 
 public:
 	/**
-	 * Shows the microphone disclosure on first launch, otherwise the notice, and
+	 * Shows the microphone disclosure on first launch, otherwise the main menu, and
 	 * loads the active station in the background.
 	 */
 	void Begin(UStationClient* InClient, FStationMicrophoneSetup InMicrophone = FStationMicrophoneSetup::System());
 
 	/**
-	 * Microphone to notice. `bAllow` asks the system for the microphone now; the
+	 * Microphone to menu. `bAllow` asks the system for the microphone now; the
 	 * disclosure counts as shown either way, so it is not shown again.
 	 */
 	void AnswerMicrophone(bool bAllow);
 
+	/**
+	 * Menu to the chosen Station Mode (#421): the notice the first time in this launch,
+	 * otherwise straight to the brief. Does nothing on any other step. Why the station
+	 * did not load stays shown; any other error is cleared.
+	 */
+	void ChooseMode(EStationSessionMode InMode);
+
 	/** Notice to brief. Does nothing on any other step. */
 	void AcknowledgeNotice();
+
+	/**
+	 * Notice or brief back to the menu. Does nothing on any other step. Why the station
+	 * did not load stays shown; any other error is cleared.
+	 */
+	void BackToMenu();
 
 	/** Reloads the station after a failed load. */
 	void RetryLoadStation();
 
 	/**
-	 * True on the brief once the station is loaded. Voice also needs Phoenix to serve
-	 * realtime voice and a microphone the system has not blocked.
+	 * True on a training's brief once the station is loaded. Voice also needs Phoenix to
+	 * serve realtime voice and a microphone the system has not blocked.
 	 */
 	bool CanEnter(EStationTrainingMode Mode) const;
 
@@ -162,6 +189,20 @@ public:
 	 * run continues as text and `IsVoiceFallback` is true.
 	 */
 	void Enter(EStationTrainingMode Mode);
+
+	/**
+	 * True on a simulated exam's brief once the station is loaded, when
+	 * `SimulatedExamUnavailableText` is empty. Trainings stay available from the menu.
+	 */
+	bool CanEnterSimulatedExam() const;
+
+	/**
+	 * Starts a simulated exam ("Prova simulada", #421): a voice run with audio consent
+	 * that Phoenix records as a simulated exam for the whole run. The microphone is
+	 * asked for first if the system never did; without it the brief stays, with the
+	 * reason. Until #422-#426, the run itself behaves like a voice training.
+	 */
+	void EnterSimulatedExam();
 
 	/** The microphone as the system allows it now. */
 	EStationMicPermission GetMicrophonePermission() const;
@@ -229,6 +270,8 @@ public:
 	bool IsStationLoading() const { return bLoadingStation; }
 	const FStationSummary* GetStation() const { return Station.GetPtrOrNull(); }
 	EStationTrainingMode GetMode() const { return Mode; }
+	/** The Station Mode last chosen on the menu; a training until the learner first chooses one. */
+	EStationSessionMode GetSessionMode() const { return SessionMode; }
 	bool IsVoiceFallback() const { return bVoiceFallback; }
 
 	/** For #191 to join the room. Secret: never log or display the token. */
@@ -373,7 +416,7 @@ public:
 
 	/**
 	 * Asks Phoenix to forget the run. Once it confirms, everything this run
-	 * held is cleared and the brief is shown, ready for a new run; until then
+	 * held is cleared and the menu is shown, ready for a new run; until then
 	 * no new run can start.
 	 */
 	void Discard();
@@ -403,8 +446,13 @@ private:
 	friend class FStationHudSnapshotSpec;
 	friend class FStationHudUnitSpec;
 	friend class FStationCardSnapshotSpec;
+	friend class FStationBriefUnitSpec;
 
 	void LoadStation();
+	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);
+
+	/** Clears the last mode's failure on the way through the menu, but not why the station did not load. */
+	void ForgetModeError();
 	void SetError(const FStationClientError& Error, const FText& Fallback);
 	void StartSession();
 	void ConnectVoice();
@@ -498,6 +546,9 @@ private:
 
 	EStationRunStep Step = EStationRunStep::Notice;
 	EStationTrainingMode Mode = EStationTrainingMode::Text;
+	EStationSessionMode SessionMode = EStationSessionMode::Training;
+	/** The Pre-Station Notice was acknowledged in this launch; it is not shown again. */
+	bool bNoticeAcknowledged = false;
 	TOptional<FStationSummary> Station;
 	TOptional<FStationVoiceCredential> VoiceCredential;
 	TOptional<FString> PendingTurn;

@@ -54,6 +54,16 @@ namespace StationUi
 	const FLinearColor NeutralFill(FColor(0x44, 0x44, 0x41));
 	const FLinearColor NeutralInk(FColor(0xD3, 0xD1, 0xC7));
 
+	// The main menu's mode cards (#421): blue for a training, amber for a simulated exam.
+	const FLinearColor TrainingFill(FColor(0x14, 0x36, 0x5C));
+	const FLinearColor TrainingHover(FColor(0x1B, 0x47, 0x77));
+	const FLinearColor TrainingAccent(FColor(0x85, 0xB7, 0xEB));
+	const FLinearColor ExamFill(FColor(0x4E, 0x2A, 0x0C));
+	const FLinearColor ExamHover(FColor(0x66, 0x37, 0x12));
+	const FLinearColor ExamAccent(FColor(0xF2, 0xB6, 0x61));
+	/** Behind the main menu until the doctor's office shows there (#431). */
+	const FLinearColor MenuBackdrop(FColor(0x0E, 0x24, 0x40));
+
 	/** A rounded box of `Fill`, outlined in `Outline` when `OutlineWidth` is above 0. */
 	FSlateBrush RoundedBrush(const FLinearColor& Fill, float Radius,
 		const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.f);

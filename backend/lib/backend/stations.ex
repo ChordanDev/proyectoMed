@@ -165,6 +165,21 @@ defmodule Backend.Stations do
   end
 
   @doc """
+  Starts a session on the active station, as `create_session/1` does, once its
+  Station Mode allows it (#421). `attrs` takes `:audio_consent` and `:mode`
+  (`:training` when absent). A simulated exam is performed only by voice, so
+  without audio consent it answers `{:error, :audio_consent_required}` and
+  starts nothing.
+  """
+  @spec start_active_session(map()) ::
+          {:ok, Conversation.session()} | {:error, :audio_consent_required}
+  def start_active_session(attrs) do
+    with :ok <- ensure_mode_allowed(attrs) do
+      {:ok, create_session(attrs)}
+    end
+  end
+
+  @doc """
   Starts a session on a published Station version from the database (issue
   #334, ADR-013 amendment on #209).
 
@@ -172,8 +187,12 @@ defmodule Backend.Stations do
   number) or `{:random, area}`, where `area` is an `[ÁREA]` or `nil` for any
   area. The session pins the latest published version at this moment: its
   validated package is kept with the session, so a later re-publish never
-  changes a session in progress. `attrs` takes `:audio_consent` and
-  `:user_id`, the learner the session belongs to (#337).
+  changes a session in progress. `attrs` takes `:audio_consent`, `:user_id`,
+  the learner the session belongs to (#337), and `:mode`, the Station Mode
+  (#421): `:training` when absent, or `:simulated_exam`, which needs audio
+  consent. A simulated exam without it answers
+  `{:error, :audio_consent_required}`; this request check runs first, before the
+  node-level gates below.
 
   The session's `station_id` is the case number and `station_version` the
   published version number; `station_slug`, `station_area` and
@@ -190,14 +209,15 @@ defmodule Backend.Stations do
   session holds one slot until it is graded or expires.
 
   A node draining for a deploy (`start_draining/0`, #344) answers
-  `{:error, :draining}` before any other check, and a node at its
+  `{:error, :draining}` before any other node check, and a node at its
   concurrent-session cap (`MAX_CONCURRENT_SESSIONS`, `Backend.Stations.Capacity`)
   answers `{:error, :capacity_exhausted}`.
   """
   @spec start_station_session({:station, integer()} | {:random, String.t() | nil}, map()) ::
           {:ok, Conversation.session()}
           | {:error,
-             :draining
+             :audio_consent_required
+             | :draining
              | :capacity_exhausted
              | :subscription_required
              | {:daily_quota_exhausted, DateTime.t()}
@@ -207,13 +227,14 @@ defmodule Backend.Stations do
   def start_station_session(selection, attrs \\ %{}) do
     attrs = if is_list(attrs), do: Enum.into(attrs, %{}), else: attrs
 
-    with :ok <- admit_new_session(),
+    with :ok <- ensure_mode_allowed(attrs),
+         :ok <- admit_new_session(),
          :ok <- require_entitlement(attrs[:user_id]),
          {:ok, version} <- published_version(selection),
          {:ok, package} <- pinned_package(version) do
       within_daily_quota(attrs[:user_id], fn ->
         attrs
-        |> Map.take([:audio_consent, :user_id])
+        |> Map.take([:audio_consent, :user_id, :mode])
         |> Map.merge(%{
           station_id: version.case.number,
           station_version: version.version_number,
@@ -228,8 +249,13 @@ defmodule Backend.Stations do
     end
   end
 
-  # The node-level gates come first (#344): a draining node or a full one
-  # refuses before any entitlement, quota or station work.
+  # A simulated exam is performed only by voice (#318 business rule 2).
+  defp ensure_mode_allowed(%{mode: :simulated_exam, audio_consent: true}), do: :ok
+  defp ensure_mode_allowed(%{mode: :simulated_exam}), do: {:error, :audio_consent_required}
+  defp ensure_mode_allowed(_attrs), do: :ok
+
+  # The node-level gates (#344) run before any entitlement, quota or station
+  # work: a draining node or a full one refuses without touching them.
   defp admit_new_session do
     if Drain.draining?(),
       do: {:error, :draining},

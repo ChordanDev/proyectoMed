@@ -45,28 +45,57 @@ defmodule BackendWeb.StationController do
         _ -> nil
       end
 
-    if is_boolean(audio_consent) do
-      session = Stations.create_session(%{audio_consent: audio_consent})
-
+    with true <- is_boolean(audio_consent),
+         {:ok, mode} <- session_mode(params),
+         {:ok, session} <-
+           Stations.start_active_session(%{audio_consent: audio_consent, mode: mode}) do
       json(conn, %{
         session_id: session.session_id,
         station_id: session.station_id,
         station_version: session.station_version,
         audio_consent: session.audio_consent,
+        mode: mode_to_string(session),
         started_at: DateTime.to_iso8601(session.started_at),
         expires_at: DateTime.to_iso8601(session.expires_at),
         deadline_at: DateTime.to_iso8601(session.deadline_at),
         server_now: DateTime.to_iso8601(DateTime.utc_now())
       })
     else
-      conn
-      |> put_status(:bad_request)
-      |> json(%{
-        error: "invalid_parameters",
-        message: "Parâmetros inválidos: 'audio_consent' é obrigatório e deve ser um booleano."
-      })
+      {:error, :audio_consent_required} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{
+          error: "audio_consent_required",
+          message: "A prova simulada é feita só por voz: é preciso consentir com o uso do áudio."
+        })
+
+      {:error, :invalid_mode} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{
+          error: "invalid_parameters",
+          message: "Parâmetros inválidos: 'mode' deve ser \"training\" ou \"simulated_exam\"."
+        })
+
+      false ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{
+          error: "invalid_parameters",
+          message: "Parâmetros inválidos: 'audio_consent' é obrigatório e deve ser um booleano."
+        })
     end
   end
+
+  # The Station Mode (#421): a missing or null mode is a training, so clients
+  # that predate the mode keep starting trainings.
+  defp session_mode(%{"mode" => "simulated_exam"}), do: {:ok, :simulated_exam}
+  defp session_mode(%{"mode" => "training"}), do: {:ok, :training}
+  defp session_mode(%{"mode" => nil}), do: {:ok, :training}
+  defp session_mode(%{"mode" => _other}), do: {:error, :invalid_mode}
+  defp session_mode(_params), do: {:ok, :training}
+
+  defp mode_to_string(session), do: session |> Map.get(:mode, :training) |> Atom.to_string()
 
   def create_message(conn, %{"id" => session_id} = params) do
     role = params["role"]
@@ -233,6 +262,7 @@ defmodule BackendWeb.StationController do
         status: "completed",
         completed_at: DateTime.to_iso8601(session.completed_at),
         completion_reason: to_string(session.completion_reason),
+        mode: mode_to_string(session),
         deadline_at: DateTime.to_iso8601(session.deadline_at),
         server_now: DateTime.to_iso8601(DateTime.utc_now())
       })
@@ -284,6 +314,7 @@ defmodule BackendWeb.StationController do
           station_id: session.station_id,
           station_version: session.station_version,
           audio_consent: session.audio_consent,
+          mode: mode_to_string(session),
           started_at: DateTime.to_iso8601(session.started_at),
           expires_at: DateTime.to_iso8601(session.expires_at),
           deadline_at: DateTime.to_iso8601(session.deadline_at),
