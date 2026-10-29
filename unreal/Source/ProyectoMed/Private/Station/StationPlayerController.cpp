@@ -189,20 +189,36 @@ void AStationPlayerController::SetupInputComponent()
 	Super::SetupInputComponent();
 	InputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &AStationPlayerController::PressTalkKey);
 	InputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &AStationPlayerController::ReleaseTalkKey);
+	// Shift + space bar asks for an exam aloud; this chord masks the plain space bar.
+	const FInputChord ExamChord(EKeys::SpaceBar, /*bShift*/ true, false, false, false);
+	InputComponent->BindKey(ExamChord, IE_Pressed, this, &AStationPlayerController::PressExamTalkKey);
+	InputComponent->BindKey(ExamChord, IE_Released, this, &AStationPlayerController::ReleaseTalkKey);
 }
 
 void AStationPlayerController::PressTalkKey()
+{
+	if (Flow && !IsTyping())
+	{
+		Flow->PressTalkKey();
+	}
+}
+
+void AStationPlayerController::PressExamTalkKey()
+{
+	if (Flow && !IsTyping())
+	{
+		Flow->PressTalkKey(/*bForExam*/ true);
+	}
+}
+
+bool AStationPlayerController::IsTyping()
 {
 	// A text box takes the space as a character, and Slate still hands its key-down to the game.
 	const TSharedPtr<SWidget> Focused = FSlateApplication::IsInitialized()
 		? FSlateApplication::Get().GetKeyboardFocusedWidget()
 		: nullptr;
-	const bool bTyping = Focused
+	return Focused
 		&& (Focused->GetType() == TEXT("SEditableText") || Focused->GetType() == TEXT("SMultiLineEditableText"));
-	if (Flow && !bTyping)
-	{
-		Flow->PressTalkKey();
-	}
 }
 
 void AStationPlayerController::ReleaseTalkKey()

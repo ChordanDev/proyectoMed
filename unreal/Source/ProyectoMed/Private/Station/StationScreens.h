@@ -181,6 +181,8 @@ private:
 
 	/** The microphone's look: idle, arming or recording, with the recording time. */
 	void RefreshMicrophone();
+	/** The talk button's label and look (#419): idle, talking, or how to cut the patient. */
+	void RefreshTalk();
 	void RequestExam();
 
 	UFUNCTION()
@@ -200,6 +202,12 @@ private:
 
 	UFUNCTION()
 	void HandleRequestExam();
+
+	UFUNCTION()
+	void HandlePressTalk();
+
+	UFUNCTION()
+	void HandleReleaseTalk();
 
 	UFUNCTION()
 	void HandleAskExamAloud();
@@ -230,6 +238,16 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UButton> SendButton;
+
+	/** Push-to-talk (#419): held, like the space bar, to talk to the patient. */
+	UPROPERTY()
+	TObjectPtr<UButton> TalkButton;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> TalkText;
+
+	/** Whether the talk button is styled as talking; unset before its first style. */
+	TOptional<bool> TalkLookTalking;
 
 	UPROPERTY()
 	TObjectPtr<UButton> ExamTab;

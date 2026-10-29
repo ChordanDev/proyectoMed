@@ -185,10 +185,12 @@ public:
 	 * Push-to-talk (#419): the learner pressed the talk key, the space bar or the
 	 * HUD's talk button. The voice worker hears the learner only while it is held.
 	 * While the patient answers, a single press does nothing: a tap followed by a
-	 * press opens the microphone and cuts the patient at once. True when the press
-	 * opened the microphone.
+	 * press opens the microphone and cuts the patient at once. With `bForExam` (the
+	 * exam button, or Shift + space bar) the press also arms the exam mode, so what
+	 * is said goes to the impresso request (#364); it needs `CanAskExamAloud`. True
+	 * when the press opened the microphone.
 	 */
-	bool PressTalkKey();
+	bool PressTalkKey(bool bForExam = false);
 
 	/**
 	 * The learner released the talk key. The microphone closes a moment later, so the
@@ -198,6 +200,9 @@ public:
 
 	/** The talk key is held and the microphone open. */
 	bool IsTalking() const { return TalkKey.IsHeld(); }
+
+	/** The talk key is held for an exam request. */
+	bool IsTalkingForExam() const { return TalkKey.IsHeld() && bTalkKeyForExam; }
 
 	/** A press of the talk key can open the microphone: the voice of a running voice training is ready. */
 	bool CanTalk() const;
@@ -537,6 +542,8 @@ private:
 	bool bVoiceOutcome = false;
 	FStationPatientOutput Patient;
 	FStationTalkKey TalkKey;
+	/** The held talk key arms the exam mode: its release releases the exam button too. */
+	bool bTalkKeyForExam = false;
 	/** Closes the microphone once the release tail is over. */
 	FTSTicker::FDelegateHandle TalkTailTicker;
 	/** `FPlatformTime::Seconds()` when the patient's voice was last heard; written on a LiveKit thread. */

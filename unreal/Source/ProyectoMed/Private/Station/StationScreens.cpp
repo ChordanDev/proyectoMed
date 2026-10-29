@@ -370,6 +370,21 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 		RuleSlot->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
 	}
 
+	// Push-to-talk (#419): in a voice training the learner holds this button, or the
+	// space bar, to talk to the patient; releasing it sends what was said.
+	TalkButton = WidgetTree->ConstructWidget<UButton>();
+	TalkButton->OnPressed.AddDynamic(this, &UStationHudWidget::HandlePressTalk);
+	TalkButton->OnReleased.AddDynamic(this, &UStationHudWidget::HandleReleaseTalk);
+	TalkText = WidgetTree->ConstructWidget<UTextBlock>();
+	TalkText->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 15));
+	TalkText->SetJustification(ETextJustify::Center);
+	TalkText->SetColorAndOpacity(FSlateColor(StationUi::Ink));
+	TalkButton->AddChild(TalkText);
+	if (UVerticalBoxSlot* TalkSlot = Column->AddChildToVerticalBox(TalkButton))
+	{
+		TalkSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+	}
+
 	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
 	if (UVerticalBoxSlot* RowSlot = Column->AddChildToVerticalBox(Row))
 	{
@@ -967,7 +982,8 @@ void UStationHudWidget::RefreshMicrophone()
 	{
 		return;
 	}
-	const EMicrophoneLook Look = !bMicrophoneHeld ? EMicrophoneLook::Idle
+	const bool bHeld = bMicrophoneHeld || (Flow && Flow->IsTalkingForExam());
+	const EMicrophoneLook Look = !bHeld ? EMicrophoneLook::Idle
 		: Flow && Flow->IsArmingExamAloud() ? EMicrophoneLook::Arming
 		: Flow && (Flow->IsListeningForExam() || Flow->IsSpokenExamInFlight()) ? EMicrophoneLook::Recording
 		: EMicrophoneLook::Idle;
@@ -1009,7 +1025,7 @@ void UStationHudWidget::RefreshMicrophone()
 	}
 	else
 	{
-		ExamAloudText->SetText(LOCTEXT("ExamAloudIdle", "Segure para pedir um exame"));
+		ExamAloudText->SetText(LOCTEXT("ExamAloudIdle", "Segure para pedir (Shift + Espaço)"));
 		ExamAloudText->SetColorAndOpacity(FSlateColor(StationUi::Muted));
 	}
 }
@@ -1069,13 +1085,29 @@ void UStationHudWidget::HandleCloseDocument()
 	StationUi::SetShown(DocumentViewer, false);
 }
 
-void UStationHudWidget::HandleAskExamAloud()
+void UStationHudWidget::HandlePressTalk()
 {
-	bMicrophoneHeld = true;
 	if (Flow)
 	{
-		Flow->AskExamAloud();
+		Flow->PressTalkKey();
 	}
+	RefreshTalk();
+}
+
+void UStationHudWidget::HandleReleaseTalk()
+{
+	if (Flow)
+	{
+		Flow->ReleaseTalkKey();
+	}
+	RefreshTalk();
+}
+
+void UStationHudWidget::HandleAskExamAloud()
+{
+	// The exam push-to-talk (#419): the press opens nothing while the patient
+	// answers, unless it follows a tap.
+	bMicrophoneHeld = Flow && Flow->PressTalkKey(/*bForExam*/ true);
 	RefreshMicrophone();
 }
 
@@ -1084,7 +1116,7 @@ void UStationHudWidget::HandleReleaseExamAloud()
 	bMicrophoneHeld = false;
 	if (Flow)
 	{
-		Flow->ReleaseExamAloud();
+		Flow->ReleaseTalkKey();
 	}
 	RefreshMicrophone();
 }
@@ -1135,7 +1167,7 @@ void UStationHudWidget::Refresh()
 	}
 	else if (Voice.State == EStationVoiceState::Ready)
 	{
-		Status = LOCTEXT("MicrophoneOn", "Microfone ativo");
+		Status = LOCTEXT("VoiceReady", "Voz conectada");
 	}
 	else if (Voice.State == EStationVoiceState::Reconnecting)
 	{
@@ -1150,7 +1182,47 @@ void UStationHudWidget::Refresh()
 	VoiceStatusText->SetColorAndOpacity(Voice.bLost ? StationUi::Caution : StationUi::Muted);
 
 	RefreshConversation();
+	RefreshTalk();
 	RefreshExams();
+}
+
+void UStationHudWidget::RefreshTalk()
+{
+	if (!Flow || !TalkButton)
+	{
+		return;
+	}
+	const bool bShown = Flow->ShouldRequestExamsAloud(); // a voice training whose voice and microphone work
+	StationUi::SetShown(TalkButton, bShown);
+	if (!bShown)
+	{
+		return;
+	}
+	// Disabling a held button would lose its release, so it stays enabled while the run goes on.
+	TalkButton->SetIsEnabled(Flow->CanFinish());
+	const bool bTalking = Flow->IsTalking() && !Flow->IsTalkingForExam();
+	const FText Label = bTalking ? LOCTEXT("TalkTalking", "Falando... solte para enviar")
+		: Flow->IsPatientAnswering() ? LOCTEXT("TalkCut", "Toque e segure para interromper")
+		: LOCTEXT("TalkIdle", "Segure para falar (Espaço)");
+	if (!Label.EqualTo(TalkText->GetText()))
+	{
+		TalkText->SetText(Label);
+	}
+	if (TalkLookTalking.IsSet() && TalkLookTalking.GetValue() == bTalking)
+	{
+		return;
+	}
+	TalkLookTalking = bTalking;
+	const FLinearColor Fill = bTalking ? StationUi::Recording : StationUi::Raised;
+	const FLinearColor Edge = bTalking ? StationUi::RecordingInk : StationUi::Quiet;
+	FButtonStyle Style;
+	Style.SetNormal(StationUi::RoundedBrush(Fill, 10.f, Edge, 1.5f));
+	Style.SetHovered(StationUi::RoundedBrush(bTalking ? Fill : StationUi::RaisedHover, 10.f, bTalking ? Edge : StationUi::Ink, 1.5f));
+	Style.SetPressed(StationUi::RoundedBrush(Fill, 10.f, Edge, 1.5f));
+	Style.SetDisabled(StationUi::RoundedBrush(StationUi::Raised, 10.f, StationUi::PanelEdge, 1.5f));
+	Style.SetNormalPadding(FMargin(12.f, 12.f));
+	Style.SetPressedPadding(FMargin(12.f, 12.f));
+	TalkButton->SetStyle(Style);
 }
 
 void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -1161,6 +1233,7 @@ void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 		TimerText->SetText(FormatStationTimer(Flow->GetClient()->GetRemainingTime()));
 		Flow->CheckStationTimer();
 	}
+	RefreshTalk();
 	if (MicrophoneRing && MicrophoneLook == EMicrophoneLook::Recording)
 	{
 		// The pulse: grows from the button and fades, about once a second.

@@ -8,6 +8,7 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
@@ -70,6 +71,32 @@ void FStationHudUnitSpec::Define()
 			AfterLoss.Contains(TEXT("Nenhum exame solicitado ainda. Descreva abaixo o que você solicita.")));
 		TestFalse(TEXT("no longer the hidden microphone"),
 			AfterLoss.Contains(TEXT("Nenhum exame solicitado ainda. Segure o microfone e diga o que você solicita.")));
+	});
+
+	// #419: the talk button, for touch screens, does what the space bar does.
+	It("shows the talk button in a voice training, and how to cut the patient while it answers", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		UStationHudWidget* Hud = MakeHud(Flow);
+		TestEqual(TEXT("shown while the voice works"), Hud->TalkButton->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual(TEXT("hold to talk"), Hud->TalkText->GetText().ToString(), FString(TEXT("Segure para falar (Espaço)")));
+
+		FStationVoiceEvent Sent;
+		Sent.Kind = EStationVoiceEventKind::Learner;
+		Sent.TurnId = 1;
+		Sent.Text = TEXT("Onde dói?");
+		Sent.bFinal = true;
+		Flow->HandleVoiceEvent(Sent);
+		Hud->Refresh();
+		TestEqual(TEXT("while the patient answers"), Hud->TalkText->GetText().ToString(),
+			FString(TEXT("Toque e segure para interromper")));
+
+		Flow->Voice.bLost = true;
+		Hud->Refresh();
+		TestEqual(TEXT("hidden once the voice is lost"), Hud->TalkButton->GetVisibility(), ESlateVisibility::Collapsed);
+
+		UStationHudWidget* Text = MakeHud(MakeFlow(EStationTrainingMode::Text));
+		TestEqual(TEXT("never in a text training"), Text->TalkButton->GetVisibility(), ESlateVisibility::Collapsed);
 	});
 
 	It("links a request's document from its card and lists a document a turn to the examiner released apart", [this]()

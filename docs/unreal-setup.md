@@ -134,7 +134,8 @@ only code that talks to it, and its interface is documented in
 5. The "Exames" tab at the top right opens the "Exames solicitados" panel down
    the right edge; its × closes it again. A text training types a request there
    ("exame físico", "eletrocardiograma"); a voice training holds the round
-   microphone at the bottom of the panel and says it (#364): the microphone
+   microphone at the bottom of the panel, or Shift + space bar, and says it
+   (#364, push-to-talk as below, #419): the microphone
    turns amber while Phoenix arms the request, then red with a pulse and
    "Gravando 0:03 · solte para enviar" while it records. Either way the request
    goes to Phoenix's impresso route, never to the patient, and never joins the
@@ -199,16 +200,19 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   the loudness of the tone. Real speech needs the real-time voice runbook in
   the README.
 - The microphone is push-to-talk (#419): the voice worker hears the learner
-  only while the **space bar** is held, and releasing it sends the turn at
-  once, without waiting for the end of speech. While the patient answers (from
+  only while the **space bar**, or the "Segure para falar (Espaço)" button
+  above the typed box (for touch screens), is held, and releasing it sends the
+  turn at once, without waiting for the end of speech. The button reads
+  "Falando... solte para enviar" while held. While the patient answers (from
   the learner's sent turn until the reply ends, or while its voice plays), a
-  single press does nothing; tap the space bar and then hold it to cut the
-  patient and talk. While the typed-reply box has the keyboard focus the space
+  single press does nothing and the button reads "Toque e segure para
+  interromper"; tap and then hold to cut the patient and talk. The exam
+  microphone and Shift + space bar follow the same rule. While the typed-reply box has the keyboard focus the space
   bar types a space; click the scene to give it back to the talk key. During
   the run the space bar no longer presses the focused button (Enter still
   does), and switching to another app releases a held key.
 - The voice status under the timer reads "Conectando a voz..." until the
-  worker joins, then "Microfone ativo". While LiveKit retries the connection or
+  worker joins, then "Voz conectada". While LiveKit retries the connection or
   the worker is gone it reads "Reconectando a voz..." and the microphone stops.
   If the worker has not joined within 20 seconds, or the voice has not come back
   within 10, it reads "A voz caiu. O tempo da estação continua." for the rest of

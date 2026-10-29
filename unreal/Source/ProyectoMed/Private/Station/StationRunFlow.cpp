@@ -791,6 +791,7 @@ void UStationRunFlow::ResetRun()
 	VoiceLearnerLine = INDEX_NONE;
 	bVoiceOutcome = false;
 	TalkKey.Reset();
+	bTalkKeyForExam = false;
 	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
 	TalkTailTicker.Reset();
 	PatientHeardAt->store(0.0);
@@ -1068,14 +1069,15 @@ bool UStationRunFlow::CanTalk() const
 
 bool UStationRunFlow::IsPatientAnswering() const
 {
+	// A spoken exam request waits for the examiner, not the patient.
 	const bool bAwaitingReply = bVoiceLearnerCommitted && !bVoiceOutcome && !bVoiceTurnFailed
-		&& VoiceTurnId > CutVoiceTurnId;
+		&& VoiceTurnId > CutVoiceTurnId && VoiceTurnId != SpokenExamTurn;
 	return bAwaitingReply || FPlatformTime::Seconds() - PatientHeardAt->load() < PatientVoiceQuietSeconds;
 }
 
-bool UStationRunFlow::PressTalkKey()
+bool UStationRunFlow::PressTalkKey(bool bForExam)
 {
-	if (!CanTalk())
+	if (!CanTalk() || (bForExam && !CanAskExamAloud()))
 	{
 		return false;
 	}
@@ -1084,9 +1086,14 @@ bool UStationRunFlow::PressTalkKey()
 	{
 		return false;
 	}
+	bTalkKeyForExam = bForExam;
 	if (bAnswering)
 	{
 		CutPatient();
+	}
+	if (bForExam)
+	{
+		AskExamAloud();
 	}
 	ApplyTalkKey();
 	OnChanged.Broadcast();
@@ -1100,6 +1107,11 @@ void UStationRunFlow::ReleaseTalkKey()
 	if (!bWasHeld)
 	{
 		return; // the first tap of a cut, or a press that opened nothing
+	}
+	if (bTalkKeyForExam)
+	{
+		bTalkKeyForExam = false;
+		ReleaseExamAloud();
 	}
 	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
 	TalkTailTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateWeakLambda(this, [this](float)
@@ -1119,6 +1131,10 @@ void UStationRunFlow::CutPatient()
 {
 	SilencePatient();
 	PatientHeardAt->store(0.0);
+	if (VoiceTurnId == SpokenExamTurn)
+	{
+		return; // an exam request's outcome is always kept (#364)
+	}
 	if (!bVoiceOutcome)
 	{
 		// The worker cancels the turn on the press, and Phoenix keeps nothing of it.
