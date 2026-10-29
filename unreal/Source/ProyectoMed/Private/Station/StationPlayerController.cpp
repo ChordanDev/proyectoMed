@@ -6,6 +6,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/GameInstance.h"
 #include "EngineUtils.h"
+#include "Framework/Application/NavigationConfig.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
@@ -70,6 +72,17 @@ void AStationPlayerController::BeginPlay()
 	Microphone = NewObject<UStationMicrophone>(this);
 	PreparePatientVoice();
 
+	if (FSlateApplication::IsInitialized())
+	{
+		// The space bar is the talk key (#419): it must not also press the focused button.
+		PreviousNavigation = FSlateApplication::Get().GetNavigationConfig();
+		TSharedRef<FNavigationConfig> Navigation = MakeShared<FNavigationConfig>();
+		Navigation->KeyActionRules.Remove(EKeys::SpaceBar);
+		FSlateApplication::Get().SetNavigationConfig(Navigation);
+		ActivationHandle = FSlateApplication::Get().OnApplicationActivationStateChanged()
+			.AddUObject(this, &AStationPlayerController::HandleActivation);
+	}
+
 	bShowMouseCursor = true;
 	Flow->OnChanged.AddUObject(this, &AStationPlayerController::Render);
 	Flow->Begin(Subsystem->GetClient());
@@ -81,6 +94,14 @@ void AStationPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	if (Microphone)
 	{
 		Microphone->Stop();
+	}
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().OnApplicationActivationStateChanged().Remove(ActivationHandle);
+		if (PreviousNavigation)
+		{
+			FSlateApplication::Get().SetNavigationConfig(PreviousNavigation.ToSharedRef());
+		}
 	}
 	// A run left mid-way or on its feedback is ephemeral: ask Phoenix to forget
 	// it now instead of waiting for the session to expire.
@@ -175,6 +196,59 @@ void AStationPlayerController::PreparePatientVoice()
 	}
 	UE_LOG(LogStationPlayer, Warning, TEXT("No patient face (a skeletal mesh component named '%s') in this level; the patient will be silent."),
 		*FaceComponentName.ToString());
+}
+
+void AStationPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+	InputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &AStationPlayerController::PressTalkKey);
+	InputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &AStationPlayerController::ReleaseTalkKey);
+	// Shift + space bar asks for an exam aloud; this chord masks the plain space bar.
+	const FInputChord ExamChord(EKeys::SpaceBar, /*bShift*/ true, false, false, false);
+	InputComponent->BindKey(ExamChord, IE_Pressed, this, &AStationPlayerController::PressExamTalkKey);
+	InputComponent->BindKey(ExamChord, IE_Released, this, &AStationPlayerController::ReleaseTalkKey);
+}
+
+void AStationPlayerController::PressTalkKey()
+{
+	if (Flow && !IsTyping())
+	{
+		Flow->PressTalkKey();
+	}
+}
+
+void AStationPlayerController::PressExamTalkKey()
+{
+	if (Flow && !IsTyping())
+	{
+		Flow->PressTalkKey(/*bForExam*/ true);
+	}
+}
+
+bool AStationPlayerController::IsTyping()
+{
+	// A text box takes the space as a character, and Slate still hands its key-down to the game.
+	const TSharedPtr<SWidget> Focused = FSlateApplication::IsInitialized()
+		? FSlateApplication::Get().GetKeyboardFocusedWidget()
+		: nullptr;
+	return Focused
+		&& (Focused->GetType() == TEXT("SEditableText") || Focused->GetType() == TEXT("SMultiLineEditableText"));
+}
+
+void AStationPlayerController::ReleaseTalkKey()
+{
+	if (Flow)
+	{
+		Flow->ReleaseTalkKey();
+	}
+}
+
+void AStationPlayerController::HandleActivation(bool bIsActive)
+{
+	if (!bIsActive)
+	{
+		ReleaseTalkKey();
+	}
 }
 
 void AStationPlayerController::UpdateMicrophone()

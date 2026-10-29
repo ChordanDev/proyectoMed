@@ -160,7 +160,7 @@ void FStationHudSnapshotSpec::Define()
 		OutDir = FPlatformMisc::GetEnvironmentVariable(TEXT("STATION_HUD_SNAPSHOT_DIR"));
 	});
 
-	It("renders the exam panel, the microphone and the document reader", [this]()
+	It("renders the exam panel, the microphone, the talk button and the document reader", [this]()
 	{
 		if (OutDir.IsEmpty() || !FApp::CanEverRender())
 		{
@@ -202,6 +202,20 @@ void FStationHudSnapshotSpec::Define()
 		Hud = MakeHud(MakeFlow(EStationTrainingMode::Text));
 		Hud->OpenExams();
 		Save(Hud, TEXT("6-text-panel"));
+
+		// #419: the talk button while the learner holds it, and while the patient answers.
+		UStationRunFlow* Talking = MakeFlow(EStationTrainingMode::Voice);
+		Talking->TalkKey.Press(FPlatformTime::Seconds(), false);
+		Save(MakeHud(Talking), TEXT("7-voice-talking"));
+
+		UStationRunFlow* Answering = MakeFlow(EStationTrainingMode::Voice);
+		FStationVoiceEvent Sent;
+		Sent.Kind = EStationVoiceEventKind::Learner;
+		Sent.TurnId = 1;
+		Sent.Text = TEXT("Onde dói?");
+		Sent.bFinal = true;
+		Answering->HandleVoiceEvent(Sent);
+		Save(MakeHud(Answering), TEXT("8-voice-patient-answering"));
 	});
 }
 

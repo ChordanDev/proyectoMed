@@ -962,6 +962,7 @@ class MockParticipant:
     def __init__(self, identity: str = "voice-worker"):
         self.identity = identity
         self.published_data: list[tuple[str, str, bool]] = []
+        self.track_publications: dict[str, object] = {}
 
     async def publish_data(
         self, data: str, topic: str = "transcript", reliable: bool = True
@@ -981,11 +982,19 @@ class MockRoom:
     def on(self, event_name: str, handler) -> None:
         self.handlers[event_name] = handler
 
+    def off(self, event_name: str, handler) -> None:
+        if self.handlers.get(event_name) is handler:
+            del self.handlers[event_name]
+
 
 class MockStream:
     def __init__(self, queue: asyncio.Queue[SpeechEvent | None]):
         self.queue = queue
         self.closed = False
+        self.flushes = 0
+
+    def flush(self) -> None:
+        self.flushes += 1
 
     def __aiter__(self):
         return self
@@ -994,6 +1003,8 @@ class MockStream:
         item = await self.queue.get()
         if item is None:
             raise StopAsyncIteration
+        if isinstance(item, Exception):
+            raise item
         return item
 
     async def aclose(self) -> None:

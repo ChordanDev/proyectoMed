@@ -30,6 +30,7 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, c
 from livekit.plugins import cartesia, deepgram
 
 from fake_providers import FakeSTT, FakeTTS, fake_providers_from_env
+from push_to_talk import PUSH_TO_TALK_TRACK, PushToTalk
 from speech import SpeechPlayer
 from transcripts import (
     DEFAULT_TURN_RETRIES,
@@ -600,6 +601,8 @@ async def transcribe(
             sample_rate=16000,
         )
     stream = stt.stream()
+    push_to_talk = PushToTalk(stream)
+    stop_following = follow_push_to_talk(room, learner, push_to_talk)
 
     async def pump() -> None:
         async for frame_event in audio:
@@ -618,7 +621,7 @@ async def transcribe(
         if voice is not None:
             # The learner left: nobody is listening to the reply being spoken.
             await voice.stop()
-        for resource in (audio, stream):
+        for resource in (audio, push_to_talk, stream):
             try:
                 if hasattr(resource, "aclose"):
                     await resource.aclose()
@@ -647,7 +650,7 @@ async def transcribe(
 
     try:
         await process_speech_stream(
-            stream,
+            push_to_talk,
             tracker,
             phoenix,
             on_publish=lambda event: publish(room, event),
@@ -661,12 +664,63 @@ async def transcribe(
             on_barge_in=voice.cancel_turn if voice is not None else None,
         )
     finally:
+        stop_following()
         primary = sys.exception()
         try:
             await close_resources()
         except (Exception, asyncio.CancelledError):
             if primary is None:
                 raise
+
+
+def follow_push_to_talk(room, learner, push_to_talk: PushToTalk):
+    """Hears the learner's push-to-talk microphone mutes (#419); returns the undo.
+
+    The Unreal client names its microphone `PUSH_TO_TALK_TRACK` and unmutes it only
+    while the talk key is held. The mute is the release signal because the learner
+    token cannot publish data (#364). Any other microphone's mutes are ignored: the
+    browser mutes the web client's track on its own.
+    """
+
+    def is_push_to_talk(participant, publication) -> bool:
+        return (
+            learner is not None
+            and participant.identity == learner.identity
+            and publication.source == rtc.TrackSource.SOURCE_MICROPHONE
+            and getattr(publication, "name", "") == PUSH_TO_TALK_TRACK
+        )
+
+    def on_muted(participant, publication) -> None:
+        if is_push_to_talk(participant, publication):
+            push_to_talk.release()
+
+    def on_unmuted(participant, publication) -> None:
+        if is_push_to_talk(participant, publication):
+            push_to_talk.press()
+
+    def on_published(publication, participant) -> None:
+        if is_push_to_talk(participant, publication):
+            # Released, then pressed again if the learner already holds the key.
+            push_to_talk.release()
+            if not publication.muted:
+                push_to_talk.press()
+
+    # Read before listening: a failed read then leaves no handler behind.
+    published = []
+    if learner is not None:
+        published = list(learner.track_publications.values())
+    room.on("track_muted", on_muted)
+    room.on("track_unmuted", on_unmuted)
+    room.on("track_published", on_published)
+    for publication in published:
+        on_published(publication, learner)
+
+    def stop() -> None:
+        room.off("track_muted", on_muted)
+        room.off("track_unmuted", on_unmuted)
+        room.off("track_published", on_published)
+
+    return stop
 
 
 async def publish(room: rtc.Room, payload: dict) -> None:

@@ -8,6 +8,7 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
@@ -72,6 +73,32 @@ void FStationHudUnitSpec::Define()
 			AfterLoss.Contains(TEXT("Nenhum exame solicitado ainda. Segure o microfone e diga o que você solicita.")));
 	});
 
+	// #419: the talk button, for touch screens, does what the space bar does.
+	It("shows the talk button in a voice training, and how to cut the patient while it answers", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		UStationHudWidget* Hud = MakeHud(Flow);
+		TestEqual(TEXT("shown while the voice works"), Hud->TalkButton->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual(TEXT("hold to talk"), Hud->TalkText->GetText().ToString(), FString(TEXT("Segure para falar (Espaço)")));
+
+		FStationVoiceEvent Sent;
+		Sent.Kind = EStationVoiceEventKind::Learner;
+		Sent.TurnId = 1;
+		Sent.Text = TEXT("Onde dói?");
+		Sent.bFinal = true;
+		Flow->HandleVoiceEvent(Sent);
+		Hud->Refresh();
+		TestEqual(TEXT("while the patient answers"), Hud->TalkText->GetText().ToString(),
+			FString(TEXT("Toque e segure para interromper")));
+
+		Flow->Voice.bLost = true;
+		Hud->Refresh();
+		TestEqual(TEXT("hidden once the voice is lost"), Hud->TalkButton->GetVisibility(), ESlateVisibility::Collapsed);
+
+		UStationHudWidget* Text = MakeHud(MakeFlow(EStationTrainingMode::Text));
+		TestEqual(TEXT("never in a text training"), Text->TalkButton->GetVisibility(), ESlateVisibility::Collapsed);
+	});
+
 	It("does not show a press the flow refused as recording", [this]()
 	{
 		// The previous spoken request still waits for Phoenix's answer.
@@ -87,7 +114,42 @@ void FStationHudUnitSpec::Define()
 
 		Hud->HandleReleaseExamAloud();
 		TestEqual(TEXT("idle once released"), Hud->ExamAloudText->GetText().ToString(),
-			FString(TEXT("Segure para pedir um exame")));
+			FString(TEXT("Segure para pedir (Shift + Espaço)")));
+	});
+
+	// #419: a press refused because the patient answers waits for nothing.
+	It("does not ask to wait for a press refused while the patient answers", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		FStationVoiceEvent Sent;
+		Sent.Kind = EStationVoiceEventKind::Learner;
+		Sent.TurnId = 1;
+		Sent.Text = TEXT("Onde dói?");
+		Sent.bFinal = true;
+		Flow->HandleVoiceEvent(Sent);
+		UStationHudWidget* Hud = MakeHud(Flow);
+
+		Hud->HandleAskExamAloud();
+		TestFalse(TEXT("not the waiting look"), Hud->MicrophoneLook == UStationHudWidget::EMicrophoneLook::Waiting);
+		TestEqual(TEXT("still the idle hint"), Hud->ExamAloudText->GetText().ToString(),
+			FString(TEXT("Segure para pedir (Shift + Espaço)")));
+		Hud->HandleReleaseExamAloud();
+	});
+
+	// #419: the space bar, the talk button and the exam button share one talk key.
+	It("leaves a hold of the space bar alone when the exam button is pressed and released", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		UStationHudWidget* Hud = MakeHud(Flow);
+		Flow->TalkKey.Press(FPlatformTime::Seconds(), false); // the space bar is held
+
+		Hud->HandleAskExamAloud();
+		Hud->HandleReleaseExamAloud();
+		TestTrue(TEXT("the space bar still holds the talk key"), Flow->IsTalking());
+
+		Hud->HandlePressTalk();
+		Hud->HandleReleaseTalk();
+		TestTrue(TEXT("nor does the talk button end it"), Flow->IsTalking());
 	});
 
 	It("records while a press the flow took is held", [this]()

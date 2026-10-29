@@ -100,8 +100,9 @@ struct FStationVoiceHandlers
 /**
  * One run's voice link. Create it through `UStationClient::ConnectVoice`, which
  * also ends it with the run. The microphone is whatever the caller pushes: the game
- * pushes the captured device, tests push generated audio. Echo of the patient's
- * voice is cancelled before the audio leaves the machine.
+ * pushes the captured device, tests push generated audio. It is push-to-talk (#419):
+ * published muted, it sends only while `SetMicrophoneOpen(true)`. Echo of the
+ * patient's voice is cancelled before the audio leaves the machine.
  */
 class STATIONCLIENT_API FStationVoiceLink : public TSharedFromThis<FStationVoiceLink, ESPMode::ThreadSafe>
 {
@@ -126,10 +127,20 @@ public:
 
 	/**
 	 * Learner microphone audio, interleaved float samples in [-1, 1], any rate and
-	 * channel count. Dropped unless the link is `WaitingForWorker` or `Ready`.
-	 * Any thread, one at a time.
+	 * channel count. Dropped unless the link is `WaitingForWorker` or `Ready` and the
+	 * microphone is open. Any thread, one at a time.
 	 */
 	void PushMicrophonePcm(TConstArrayView<float> Samples, int32 SampleRate, int32 NumChannels);
+
+	/**
+	 * Opens or closes the microphone; it starts closed. The track stays published and
+	 * is muted while closed, and the voice worker hears the mute as the learner
+	 * releasing the talk key: it ends the turn at once instead of waiting for the end
+	 * of speech, and an unmute interrupts the patient (#419). The learner cannot
+	 * publish data (#364), so the mute is the signal. Game thread.
+	 */
+	void SetMicrophoneOpen(bool bOpen);
+	bool IsMicrophoneOpen() const;
 
 	/** Game thread. */
 	EStationVoiceState GetState() const { return State; }

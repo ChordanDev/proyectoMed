@@ -39,6 +39,7 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void SetupInputComponent() override;
 
 private:
 	void Render();
@@ -50,6 +51,22 @@ private:
 	void PreparePatientVoice();
 	/** Keeps the microphone on exactly while the voice link is in the room. */
 	void UpdateMicrophone();
+
+	/**
+	 * Push-to-talk (#419): the space bar is the talk key, and Shift + space bar the
+	 * exam request's, except while the learner types. Either release ends either.
+	 */
+	void PressTalkKey();
+	void PressExamTalkKey();
+	void ReleaseTalkKey();
+	/** A text box has the keyboard focus. */
+	static bool IsTyping();
+	/** A key-up never arrives once the app is in the background: let the key go then. */
+	void HandleActivation(bool bIsActive);
+
+	/** Slate's navigation keys before the run took the space bar from them. */
+	TSharedPtr<class FNavigationConfig> PreviousNavigation;
+	FDelegateHandle ActivationHandle;
 
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
