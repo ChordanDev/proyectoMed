@@ -294,6 +294,21 @@ void FStationHudUnitSpec::Define()
 			Texts(Hud->ExamCardBox).Contains(TEXT("Nenhum exame solicitado ainda. Descreva abaixo o que você solicita.")));
 	});
 
+	It("names a simulated exam that lost its voice on the invalidated screen", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		Flow->Step = EStationRunStep::Invalidated;
+		Flow->Invalidation = EStationInvalidation::VoiceLost;
+		UStationInvalidatedWidget* Screen = CreateWidget<UStationInvalidatedWidget>(GEngine->GetWorldContexts()[0].World());
+		Screen->TakeWidget();
+		Screen->SetFlow(Flow);
+		Screen->Refresh();
+		TestEqual(TEXT("the title"), Screen->TitleText->GetText().ToString(), FString(TEXT("Prova simulada invalidada")));
+		TestEqual(TEXT("why"), Screen->BodyText->GetText().ToString(),
+			StationInvalidatedText(EStationSessionMode::SimulatedExam, EStationInvalidation::VoiceLost).ToString());
+	});
+
 	It("keeps the typed turn and the typed exam request in a training", [this]()
 	{
 		UStationHudWidget* Hud = MakeHud(MakeFlow(EStationTrainingMode::Text));

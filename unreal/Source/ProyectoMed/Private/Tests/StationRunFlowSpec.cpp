@@ -281,6 +281,23 @@ void FStationRunUnitSpec::Define()
 		TestTrue("the exam asked aloud", Flow->CanAskExamAloud());
 	});
 
+	It("names the Station Mode and why the run ended on the invalidated screen", [this]()
+	{
+		TestEqual("a training", StationInvalidatedTitle(EStationSessionMode::Training).ToString(),
+			FString(TEXT("Treino invalidado")));
+		TestEqual("a simulated exam", StationInvalidatedTitle(EStationSessionMode::SimulatedExam).ToString(),
+			FString(TEXT("Prova simulada invalidada")));
+		TestEqual("a training that lost Phoenix",
+			StationInvalidatedText(EStationSessionMode::Training, EStationInvalidation::PhoenixLost).ToString(),
+			FString(TEXT("A conexão com o servidor caiu e o treino não pode continuar. Esta tentativa não tem resultado nem feedback.")));
+		TestEqual("a simulated exam that lost Phoenix",
+			StationInvalidatedText(EStationSessionMode::SimulatedExam, EStationInvalidation::PhoenixLost).ToString(),
+			FString(TEXT("A conexão com o servidor caiu e a prova simulada não pode continuar. Esta tentativa não tem resultado nem penalidade.")));
+		TestEqual("a simulated exam that lost its voice",
+			StationInvalidatedText(EStationSessionMode::SimulatedExam, EStationInvalidation::VoiceLost).ToString(),
+			FString(TEXT("A voz ou o microfone falhou, e a prova simulada é feita só por voz. Esta tentativa não tem resultado nem penalidade.")));
+	});
+
 	It("shows Phoenix's refusal of typed input in a simulated exam as it words it", [this]()
 	{
 		const FString Refusal = TEXT("A prova simulada é feita só por voz: o texto digitado não é aceito.");

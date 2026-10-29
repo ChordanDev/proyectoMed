@@ -1569,10 +1569,10 @@ TSharedRef<SWidget> UStationInvalidatedWidget::RebuildWidget()
 	if (WidgetTree && !WidgetTree->RootWidget)
 	{
 		UVerticalBox* Column = StationUi::MakeCenteredCard(*WidgetTree, 760.f, 900.f);
-		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("InvalidatedTitle", "Treino invalidado"), 32, true,
-			StationUi::Ink, 0.f);
-		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("InvalidatedBody",
-			"A conexão com o servidor caiu e o treino não pode continuar. Esta tentativa não tem resultado nem feedback."), 18);
+		TitleText = StationUi::AddText(*WidgetTree, *Column,
+			StationInvalidatedTitle(EStationSessionMode::Training), 32, true, StationUi::Ink, 0.f);
+		BodyText = StationUi::AddText(*WidgetTree, *Column,
+			StationInvalidatedText(EStationSessionMode::Training, EStationInvalidation::PhoenixLost), 18);
 		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("InvalidatedRestart",
 			"Reinicie a estação para começar de novo."), 16, false, StationUi::Muted);
 		UButton* Restart = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("RestartStation", "Reiniciar estação"));
@@ -1580,6 +1580,16 @@ TSharedRef<SWidget> UStationInvalidatedWidget::RebuildWidget()
 		StationUi::MakePrimary(*Restart);
 	}
 	return Super::RebuildWidget();
+}
+
+void UStationInvalidatedWidget::Refresh()
+{
+	if (!Flow || !TitleText || !BodyText)
+	{
+		return;
+	}
+	TitleText->SetText(StationInvalidatedTitle(Flow->GetSessionMode()));
+	BodyText->SetText(StationInvalidatedText(Flow->GetSessionMode(), Flow->GetInvalidation()));
 }
 
 void UStationInvalidatedWidget::HandleRestart()

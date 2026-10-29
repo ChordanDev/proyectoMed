@@ -429,7 +429,10 @@ private:
 	TObjectPtr<UButton> FinishButton;
 };
 
-/** A training that lost Phoenix (#196): it is over, with nothing to show but the restart. */
+/**
+ * A run that lost Phoenix (#196), or a simulated exam that lost its voice (#422): it is
+ * over, with nothing to show but why and the restart.
+ */
 UCLASS()
 class UStationInvalidatedWidget : public UUserWidget
 {
@@ -438,12 +441,27 @@ class UStationInvalidatedWidget : public UUserWidget
 public:
 	FSimpleDelegate OnRestart;
 
+	void SetFlow(UStationRunFlow* InFlow) { Flow = InFlow; }
+	/** Names the run's Station Mode and why it ended. */
+	void Refresh();
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	friend class FStationHudUnitSpec;
+
 	UFUNCTION()
 	void HandleRestart();
+
+	UPROPERTY()
+	TObjectPtr<UStationRunFlow> Flow;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> TitleText;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> BodyText;
 };
 
 UCLASS()

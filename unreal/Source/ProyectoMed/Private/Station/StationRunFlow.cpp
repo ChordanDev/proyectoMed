@@ -13,6 +13,27 @@ bool IsVoiceTrainingAvailable(const FStationSummary& Station)
 	return Station.VoiceMode == EStationVoiceMode::Realtime;
 }
 
+FText StationInvalidatedTitle(EStationSessionMode SessionMode)
+{
+	return SessionMode == EStationSessionMode::SimulatedExam
+		? LOCTEXT("InvalidatedExamTitle", "Prova simulada invalidada")
+		: LOCTEXT("InvalidatedTitle", "Treino invalidado");
+}
+
+FText StationInvalidatedText(EStationSessionMode SessionMode, EStationInvalidation Reason)
+{
+	if (SessionMode != EStationSessionMode::SimulatedExam)
+	{
+		return LOCTEXT("InvalidatedBody",
+			"A conexão com o servidor caiu e o treino não pode continuar. Esta tentativa não tem resultado nem feedback.");
+	}
+	return Reason == EStationInvalidation::VoiceLost
+		? LOCTEXT("InvalidatedExamVoiceBody",
+			"A voz ou o microfone falhou, e a prova simulada é feita só por voz. Esta tentativa não tem resultado nem penalidade.")
+		: LOCTEXT("InvalidatedExamBody",
+			"A conexão com o servidor caiu e a prova simulada não pode continuar. Esta tentativa não tem resultado nem penalidade.");
+}
+
 FText SimulatedExamUnavailableText(const FStationSummary& Station, EStationMicPermission Permission)
 {
 	if (!IsVoiceTrainingAvailable(Station))
@@ -276,12 +297,20 @@ void UStationRunFlow::StartSession()
 			return;
 		}
 
-		// The run has started either way; without a credential it continues as text.
+		// The run has started either way; without a credential a training continues as
+		// text, and a simulated exam, which is voice only (#422), is invalidated.
 		Self->Client->RequestVoiceCredential([WeakThis, ThisRun](const TStationResult<FStationVoiceCredential>& Credential)
 		{
 			UStationRunFlow* Flow = WeakThis.Get();
 			if (!Flow || Flow->Run != ThisRun)
 			{
+				return;
+			}
+			if (Credential.HasError() && !Flow->AllowsTypedInput())
+			{
+				UE_LOG(LogStationRun, Warning, TEXT("No voice credential (%d %s) for a simulated exam."),
+					Credential.GetError().HttpStatus, *Credential.GetError().Code);
+				Flow->Invalidate(EStationInvalidation::VoiceLost);
 				return;
 			}
 			if (Credential.HasError())
@@ -806,9 +835,12 @@ void UStationRunFlow::CheckPhoenix(TFunction<void()> OnAnswered)
 	});
 }
 
-void UStationRunFlow::Invalidate()
+void UStationRunFlow::Invalidate(EStationInvalidation Reason)
 {
-	UE_LOG(LogStationRun, Warning, TEXT("Phoenix does not answer; the run is invalidated."));
+	UE_LOG(LogStationRun, Warning, TEXT("%s; the run is invalidated."), Reason == EStationInvalidation::VoiceLost
+		? TEXT("The voice of a simulated exam failed")
+		: TEXT("Phoenix does not answer"));
+	Invalidation = Reason;
 	// No handler of the room runs after this, and nothing it still delivers plays.
 	Client->DisconnectVoice();
 	SilencePatient();
@@ -984,6 +1016,12 @@ void UStationRunFlow::LoseVoice()
 		ResetSpokenExam();
 		ReloadReleasedImpressos();
 	}
+	// A simulated exam is voice only (#422): without its voice it takes no input at all.
+	if (Step == EStationRunStep::Running && !AllowsTypedInput())
+	{
+		Invalidate(EStationInvalidation::VoiceLost);
+		return;
+	}
 	// In a training the learner goes on in writing (#196), which needs Phoenix.
 	if (Step == EStationRunStep::Running && Client)
 	{
@@ -1150,6 +1188,12 @@ void UStationRunFlow::ReportMicrophoneUnavailable()
 		return;
 	}
 	Voice.bMicrophoneUnavailable = true;
+	// A simulated exam is voice only (#422): without a microphone it takes no input at all.
+	if (Step == EStationRunStep::Running && !AllowsTypedInput())
+	{
+		Invalidate(EStationInvalidation::VoiceLost);
+		return;
+	}
 	OnChanged.Broadcast();
 }
 

@@ -56,6 +56,7 @@ void AStationPlayerController::BeginPlay()
 	Brief->SetFlow(Flow);
 	Hud->SetFlow(Flow);
 	Feedback->SetFlow(Flow);
+	Invalidated->SetFlow(Flow);
 	Menu->OnModeChosen.BindWeakLambda(this, [this](EStationSessionMode Mode) { Flow->ChooseMode(Mode); });
 	Menu->OnQuit.BindWeakLambda(this, [this]() { UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false); });
 	Notice->OnAcknowledged.BindWeakLambda(this, [this]() { Flow->AcknowledgeNotice(); });
@@ -135,6 +136,7 @@ void AStationPlayerController::Render()
 	Brief->Refresh();
 	Hud->Refresh();
 	Feedback->Refresh();
+	Invalidated->Refresh();
 	UpdateMicrophone();
 	UpdateCamera();
 

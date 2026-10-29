@@ -909,8 +909,16 @@ What the client does:
   `CanSendTurn` and `CanRequestExam` are false and `SendTypedTurn` and
   `RequestExam` send nothing. `CanAskExamAloud` does not depend on it.
 - The HUD hides the typed turn (`TurnRow`) and the typed exam box
-  (`ExamTypedRow`) for the whole run, also after a voice loss. The exam panel
-  only names the microphone.
+  (`ExamTypedRow`) for the whole run. The exam panel only names the microphone.
+- Without its voice a simulated exam takes no input at all, so the flow
+  invalidates it (#318 business rule 8: no result and no penalty, and the
+  learner can start again). That happens when `RequestVoiceCredential` fails
+  (the run never goes on in writing, `IsVoiceFallback` stays false), when the
+  voice is lost (a `Fatal` event or a failed room) and when the microphone
+  will not open. `GetInvalidation` is then `EStationInvalidation::VoiceLost`
+  (`PhoenixLost` when Phoenix stops answering), and the invalidated screen
+  names the mode and the reason (`StationInvalidatedTitle`,
+  `StationInvalidatedText`). A training still goes on in writing (#196).
 - If Phoenix still refuses a typed call, `StationErrorText` shows its
   `message`, as for any Phoenix error.
 
