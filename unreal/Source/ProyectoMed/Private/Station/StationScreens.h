@@ -1,5 +1,5 @@
 // The station's native UMG screens: the first-launch microphone disclosure,
-// Pre-Station Notice, brief, the in-run HUD with the Station Timer, the voice
+// the main menu (#421), Pre-Station Notice, brief, the in-run HUD with the Station Timer, the voice
 // status, the conversation and the exam panel, and the feedback once the run
 // ends. They render UStationRunFlow and never call the network.
 
@@ -13,6 +13,7 @@
 class UBorder;
 class UButton;
 class UEditableTextBox;
+class UHorizontalBox;
 class UOverlay;
 class UScrollBox;
 class UStationRunFlow;
@@ -21,6 +22,7 @@ class UVerticalBox;
 class UWidget;
 enum class EStationSpeaker : uint8;
 struct FStationExamRequest;
+enum class EStationSessionMode : uint8;
 struct FStationImpresso;
 
 UCLASS()
@@ -44,6 +46,37 @@ private:
 };
 struct FStationCriterionResult;
 struct FStationResult;
+
+/**
+ * The main menu, like a game's title screen (#421): the learner chooses a training
+ * or a simulated exam, over the consultation room seen from the menu camera.
+ */
+UCLASS()
+class UStationMenuWidget : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	TDelegate<void(EStationSessionMode)> OnModeChosen;
+
+protected:
+	virtual TSharedRef<SWidget> RebuildWidget() override;
+
+private:
+	friend class FStationBriefUnitSpec;
+
+	UFUNCTION()
+	void HandleTraining();
+
+	UFUNCTION()
+	void HandleSimulatedExam();
+
+	UPROPERTY()
+	TObjectPtr<UButton> TrainingButton;
+
+	UPROPERTY()
+	TObjectPtr<UButton> SimulatedExamButton;
+};
 
 UCLASS()
 class UStationNoticeWidget : public UUserWidget
@@ -70,8 +103,8 @@ public:
 	void SetFlow(UStationRunFlow* InFlow) { Flow = InFlow; }
 
 	/**
-	 * Re-reads the flow: loading, error, the station brief, which trainings can start,
-	 * and whether the simulated exam can start or why not (#421).
+	 * Re-reads the flow: loading, error, the station brief, and the chosen mode's way
+	 * in: which trainings can start, or whether the simulated exam can and why not (#421).
 	 */
 	void Refresh();
 
@@ -89,6 +122,9 @@ private:
 
 	UFUNCTION()
 	void HandleSimulatedExam();
+
+	UFUNCTION()
+	void HandleBackToMenu();
 
 	UFUNCTION()
 	void HandleRetry();
@@ -121,7 +157,19 @@ private:
 	UPROPERTY()
 	TObjectPtr<UVerticalBox> FooterBox;
 
-	/** The simulated exam ("Prova simulada", #421), under the trainings. */
+	/** Back to the main menu (#421). */
+	UPROPERTY()
+	TObjectPtr<UButton> MenuButton;
+
+	/** Names the chosen mode. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> HeadingText;
+
+	/** A training's two ways in: by text and by voice. */
+	UPROPERTY()
+	TObjectPtr<UHorizontalBox> TrainingsRow;
+
+	/** A simulated exam's one way in ("Prova simulada", #421), by voice. */
 	UPROPERTY()
 	TObjectPtr<UButton> SimulatedExamButton;
 

@@ -16,6 +16,7 @@
 DEFINE_LOG_CATEGORY_STATIC(LogStationPlayer, Log, All);
 
 const FName AStationPlayerController::StationViewTag(TEXT("StationView"));
+const FName AStationPlayerController::MenuViewTag(TEXT("MenuView"));
 
 namespace
 {
@@ -31,12 +32,19 @@ void AStationPlayerController::BeginPlay()
 		return;
 	}
 
-	UseStationCamera();
+	StationCamera = FindCamera(StationViewTag);
+	MenuCamera = FindCamera(MenuViewTag);
+	if (!StationCamera.IsValid())
+	{
+		UE_LOG(LogStationPlayer, Warning, TEXT("No camera tagged '%s' in this level; the view stays at the controller."),
+			*StationViewTag.ToString());
+	}
 
 	UStationClientSubsystem* Subsystem = GetGameInstance()->GetSubsystem<UStationClientSubsystem>();
 	Flow = NewObject<UStationRunFlow>(this);
 
 	MicrophoneScreen = CreateWidget<UStationMicrophoneWidget>(this, UStationMicrophoneWidget::StaticClass());
+	Menu = CreateWidget<UStationMenuWidget>(this, UStationMenuWidget::StaticClass());
 	Notice = CreateWidget<UStationNoticeWidget>(this, UStationNoticeWidget::StaticClass());
 	Brief = CreateWidget<UStationBriefWidget>(this, UStationBriefWidget::StaticClass());
 	Hud = CreateWidget<UStationHudWidget>(this, UStationHudWidget::StaticClass());
@@ -45,10 +53,12 @@ void AStationPlayerController::BeginPlay()
 	Brief->SetFlow(Flow);
 	Hud->SetFlow(Flow);
 	Feedback->SetFlow(Flow);
+	Menu->OnModeChosen.BindWeakLambda(this, [this](EStationSessionMode Mode) { Flow->ChooseMode(Mode); });
 	Notice->OnAcknowledged.BindWeakLambda(this, [this]() { Flow->AcknowledgeNotice(); });
 	MicrophoneScreen->OnAnswered.BindWeakLambda(this, [this](bool bAllow) { Flow->AnswerMicrophone(bAllow); });
 	Invalidated->OnRestart.BindWeakLambda(this, [this]() { Flow->Restart(); });
 	MicrophoneScreen->AddToViewport();
+	Menu->AddToViewport();
 	Notice->AddToViewport();
 	Brief->AddToViewport();
 	Hud->AddToViewport();
@@ -81,7 +91,7 @@ void AStationPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AStationPlayerController::Render()
 {
-	if (!Flow || !Notice || !Brief || !Hud || !Feedback || !Invalidated || !MicrophoneScreen)
+	if (!Flow || !Menu || !Notice || !Brief || !Hud || !Feedback || !Invalidated || !MicrophoneScreen)
 	{
 		return;
 	}
@@ -89,6 +99,7 @@ void AStationPlayerController::Render()
 	const EStationRunStep Step = Flow->GetStep();
 	const bool bRunning = Step == EStationRunStep::Running;
 	MicrophoneScreen->SetVisibility(Step == EStationRunStep::Microphone ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	Menu->SetVisibility(Step == EStationRunStep::Menu ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	Notice->SetVisibility(Step == EStationRunStep::Notice ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	Brief->SetVisibility(Step == EStationRunStep::Brief || Step == EStationRunStep::Starting
 		? ESlateVisibility::Visible
@@ -102,6 +113,7 @@ void AStationPlayerController::Render()
 	Hud->Refresh();
 	Feedback->Refresh();
 	UpdateMicrophone();
+	UpdateCamera();
 
 	// Only when the run starts or ends: applying an input mode releases the mouse
 	// capture and moves the focus, which would let go of a held button (#364) or
@@ -182,16 +194,23 @@ void AStationPlayerController::UpdateMicrophone()
 	}
 }
 
-void AStationPlayerController::UseStationCamera()
+AActor* AStationPlayerController::FindCamera(const FName& Tag) const
 {
 	for (TActorIterator<ACameraActor> It(GetWorld()); It; ++It)
 	{
-		if (It->ActorHasTag(StationViewTag))
+		if (It->ActorHasTag(Tag))
 		{
-			SetViewTarget(*It);
-			return;
+			return *It;
 		}
 	}
-	UE_LOG(LogStationPlayer, Warning, TEXT("No camera tagged '%s' in this level; the view stays at the controller."),
-		*StationViewTag.ToString());
+	return nullptr;
+}
+
+void AStationPlayerController::UpdateCamera()
+{
+	AActor* Wanted = Flow->GetStep() == EStationRunStep::Menu && MenuCamera.IsValid() ? MenuCamera.Get() : StationCamera.Get();
+	if (Wanted && GetViewTarget() != Wanted)
+	{
+		SetViewTarget(Wanted);
+	}
 }

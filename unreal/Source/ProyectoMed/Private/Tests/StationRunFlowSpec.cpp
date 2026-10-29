@@ -136,13 +136,77 @@ void FStationRunUnitSpec::Define()
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
 		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
-		TestFalse("on the notice", Flow->CanEnterSimulatedExam());
+		TestFalse("on the menu", Flow->CanEnterSimulatedExam());
 		Flow->EnterSimulatedExam();
-		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("still on the menu", Flow->GetStep(), EStationRunStep::Menu);
 		TestEqual("a training until a simulated exam starts", Flow->GetSessionMode(), EStationSessionMode::Training);
 	});
 
-	It("asks for the microphone once, on first launch, before the notice", [this]()
+	It("starts on the menu, where the learner chooses a training or a simulated exam (#421)", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		TestEqual("menu", Flow->GetStep(), EStationRunStep::Menu);
+		Flow->AcknowledgeNotice();
+		TestEqual("no notice before a mode is chosen", Flow->GetStep(), EStationRunStep::Menu);
+
+		Flow->ChooseMode(EStationSessionMode::SimulatedExam);
+		TestEqual("then the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("the chosen mode", Flow->GetSessionMode(), EStationSessionMode::SimulatedExam);
+		Flow->ChooseMode(EStationSessionMode::Training);
+		TestEqual("no second choice off the menu", Flow->GetSessionMode(), EStationSessionMode::SimulatedExam);
+		Flow->AcknowledgeNotice();
+		TestEqual("then the brief", Flow->GetStep(), EStationRunStep::Brief);
+
+		Flow->BackToMenu();
+		TestEqual("back on the menu", Flow->GetStep(), EStationRunStep::Menu);
+		Flow->ChooseMode(EStationSessionMode::Training);
+		TestEqual("the notice is read once per launch", Flow->GetStep(), EStationRunStep::Brief);
+		TestEqual("the new mode", Flow->GetSessionMode(), EStationSessionMode::Training);
+	});
+
+	It("goes back to the menu only from the notice or the brief", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		Flow->ChooseMode(EStationSessionMode::Training);
+		Flow->BackToMenu();
+		TestEqual("from the notice", Flow->GetStep(), EStationRunStep::Menu);
+
+		for (const EStationRunStep Step : {EStationRunStep::Starting, EStationRunStep::Running, EStationRunStep::Finishing,
+				 EStationRunStep::Feedback, EStationRunStep::Invalidated})
+		{
+			Flow->Step = Step;
+			Flow->BackToMenu();
+			TestEqual(FString::Printf(TEXT("stays on step %d"), static_cast<int32>(Step)), Flow->GetStep(), Step);
+		}
+	});
+
+	It("offers on the brief only the chosen mode's way in", [this]()
+	{
+		FStationSummary Station;
+		Station.VoiceMode = EStationVoiceMode::Realtime;
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Begin(NewObject<UStationClient>(), MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		Flow->Station = Station;
+		Flow->Step = EStationRunStep::Brief;
+
+		Flow->SessionMode = EStationSessionMode::Training;
+		TestTrue("a training by text", Flow->CanEnter(EStationTrainingMode::Text));
+		TestTrue("a training by voice", Flow->CanEnter(EStationTrainingMode::Voice));
+		TestFalse("no simulated exam from a training's brief", Flow->CanEnterSimulatedExam());
+
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		TestTrue("the simulated exam", Flow->CanEnterSimulatedExam());
+		TestFalse("no text in a simulated exam", Flow->CanEnter(EStationTrainingMode::Text));
+		TestFalse("no training from a simulated exam's brief", Flow->CanEnter(EStationTrainingMode::Voice));
+	});
+
+	It("asks for the microphone once, on first launch, before the menu", [this]()
 	{
 		UStationClient* Client = NewObject<UStationClient>();
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
@@ -159,13 +223,13 @@ void FStationRunUnitSpec::Define()
 
 		Flow->AnswerMicrophone(true);
 		TestEqual("system asked", Fake->Requests, 1);
-		TestEqual("then the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("then the menu", Flow->GetStep(), EStationRunStep::Menu);
 		TestTrue("remembered", Fake->bDisclosureShown);
 		TestEqual("granted", Flow->GetMicrophonePermission(), EStationMicPermission::Granted);
 
 		UStationRunFlow* NextLaunch = NewObject<UStationRunFlow>();
 		NextLaunch->Begin(Client, MicrophoneSetup(Fake));
-		TestEqual("next launch starts on the notice", NextLaunch->GetStep(), EStationRunStep::Notice);
+		TestEqual("next launch starts on the menu", NextLaunch->GetStep(), EStationRunStep::Menu);
 		TestEqual("not asked again", Fake->Requests, 1);
 	});
 
@@ -180,7 +244,7 @@ void FStationRunUnitSpec::Define()
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
 		Flow->Begin(Client, MicrophoneSetup(Fake));
 		Flow->AnswerMicrophone(false);
-		TestEqual("notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("menu", Flow->GetStep(), EStationRunStep::Menu);
 		TestEqual("system not asked", Fake->Requests, 0);
 		TestTrue("disclosure shown, not shown again", Fake->bDisclosureShown);
 		TestEqual("still undecided", Flow->GetMicrophonePermission(), EStationMicPermission::NotDetermined);
@@ -192,8 +256,9 @@ void FStationRunUnitSpec::Define()
 		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
 		Flow->Begin(Client, MicrophoneSetup(MakeShared<FFakeMicrophone>()));
+		Flow->ChooseMode(EStationSessionMode::Training);
 
-		TestEqual("starts on the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("the notice once a mode is chosen", Flow->GetStep(), EStationRunStep::Notice);
 		TestFalse("cannot enter", Flow->CanEnter(EStationTrainingMode::Text));
 		Flow->Enter(EStationTrainingMode::Text);
 		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
@@ -619,14 +684,14 @@ void FStationRunUnitSpec::Define()
 		Flow->Finish();
 		Flow->ExpireTimer();
 		Flow->CheckStationTimer();
-		TestEqual("still on the notice", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("still on the menu", Flow->GetStep(), EStationRunStep::Menu);
 		TestFalse("cannot discard", Flow->CanDiscard());
 		Flow->Discard();
 		TestFalse("no discard", Flow->IsDiscarding());
 		TestNull("no result", Flow->GetResult());
 		TestFalse("no restart", Flow->CanRestart());
 		Flow->Restart();
-		TestEqual("still on the notice after a restart", Flow->GetStep(), EStationRunStep::Notice);
+		TestEqual("still on the menu after a restart", Flow->GetStep(), EStationRunStep::Menu);
 	});
 }
 
@@ -674,6 +739,7 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
 			if (TestNotNull(TEXT("station (is Phoenix running?)"), Flow->GetStation()))
@@ -691,6 +757,7 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			Flow->Enter(EStationTrainingMode::Text);
 			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
@@ -716,6 +783,7 @@ void FStationRunPhoenixSpec::Define()
 		Microphone->Permission = EStationMicPermission::Denied;
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			TestTrue("text still offered", Flow->CanEnter(EStationTrainingMode::Text));
 			TestFalse("voice blocked", Flow->CanEnter(EStationTrainingMode::Voice));
@@ -730,6 +798,7 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			if (!TestTrue(TEXT("voice offered (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnter(EStationTrainingMode::Voice)))
 			{
@@ -758,13 +827,14 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::SimulatedExam);
 			Flow->AcknowledgeNotice();
 			if (!TestTrue(TEXT("simulated exam offered (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnterSimulatedExam()))
 			{
 				Done.Execute();
 				return;
 			}
-			TestTrue("trainings offered too", Flow->CanEnter(EStationTrainingMode::Text));
+			TestFalse("no text in a simulated exam", Flow->CanEnter(EStationTrainingMode::Text));
 			Flow->EnterSimulatedExam();
 			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
 				[this, Done]()
@@ -795,12 +865,15 @@ void FStationRunPhoenixSpec::Define()
 		Microphone->Permission = EStationMicPermission::Denied;
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::SimulatedExam);
 			Flow->AcknowledgeNotice();
 			TestFalse("simulated exam blocked", Flow->CanEnterSimulatedExam());
-			TestTrue("text training still offered", Flow->CanEnter(EStationTrainingMode::Text));
 			Flow->EnterSimulatedExam();
 			TestEqual("stays on the brief", Flow->GetStep(), EStationRunStep::Brief);
 			TestNull("no session", Client->GetSession());
+			Flow->BackToMenu();
+			Flow->ChooseMode(EStationSessionMode::Training);
+			TestTrue("a text training is still offered", Flow->CanEnter(EStationTrainingMode::Text));
 			Done.Execute();
 		});
 	});
@@ -812,6 +885,7 @@ void FStationRunPhoenixSpec::Define()
 		Microphone->Answer = EStationMicPermission::Denied;
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::SimulatedExam);
 			Flow->AcknowledgeNotice();
 			if (!TestTrue(TEXT("simulated exam offered (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnterSimulatedExam()))
 			{
@@ -823,7 +897,9 @@ void FStationRunPhoenixSpec::Define()
 			TestEqual("back on the brief", Flow->GetStep(), EStationRunStep::Brief);
 			TestTrue("told why", Flow->GetErrorText().ToString().Contains(TEXT("prova simulada")));
 			TestNull("no session", Client->GetSession());
-			TestTrue("text training still offered", Flow->CanEnter(EStationTrainingMode::Text));
+			Flow->BackToMenu();
+			Flow->ChooseMode(EStationSessionMode::Training);
+			TestTrue("a text training is still offered", Flow->CanEnter(EStationTrainingMode::Text));
 			Done.Execute();
 		});
 	});
@@ -832,6 +908,7 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			if (!TestTrue(TEXT("voice offered (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnter(EStationTrainingMode::Voice)))
 			{
@@ -865,6 +942,7 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			Flow->Enter(EStationTrainingMode::Voice);
 			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
@@ -898,6 +976,7 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Mode, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			if (!TestTrue(TEXT("can enter (is Phoenix on VOICE_MODE=realtime?)"), Flow->CanEnter(Mode)))
 			{
@@ -963,6 +1042,7 @@ void FStationRunPhoenixSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done, Then]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			Flow->Enter(EStationTrainingMode::Text);
 			WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Running || !Flow->GetErrorText().IsEmpty(); },
@@ -1313,11 +1393,13 @@ void FStationRunPhoenixSpec::Define()
 					TestNotNull("session kept until Phoenix confirms", Client->GetSession());
 					WhenFlow(Flow, [this]() { return !Flow->IsDiscarding(); }, [this, Done]()
 					{
-						TestEqual("brief", Flow->GetStep(), EStationRunStep::Brief);
+						TestEqual("back on the menu (#421)", Flow->GetStep(), EStationRunStep::Menu);
 						TestTrue("error cleared", Flow->GetErrorText().IsEmpty());
 						TestNull("session forgotten", Client->GetSession());
 						TestNull("feedback forgotten", Flow->GetResult());
 						TestEqual("transcript forgotten", Flow->GetTranscript().Num(), 0);
+						Flow->ChooseMode(EStationSessionMode::Training);
+						TestEqual("the notice is not read again", Flow->GetStep(), EStationRunStep::Brief);
 						TestTrue("can start a new run", Flow->CanEnter(EStationTrainingMode::Text));
 						Done.Execute();
 					});
@@ -1386,6 +1468,7 @@ void FStationRunVoiceSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			TestNull("no microphone before the learner chooses voice", Client->GetVoice());
 			Flow->Enter(EStationTrainingMode::Voice);
@@ -1441,7 +1524,7 @@ void FStationRunVoiceSpec::Define()
 							WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
 							{
 								Flow->Discard();
-								WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Brief; }, [this, Done]()
+								WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Menu; }, [this, Done]()
 								{
 									TestEqual("conversation gone", Flow->GetTranscript().Num(), 0);
 									TestTrue("no spoken text left", Flow->GetVoice().LearnerText.IsEmpty()
@@ -1459,6 +1542,7 @@ void FStationRunVoiceSpec::Define()
 	{
 		WhenFlow(Flow, [this]() { return !Flow->IsStationLoading(); }, [this, Done]()
 		{
+			Flow->ChooseMode(EStationSessionMode::Training);
 			Flow->AcknowledgeNotice();
 			Flow->Enter(EStationTrainingMode::Voice);
 			WhenFlow(Flow, [this]() { return Flow->GetVoice().State == EStationVoiceState::Ready || Flow->GetVoice().bLost; },
@@ -1478,7 +1562,7 @@ void FStationRunVoiceSpec::Define()
 					WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Feedback; }, [this, Done]()
 					{
 						Flow->Discard();
-						WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Brief; }, [this, Done]()
+						WhenFlow(Flow, [this]() { return Flow->GetStep() == EStationRunStep::Menu; }, [this, Done]()
 						{
 							TestFalse("a new run starts without the failure", Flow->GetVoice().bMicrophoneUnavailable);
 							Done.Execute();

@@ -3,6 +3,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
 #include "Components/EditableTextBox.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
@@ -158,6 +159,86 @@ void UStationMicrophoneWidget::HandleNotNow()
 	OnAnswered.ExecuteIfBound(false);
 }
 
+namespace
+{
+	/** One entry of the main menu: its name, and what it is under it. */
+	UButton* AddMenuEntry(UWidgetTree& Tree, UVerticalBox& Parent, const FText& Label, const FText& Description,
+		float SpaceAbove)
+	{
+		UButton* Entry = Tree.ConstructWidget<UButton>();
+		FButtonStyle Style;
+		Style.SetNormal(StationUi::RoundedBrush(FLinearColor::Transparent, 12.f));
+		Style.SetHovered(StationUi::RoundedBrush(StationUi::Raised, 12.f, StationUi::PanelEdge, 1.f));
+		Style.SetPressed(StationUi::RoundedBrush(StationUi::RaisedHover, 12.f, StationUi::PanelEdge, 1.f));
+		Style.SetNormalPadding(FMargin(20.f, 14.f));
+		Style.SetPressedPadding(FMargin(20.f, 14.f));
+		Entry->SetStyle(Style);
+
+		UVerticalBox* Content = Tree.ConstructWidget<UVerticalBox>();
+		if (UButtonSlot* ContentSlot = Cast<UButtonSlot>(Entry->AddChild(Content)))
+		{
+			ContentSlot->SetHorizontalAlignment(HAlign_Left);
+		}
+		StationUi::AddText(Tree, *Content, Label, 30, true, StationUi::Ink, 0.f);
+		UTextBlock* What = StationUi::AddText(Tree, *Content, Description, 16, false, StationUi::Muted, 6.f);
+		What->SetAutoWrapText(false);
+		What->SetWrapTextAt(440.f);
+
+		if (UVerticalBoxSlot* Slot = Parent.AddChildToVerticalBox(Entry))
+		{
+			Slot->SetPadding(FMargin(-20.f, SpaceAbove, 0.f, 0.f));
+		}
+		return Entry;
+	}
+}
+
+TSharedRef<SWidget> UStationMenuWidget::RebuildWidget()
+{
+	if (WidgetTree && !WidgetTree->RootWidget)
+	{
+		// A dark band on the left, like a game's title screen; the consultation room
+		// shows through on the right.
+		UOverlay* Screen = WidgetTree->ConstructWidget<UOverlay>();
+		WidgetTree->RootWidget = Screen;
+		USizeBox* BandSize = WidgetTree->ConstructWidget<USizeBox>();
+		BandSize->SetWidthOverride(620.f);
+		if (UOverlaySlot* BandSlot = Screen->AddChildToOverlay(BandSize))
+		{
+			BandSlot->SetHorizontalAlignment(HAlign_Left);
+			BandSlot->SetVerticalAlignment(VAlign_Fill);
+		}
+		UBorder* Band = WidgetTree->ConstructWidget<UBorder>();
+		Band->SetBrushColor(FLinearColor(StationUi::Panel.R, StationUi::Panel.G, StationUi::Panel.B, 0.92f));
+		Band->SetPadding(FMargin(72.f, 96.f, 56.f, 64.f));
+		BandSize->SetContent(Band);
+
+		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
+		Band->SetContent(Column);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("MenuTitle", "ProyectoMed"), 48, true, StationUi::Ink, 0.f);
+		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("MenuSubtitle", "Ferramenta educacional para treinar estações práticas."),
+			18, false, StationUi::Muted, 8.f);
+
+		TrainingButton = AddMenuEntry(*WidgetTree, *Column, LOCTEXT("MenuTraining", "Treino"),
+			LOCTEXT("MenuTrainingNote", "Por texto ou por voz, com o relógio à vista."), 56.f);
+		TrainingButton->OnClicked.AddDynamic(this, &UStationMenuWidget::HandleTraining);
+		SimulatedExamButton = AddMenuEntry(*WidgetTree, *Column, LOCTEXT("MenuSimulatedExam", "Prova simulada"),
+			LOCTEXT("MenuSimulatedExamNote", "Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
+			12.f);
+		SimulatedExamButton->OnClicked.AddDynamic(this, &UStationMenuWidget::HandleSimulatedExam);
+	}
+	return Super::RebuildWidget();
+}
+
+void UStationMenuWidget::HandleTraining()
+{
+	OnModeChosen.ExecuteIfBound(EStationSessionMode::Training);
+}
+
+void UStationMenuWidget::HandleSimulatedExam()
+{
+	OnModeChosen.ExecuteIfBound(EStationSessionMode::SimulatedExam);
+}
+
 TSharedRef<SWidget> UStationNoticeWidget::RebuildWidget()
 {
 	if (WidgetTree && !WidgetTree->RootWidget)
@@ -189,8 +270,15 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 		UVerticalBox* Footer = nullptr;
 		UVerticalBox* Column = StationUi::MakeFooterCard(*WidgetTree, 860.f, 860.f, Footer);
 		FooterBox = Footer;
-		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("BriefHeading", "Antes de entrar na estação"), 16, true,
-			StationUi::Muted, 0.f);
+		MenuButton = StationUi::MakeFlatButton(*WidgetTree, LOCTEXT("BackToMenu", "‹ Voltar ao menu"), 16, StationUi::Link);
+		MenuButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleBackToMenu);
+		if (UVerticalBoxSlot* MenuSlot = Column->AddChildToVerticalBox(MenuButton))
+		{
+			MenuSlot->SetHorizontalAlignment(HAlign_Left);
+			MenuSlot->SetPadding(FMargin(-6.f, 0.f, 0.f, 0.f));
+		}
+		HeadingText = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("BriefHeading", "Antes de entrar na estação"), 16, true,
+			StationUi::Muted, 12.f);
 
 		StatusText = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("BriefLoading", "Carregando cenário e tarefas..."), 18);
 		ErrorText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 18, false, StationUi::Caution);
@@ -215,6 +303,7 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 			"O tempo da estação começa a contar quando você entrar."), 15, false, StationUi::Muted, 16.f);
 
 		UHorizontalBox* Trainings = WidgetTree->ConstructWidget<UHorizontalBox>();
+		TrainingsRow = Trainings;
 		if (UVerticalBoxSlot* TrainingsSlot = FooterBox->AddChildToVerticalBox(Trainings))
 		{
 			TrainingsSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
@@ -233,14 +322,11 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 			"No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."),
 			14, false, StationUi::Muted, 10.f);
 
-		// The other Station Mode, quieter than the trainings and apart from them (#421).
-		SimulatedExamButton = StationUi::AddButton(*WidgetTree, *FooterBox, LOCTEXT("SimulatedExam", "Prova simulada"), 20.f);
+		// A simulated exam's one way in, by voice (#421).
+		SimulatedExamButton = StationUi::AddButton(*WidgetTree, *FooterBox,
+			LOCTEXT("StartSimulatedExam", "Iniciar prova simulada"), 14.f);
 		SimulatedExamButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleSimulatedExam);
-		StationUi::MakeSecondary(*SimulatedExamButton);
-		if (UVerticalBoxSlot* ExamSlot = Cast<UVerticalBoxSlot>(SimulatedExamButton->Slot))
-		{
-			ExamSlot->SetHorizontalAlignment(HAlign_Left);
-		}
+		StationUi::MakePrimary(*SimulatedExamButton);
 		SimulatedExamNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("SimulatedExamNote",
 			"Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
 			14, false, StationUi::Muted, 10.f);
@@ -274,6 +360,10 @@ void UStationBriefWidget::Refresh()
 		return;
 	}
 
+	const bool bExam = Flow->GetSessionMode() == EStationSessionMode::SimulatedExam;
+	HeadingText->SetText(bExam
+		? LOCTEXT("SimulatedExamHeading", "Prova simulada · Antes de entrar na estação")
+		: LOCTEXT("TrainingHeading", "Treino · Antes de entrar na estação"));
 	TitleText->SetText(FText::FromString(Station->DisplayTitle));
 	ScenarioText->SetText(FText::FromString(Station->Scenario));
 	TaskList->ClearChildren();
@@ -284,14 +374,17 @@ void UStationBriefWidget::Refresh()
 
 	TextButton->SetIsEnabled(Flow->CanEnter(EStationTrainingMode::Text));
 	const bool bVoiceOffered = IsVoiceTrainingAvailable(*Station);
+	StationUi::SetShown(TrainingsRow, !bExam);
 	StationUi::SetShown(VoiceButton, bVoiceOffered);
-	StationUi::SetShown(VoiceNote, bVoiceOffered);
+	StationUi::SetShown(VoiceNote, !bExam && bVoiceOffered);
 	VoiceButton->SetIsEnabled(Flow->CanEnter(EStationTrainingMode::Voice));
 	VoiceNote->SetText(Flow->GetMicrophonePermission() == EStationMicPermission::Denied
 		? LOCTEXT("VoiceBlocked", "O microfone está bloqueado. Para treinar por voz, libere o acesso nos ajustes de privacidade do sistema e abra o app de novo.")
 		: LOCTEXT("VoiceNote", "No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."));
 
 	// The simulated exam stays in view when it cannot start, so the learner reads why.
+	StationUi::SetShown(SimulatedExamButton, bExam);
+	StationUi::SetShown(SimulatedExamNote, bExam);
 	const FText ExamUnavailable = SimulatedExamUnavailableText(*Station, Flow->GetMicrophonePermission());
 	SimulatedExamButton->SetIsEnabled(Flow->CanEnterSimulatedExam());
 	SimulatedExamNote->SetText(ExamUnavailable.IsEmpty()
@@ -320,6 +413,14 @@ void UStationBriefWidget::HandleSimulatedExam()
 	if (Flow)
 	{
 		Flow->EnterSimulatedExam();
+	}
+}
+
+void UStationBriefWidget::HandleBackToMenu()
+{
+	if (Flow)
+	{
+		Flow->BackToMenu();
 	}
 }
 

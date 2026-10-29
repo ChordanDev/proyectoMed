@@ -88,7 +88,7 @@ void UStationRunFlow::Begin(UStationClient* InClient, FStationMicrophoneSetup In
 {
 	Client = InClient;
 	Microphone = MoveTemp(InMicrophone);
-	Step = Microphone.WasDisclosureShown() ? EStationRunStep::Notice : EStationRunStep::Microphone;
+	Step = Microphone.WasDisclosureShown() ? EStationRunStep::Menu : EStationRunStep::Microphone;
 	LoadStation();
 }
 
@@ -101,7 +101,7 @@ void UStationRunFlow::AnswerMicrophone(bool bAllow)
 	Microphone.RememberDisclosureShown();
 	if (!bAllow)
 	{
-		Step = EStationRunStep::Notice;
+		Step = EStationRunStep::Menu;
 		OnChanged.Broadcast();
 		return;
 	}
@@ -110,7 +110,7 @@ void UStationRunFlow::AnswerMicrophone(bool bAllow)
 	{
 		if (UStationRunFlow* Self = WeakThis.Get(); Self && Self->Step == EStationRunStep::Microphone)
 		{
-			Self->Step = EStationRunStep::Notice;
+			Self->Step = EStationRunStep::Menu;
 			Self->OnChanged.Broadcast();
 		}
 	});
@@ -121,19 +121,44 @@ EStationMicPermission UStationRunFlow::GetMicrophonePermission() const
 	return Microphone.GetPermission ? Microphone.GetPermission() : EStationMicPermission::Denied;
 }
 
+void UStationRunFlow::ChooseMode(EStationSessionMode InMode)
+{
+	if (Step != EStationRunStep::Menu)
+	{
+		return;
+	}
+	SessionMode = InMode;
+	ErrorText = FText::GetEmpty();
+	Step = bNoticeAcknowledged ? EStationRunStep::Brief : EStationRunStep::Notice;
+	OnChanged.Broadcast();
+}
+
 void UStationRunFlow::AcknowledgeNotice()
 {
 	if (Step != EStationRunStep::Notice)
 	{
 		return;
 	}
+	bNoticeAcknowledged = true;
 	Step = EStationRunStep::Brief;
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::BackToMenu()
+{
+	if (Step != EStationRunStep::Notice && Step != EStationRunStep::Brief)
+	{
+		return;
+	}
+	ErrorText = FText::GetEmpty();
+	Step = EStationRunStep::Menu;
 	OnChanged.Broadcast();
 }
 
 void UStationRunFlow::RetryLoadStation()
 {
-	if (!bLoadingStation && (Step == EStationRunStep::Notice || Step == EStationRunStep::Brief))
+	if (!bLoadingStation
+		&& (Step == EStationRunStep::Menu || Step == EStationRunStep::Notice || Step == EStationRunStep::Brief))
 	{
 		LoadStation();
 	}
@@ -142,6 +167,7 @@ void UStationRunFlow::RetryLoadStation()
 bool UStationRunFlow::CanEnter(EStationTrainingMode InMode) const
 {
 	return Step == EStationRunStep::Brief
+		&& SessionMode == EStationSessionMode::Training
 		&& Station.IsSet()
 		&& (InMode == EStationTrainingMode::Text
 			|| (IsVoiceTrainingAvailable(Station.GetValue()) && GetMicrophonePermission() != EStationMicPermission::Denied));
@@ -158,6 +184,7 @@ void UStationRunFlow::Enter(EStationTrainingMode InMode)
 bool UStationRunFlow::CanEnterSimulatedExam() const
 {
 	return Step == EStationRunStep::Brief
+		&& SessionMode == EStationSessionMode::SimulatedExam
 		&& Station.IsSet()
 		&& SimulatedExamUnavailableText(Station.GetValue(), GetMicrophonePermission()).IsEmpty();
 }
@@ -804,7 +831,7 @@ void UStationRunFlow::Discard()
 			return;
 		}
 		Self->ResetRun();
-		Self->Step = EStationRunStep::Brief;
+		Self->Step = EStationRunStep::Menu;
 		Self->OnChanged.Broadcast();
 	});
 }
