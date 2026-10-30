@@ -15,19 +15,57 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
+#include "Framework/Application/SlateApplication.h"
+#include "InputCoreTypes.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
 #include "Station/StationUi.h"
+#include "Widgets/SWindow.h"
 
 BEGIN_DEFINE_SPEC(FStationBriefUnitSpec, "ProyectoMed.StationCards.Unit",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 	UStationRunFlow* MakeFlow(EStationSessionMode SessionMode, EStationVoiceMode VoiceMode, EStationMicPermission Permission) const;
 	UStationBriefWidget* MakeBrief(UStationRunFlow* Flow) const;
+	UStationMenuWidget* MakeMenu() const;
 	/** Every text under `Root`, in tree order. */
 	static TArray<FString> Texts(UWidget* Root);
 	static bool IsShown(const UWidget* Widget);
+	static FReply Press(UStationMenuWidget& Menu, const FKey& Key, bool bRepeat = false);
+	/** Lets every fade end, then checks that `Mode` is the lit one and the only one with an arrow. */
+	void ExpectSelected(UStationMenuWidget& Menu, EStationSessionMode Mode);
 END_DEFINE_SPEC(FStationBriefUnitSpec)
+
+UStationMenuWidget* FStationBriefUnitSpec::MakeMenu() const
+{
+	UStationMenuWidget* Menu = CreateWidget<UStationMenuWidget>(GEngine->GetWorldContexts()[0].World());
+	Menu->TakeWidget();
+	return Menu;
+}
+
+FReply FStationBriefUnitSpec::Press(UStationMenuWidget& Menu, const FKey& Key, bool bRepeat)
+{
+	return Menu.NativeOnPreviewKeyDown(FGeometry(), FKeyEvent(Key, FModifierKeysState(), 0, bRepeat, 0, 0));
+}
+
+void FStationBriefUnitSpec::ExpectSelected(UStationMenuWidget& Menu, EStationSessionMode Mode)
+{
+	Menu.NativeTick(FGeometry(), 10.f);
+
+	const bool bTraining = Mode == EStationSessionMode::Training;
+	UButton* Lit = bTraining ? Menu.TrainingButton : Menu.SimulatedExamButton;
+	UButton* Dimmed = bTraining ? Menu.SimulatedExamButton : Menu.TrainingButton;
+	UButton* Arrow = bTraining ? Menu.TrainingArrow : Menu.SimulatedExamArrow;
+	UButton* OtherArrow = bTraining ? Menu.SimulatedExamArrow : Menu.TrainingArrow;
+	TestEqual("the selected mode lit", Lit->GetRenderOpacity(), 1.f);
+	TestEqual("the other dimmed", Dimmed->GetRenderOpacity(), 0.45f);
+	if (TestNotNull("its arrow", Arrow) && TestNotNull("the other arrow", OtherArrow))
+	{
+		TestEqual("its arrow in view", Arrow->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual("and solid", Arrow->GetRenderOpacity(), 1.f);
+		TestEqual("the other arrow keeps its place out of view, so nothing moves", OtherArrow->GetVisibility(), ESlateVisibility::Hidden);
+	}
+}
 
 UStationRunFlow* FStationBriefUnitSpec::MakeFlow(EStationSessionMode SessionMode, EStationVoiceMode VoiceMode,
 	EStationMicPermission Permission) const
@@ -85,10 +123,11 @@ void FStationBriefUnitSpec::Define()
 
 		const TArray<FString> Training = Texts(Menu->TrainingButton);
 		TestTrue("training", Training.Contains(TEXT("Treino")));
-		TestTrue("what a training is", Training.ContainsByPredicate([](const FString& Text) { return Text.Contains(TEXT("texto ou por voz")); }));
+		TestTrue("what a training is", Training.Contains(TEXT("Pratique a estação no seu ritmo, por texto ou por voz.")));
 		const TArray<FString> Exam = Texts(Menu->SimulatedExamButton);
 		TestTrue("simulated exam", Exam.Contains(TEXT("Prova simulada")));
-		TestTrue("what a simulated exam is", Exam.ContainsByPredicate([](const FString& Text) { return Text.Contains(TEXT("Só por voz")); }));
+		TestTrue("what a simulated exam is", Exam.Contains(TEXT("Uma estação completa, como no dia da prova prática.")));
+		TestTrue("not an official grade", Exam.Contains(TEXT("Não é nota oficial do Revalida.")));
 
 		Menu->HandleTraining();
 		Menu->HandleSimulatedExam();
@@ -102,8 +141,9 @@ void FStationBriefUnitSpec::Define()
 		Menu->TakeWidget();
 
 		const TArray<FString> Training = Texts(Menu->TrainingButton);
-		TestTrue("text or voice", Training.Contains(TEXT("Texto ou voz")));
+		TestFalse("text or voice is in its description, not a trait", Training.Contains(TEXT("Texto ou voz")));
 		TestTrue("the clock in view", Training.Contains(TEXT("Relógio à vista")));
+		TestTrue("with help", Training.Contains(TEXT("Com ajuda")));
 		const TArray<FString> Exam = Texts(Menu->SimulatedExamButton);
 		TestTrue("voice only", Exam.Contains(TEXT("Só voz")));
 		TestTrue("no help", Exam.Contains(TEXT("Sem ajuda")));
@@ -134,6 +174,132 @@ void FStationBriefUnitSpec::Define()
 		TestTrue("settings shown", IsShown(Menu->SettingsButton));
 		TestFalse("settings not there yet", Menu->SettingsButton->GetIsEnabled());
 		TestTrue("said so", Texts(Menu->SettingsButton).Contains(TEXT("Ajustes · em breve")));
+		TestTrue("history shown", IsShown(Menu->HistoryButton));
+		TestFalse("history not there yet", Menu->HistoryButton && Menu->HistoryButton->GetIsEnabled());
+		TestTrue("said so too", Texts(Menu->HistoryButton).Contains(TEXT("Histórico · em breve")));
+	});
+
+	It("leaves the app with Esc", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		int32 Quits = 0;
+		Menu->OnQuit.BindLambda([&Quits]() { ++Quits; });
+
+		TestTrue("taken", Press(*Menu, EKeys::Escape).IsEventHandled());
+		TestEqual("quit asked once", Quits, 1);
+	});
+
+	It("opens with the training selected and the simulated exam dimmed, nothing else in view", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		ExpectSelected(*Menu, EStationSessionMode::Training);
+		TestEqual("the arrow fully in view at once", Menu->TrainingArrow ? Menu->TrainingArrow->GetRenderOpacity() : 0.f, 1.f);
+	});
+
+	It("selects a mode with a click, without entering it", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		TArray<EStationSessionMode> Chosen;
+		Menu->OnModeChosen.BindLambda([&Chosen](EStationSessionMode Mode) { Chosen.Add(Mode); });
+
+		Menu->SimulatedExamButton->OnClicked.Broadcast();
+		ExpectSelected(*Menu, EStationSessionMode::SimulatedExam);
+		Menu->TrainingButton->OnClicked.Broadcast();
+		ExpectSelected(*Menu, EStationSessionMode::Training);
+		TestEqual("nothing entered", Chosen.Num(), 0);
+	});
+
+	It("selects a mode with the arrow keys", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+
+		TestTrue("down taken", Press(*Menu, EKeys::Down).IsEventHandled());
+		ExpectSelected(*Menu, EStationSessionMode::SimulatedExam);
+		TestTrue("up taken", Press(*Menu, EKeys::Up).IsEventHandled());
+		ExpectSelected(*Menu, EStationSessionMode::Training);
+	});
+
+	It("selects the mode that takes the focus, and rings it", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+
+		Menu->SimulatedExamButton->OnReceivedFocus.ExecuteIfBound();
+		ExpectSelected(*Menu, EStationSessionMode::SimulatedExam);
+		TestEqual("the ring", Menu->SimulatedExamButton->GetStyle().Normal.OutlineSettings.Width, 2.f);
+		Menu->SimulatedExamButton->OnLostFocus.ExecuteIfBound();
+		TestEqual("the ring gone", Menu->SimulatedExamButton->GetStyle().Normal.OutlineSettings.Width, 0.f);
+	});
+
+	It("selects the training again each time the menu opens", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		Menu->SimulatedExamButton->OnClicked.Broadcast();
+
+		Menu->SetVisibility(ESlateVisibility::Collapsed);
+		Menu->SetVisibility(ESlateVisibility::Visible);
+		ExpectSelected(*Menu, EStationSessionMode::Training);
+	});
+
+	It("keeps the selection when the menu is only told to stay open", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		Menu->SimulatedExamButton->OnClicked.Broadcast();
+
+		Menu->SetVisibility(ESlateVisibility::Visible);
+		ExpectSelected(*Menu, EStationSessionMode::SimulatedExam);
+	});
+
+	It("enters a mode from its arrow", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		TArray<EStationSessionMode> Chosen;
+		Menu->OnModeChosen.BindLambda([&Chosen](EStationSessionMode Mode) { Chosen.Add(Mode); });
+
+		Menu->TrainingArrow->OnClicked.Broadcast();
+		Menu->SimulatedExamButton->OnClicked.Broadcast();
+		Menu->SimulatedExamArrow->OnClicked.Broadcast();
+		TestEqual("each its own", Chosen,
+			TArray<EStationSessionMode>{EStationSessionMode::Training, EStationSessionMode::SimulatedExam});
+	});
+
+	It("enters the selected mode with Enter", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		TArray<EStationSessionMode> Chosen;
+		Menu->OnModeChosen.BindLambda([&Chosen](EStationSessionMode Mode) { Chosen.Add(Mode); });
+
+		TestTrue("taken", Press(*Menu, EKeys::Enter).IsEventHandled());
+		Press(*Menu, EKeys::Down);
+		Press(*Menu, EKeys::Enter);
+		TestEqual("each in turn", Chosen,
+			TArray<EStationSessionMode>{EStationSessionMode::Training, EStationSessionMode::SimulatedExam});
+	});
+
+	It("enters the selected mode once however long Enter stays down", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		int32 Entered = 0;
+		Menu->OnModeChosen.BindLambda([&Entered](EStationSessionMode) { ++Entered; });
+
+		Press(*Menu, EKeys::Enter);
+		Press(*Menu, EKeys::Enter, /*bRepeat*/ true);
+		TestEqual("once", Entered, 1);
+	});
+
+	It("leaves Enter to \"Sair\" while it has the keyboard, so it does not enter a mode instead", [this]()
+	{
+		UStationMenuWidget* Menu = MakeMenu();
+		int32 Entered = 0;
+		Menu->OnModeChosen.BindLambda([&Entered](EStationSessionMode) { ++Entered; });
+		TSharedRef<SWindow> Window = SNew(SWindow).ClientSize(FVector2f(800.f, 600.f))[Menu->TakeWidget()];
+		FSlateApplication::Get().AddWindow(Window, false);
+
+		FSlateApplication::Get().SetUserFocus(0, Menu->QuitButton->TakeWidget(), EFocusCause::Navigation);
+		TestFalse("left to the button", Press(*Menu, EKeys::Enter).IsEventHandled());
+		TestEqual("no mode entered", Entered, 0);
+
+		FSlateApplication::Get().ClearUserFocus(0);
+		FSlateApplication::Get().RequestDestroyWindow(Window);
 	});
 
 	It("offers a training's two ways in, and not the simulated exam, on a training's brief", [this]()

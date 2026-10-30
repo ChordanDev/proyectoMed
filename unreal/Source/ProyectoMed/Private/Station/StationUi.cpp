@@ -33,6 +33,13 @@ FSlateFontInfo StationUi::Font(FName Weight, int32 Size)
 	return FCoreStyle::GetDefaultFontStyle(Weight, Size);
 }
 
+FSlateFontInfo StationUi::MockupFont(FName Weight, float Pixels)
+{
+	FSlateFontInfo Info = Font(Weight, 0);
+	Info.Size = Pixels * 0.75f;
+	return Info;
+}
+
 UVerticalBox* StationUi::MakeCenteredCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight)
 {
 	UBorder* Screen = Tree.ConstructWidget<UBorder>();
@@ -132,8 +139,9 @@ UBorder* StationUi::MakeRounded(UWidgetTree& Tree, const FLinearColor& Fill, flo
 namespace
 {
 	constexpr float ButtonRadius = 8.f;
-	/** Above and below a button's label, which together with the line keeps it at least 44 px tall. */
-	constexpr float ButtonLabelSpace = 11.f;
+	/** Above and below a button's label: with the line, the mockups' 52 px, or 44 px for a ghost. */
+	constexpr float ButtonLabelSpace = 15.f;
+	constexpr float GhostLabelSpace = 12.f;
 	constexpr float EnterArrowSize = 60.f;
 	/** A disabled button in the mockups. */
 	constexpr float DisabledOpacity = 0.45f;
@@ -232,16 +240,16 @@ namespace
 		});
 	}
 
-	void MakeLabelled(UButton& Button, const FButtonLook& Look, FName Weight = StationUi::FontBold, int32 Size = 16,
-		float SideSpace = 24.f)
+	void MakeLabelled(UButton& Button, const FButtonLook& Look, FName Weight = StationUi::FontBold, float Pixels = 16.f,
+		float SideSpace = 24.f, float LabelSpace = ButtonLabelSpace)
 	{
 		ApplyWithFocusRing(Button, StyleFor(Look));
 		Button.SetBackgroundColor(FLinearColor::White);
 		if (UTextBlock* Label = Cast<UTextBlock>(Button.GetChildAt(0)))
 		{
-			Label->SetFont(StationUi::Font(Weight, Size));
+			Label->SetFont(StationUi::MockupFont(Weight, Pixels));
 			Label->SetColorAndOpacity(FSlateColor::UseForeground());
-			Label->SetMargin(FMargin(SideSpace, ButtonLabelSpace));
+			Label->SetMargin(FMargin(SideSpace, LabelSpace));
 			if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(Label->Slot))
 			{
 				LabelSlot->SetPadding(FMargin(0.f));
@@ -308,7 +316,7 @@ void StationUi::MakeGhost(UButton& Button)
 	FButtonLook Look;
 	Look.Label = Muted;
 	Look.HoverLabel = InkTitle;
-	MakeLabelled(Button, Look, FontSemiBold, 15, 0.f);
+	MakeLabelled(Button, Look, FontSemiBold, 15.f, 0.f, GhostLabelSpace);
 }
 
 void StationUi::MakeRow(UButton& Button)
@@ -336,12 +344,28 @@ UButton* StationUi::MakeEnterArrow(UWidgetTree& Tree, const FLinearColor& Accent
 	}
 	UTextBlock* Arrow = Tree.ConstructWidget<UTextBlock>();
 	Arrow->SetText(FText::FromString(TEXT("→")));
-	Arrow->SetFont(Font(FontBold, 26));
+	Arrow->SetFont(MockupFont(FontBold, 26.f));
 	Arrow->SetColorAndOpacity(FSlateColor::UseForeground());
 	if (USizeBoxSlot* ArrowSlot = Cast<USizeBoxSlot>(Size->AddChild(Arrow)))
 	{
 		ArrowSlot->SetHorizontalAlignment(HAlign_Center);
 		ArrowSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	return Button;
+}
+
+UButton* StationUi::MakeContentButton(UWidgetTree& Tree, UWidget& Content, const FMargin& RingSpace)
+{
+	UButton* Button = Tree.ConstructWidget<UButton>();
+	FButtonLook Look;
+	Look.Radius = 6.f;
+	ApplyWithFocusRing(*Button, StyleFor(Look));
+	Button->SetBackgroundColor(FLinearColor::White);
+	if (UButtonSlot* Slot = Cast<UButtonSlot>(Button->AddChild(&Content)))
+	{
+		Slot->SetPadding(RingSpace);
+		Slot->SetHorizontalAlignment(HAlign_Fill);
+		Slot->SetVerticalAlignment(VAlign_Fill);
 	}
 	return Button;
 }
@@ -368,7 +392,7 @@ UBorder* StationUi::MakeChip(UWidgetTree& Tree, const FText& Label)
 	UBorder* Chip = MakeRounded(Tree, FLinearColor::Transparent, 16.f, FMargin(12.f, 6.f), ChipEdge, 1.f);
 	UTextBlock* Text = Tree.ConstructWidget<UTextBlock>();
 	Text->SetText(Label);
-	Text->SetFont(Font(FontSemiBold, 13));
+	Text->SetFont(MockupFont(FontSemiBold, 13.f));
 	Text->SetColorAndOpacity(FSlateColor(InkLabel));
 	Chip->SetContent(Text);
 	return Chip;
@@ -390,7 +414,7 @@ UHorizontalBox* StationUi::MakeKeyHint(UWidgetTree& Tree, const FText& Key, cons
 	Cap->SetVerticalAlignment(VAlign_Center);
 	UTextBlock* KeyName = Tree.ConstructWidget<UTextBlock>();
 	KeyName->SetText(Key);
-	KeyName->SetFont(Font(FontBold, 12));
+	KeyName->SetFont(MockupFont(FontBold, 12.f));
 	KeyName->SetColorAndOpacity(FSlateColor(InkLabel));
 	Cap->SetContent(KeyName);
 	Size->SetContent(Cap);
@@ -401,7 +425,7 @@ UHorizontalBox* StationUi::MakeKeyHint(UWidgetTree& Tree, const FText& Key, cons
 
 	UTextBlock* What = Tree.ConstructWidget<UTextBlock>();
 	What->SetText(Action);
-	What->SetFont(Font(FontMedium, 13));
+	What->SetFont(MockupFont(FontMedium, 13.f));
 	What->SetColorAndOpacity(FSlateColor(InkHint));
 	if (UHorizontalBoxSlot* WhatSlot = Hint->AddChildToHorizontalBox(What))
 	{

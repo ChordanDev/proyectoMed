@@ -92,11 +92,6 @@ namespace StationUi
 	const FLinearColor NeutralFill(FColor(0x44, 0x44, 0x41));
 	const FLinearColor NeutralInk(FColor(0xD3, 0xD1, 0xC7));
 
-	// The fills of the main menu's mode cards (#421), until the Cine menu replaces them (#456).
-	const FLinearColor TrainingFill(FColor(0x14, 0x36, 0x5C));
-	const FLinearColor TrainingHover(FColor(0x1B, 0x47, 0x77));
-	const FLinearColor ExamFill(FColor(0x4E, 0x2A, 0x0C));
-	const FLinearColor ExamHover(FColor(0x66, 0x37, 0x12));
 	/** Behind the main menu until the doctor's office shows there (#431). */
 	const FLinearColor MenuBackdrop(FColor(0x0E, 0x24, 0x40));
 
@@ -109,6 +104,12 @@ namespace StationUi
 
 	/** Manrope in `Weight`, one of the names above. */
 	FSlateFontInfo Font(FName Weight, int32 Size);
+
+	/**
+	 * `Font` as tall as `Pixels` in the mockups: Slate sizes a font in points at 96 DPI,
+	 * so a CSS pixel is three quarters of one.
+	 */
+	FSlateFontInfo MockupFont(FName Weight, float Pixels);
 
 	/** A rounded box of `Fill`, outlined in `Outline` when `OutlineWidth` is above 0. */
 	FSlateBrush RoundedBrush(const FLinearColor& Fill, float Radius,
@@ -142,6 +143,12 @@ namespace StationUi
 
 	/** The round button that enters a mode, in that mode's `Accent`. */
 	UButton* MakeEnterArrow(UWidgetTree& Tree, const FLinearColor& Accent);
+
+	/**
+	 * A button around `Content`, for what a label cannot hold: no box of its own, and
+	 * `RingSpace` between its content and the keyboard's ring.
+	 */
+	UButton* MakeContentButton(UWidgetTree& Tree, UWidget& Content, const FMargin& RingSpace);
 
 	/**
 	 * Darkens the scene behind text, from the left edge to clear past the middle. Goes
