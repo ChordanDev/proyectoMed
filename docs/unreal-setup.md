@@ -313,8 +313,9 @@ the raw Manrope files.
 - The voice status under the timer reads "Conectando a voz..." until the
   worker joins, then "Voz conectada". While LiveKit retries the connection or
   the worker is gone it reads "Reconectando a voz..." and the microphone stops.
-  If the worker has not joined within 20 seconds, or the voice has not come back
-  within 10, it reads "A voz caiu. O tempo da estação continua." for the rest of
+  If the link has not joined and published within 30 seconds, the worker has not
+  joined within 20, or the voice has not come back within 10, it reads
+  "A voz caiu. O tempo da estação continua." for the rest of
   the run; the station timer keeps running and the learner continues in
   writing. A transcription failure stops the worker and reads the same. Each
   of these voice failures checks Phoenix once: when Phoenix does not answer

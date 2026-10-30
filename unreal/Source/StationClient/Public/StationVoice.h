@@ -65,7 +65,7 @@ enum class EStationVoiceState : uint8
 {
 	/** Not joined, or left. */
 	Disconnected,
-	/** Joining the room and publishing the microphone. */
+	/** Joining the room and publishing the microphone. Becomes `Failed` after 30 seconds. */
 	Connecting,
 	/** In the room with the microphone published, waiting for the voice worker. Becomes `Failed` after 20 seconds. */
 	WaitingForWorker,
@@ -77,8 +77,9 @@ enum class EStationVoiceState : uint8
 	 */
 	Reconnecting,
 	/**
-	 * Joining or publishing failed, or the voice worker never joined or did not come
-	 * back; `GetFailure()` says why. Final: the link has left the room.
+	 * Joining or publishing failed or took too long, or the voice worker never joined
+	 * or did not come back; `GetFailure()` says why. Final: nothing more is heard or
+	 * sent, and the link leaves the room once any SDK call under way returns.
 	 */
 	Failed,
 };
@@ -116,6 +117,9 @@ public:
 
 	/** Joins the room on a background thread; returns at once. Game thread. */
 	void Connect();
+
+	/** Replaces the `Connecting` deadline of 30 seconds, before `Connect`. For tests. Game thread. */
+	void SetConnectDeadline(double Seconds);
 
 	/**
 	 * Leaves the room in the background and returns at once, even while a join to an

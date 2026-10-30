@@ -25,10 +25,11 @@ public class StationClient : ModuleRules
 			"LiveKitSDK",
 		});
 
-		// The automation tests serve a fake Phoenix to control response timing.
+		// The automation tests serve a fake Phoenix to control response timing, and
+		// open a socket that never answers a LiveKit join.
 		if (Target.Configuration != UnrealTargetConfiguration.Shipping)
 		{
-			PrivateDependencyModuleNames.Add("HTTPServer");
+			PrivateDependencyModuleNames.AddRange(new string[] { "HTTPServer", "Sockets" });
 		}
 	}
 }
