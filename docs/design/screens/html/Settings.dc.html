@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Ajustes</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}
+.switch{all:unset;cursor:pointer;box-sizing:border-box;width:52px;height:30px;border-radius:15px;padding:4px;display:inline-flex;flex:none}
+.switch:focus-visible{outline:2px solid #ffffff;outline-offset:3px}
+.line{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 0;border-top:1px solid #2f3d48}
+</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win"></i><i class="doc"></i><i class="desk"></i></div>
+<div class="scrim-full" aria-hidden="true"></div>
+
+<div style="position: absolute; inset: 0; padding: 64px 96px 48px; display: flex; flex-direction: column; gap: 28px">
+<a class="ghost" href="Main.dc.html" style="align-self: flex-start">‹ Menu</a>
+<h1 class="h1">Ajustes</h1>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 64px; align-items: start">
+<section style="display: flex; flex-direction: column">
+<h2 class="eyebrow" style="margin: 0 0 8px">Conta</h2>
+<div class="line"><span class="small">Conectado como</span><span class="h3" style="font-size: 16px">[email da conta]</span></div>
+<div class="line"><button class="ghost" style="color: #e8eef2">Sair desta conta</button><button class="ghost">Sair de todos os aparelhos</button></div>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 class="eyebrow" style="margin: 0 0 8px">Plano e cota</h2>
+<div class="line"><span class="small">Simulações de hoje</span><span class="h3" style="font-size: 16px">[n] de [n]</span></div>
+<div class="line"><span class="small">A cota renova à meia-noite (horário de Brasília).</span><button class="ghost" style="color: #e8eef2">Gerenciar no site ↗</button></div>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 class="eyebrow" style="margin: 0 0 8px">Áudio</h2>
+<div class="line"><label for="mic" class="small">Microfone</label><select id="mic" class="field" style="width: 300px; height: 44px"><option>[Microfone padrão do sistema]</option></select></div>
+<div class="line"><span class="small" style="display: flex; align-items: center; gap: 10px"><span class="dot" style="background: #5fd0bf"></span>Acesso ao microfone permitido</span><button class="btn btn-secondary" style="height: 40px; font-size: 14px">Testar microfone</button></div>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 class="eyebrow" style="margin: 0 0 8px">Prova simulada</h2>
+<div class="line">
+<span style="display: flex; flex-direction: column; gap: 4px"><span class="h3" style="font-size: 16px" id="tlabel">Mostrar minha transcrição</span><span class="fine">As suas falas aparecem na tela durante a prova. O paciente continua só em áudio.</span></span>
+<button class="switch" role="switch" aria-labelledby="tlabel" aria-checked="{{ checked }}" onClick="{{ toggle }}" style="{{ track }}"><span style="display: block; width: 22px; height: 22px; border-radius: 11px; background: #ffffff"></span></button>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 class="eyebrow" style="margin: 0 0 8px">Privacidade</h2>
+<div class="line"><button class="ghost" style="color: #e8eef2">Termos de uso ↗</button><button class="ghost" style="color: #e8eef2">Política de privacidade ↗</button></div>
+<div class="line"><span class="fine">O áudio e a conversa completa não são guardados depois da estação.</span></div>
+</section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { on: true };
+  }
+  renderVals() {
+    const on = this.state.on;
+    return {
+      checked: on ? 'true' : 'false',
+      track: 'background:' + (on ? '#f2a65a' : '#3a4955') + '; justify-content:' + (on ? 'flex-end' : 'flex-start'),
+      toggle: () => this.setState({ on: !on })
+    };
+  }
+}
+</script>
+</body>
+</html>

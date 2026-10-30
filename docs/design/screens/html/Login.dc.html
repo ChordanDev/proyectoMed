@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Entrar</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win"></i><i class="doc"></i><i class="desk"></i></div>
+<div class="scene-tag">[Cena do consultório ao fundo]</div>
+<div class="scrim-left" aria-hidden="true"></div>
+
+<div class="brand"><div class="wordmark">Proyecto<span style="color: #5fd0bf">Med</span></div></div>
+
+<div style="position: absolute; left: 96px; bottom: 96px; width: 760px; display: flex; flex-direction: column; gap: 28px">
+<div class="eyebrow">Entrar</div>
+<h1 class="h1">Conecte sua conta</h1>
+
+<div style="display: flex; gap: 40px; align-items: flex-start">
+<div style="flex: 1; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; gap: 16px; align-items: baseline">
+<span style="font-size: 15px; font-weight: 800; color: #5fd0bf">1</span>
+<p class="body">No celular ou no computador, abra <strong style="color: #ffffff">[verification_uri]</strong></p>
+</div>
+<div style="display: flex; gap: 16px; align-items: baseline">
+<span style="font-size: 15px; font-weight: 800; color: #5fd0bf">2</span>
+<p class="body">Digite o código do aplicativo e toque em Autorizar.</p>
+</div>
+<div style="display: flex; gap: 10px; margin: 6px 0 0 30px" aria-label="Código do aplicativo: BCDF-GHJK">
+<span style="font-size: 52px; font-weight: 800; letter-spacing: 0.12em; color: #ffffff">BCDF</span>
+<span style="font-size: 52px; font-weight: 800; color: #5a6a76">–</span>
+<span style="font-size: 52px; font-weight: 800; letter-spacing: 0.12em; color: #ffffff">GHJK</span>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 10px">
+<div role="img" aria-label="QR code para abrir a página de autorização" style="width: 168px; height: 168px; border-radius: 10px; background: #f6f3ec; display: flex; align-items: center; justify-content: center; color: #1d2833; font-size: 12px; font-weight: 700">[QR code]</div>
+<span class="fine">Ou aponte a câmera</span>
+</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 14px">
+<span class="dot" style="background: #5fd0bf"></span>
+<span class="small">Aguardando confirmação… o código expira em <strong style="color: #ffffff">9:42</strong></span>
+</div>
+
+<div style="display: flex; align-items: center; gap: 28px">
+<button class="btn btn-secondary">Gerar novo código</button>
+<button class="ghost">Sair</button>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

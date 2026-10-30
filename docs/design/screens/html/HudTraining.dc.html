@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Treino em andamento</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}
+.ptt{all:unset;cursor:pointer;box-sizing:border-box;width:100%;height:60px;border-radius:30px;display:flex;align-items:center;justify-content:center;gap:12px;font-family:Manrope,system-ui,sans-serif;font-size:16px;font-weight:700;color:#0b1116;background:#5fd0bf}
+.ptt:focus-visible{outline:2px solid #ffffff;outline-offset:4px}
+</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win" style="left: 38%"></i><i class="pat" style="left: 52%; top: 26%"></i><i class="desk" style="left: 0"></i></div>
+<div class="scene-tag" style="left: 50%; right: auto; transform: translateX(-50%); top: auto; bottom: 40px">[Cena: paciente diante do médico]</div>
+<div class="scrim-soft" aria-hidden="true"></div>
+
+<div class="panel" style="position: absolute; left: 50%; top: 32px; transform: translateX(-50%); padding: 14px 18px 14px 26px; display: flex; align-items: center; gap: 24px">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span class="eyebrow" style="font-size: 11px; color: {{ timeLabelColor }}">{{ timeLabel }}</span>
+<span style="font-size: 40px; font-weight: 800; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; color: {{ timeColor }}">{{ time }}</span>
+</div>
+<div style="width: 1px; align-self: stretch; background: #2f3d48"></div>
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 190px">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600"><span class="dot" style="background: {{ voiceColor }}"></span>{{ voiceLabel }}</span>
+<span class="fine">Treino por voz</span>
+</div>
+<a class="btn btn-danger" href="ResultTraining.dc.html" style="height: 44px; padding: 0 18px; font-size: 14px">Finalizar estação</a>
+</div>
+
+<section class="panel" aria-label="Conversa" style="position: absolute; left: 32px; top: 32px; bottom: 32px; width: 440px; display: flex; flex-direction: column">
+<div style="padding: 20px 24px; display: flex; justify-content: space-between; align-items: center"><h2 class="h3">Conversa</h2><span class="fine">Exemplo</span></div>
+<hr class="rule">
+<div style="flex: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; justify-content: flex-end">
+<div style="align-self: flex-end; max-width: 84%; display: flex; flex-direction: column; gap: 4px; align-items: flex-end"><span class="fine">Você</span><span style="background: #224a45; padding: 12px 14px; border-radius: 12px 12px 4px 12px; font-size: 15px; line-height: 1.45">Boa tarde, eu sou o médico de plantão. O que traz o senhor aqui hoje?</span></div>
+<div style="align-self: flex-start; max-width: 84%; display: flex; flex-direction: column; gap: 4px"><span class="fine">Paciente</span><span style="background: #24313b; padding: 12px 14px; border-radius: 12px 12px 12px 4px; font-size: 15px; line-height: 1.45">Doutor, é uma dor na barriga que começou ontem perto do umbigo.</span></div>
+<div style="align-self: flex-end; max-width: 84%; display: flex; flex-direction: column; gap: 4px; align-items: flex-end"><span class="fine">Você</span><span style="background: #224a45; padding: 12px 14px; border-radius: 12px 12px 4px 12px; font-size: 15px; line-height: 1.45">E essa dor mudou de lugar desde então?</span></div>
+<div style="align-self: flex-start; display: flex; align-items: center; gap: 10px" aria-label="Paciente falando"><span class="fine">Paciente falando</span><span aria-hidden="true" style="display: flex; gap: 3px; align-items: center"><i style="width: 3px; height: 10px; background: #a9b7c1; border-radius: 2px"></i><i style="width: 3px; height: 18px; background: #a9b7c1; border-radius: 2px"></i><i style="width: 3px; height: 12px; background: #a9b7c1; border-radius: 2px"></i><i style="width: 3px; height: 20px; background: #a9b7c1; border-radius: 2px"></i></span></div>
+</div>
+<hr class="rule">
+<div style="padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+<button class="ptt"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0b1116" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>Segure para falar</button>
+<span class="fine" style="display: flex; align-items: center; gap: 8px; justify-content: center"><span class="kbd">Espaço</span>segure e solte para enviar</span>
+</div>
+</section>
+
+<div style="position: absolute; right: 32px; top: 32px; display: flex; flex-direction: column; gap: 12px; align-items: flex-end">
+<button class="btn btn-secondary" style="background: rgba(12,17,22,.84); height: 48px">Cenário e tarefas</button>
+<a class="btn btn-secondary" href="Document.dc.html" style="background: rgba(12,17,22,.84); height: 48px">Exames · 2</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"overtime":{"editor":"boolean","default":false},"voice":{"editor":"enum","options":["connected","connecting","reconnecting","lost"],"default":"connected"},"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const over = this.props.overtime ?? false;
+    const v = this.props.voice ?? 'connected';
+    const voices = {
+      connected: ['Voz conectada', '#5fd0bf'],
+      connecting: ['Conectando a voz...', '#a9b7c1'],
+      reconnecting: ['Reconectando a voz...', '#f2a65a'],
+      lost: ['A voz caiu. O tempo da estação continua.', '#ff8a7a']
+    };
+    return {
+      time: over ? '+03:20' : '07:42',
+      timeLabel: over ? 'Tempo esgotado · além do tempo' : 'Tempo restante',
+      timeLabelColor: over ? '#f2a65a' : '#a9b7c1',
+      timeColor: over ? '#f2a65a' : '#ffffff',
+      voiceLabel: voices[v][0],
+      voiceColor: voices[v][1]
+    };
+  }
+}
+</script>
+</body>
+</html>
