@@ -10,7 +10,9 @@ fails technically.
 `GET /api/v2/stations/active/sessions/:id/result` delegates through
 `Backend.Stations.get_educational_result/2`. Successful responses have
 `schema_version: "2"`, `session_id`, `status: "completed"`, authored `placeholder`,
-`criteria`, `coverage`, and `estimates`. Responses use `Cache-Control: no-store`.
+`criteria`, `coverage`, and `estimates`. A training adds its overtime fields
+(#323) and a simulated exam adds its own (see below). Responses use
+`Cache-Control: no-store`.
 
 | Field | Contract |
 | --- | --- |
@@ -118,7 +120,47 @@ assessed authored zero level and `points: "0"`. Uncertain, unobservable, and
 excluded criteria never acquire zero points or levels. Empty/all-excluded
 rubrics have null total and zero subtotals/maxima, displayed as no eligible
 criteria rather than a fabricated total score. There are no percentages,
-normalization, pass/fail thresholds, certification, or readiness claims.
+pass/fail thresholds, certification, or readiness claims, and nothing is
+normalized except the simulated exam's scaled total below.
+
+## Simulated exam result (issue #426)
+
+A simulated exam ("Prova simulada", #318, ADR-012 amendment on #124) always
+shows a numeric total, even when some criteria could not be assessed. Its v2
+body adds three top-level fields, computed by Phoenix
+(`Backend.Stations.SimulatedExamScore`). A training has none of them, and in
+both modes `estimates` and its `total` keep the contract above.
+
+| Field | Contract |
+| --- | --- |
+| `scaled_total` | `scored_subtotal / scored_max × eligible_max` as a decimal point string; **null** at level 1 |
+| `certainty_level` | Integer from 1 to 5 |
+| `incomplete` | True when any eligible criterion is unassessed, that is when `estimates.unresolved` is not empty |
+
+**Certainty level.** It is the share of eligible points that were assessed,
+compared in exact integer arithmetic on the fortieths, never with floats and
+never from provider or model confidence:
+
+| Level | Condition | Learner-facing label |
+| --- | --- | --- |
+| 5 | `scored_max * 100 >= eligible_max * 100` | Certeira |
+| 4 | `scored_max * 100 >= eligible_max * 80` | Quase certeira |
+| 3 | `scored_max * 100 >= eligible_max * 60` | Parcialmente certeira |
+| 2 | `scored_max * 100 >= eligible_max * 40` | Pouco certeira |
+| 1 | below that, or `eligible_max = 0` | Insuficiente |
+
+**Rounding.** The scaled total is computed in integer fortieths and rounded half
+up to the nearest fortieth (0.025): 6 of 8 assessed points on a 10-point station
+gives `"7.5"`, and 6.25 of 8.75 on 10 gives `"7.15"`. The value is therefore an
+ordinary point string, displayed without further rounding. It equals `total` at
+full coverage and never passes `eligible_max`.
+
+An unassessed criterion is left out of the calculation, never counted as zero.
+The client lists the criteria left out from `estimates.unresolved` or the
+criterion statuses, says in Brazilian Portuguese that the score is incomplete,
+and shows the certainty label. At level 1 it shows no total. The disclosure below
+still applies, and a technical failure is still a 502 `invalid_attempt` with no
+result, as in trainings (#196).
 
 ## Failure and legacy migration
 
@@ -179,6 +221,9 @@ The pending review of complete and no-eligible results, and of how readers under
 
 - `backend/test/backend_web/controllers/educational_result_test.exs`: public HTTP
   and context evidence, exact reconciliation, failures, lifecycle, legacy safety.
+- `backend/test/backend_web/controllers/simulated_exam_result_test.exs`: every
+  certainty threshold, `eligible_max = 0`, rounding and the 502 of a simulated
+  exam at the HTTP API.
 - `web/src/features/station/api/educational-result.test.ts`: strict v2 decoding,
   exact reconciliation and no fallback.
 - `web/src/features/station/result/educational-result.fixture.ts`: fictional
