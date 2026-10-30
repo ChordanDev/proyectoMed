@@ -406,6 +406,67 @@ void FStationClientUnitSpec::Define()
 			}
 		});
 
+		It("leaves a training's result without a simulated exam score", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(R"({
+				"session_id": "abc123", "criteria": [],
+				"estimates": {"total": "2", "scored_subtotal": "2", "scored_max": "2", "eligible_max": "2", "unresolved": []}
+			})"));
+			FStationResult Result;
+			Result.CertaintyLevel = 3;
+			Result.ScaledTotal = TEXT("stale");
+			Result.bIncomplete = true;
+			TestTrue("parsed", StationJson::ParseResult(*Json, Result));
+			TestEqual("no level", Result.CertaintyLevel, 0);
+			TestTrue("no scaled total", Result.ScaledTotal.IsEmpty());
+			TestFalse("not incomplete", Result.bIncomplete);
+			TestEqual("the total stays", Result.EstimatedTotal, TEXT("2"));
+		});
+
+		It("parses a simulated exam's scaled total, certainty level and incomplete flag", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(R"({
+				"session_id": "abc123", "criteria": [], "scaled_total": "7.5", "certainty_level": 4, "incomplete": true,
+				"estimates": {"total": null, "scored_subtotal": "6", "scored_max": "8", "eligible_max": "10",
+					"unresolved": [{"id": "c2", "status": "uncertain"}]}
+			})"));
+			FStationResult Result;
+			TestTrue("parsed", StationJson::ParseResult(*Json, Result));
+			TestEqual("scaled total", Result.ScaledTotal, TEXT("7.5"));
+			TestEqual("level", Result.CertaintyLevel, 4);
+			TestTrue("incomplete", Result.bIncomplete);
+			TestTrue("the total stays null", Result.EstimatedTotal.IsEmpty());
+		});
+
+		It("parses level 1 with no total", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(TEXT(R"({
+				"session_id": "abc123", "criteria": [], "scaled_total": null, "certainty_level": 1, "incomplete": true,
+				"estimates": {"total": null, "scored_subtotal": "1", "scored_max": "3", "eligible_max": "10", "unresolved": []}
+			})"));
+			FStationResult Result;
+			TestTrue("parsed", StationJson::ParseResult(*Json, Result));
+			TestEqual("level", Result.CertaintyLevel, 1);
+			TestTrue("no scaled total", Result.ScaledTotal.IsEmpty());
+		});
+
+		It("refuses a simulated exam score that does not add up", [this]()
+		{
+			const FString Estimates = TEXT(R"("session_id": "abc123", "criteria": [],
+				"estimates": {"total": null, "scored_subtotal": "1", "scored_max": "3", "eligible_max": "10", "unresolved": []})");
+			for (const FString& Score : {
+				FString(TEXT(R"("scaled_total": "7.5", "certainty_level": 6, "incomplete": true)")),
+				FString(TEXT(R"("scaled_total": null, "certainty_level": 0, "incomplete": true)")),
+				FString(TEXT(R"("scaled_total": "7.5", "certainty_level": 4)")),
+				FString(TEXT(R"("scaled_total": null, "certainty_level": 4, "incomplete": true)")),
+				FString(TEXT(R"("scaled_total": "7.5", "certainty_level": 1, "incomplete": true)"))})
+			{
+				const TSharedRef<FJsonObject> Json = ParseObject(FString::Printf(TEXT("{%s, %s}"), *Estimates, *Score));
+				FStationResult Result;
+				TestFalse(*Score, StationJson::ParseResult(*Json, Result));
+			}
+		});
+
 		It("parses a finish body into the session", [this]()
 		{
 			FStationSession Session;

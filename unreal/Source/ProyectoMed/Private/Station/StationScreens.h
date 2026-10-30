@@ -24,6 +24,13 @@ enum class EStationSpeaker : uint8;
 struct FStationExamRequest;
 enum class EStationSessionMode : uint8;
 struct FStationImpresso;
+struct FStationResult;
+
+/** The pt-BR name of a Prova simulada's certainty level, from "Certeira" (5) to "Insuficiente" (1). */
+FText StationCertaintyLabel(int32 Level);
+
+/** What a Prova simulada's result says when criteria were left out, naming them; empty when none was. */
+FText StationIncompleteNotice(const FStationResult& Result);
 
 UCLASS()
 class UStationMicrophoneWidget : public UUserWidget
@@ -45,7 +52,6 @@ private:
 	void HandleNotNow();
 };
 struct FStationCriterionResult;
-struct FStationResult;
 
 /**
  * The main menu, like a game's title screen (#421): the learner chooses a training
@@ -214,6 +220,20 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> VoiceNote;
+};
+
+/** One criterion's row in a Prova simulada's result: a click opens or closes what it holds. */
+UCLASS()
+class UStationCriterionRow : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY()
+	TObjectPtr<UWidget> Details;
+
+	UFUNCTION()
+	void HandleClicked();
 };
 
 /** The "open" link of one released document: tells the HUD which one to show. */
@@ -500,8 +520,20 @@ protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	friend class FStationHudUnitSpec;
+
 	void AddSummary(const FStationResult& Result);
 	void AddCriterion(int32 Ordinal, const FStationCriterionResult& Criterion);
+	/** What a criterion's card ends with in either mode: its level, evidence and recommendation. */
+	void AddCriterionDetails(UVerticalBox& Card, const FStationCriterionResult& Criterion, int32 TextSize);
+
+	// A Prova simulada's result (#426), laid out as docs/design/screens/html/ResultExam.dc.html.
+
+	/** The screen, with no result in it yet. */
+	UWidget* BuildExamScreen();
+	void ShowExamResult(const FStationResult& Result);
+	void AddExamSummary(const FStationResult& Result);
+	void AddExamCriterion(int32 Ordinal, const FStationCriterionResult& Criterion);
 
 	UFUNCTION()
 	void HandleRestart();
@@ -530,4 +562,39 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UButton> RestartButton;
+
+	/** Everything but a Prova simulada's result: grading, its failures and a training's result. */
+	UPROPERTY()
+	TObjectPtr<UWidget> CardScreen;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> ExamScreen;
+
+	/** "Exemplo — dados fictícios" over a placeholder result. */
+	UPROPERTY()
+	TObjectPtr<UWidget> ExamSampleMark;
+
+	/** The total and its certainty, in the left column. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> ExamSummaryBox;
+
+	/** One lit segment per certainty level. */
+	UPROPERTY()
+	TObjectPtr<UHorizontalBox> ExamMeter;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ExamErrorText;
+
+	UPROPERTY()
+	TObjectPtr<UButton> ExamBackButton;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ExamPointsText;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> ExamCriteriaBox;
+
+	/** Keeps each row's click handler alive with the row. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStationCriterionRow>> ExamRows;
 };

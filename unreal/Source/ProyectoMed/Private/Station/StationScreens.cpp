@@ -137,6 +137,13 @@ namespace
 	{
 		return FText::FromString(Points.Replace(TEXT("."), TEXT(",")));
 	}
+
+	/** What every state of the result screen says it is not (ADR-012). */
+	FText ResultDisclaimer()
+	{
+		return LOCTEXT("ResultDisclaimer",
+			"Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.");
+	}
 }
 
 // The learner-facing copy is Brazilian Portuguese, matching the web station
@@ -1645,9 +1652,7 @@ TSharedRef<SWidget> UStationFeedbackWidget::RebuildWidget()
 		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("ResultTitle", "Resultado educacional da estação"), 30, true,
 			StationUi::Ink, 0.f);
 		// Every state of this screen says what the result is not.
-		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("ResultDisclaimer",
-			"Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame."),
-			16, false, StationUi::Muted);
+		StationUi::AddText(*WidgetTree, *Column, ResultDisclaimer(), 16, false, StationUi::Muted);
 
 		LoadingBox = WidgetTree->ConstructWidget<UVerticalBox>();
 		Column->AddChild(LoadingBox);
@@ -1668,6 +1673,21 @@ TSharedRef<SWidget> UStationFeedbackWidget::RebuildWidget()
 		RestartButton = StationUi::AddButton(*WidgetTree, *FooterBox, LOCTEXT("RestartStation", "Reiniciar estação"), 14.f);
 		RestartButton->OnClicked.AddDynamic(this, &UStationFeedbackWidget::HandleRestart);
 		StationUi::MakePrimary(*RestartButton);
+
+		// The card built above is the tree's root until now; both screens share it from here.
+		CardScreen = WidgetTree->RootWidget;
+		ExamScreen = BuildExamScreen();
+		UOverlay* Screens = WidgetTree->ConstructWidget<UOverlay>();
+		WidgetTree->RootWidget = Screens;
+		for (UWidget* Screen : {CardScreen.Get(), ExamScreen.Get()})
+		{
+			if (UOverlaySlot* ScreenSlot = Screens->AddChildToOverlay(Screen))
+			{
+				ScreenSlot->SetHorizontalAlignment(HAlign_Fill);
+				ScreenSlot->SetVerticalAlignment(VAlign_Fill);
+			}
+		}
+		StationUi::SetShown(ExamScreen, false);
 	}
 	return Super::RebuildWidget();
 }
@@ -1691,10 +1711,20 @@ void UStationFeedbackWidget::Refresh()
 	StationUi::SetShown(RestartButton, bFeedback);
 	RestartButton->SetIsEnabled(Flow->CanDiscard());
 
+	// Only Phoenix scores a Prova simulada, so its score is what picks the layout.
+	const bool bExamResult = Result && Result->CertaintyLevel > 0;
+	StationUi::SetShown(CardScreen, !bExamResult);
+	StationUi::SetShown(ExamScreen, bExamResult);
+
 	ResultBox->ClearChildren();
 	StationUi::SetShown(ResultBox, Result != nullptr);
 	if (!Result)
 	{
+		return;
+	}
+	if (bExamResult)
+	{
+		ShowExamResult(*Result);
 		return;
 	}
 
@@ -1842,22 +1872,28 @@ void UStationFeedbackWidget::AddCriterion(int32 Ordinal, const FStationCriterion
 	}
 
 	StationUi::AddText(*WidgetTree, *Card, FText::FromString(Criterion.Description), 16, false, StationUi::Ink, 10.f);
-	if (bAssessed && !Criterion.LevelDescription.TrimStartAndEnd().IsEmpty())
+	AddCriterionDetails(*Card, Criterion, 15);
+}
+
+void UStationFeedbackWidget::AddCriterionDetails(UVerticalBox& Card, const FStationCriterionResult& Criterion, int32 TextSize)
+{
+	const int32 HeadingSize = TextSize - 1;
+	if (Criterion.Status == EStationCriterionStatus::Assessed && !Criterion.LevelDescription.TrimStartAndEnd().IsEmpty())
 	{
-		StationUi::AddText(*WidgetTree, *Card, FText::Format(LOCTEXT("CriterionLevel", "Nível autoral: {0}"),
-			FText::FromString(Criterion.LevelDescription)), 15, false, StationUi::Muted, 4.f);
+		StationUi::AddText(*WidgetTree, Card, FText::Format(LOCTEXT("CriterionLevel", "Nível autoral: {0}"),
+			FText::FromString(Criterion.LevelDescription)), TextSize, false, StationUi::Muted, 4.f);
 	}
 
 	if (Criterion.Evidence.Num() > 0)
 	{
-		StationUi::AddText(*WidgetTree, *Card, LOCTEXT("EvidenceHeading", "Evidências"), 14, true, StationUi::Muted, 14.f);
+		StationUi::AddText(*WidgetTree, Card, LOCTEXT("EvidenceHeading", "Evidências"), HeadingSize, true, StationUi::Muted, 14.f);
 		for (const FStationEvidence& Excerpt : Criterion.Evidence)
 		{
 			// Laid out like the conversation: the learner's words on the right, the patient's on the left.
 			const bool bLearner = Excerpt.Speaker == EStationSpeaker::Learner;
 			UBorder* Bubble = StationUi::MakeRounded(*WidgetTree, bLearner ? StationUi::LearnerBubble : StationUi::PanelSolid,
 				10.f, FMargin(12.f, 8.f));
-			if (UVerticalBoxSlot* BubbleSlot = Card->AddChildToVerticalBox(Bubble))
+			if (UVerticalBoxSlot* BubbleSlot = Card.AddChildToVerticalBox(Bubble))
 			{
 				BubbleSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
 				BubbleSlot->SetHorizontalAlignment(bLearner ? HAlign_Right : HAlign_Left);
@@ -1866,15 +1902,441 @@ void UStationFeedbackWidget::AddCriterion(int32 Ordinal, const FStationCriterion
 			Quote->SetText(FText::Format(bLearner
 				? LOCTEXT("EvidenceLearner", "Você: “{0}”")
 				: LOCTEXT("EvidencePatient", "Paciente: “{0}”"), FText::FromString(Excerpt.Text)));
-			Quote->SetFont(StationUi::Font(StationUi::FontRegular, 15));
+			Quote->SetFont(StationUi::Font(StationUi::FontRegular, TextSize));
 			Quote->SetColorAndOpacity(FSlateColor(StationUi::Ink));
 			Quote->SetWrapTextAt(EvidenceWrapWidth);
 			Bubble->SetContent(Quote);
 		}
 	}
 
-	StationUi::AddText(*WidgetTree, *Card, LOCTEXT("RecommendationHeading", "Recomendação"), 14, true, StationUi::Muted, 14.f);
-	StationUi::AddText(*WidgetTree, *Card, FText::FromString(Criterion.Recommendation), 15, false, StationUi::Ink, 4.f);
+	StationUi::AddText(*WidgetTree, Card, LOCTEXT("RecommendationHeading", "Recomendação"), HeadingSize, true, StationUi::Muted, 14.f);
+	StationUi::AddText(*WidgetTree, Card, FText::FromString(Criterion.Recommendation), TextSize, false, StationUi::Ink, 4.f);
+}
+
+void UStationCriterionRow::HandleClicked()
+{
+	StationUi::SetShown(Details, Details && Details->GetVisibility() == ESlateVisibility::Collapsed);
+}
+
+namespace
+{
+	/** The width of the left column, and of a row's first and last cells, as in the mockup. */
+	constexpr float ExamSummaryWidth = 500.f;
+	constexpr float ExamOrdinalWidth = 76.f;
+	constexpr float ExamPointsWidth = 104.f;
+
+	// The font sizes below are the mockup's pixels times 0.75: Slate's size is in points
+	// at 96 DPI, so the same number would come out a third larger than in the mockup.
+
+	/** The tracking of the mockup's `.eyebrow`, in thousandths of an em. */
+	constexpr int32 EyebrowTracking = 120;
+
+	UTextBlock* AddEyebrow(UWidgetTree& Tree, UPanelWidget& Parent, const FText& Text, int32 Size, const FLinearColor& Color,
+		float SpaceAbove = 0.f)
+	{
+		UTextBlock* Block = StationUi::AddText(Tree, Parent, Text, Size, true, Color, SpaceAbove);
+		FSlateFontInfo Font = StationUi::Font(StationUi::FontBold, Size);
+		Font.LetterSpacing = EyebrowTracking;
+		Block->SetFont(Font);
+		return Block;
+	}
+
+	/** How sure the level is, in the mockup's three colors. */
+	FLinearColor CertaintyColor(int32 Level)
+	{
+		return Level >= 4 ? StationUi::TreinoAccent : Level >= 2 ? StationUi::ProvaAccent : StationUi::DangerInk;
+	}
+
+	/** Lights `Level` of the five segments. */
+	UHorizontalBox* MakeCertaintyMeter(UWidgetTree& Tree, int32 Level)
+	{
+		UHorizontalBox* Meter = Tree.ConstructWidget<UHorizontalBox>();
+		for (int32 Step = 1; Step <= 5; ++Step)
+		{
+			USizeBox* Segment = Tree.ConstructWidget<USizeBox>();
+			Segment->SetHeightOverride(8.f);
+			Segment->SetContent(StationUi::MakeRounded(Tree, Step <= Level ? CertaintyColor(Level) : StationUi::PanelEdge,
+				4.f, FMargin(0.f)));
+			if (UHorizontalBoxSlot* SegmentSlot = Meter->AddChildToHorizontalBox(Segment))
+			{
+				SegmentSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+				SegmentSlot->SetPadding(FMargin(Step > 1 ? 6.f : 0.f, 0.f, 0.f, 0.f));
+			}
+		}
+		return Meter;
+	}
+
+	/** A criterion's outcome as an outlined pill. */
+	UBorder* MakeOutcomeChip(UWidgetTree& Tree, const FStationCriterionResult& Criterion)
+	{
+		FText Label;
+		FLinearColor Color = StationUi::Muted;
+		switch (Criterion.Status)
+		{
+		case EStationCriterionStatus::Assessed:
+			Label = Criterion.Level == TEXT("adequado") ? LOCTEXT("OutcomeAdequate", "Adequado")
+				: Criterion.Level == TEXT("parcialmente_adequado") ? LOCTEXT("OutcomePartial", "Parcialmente adequado")
+				: LOCTEXT("OutcomeInadequate", "Inadequado");
+			Color = Criterion.Level == TEXT("adequado") ? StationUi::TreinoAccent
+				: Criterion.Level == TEXT("parcialmente_adequado") ? StationUi::ProvaAccent : StationUi::DangerInk;
+			break;
+		case EStationCriterionStatus::Uncertain:
+			Label = LOCTEXT("CriterionUncertain", "Incerto");
+			break;
+		case EStationCriterionStatus::NotObservable:
+			Label = LOCTEXT("CriterionNotObservable", "Não observável");
+			break;
+		case EStationCriterionStatus::NotApplicable:
+			Label = LOCTEXT("OutcomeExcluded", "Excluído");
+			break;
+		}
+		const bool bAssessed = Criterion.Status == EStationCriterionStatus::Assessed;
+		UBorder* Chip = StationUi::MakeRounded(Tree, FLinearColor::Transparent, 16.f, FMargin(12.f, 6.f),
+			bAssessed ? Color : StationUi::ChipEdge, 1.f);
+		UTextBlock* Text = Tree.ConstructWidget<UTextBlock>();
+		Text->SetText(Label);
+		Text->SetFont(StationUi::Font(StationUi::FontSemiBold, 10));
+		Text->SetColorAndOpacity(FSlateColor(Color));
+		Chip->SetContent(Text);
+		return Chip;
+	}
+}
+
+FText StationCertaintyLabel(int32 Level)
+{
+	switch (Level)
+	{
+	case 5:
+		return LOCTEXT("CertaintyFive", "Certeira");
+	case 4:
+		return LOCTEXT("CertaintyFour", "Quase certeira");
+	case 3:
+		return LOCTEXT("CertaintyThree", "Parcialmente certeira");
+	case 2:
+		return LOCTEXT("CertaintyTwo", "Pouco certeira");
+	default:
+		return LOCTEXT("CertaintyOne", "Insuficiente");
+	}
+}
+
+FText StationIncompleteNotice(const FStationResult& Result)
+{
+	if (!Result.bIncomplete)
+	{
+		return FText::GetEmpty();
+	}
+
+	TArray<FText> LeftOut;
+	for (int32 Index = 0; Index < Result.Criteria.Num(); ++Index)
+	{
+		const EStationCriterionStatus Status = Result.Criteria[Index].Status;
+		if (Status == EStationCriterionStatus::Uncertain)
+		{
+			LeftOut.Add(FText::Format(LOCTEXT("LeftOutUncertain", "Critério {0} (incerto)"), Index + 1));
+		}
+		else if (Status == EStationCriterionStatus::NotObservable)
+		{
+			LeftOut.Add(FText::Format(LOCTEXT("LeftOutNotObservable", "Critério {0} (não observável)"), Index + 1));
+		}
+	}
+
+	const bool bOne = LeftOut.Num() == 1;
+	const FText List = FText::Join(LOCTEXT("LeftOutSeparator", ", "), LeftOut);
+	const FText Lead = Result.CertaintyLevel == 2
+		? LOCTEXT("IncompleteLow", "Nota incompleta e pouco certeira: leia este total com cautela.")
+		: LOCTEXT("Incomplete", "Nota incompleta.");
+	const FText Names = FText::Format(bOne
+		? LOCTEXT("LeftOutOne", "{0} Ficou de fora: {1}.")
+		: LOCTEXT("LeftOutMany", "{0} Ficaram de fora: {1}."), Lead, List);
+	if (Result.ScaledTotal.IsEmpty())
+	{
+		return Names;
+	}
+	return FText::Format(bOne
+		? LOCTEXT("EstimatedWithoutIt", "{0} O total foi estimado sem ele.")
+		: LOCTEXT("EstimatedWithoutThem", "{0} O total foi estimado sem eles."), Names);
+}
+
+UWidget* UStationFeedbackWidget::BuildExamScreen()
+{
+	UOverlay* Screen = WidgetTree->ConstructWidget<UOverlay>();
+
+	UBorder* Backdrop = WidgetTree->ConstructWidget<UBorder>();
+	Backdrop->SetBrushColor(StationUi::Backdrop);
+	Backdrop->SetPadding(FMargin(96.f, 64.f, 96.f, 48.f));
+	if (UOverlaySlot* BackdropSlot = Screen->AddChildToOverlay(Backdrop))
+	{
+		BackdropSlot->SetHorizontalAlignment(HAlign_Fill);
+		BackdropSlot->SetVerticalAlignment(VAlign_Fill);
+	}
+
+	UBorder* Sample = StationUi::MakeRounded(*WidgetTree, StationUi::Ink, 4.f, FMargin(10.f, 4.f));
+	UTextBlock* SampleText = WidgetTree->ConstructWidget<UTextBlock>();
+	SampleText->SetText(LOCTEXT("FictionalResultMark", "EXEMPLO — DADOS FICTÍCIOS"));
+	SampleText->SetFont(StationUi::Font(StationUi::FontBold, 9));
+	SampleText->SetColorAndOpacity(FSlateColor(StationUi::InkOnAccent));
+	Sample->SetContent(SampleText);
+	ExamSampleMark = Sample;
+	if (UOverlaySlot* SampleSlot = Screen->AddChildToOverlay(Sample))
+	{
+		SampleSlot->SetHorizontalAlignment(HAlign_Center);
+		SampleSlot->SetVerticalAlignment(VAlign_Top);
+		SampleSlot->SetPadding(FMargin(0.f, 24.f, 0.f, 0.f));
+	}
+
+	UHorizontalBox* Columns = WidgetTree->ConstructWidget<UHorizontalBox>();
+	Backdrop->SetContent(Columns);
+
+	USizeBox* LeftSize = WidgetTree->ConstructWidget<USizeBox>();
+	LeftSize->SetWidthOverride(ExamSummaryWidth);
+	Columns->AddChild(LeftSize);
+	UVerticalBox* Left = WidgetTree->ConstructWidget<UVerticalBox>();
+	LeftSize->SetContent(Left);
+
+	// A long list of what was left out scrolls; the disclaimer and the way out stay in view.
+	UScrollBox* SummaryScroll = WidgetTree->ConstructWidget<UScrollBox>();
+	if (UVerticalBoxSlot* ScrollSlot = Left->AddChildToVerticalBox(SummaryScroll))
+	{
+		ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	}
+	ExamSummaryBox = WidgetTree->ConstructWidget<UVerticalBox>();
+	SummaryScroll->AddChild(ExamSummaryBox);
+
+	StationUi::AddText(*WidgetTree, *Left, ResultDisclaimer(), 10, false, StationUi::Muted, 14.f);
+	ExamErrorText = StationUi::AddText(*WidgetTree, *Left, FText::GetEmpty(), 11, false, StationUi::Caution, 6.f);
+	ExamBackButton = StationUi::AddButton(*WidgetTree, *Left, LOCTEXT("BackToMenu", "Voltar ao menu"), 14.f);
+	ExamBackButton->OnClicked.AddDynamic(this, &UStationFeedbackWidget::HandleRestart);
+	StationUi::MakeExam(*ExamBackButton);
+	if (UVerticalBoxSlot* BackSlot = Cast<UVerticalBoxSlot>(ExamBackButton->Slot))
+	{
+		BackSlot->SetHorizontalAlignment(HAlign_Left);
+	}
+
+	UVerticalBox* Right = WidgetTree->ConstructWidget<UVerticalBox>();
+	if (UHorizontalBoxSlot* RightSlot = Columns->AddChildToHorizontalBox(Right))
+	{
+		RightSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		RightSlot->SetPadding(FMargin(64.f, 0.f, 0.f, 0.f));
+	}
+
+	UHorizontalBox* Heading = WidgetTree->ConstructWidget<UHorizontalBox>();
+	Right->AddChild(Heading);
+	UTextBlock* HeadingText = WidgetTree->ConstructWidget<UTextBlock>();
+	HeadingText->SetText(LOCTEXT("CriteriaHeading", "Critérios"));
+	HeadingText->SetFont(StationUi::Font(StationUi::FontBold, 15));
+	HeadingText->SetColorAndOpacity(FSlateColor(StationUi::InkTitle));
+	Heading->AddChild(HeadingText);
+	ExamPointsText = WidgetTree->ConstructWidget<UTextBlock>();
+	ExamPointsText->SetFont(StationUi::Font(StationUi::FontMedium, 11));
+	ExamPointsText->SetColorAndOpacity(FSlateColor(StationUi::Muted));
+	ExamPointsText->SetJustification(ETextJustify::Right);
+	if (UHorizontalBoxSlot* PointsSlot = Heading->AddChildToHorizontalBox(ExamPointsText))
+	{
+		PointsSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		PointsSlot->SetVerticalAlignment(VAlign_Bottom);
+	}
+
+	UBorder* Panel = StationUi::MakePanel(*WidgetTree, FMargin(24.f, 4.f));
+	if (UVerticalBoxSlot* PanelSlot = Right->AddChildToVerticalBox(Panel))
+	{
+		PanelSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		PanelSlot->SetPadding(FMargin(0.f, 16.f, 0.f, 0.f));
+	}
+	UScrollBox* CriteriaScroll = WidgetTree->ConstructWidget<UScrollBox>();
+	Panel->SetContent(CriteriaScroll);
+	ExamCriteriaBox = WidgetTree->ConstructWidget<UVerticalBox>();
+	CriteriaScroll->AddChild(ExamCriteriaBox);
+
+	StationUi::AddText(*WidgetTree, *Right, LOCTEXT("OpenCriterionHint",
+		"Toque num critério para ver a evidência e a recomendação."), 10, false, StationUi::Muted, 16.f);
+
+	return Screen;
+}
+
+void UStationFeedbackWidget::ShowExamResult(const FStationResult& Result)
+{
+	StationUi::SetShown(ExamSampleMark, Result.bPlaceholder);
+	StationUi::SetShown(ExamErrorText, !Flow->GetErrorText().IsEmpty());
+	ExamErrorText->SetText(Flow->GetErrorText());
+	ExamBackButton->SetIsEnabled(Flow->CanDiscard());
+	ExamPointsText->SetText(FText::Format(LOCTEXT("AssessedOfStation", "Avaliados {0} dos {1} pontos da estação"),
+		DisplayPoints(Result.ScoredMax), DisplayPoints(Result.EligibleMax)));
+
+	ExamSummaryBox->ClearChildren();
+	AddExamSummary(Result);
+
+	ExamCriteriaBox->ClearChildren();
+	ExamRows.Reset();
+	for (int32 Index = 0; Index < Result.Criteria.Num(); ++Index)
+	{
+		AddExamCriterion(Index + 1, Result.Criteria[Index]);
+	}
+}
+
+void UStationFeedbackWidget::AddExamSummary(const FStationResult& Result)
+{
+	UHorizontalBox* Mode = WidgetTree->ConstructWidget<UHorizontalBox>();
+	ExamSummaryBox->AddChild(Mode);
+	if (UHorizontalBoxSlot* MarkSlot = Mode->AddChildToHorizontalBox(StationUi::MakeModeMark(*WidgetTree, StationUi::ProvaAccent)))
+	{
+		MarkSlot->SetVerticalAlignment(VAlign_Center);
+		MarkSlot->SetPadding(FMargin(0.f, 0.f, 12.f, 0.f));
+	}
+	AddEyebrow(*WidgetTree, *Mode, LOCTEXT("ExamResultMode", "RESULTADO EDUCACIONAL · PROVA SIMULADA"), 10, StationUi::ProvaAccent);
+
+	if (const FStationSummary* Station = Flow->GetStation())
+	{
+		StationUi::AddText(*WidgetTree, *ExamSummaryBox, FText::FromString(Station->DisplayTitle), 24, true, StationUi::InkTitle, 26.f);
+	}
+
+	AddEyebrow(*WidgetTree, *ExamSummaryBox, LOCTEXT("EstimatedTotal", "TOTAL ESTIMADO"), 9, StationUi::Muted, 26.f);
+	if (!Result.ScaledTotal.IsEmpty())
+	{
+		UHorizontalBox* Total = WidgetTree->ConstructWidget<UHorizontalBox>();
+		ExamSummaryBox->AddChild(Total);
+		UTextBlock* Scaled = WidgetTree->ConstructWidget<UTextBlock>();
+		Scaled->SetText(DisplayPoints(Result.ScaledTotal));
+		Scaled->SetFont(StationUi::Font(StationUi::FontExtraBold, 66));
+		Scaled->SetColorAndOpacity(FSlateColor(StationUi::InkTitle));
+		Total->AddChild(Scaled);
+		UTextBlock* Of = WidgetTree->ConstructWidget<UTextBlock>();
+		Of->SetText(FText::Format(LOCTEXT("OfMaximum", "de {0}"), DisplayPoints(Result.EligibleMax)));
+		Of->SetFont(StationUi::Font(StationUi::FontSemiBold, 21));
+		Of->SetColorAndOpacity(FSlateColor(StationUi::Muted));
+		if (UHorizontalBoxSlot* OfSlot = Total->AddChildToHorizontalBox(Of))
+		{
+			OfSlot->SetVerticalAlignment(VAlign_Bottom);
+			OfSlot->SetPadding(FMargin(10.f, 0.f, 0.f, 10.f));
+		}
+	}
+	else
+	{
+		const bool bNoneEligible = !Result.Criteria.ContainsByPredicate([](const FStationCriterionResult& Criterion)
+		{
+			return Criterion.Status != EStationCriterionStatus::NotApplicable;
+		});
+		StationUi::AddText(*WidgetTree, *ExamSummaryBox, LOCTEXT("NoExamTotal", "Sem total nesta tentativa"), 21, true,
+			StationUi::InkTitle, 8.f);
+		StationUi::AddText(*WidgetTree, *ExamSummaryBox, bNoneEligible
+			? LOCTEXT("NoEligible", "Nenhum critério elegível — não há estimativa total.")
+			: LOCTEXT("ExamBelowFloor", "Menos de 40% dos pontos da estação puderam ser avaliados."),
+			11, false, StationUi::InkBody, 8.f);
+	}
+
+	UBorder* Panel = StationUi::MakePanel(*WidgetTree, FMargin(22.f, 20.f));
+	if (UVerticalBoxSlot* PanelSlot = ExamSummaryBox->AddChildToVerticalBox(Panel))
+	{
+		PanelSlot->SetPadding(FMargin(0.f, 26.f, 0.f, 0.f));
+	}
+	UVerticalBox* Certainty = WidgetTree->ConstructWidget<UVerticalBox>();
+	Panel->SetContent(Certainty);
+
+	UHorizontalBox* Heading = WidgetTree->ConstructWidget<UHorizontalBox>();
+	Certainty->AddChild(Heading);
+	UTextBlock* HeadingText = AddEyebrow(*WidgetTree, *Heading, LOCTEXT("CertaintyHeading", "CERTEZA DA ESTIMATIVA"), 9,
+		StationUi::Muted);
+	if (UHorizontalBoxSlot* HeadingSlot = Cast<UHorizontalBoxSlot>(HeadingText->Slot))
+	{
+		HeadingSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		HeadingSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>();
+	Label->SetText(StationCertaintyLabel(Result.CertaintyLevel));
+	Label->SetFont(StationUi::Font(StationUi::FontBold, 14));
+	Label->SetColorAndOpacity(FSlateColor(CertaintyColor(Result.CertaintyLevel)));
+	Heading->AddChild(Label);
+
+	ExamMeter = MakeCertaintyMeter(*WidgetTree, Result.CertaintyLevel);
+	if (UVerticalBoxSlot* MeterSlot = Certainty->AddChildToVerticalBox(ExamMeter))
+	{
+		MeterSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+	}
+
+	// Phoenix's exact points, not the mockup's percentage: the client computes nothing.
+	StationUi::AddText(*WidgetTree, *Certainty, Result.CertaintyLevel == 5 && !Result.bIncomplete
+		? LOCTEXT("AllAssessed", "Todos os critérios da estação foram avaliados.")
+		: FText::Format(LOCTEXT("PointsAssessed", "{0} dos {1} pontos da estação foram avaliados."),
+			DisplayPoints(Result.ScoredMax), DisplayPoints(Result.EligibleMax)),
+		11, false, StationUi::InkBody, 14.f);
+	if (Result.bIncomplete)
+	{
+		StationUi::AddText(*WidgetTree, *Certainty, StationIncompleteNotice(Result), 11, false,
+			Result.CertaintyLevel == 2 ? StationUi::DangerInk : StationUi::ProvaWarning, 14.f);
+	}
+}
+
+void UStationFeedbackWidget::AddExamCriterion(int32 Ordinal, const FStationCriterionResult& Criterion)
+{
+	UButton* Row = WidgetTree->ConstructWidget<UButton>();
+	StationUi::MakeRow(*Row);
+	ExamCriteriaBox->AddChild(Row);
+
+	UHorizontalBox* Cells = WidgetTree->ConstructWidget<UHorizontalBox>();
+	Row->AddChild(Cells);
+	if (UButtonSlot* CellsSlot = Cast<UButtonSlot>(Cells->Slot))
+	{
+		CellsSlot->SetHorizontalAlignment(HAlign_Fill);
+		CellsSlot->SetPadding(FMargin(0.f, 14.f));
+	}
+
+	auto AddCell = [this, Cells](UWidget* Cell, ESlateSizeRule::Type Size, float SpaceBefore)
+	{
+		if (UHorizontalBoxSlot* CellSlot = Cells->AddChildToHorizontalBox(Cell))
+		{
+			CellSlot->SetSize(FSlateChildSize(Size));
+			CellSlot->SetVerticalAlignment(VAlign_Center);
+			CellSlot->SetPadding(FMargin(SpaceBefore, 0.f, 0.f, 0.f));
+		}
+	};
+	auto MakeFixedCell = [this](const FText& Text, FName Weight, int32 Size, const FLinearColor& Color, float Width,
+		ETextJustify::Type Justification)
+	{
+		USizeBox* Cell = WidgetTree->ConstructWidget<USizeBox>();
+		Cell->SetWidthOverride(Width);
+		UTextBlock* Block = WidgetTree->ConstructWidget<UTextBlock>();
+		Block->SetText(Text);
+		Block->SetFont(StationUi::Font(Weight, Size));
+		Block->SetColorAndOpacity(FSlateColor(Color));
+		Block->SetJustification(Justification);
+		Cell->SetContent(Block);
+		return Cell;
+	};
+
+	AddCell(MakeFixedCell(FText::Format(LOCTEXT("CriterionHeading", "Critério {0}"), Ordinal), StationUi::FontRegular, 10,
+		StationUi::Muted, ExamOrdinalWidth, ETextJustify::Left), ESlateSizeRule::Automatic, 0.f);
+
+	UTextBlock* Description = WidgetTree->ConstructWidget<UTextBlock>();
+	Description->SetText(FText::FromString(Criterion.Description));
+	Description->SetFont(StationUi::Font(StationUi::FontRegular, 11));
+	Description->SetColorAndOpacity(FSlateColor(StationUi::InkTitle));
+	Description->SetAutoWrapText(true);
+	AddCell(Description, ESlateSizeRule::Fill, 20.f);
+
+	AddCell(MakeOutcomeChip(*WidgetTree, Criterion), ESlateSizeRule::Automatic, 20.f);
+
+	const FText Points = Criterion.Status == EStationCriterionStatus::Assessed
+		? FText::Format(LOCTEXT("CriterionPointsShort", "{0} / {1}"), DisplayPoints(Criterion.Points), DisplayPoints(Criterion.MaxPoints))
+		: LOCTEXT("NoPoints", "sem pontos");
+	AddCell(MakeFixedCell(Points, StationUi::FontBold, 11, StationUi::Ink, ExamPointsWidth, ETextJustify::Right),
+		ESlateSizeRule::Automatic, 20.f);
+
+	UVerticalBox* Details = WidgetTree->ConstructWidget<UVerticalBox>();
+	if (UVerticalBoxSlot* DetailsSlot = ExamCriteriaBox->AddChildToVerticalBox(Details))
+	{
+		DetailsSlot->SetPadding(FMargin(0.f, 0.f, 0.f, 14.f));
+	}
+	AddCriterionDetails(*Details, Criterion, 11);
+	StationUi::SetShown(Details, false);
+
+	UStationCriterionRow* Opener = NewObject<UStationCriterionRow>(this);
+	Opener->Details = Details;
+	Row->OnClicked.AddDynamic(Opener, &UStationCriterionRow::HandleClicked);
+	ExamRows.Add(Opener);
+
+	UBorder* Rule = WidgetTree->ConstructWidget<UBorder>();
+	Rule->SetBrushColor(StationUi::PanelEdge);
+	Rule->SetPadding(FMargin(0.f, 0.5f));
+	ExamCriteriaBox->AddChild(Rule);
 }
 
 void UStationFeedbackWidget::HandleRestart()

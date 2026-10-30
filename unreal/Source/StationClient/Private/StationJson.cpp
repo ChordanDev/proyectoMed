@@ -348,6 +348,29 @@ bool StationJson::ParseFinish(const FJsonObject& Json, FStationSession& InOut)
 	return true;
 }
 
+namespace
+{
+	/** A training has no score of this kind; a simulated exam has all of it, or the body is broken (#426). */
+	bool ParseSimulatedExamScore(const FJsonObject& Json, FStationResult& Out)
+	{
+		Out.CertaintyLevel = 0;
+		Out.ScaledTotal.Empty();
+		Out.bIncomplete = false;
+		if (!Json.HasField(TEXT("certainty_level")))
+		{
+			return true;
+		}
+		if (!Json.TryGetNumberField(TEXT("certainty_level"), Out.CertaintyLevel)
+			|| Out.CertaintyLevel < 1 || Out.CertaintyLevel > 5
+			|| !Json.TryGetBoolField(TEXT("incomplete"), Out.bIncomplete))
+		{
+			return false;
+		}
+		Out.ScaledTotal = OptionalString(Json, TEXT("scaled_total"));
+		return Out.ScaledTotal.IsEmpty() == (Out.CertaintyLevel == 1);
+	}
+}
+
 bool StationJson::ParseResult(const FJsonObject& Json, FStationResult& Out)
 {
 	const TSharedPtr<FJsonObject>* Estimates = nullptr;
@@ -363,6 +386,6 @@ bool StationJson::ParseResult(const FJsonObject& Json, FStationResult& Out)
 	Out.EstimatedTotal = OptionalString(**Estimates, TEXT("total"));
 	Out.bPlaceholder = false;
 	Json.TryGetBoolField(TEXT("placeholder"), Out.bPlaceholder);
-	return true;
+	return ParseSimulatedExamScore(Json, Out);
 }
 

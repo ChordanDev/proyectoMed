@@ -3,6 +3,7 @@ defmodule Backend.Stations.EducationalResult do
 
   alias Backend.Stations.Overtime
   alias Backend.Stations.RubricAssessment.Points
+  alias Backend.Stations.SimulatedExamScore
 
   # Only bounded learner-facing categories cross the wire. Tagged reasons may
   # contain evidence IDs or provider detail and must never be inspected here.
@@ -31,6 +32,7 @@ defmodule Backend.Stations.EducationalResult do
       }
     }
     |> put_overtime(estimates, session)
+    |> put_simulated_exam_score(estimates, session)
   end
 
   # A training adds how long it ran past the expected time and the training
@@ -52,6 +54,24 @@ defmodule Backend.Stations.EducationalResult do
         })
     end
   end
+
+  # A simulated exam adds its scaled total, certainty level and incomplete flag
+  # (#426); the rubric estimates stay untouched. A training adds nothing.
+  defp put_simulated_exam_score(result, estimates, %{mode: :simulated_exam}) do
+    score = SimulatedExamScore.score(estimates)
+
+    Map.merge(result, %{
+      scaled_total:
+        if(is_nil(score.scaled_total),
+          do: nil,
+          else: Points.to_decimal_string(score.scaled_total)
+        ),
+      certainty_level: score.certainty_level,
+      incomplete: score.incomplete
+    })
+  end
+
+  defp put_simulated_exam_score(result, _estimates, _session), do: result
 
   defp criterion(result, authored) do
     base = %{

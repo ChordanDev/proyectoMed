@@ -40,6 +40,8 @@ namespace StationUi
 	// One accent per mode, in its marks and buttons.
 	const FLinearColor TreinoAccent(FColor(0x5F, 0xD0, 0xBF));
 	const FLinearColor ProvaAccent(FColor(0xF2, 0xA6, 0x5A));
+	/** A warning in a Prova simulada's panels, softer than its accent. */
+	const FLinearColor ProvaWarning(FColor(0xF2, 0xC8, 0x9A));
 
 	// Danger: finishing the station, and failures.
 	const FLinearColor Danger(FColor(0xC2, 0x41, 0x3A));
@@ -134,6 +136,9 @@ namespace StationUi
 
 	/** Only its label, muted until hovered: for what sits beside the main actions. */
 	void MakeGhost(UButton& Button);
+
+	/** A whole row of a list as one button: only its own content shows, on a lighter ground while hovered. */
+	void MakeRow(UButton& Button);
 
 	/** The round button that enters a mode, in that mode's `Accent`. */
 	UButton* MakeEnterArrow(UWidgetTree& Tree, const FLinearColor& Accent);

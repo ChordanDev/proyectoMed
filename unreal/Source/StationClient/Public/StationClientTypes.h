@@ -387,6 +387,21 @@ struct STATIONCLIENT_API FStationResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Station")
 	FString EligibleMax;
+
+	/**
+	 * A simulated exam's certainty level, from 1 to 5 (#426); 0 in a training, which
+	 * has none of the three fields below. Phoenix computes all three.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	int32 CertaintyLevel = 0;
+
+	/** A simulated exam's total scaled to `EligibleMax`, a decimal string; empty at level 1. */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	FString ScaledTotal;
+
+	/** True when the simulated exam left an eligible criterion out. */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	bool bIncomplete = false;
 };
 
 /**

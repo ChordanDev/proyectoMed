@@ -123,7 +123,7 @@ All operations are methods of `UStationClient`. Each one takes a
 | `ArmExamMode` | `POST .../sessions/:id/exam-mode` | `FStationExamMode`: the learner's next utterance is the [spoken exam request](#spoken-exam-requests-issue-364), until `ExpiresAt` | #364 |
 | `CancelExamMode` | `DELETE .../sessions/:id/exam-mode` | Nothing; the mode is disarmed | #364 |
 | `FinishSession(Reason)` | `POST .../sessions/:id/finish` | `FStationSession` marked completed | #195 |
-| `FetchResult` | `GET /api/v2/.../sessions/:id/result` | `FStationResult`: criteria with transcript evidence | #195 |
+| `FetchResult` | `GET /api/v2/.../sessions/:id/result` | `FStationResult`: criteria with transcript evidence; a simulated exam adds [its score](#simulated-exam-result-426) | #195, #426 |
 | `DiscardSession` | `POST .../sessions/:id/discard` | Nothing; the local session is cleared only after Phoenix confirms | #195, #196 |
 | `ForgetSession` | none | Clears the local session at once and leaves the room, for a run Phoenix stopped answering; call `DiscardSession` first so Phoenix forgets it too if it is back | #196 |
 
@@ -601,8 +601,28 @@ changes): `overtime_seconds` (whole seconds past `deadline_at`, `0` when the
 learner finished within ten minutes), `overtime_penalty` (0.25 points per started
 minute, at most `"2.5"`) and `training_score` (`estimates.total` minus the
 penalty, never below `"0"`, `null` when `estimates.total` is `null`). Phoenix
-computes them; the client only displays them. A real test result has none of
-these fields.
+computes them; the client only displays them. A simulated exam's result has none
+of these fields.
+
+## Simulated exam result (#426)
+
+The result of a simulated exam adds three fields, which `FStationResult` carries
+as `ScaledTotal` (empty at level 1), `CertaintyLevel` (`0` in a training) and
+`bIncomplete`. A body whose level is outside 1-5, or that has a total at level 1 or
+none above it, is a broken response. Phoenix computes all three, and the client
+only displays them, without rounding:
+[`docs/educational-result-api.md`](educational-result-api.md#simulated-exam-result-issue-426)
+holds the thresholds and the rounding.
+
+`UStationFeedbackWidget` shows them in the layout of
+`docs/design/screens/html/ResultExam.dc.html`: the total, or no total at level 1;
+the five-step meter with its label; how many points were assessed, as Phoenix's
+exact points rather than the mockup's percentage, since the client computes
+nothing; the "Nota incompleta" notice naming each criterion left out, at level 1
+too; the disclaimer; and the criteria, each opening its evidence and
+recommendation. The mockup's area line and "Ver histórico" wait for their data
+and screen. "Voltar ao menu" discards the run, like "Reiniciar estação" in a
+training.
 
 ## Results history (`GET /me/results`, issue #338)
 
