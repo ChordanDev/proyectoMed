@@ -174,7 +174,8 @@ void UStationRunFlow::AcknowledgeNotice()
 
 void UStationRunFlow::BackToMenu()
 {
-	if (Step != EStationRunStep::Notice && Step != EStationRunStep::Brief)
+	if (Step != EStationRunStep::Notice && Step != EStationRunStep::Brief
+		&& Step != EStationRunStep::DailyQuota && Step != EStationRunStep::Subscription)
 	{
 		return;
 	}
@@ -284,8 +285,17 @@ void UStationRunFlow::StartSession()
 		}
 		if (Started.HasError())
 		{
+			const FStationClientError& Error = Started.GetError();
+			// These refusals have a screen of their own, which says more than the message.
+			if (Error.Code == TEXT("daily_quota_exhausted") || Error.Code == TEXT("subscription_required"))
+			{
+				Self->DailyQuotaResetsAt = Error.ResetsAt;
+				Self->Step = Error.Code == TEXT("daily_quota_exhausted") ? EStationRunStep::DailyQuota : EStationRunStep::Subscription;
+				Self->OnChanged.Broadcast();
+				return;
+			}
 			Self->Step = EStationRunStep::Brief;
-			Self->SetError(Started.GetError(),
+			Self->SetError(Error,
 				LOCTEXT("StartFailed", "Não foi possível iniciar a estação. Tente novamente."));
 			return;
 		}
@@ -696,6 +706,13 @@ void UStationRunFlow::CloseBrief()
 	}
 }
 
+FTimespan UStationRunFlow::GetDailyQuotaTimeLeft() const
+{
+	const TOptional<FDateTime> Phoenix = Client ? Client->GetServerTime() : TOptional<FDateTime>();
+	const FTimespan Left = DailyQuotaResetsAt - Phoenix.Get(FDateTime::UtcNow());
+	return Left > FTimespan::Zero() ? Left : FTimespan::Zero();
+}
+
 FDateTime UStationRunFlow::GetDeskClockTime() const
 {
 	const TOptional<FDateTime> Phoenix = Client ? Client->GetServerTime() : TOptional<FDateTime>();
@@ -985,6 +1002,7 @@ void UStationRunFlow::ResetRun()
 	FinishReason = EStationFinishReason::User;
 	Result.Reset();
 	TimerRetryNotBefore = 0.0;
+	DailyQuotaResetsAt = FDateTime();
 }
 
 void UStationRunFlow::LoadStation()

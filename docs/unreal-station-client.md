@@ -230,6 +230,8 @@ can come with different statuses from different routes.
 | `reply_verification_failed`, `station_ai_unavailable`, `timeout` | 502, 504 | `SendTurn` |
 | `session_not_finished` | 422 | `FetchResult` before `FinishSession` |
 | `invalid_attempt` | 502 | `FetchResult` when the run could not be assessed |
+| `subscription_required` | 402 | `StartSession` on `POST /sessions`, when the account has no active subscription (see [Refused starts](#refused-starts-issue-467)) |
+| `daily_quota_exhausted` | 429 | `StartSession` on `POST /sessions`, past the daily quota; also fills `DailyQuota` and `ResetsAt` (see [Refused starts](#refused-starts-issue-467)) |
 
 ## Learner login (device flow)
 
@@ -482,8 +484,9 @@ and this body:
   simulation left, two `POST /sessions` sent at the same moment start one
   session; the other answers `429`. Counting only graded results at start
   would let both through.
-- Show the `message` and offer a retry after `resets_at`. The remaining count
-  is shown on the web account page (`/conta`).
+- The client shows its own screen instead of the `message`, with the time left
+  until `resets_at` (see [Refused starts](#refused-starts-issue-467)). The
+  remaining count is shown on the web account page (`/conta`).
 
 ### Pre-Station Notice (`GET /pre-station-notice`)
 
@@ -1048,6 +1051,32 @@ keyboard has them, and a click does not draw it. `HudPanelOpacity` stays at the 
 approved in #444 until the HUD's own Cine issue. `Font` loads Manrope by path, so
 `DefaultGame.ini` cooks `/Game/Station/UI/Fonts` on purpose.
 
+## Refused starts (issue #467)
+
+Phoenix decides the daily quota and the subscription; the client only shows what it
+is told. `FStationClientError` carries the 429 body's `daily_quota` and `resets_at` as
+`DailyQuota` and `ResetsAt`, and `UStationRunFlow` turns a failed `StartSession` with
+one of these codes into a step of its own, rendered from `StationQuotaScreens`. Any
+other failure stays on the brief, `rate_limited` included: the code decides, not the
+status.
+
+| Code | Step | Screen |
+| --- | --- | --- |
+| `daily_quota_exhausted` | `DailyQuota` | "Você usou todas as simulações de hoje.", the time left until `resets_at` ("5 h 12 min"), "Revisar o histórico" and "Voltar ao menu" |
+| `subscription_required` | `Subscription` | "Assine para fazer estações", "Ver planos no site" and "Voltar ao menu" |
+
+- `BackToMenu` leaves both steps. Nothing holds the next start back: whether it
+  goes through is Phoenix's answer, also before `resets_at`.
+- `GetDailyQuotaTimeLeft` counts on Phoenix's clock once a session anchored it, and
+  on the machine's before. Without a readable `resets_at`, or once it passes, the
+  countdown leaves the screen.
+- "Ver planos no site" opens `/planos` on the Phoenix the client talks to. Prices
+  and plans never show in the client.
+- "Revisar o histórico" stays disabled until the history screen exists (#465).
+- **Not reachable yet:** this client still starts on the deprecated
+  `POST /api/stations/active/sessions`, which answers neither code. Both screens
+  show once it moves to `POST /sessions` with the device login (#458).
+
 ## Not in the interface yet
 
 The [device login](#learner-login-device-flow) and the bearer header (#337) have
@@ -1164,6 +1193,13 @@ that answers nothing. It covers each failure of a training that loses Phoenix
 HTTP listeners, so an editor already open on the same machine makes it fail
 with "HttpListener unable to bind to 127.0.0.1:8000" (the Model Context
 Protocol server): close that editor first.
+
+`ProyectoMed.StationRun.Unit.Quota` (in `StationQuotaSpec.cpp`) serves a fake
+Phoenix on port 18767 that refuses a start on demand, with the same caveat about
+an open editor. `ProyectoMed.StationCards.Unit.Quota` in the same file needs
+nothing else: it checks what the two screens of a refused start show.
+`ProyectoMed.StationCards.QuotaSnapshot` (in `StationQuotaSnapshotSpec.cpp`) renders
+them for a person to compare with their mockups.
 
 `ProyectoMed.StationHud.Unit` (in `StationHudSpec.cpp`) needs nothing else: it
 checks what the in-run HUD shows for a given run, such as the exam panel's
