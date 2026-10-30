@@ -96,7 +96,10 @@ Why project assets never travel outside Git:
 Keep raw source files outside `unreal/` so they never reach LFS. If the LFS
 budget falls short, buy additional GitHub LFS storage first; moving to Perforce
 is a separate decision. The scene's MetaHuman, with its shared `MetaHumans/Common`
-assets, takes about 353 MB of LFS (#190).
+assets, takes about 353 MB of LFS (#190). The doctor's office (#319) adds about
+36 MB: 26 MB of furniture and props (two thirds of it the 1k textures of the two
+CC0 props), 8 MB for the Y Bot and the retarget assets, 2 MB for the seated
+loop. The running total stays well under the 10 GiB budget.
 
 ## Running the station client
 
@@ -181,16 +184,55 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
 - The patient is `/Game/Spike/MHC_Patient/BP_MHC_Patient`. The folder keeps the
   #189 spike name because moving a MetaHuman in the editor crashed it
   (`VisualLookUp`); rename it with plenty of free memory.
-- The patient plays copies of the MetaHuman Creator template idle loops
-  (`/Game/Station/Patient/Animations`) in single-node mode, with `useLiveLink`
-  off. The project's `MetaHumans/Common` body and face skeletons list the
-  plugin's skeletons as compatible so those loops can play.
+- The patient sits in a doctor's office (#319): a desk between the learner and
+  the patient, the doctor's chair, the patient's chair, an exam couch, a closed
+  cabinet and a few props, all scenery without interaction or readable content.
+  The meshes live in `/Game/Station/Office/Furnishings`; the actors sit in the
+  `Office` outliner folder of `Consultation`. Room is left free beside the
+  patient's chair for a companion (#322) and on the desk's front right corner
+  for a clock (#425).
+- The body plays `A_Patient_Sitting_Idle` in single-node mode: the Mixamo
+  "Sitting Idle" variations 2 and 3 joined into one 9.4 s loop (both start and
+  end on the same pose, so the joins have no seam), retargeted from the Y Bot to
+  the patient. The face keeps the MetaHuman Creator template idle loop
+  (`A_Patient_Idle_Face`) in single-node mode, with `useLiveLink` off. The
+  project's `MetaHumans/Common` body and face skeletons list the plugin's
+  skeletons as compatible so those loops can play.
+- The retarget lives in `/Game/Station/Patient/Retarget`: `SK_YBot` and its
+  loop, the auto-generated IK Rigs `IK_YBot` and `IK_Patient`, and
+  `RTG_YBot_To_Patient` (fuzzy chain mapping, target aligned to the Y Bot's
+  T-pose). To retarget another clip, right-click it in the Content Browser and
+  pick **Retarget Animations** with that retargeter.
+- The seated pose fixes the distance from the patient's hips to the feet, so the
+  chair and the patient are fitted together: the patient actor sits 38 cm below
+  the floor origin and `SM_VisitorChair` has a 41.5 cm seat. Changing the
+  patient or the loop means fitting both again, checked from the side.
 - In a voice training (#191) the game swaps the face to
   `UStationPatientFaceAnim` at runtime: it keeps the same idle loop and, while
   the patient speaks, lays the jaw, mouth, lips, tongue and teeth controls
   solved from the voice (StreamingADA, as in the #189 spike) over it. The
   patient is found as the actor with a skeletal mesh component named `Face`, so
   the level needs no extra setup, and no Live Link source is involved.
+- The learner sees the scene through the `CameraActor` tagged `StationView`
+  with a seated doctor's eyes: 1.20 m above the floor, about 1.2 m from the
+  patient's head, 6.5° down, with an 80° horizontal field of view and no look
+  around. Tune it on the actor's transform and its camera component's
+  **Field Of View**. The framing keeps the patient's head below the HUD's timer
+  and **Finalizar estação** panel, clear of the conversation panel on the left
+  and of the exam drawer on the right, with the desk in view; check all three
+  after any change.
+
+#### Third-party assets in the scene
+
+| Asset | Source | Author | Licence | Link |
+| --- | --- | --- | --- | --- |
+| Y Bot and the "Sitting Idle" animations | Mixamo | Adobe | Mixamo terms: royalty-free in projects and shipped products; the raw files are not redistributed | https://www.mixamo.com |
+| Potted Plant 02 (`SM_Plant_Floor`) | Poly Haven | Rico Cilliers | CC0 | https://polyhaven.com/a/potted_plant_02 |
+| Stationery Supplies (cup and pens of `SM_PenCup`) | Poly Haven | Mateusz Sadek | CC0 | https://polyhaven.com/a/stationery_supplies |
+
+The rest of the furniture was modelled for the project in Blender. Raw sources
+stay outside the repository: the `.blend`, the exported FBX files, the layout
+used to place them, and the Mixamo downloads.
 
 ### Voice trainings
 
@@ -246,9 +288,6 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   `NSMicrophoneUsageDescription` in `unreal/Build/Mac/Resources/Info.Template.plist`;
   without it macOS refuses the microphone without asking. The editor asks as
   UnrealEditor and needs nothing.
-- The learner sees the scene through the `CameraActor` tagged `StationView`,
-  standing 1.40 m from the patient at 1.62 m with a 70° field of view. Both
-  stand because MetaHuman Creator ships no seated animation.
 
 ## Unreal MCP plugin
 
@@ -336,6 +375,14 @@ Useful editor console commands: `ModelContextProtocol.StartServer`,
   Keep it on loopback and never expose or forward the port.
 - **Serial tool calls.** Calls run one at a time on the editor game thread. Do
   not issue overlapping tool calls from one or several agents.
+- **Deleting or renaming assets crashes the editor.** In UE 5.8 the
+  `SemanticSearch` index aborts (`faiss::IndexIDMap2Template::reconstruct`)
+  when an asset is deleted, renamed or replaced, from a tool or from a script.
+  Import each asset once under its final name. To remove one, delete the file
+  with the editor closed.
+- **Blender FBX scale.** Export meshes in metres with **Apply Scalings: All
+  Local** (`apply_scale_options="FBX_SCALE_NONE"`); the other
+  options import 100 times too small or too large.
 - **Licensed Technology.** The editor warns that data sent through the plugin
   to a connected LLM service is Licensed Technology under the UE EULA; the
   developer is responsible for ensuring the LLM provider does not use it as
