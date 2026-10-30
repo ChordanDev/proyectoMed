@@ -590,7 +590,7 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		UOverlay* Root = WidgetTree->ConstructWidget<UOverlay>();
 		WidgetTree->RootWidget = Root;
 
-		UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(28.f, 14.f, 28.f, 18.f),
+		UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(28.f, 14.f, 28.f, 18.f),
 			StationUi::PanelEdge, 1.f);
 		if (UOverlaySlot* Slot = Root->AddChildToOverlay(Panel))
 		{
@@ -642,7 +642,7 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 		Slot->SetPadding(FMargin(24.f, 24.f, 0.f, 24.f));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(SidePanelPadding, 18.f),
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(SidePanelPadding, 18.f),
 		StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
@@ -861,7 +861,7 @@ void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
 		Slot->SetPadding(FMargin(0.f, 24.f, 24.f, 24.f));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(SidePanelPadding, 18.f),
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(SidePanelPadding, 18.f),
 		StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();

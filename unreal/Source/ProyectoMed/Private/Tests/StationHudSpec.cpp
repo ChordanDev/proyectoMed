@@ -8,12 +8,15 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/EditableTextBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
+#include "Station/StationUi.h"
 
 BEGIN_DEFINE_SPEC(FStationHudUnitSpec, "ProyectoMed.StationHud.Unit",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -274,6 +277,81 @@ void FStationHudUnitSpec::Define()
 		Hud->Refresh();
 		TestTrue(TEXT("redrawn for the live caption"), Hud->TranscriptBox->GetChildAt(0) != First);
 		TestEqual(TEXT("the line and the caption"), Hud->TranscriptBox->GetChildrenCount(), 2);
+	});
+
+	It("lets the scene show through its panels, but not through what the learner reads or types (#444)", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Text);
+		Flow->Transcript.Add({EStationSpeaker::Learner, TEXT("Onde dói?")});
+		Flow->Transcript.Add({EStationSpeaker::Patient, TEXT("Na barriga, doutor.")});
+		FStationImpresso BloodCount;
+		BloodCount.Id = TEXT("hemograma");
+		BloodCount.Title = TEXT("IMPRESSO 2 — Hemograma completo");
+		FStationExamRequest& Request = Flow->ExamRequests.AddDefaulted_GetRef();
+		Request.Text = TEXT("Hemograma");
+		Request.Reply.Decision = EStationImpressoDecision::Released;
+		Request.Reply.NewlyReleased.Add(BloodCount);
+		Flow->ReleasedImpressos = {BloodCount};
+		UStationHudWidget* Hud = MakeHud(Flow);
+
+		const auto Alpha = [](const FSlateBrush& Brush) { return Brush.TintColor.GetSpecifiedColor().A; };
+		const auto Borders = [](UWidget* Root)
+		{
+			TArray<UBorder*> Found;
+			UWidgetTree::ForWidgetAndChildren(Root, [&Found](UWidget* Widget)
+			{
+				if (UBorder* Border = Cast<UBorder>(Widget))
+				{
+					Found.Add(Border);
+				}
+			});
+			return Found;
+		};
+
+		// The top bar, the conversation and the exam drawer: the panel's colour.
+		int32 Panels = 0;
+		for (UBorder* Border : Borders(Hud->GetRootWidget()))
+		{
+			const FLinearColor Fill = Border->Background.TintColor.GetSpecifiedColor();
+			if (Fill.Equals(StationUi::Panel.CopyWithNewOpacity(Fill.A)))
+			{
+				++Panels;
+				TestTrue(TEXT("a panel is translucent"), Fill.A < 1.f);
+			}
+		}
+		TestEqual(TEXT("the top bar, the conversation and the exam drawer"), Panels, 3);
+
+		const TArray<UBorder*> Bubbles = Borders(Hud->TranscriptBox);
+		TestEqual(TEXT("one bubble per line"), Bubbles.Num(), 2);
+		for (UBorder* Bubble : Bubbles)
+		{
+			TestEqual(TEXT("a bubble is opaque"), Alpha(Bubble->Background), 1.f);
+		}
+
+		const TArray<UBorder*> Cards = Borders(Hud->ExamCardBox);
+		TestTrue(TEXT("the request's card"), Cards.Num() > 0);
+		for (UBorder* Card : Cards)
+		{
+			TestEqual(TEXT("an exam card is opaque"), Alpha(Card->Background), 1.f);
+		}
+
+		for (UEditableTextBox* Input : {Hud->TurnInput.Get(), Hud->ExamInput.Get()})
+		{
+			const FEditableTextBoxStyle& Style = Input->GetWidgetStyle();
+			TestEqual(TEXT("an input is opaque"), Alpha(Style.BackgroundImageNormal), 1.f);
+			TestEqual(TEXT("an input is opaque while hovered"), Alpha(Style.BackgroundImageHovered), 1.f);
+			TestEqual(TEXT("an input is opaque while focused"), Alpha(Style.BackgroundImageFocused), 1.f);
+		}
+
+		int32 Sheets = 0;
+		for (UBorder* Border : Borders(Hud->DocumentViewer))
+		{
+			if (Border->Background.TintColor.GetSpecifiedColor().Equals(StationUi::Paper))
+			{
+				++Sheets;
+			}
+		}
+		TestEqual(TEXT("the document's sheet is opaque paper"), Sheets, 1);
 	});
 }
 
