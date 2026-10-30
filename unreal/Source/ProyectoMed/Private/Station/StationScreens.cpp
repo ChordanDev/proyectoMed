@@ -325,8 +325,7 @@ TSharedRef<SWidget> UStationMenuWidget::RebuildWidget()
 		AddMode(*WidgetTree, *Modes, FMenuMode{
 			LOCTEXT("MenuTraining", "Treino"),
 			LOCTEXT("MenuTrainingNote", "Pratique a estação no seu ritmo, por texto ou por voz."),
-			{LOCTEXT("MenuTrainingTextOrVoice", "Texto ou voz"), LOCTEXT("MenuTrainingClock", "Relógio à vista"),
-				LOCTEXT("MenuTrainingHelp", "Com ajuda")},
+			{LOCTEXT("MenuTrainingClock", "Relógio à vista"), LOCTEXT("MenuTrainingHelp", "Com ajuda")},
 			FText::GetEmpty(),
 			StationUi::TreinoAccent}, 0.f, Training, TrainingEnter);
 		TrainingButton = Training;
