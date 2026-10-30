@@ -27,7 +27,7 @@ enum class EStationVoiceEventKind : uint8
 	 * sent it to the impresso request, not to the patient. Nothing is spoken.
 	 */
 	ExaminerImpresso,
-	/** A failure of one turn, for example `synthesis_failed`; the run goes on. */
+	/** A failure of one turn, for example `synthesis_failed`; the run goes on, unless it is a real test's voice (#423). */
 	TurnFailure,
 	/** The worker stopped listening to this run. */
 	Fatal,
