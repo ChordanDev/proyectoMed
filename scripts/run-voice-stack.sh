@@ -9,7 +9,8 @@
 # Environment (all optional):
 #   VOICE_STACK_PHOENIX_PORT     Phoenix port, default 4000
 #   VOICE_STACK_MOCK_PORT        mock OpenAI port, default 18766
-#   VOICE_STACK_TRANSCRIPT       what the fake STT hears, default "Qual é o seu nome?"
+#   VOICE_STACK_TRANSCRIPT       what the fake STT hears, default "Qual é o seu nome?";
+#                                lines separated by | are heard in turn, the last repeats
 #   VOICE_STACK_PATIENT_REPLY    what the mock patient answers, default "Meu nome é Carlos."
 # Never sources .env: every provider here is local and fake.
 set -euo pipefail

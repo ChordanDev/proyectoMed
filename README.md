@@ -813,7 +813,8 @@ never reads `.env`:
 - Phoenix in `dev` with `VOICE_MODE=realtime` and the E2E-only approving Jev
   adapter, on port `VOICE_STACK_PHOENIX_PORT` (default `4000`);
 - the voice worker with its fake speech providers, hearing
-  `VOICE_STACK_TRANSCRIPT` (default `Qual é o seu nome?`). It runs in `dev`
+  `VOICE_STACK_TRANSCRIPT` (default `Qual é o seu nome?`; lines separated by `|`
+  are heard in turn, and the last one repeats). It runs in `dev`
   mode without reload, which has no CPU-load cap, so it still takes rooms
   while the Unreal editor starts.
 
@@ -825,6 +826,14 @@ checks the transcript events and the patient's audio:
 scripts/run-voice-stack.sh -- \
   uv run --project voice-worker python scripts/voice-stack/probe_spoken_turn.py
 ```
+
+`scripts/run-simulated-exam-e2e.sh` runs a full Prova simulada and one training on
+that same stack, in about a minute and with no provider credit: typed input refused,
+spoken turns with no patient text, an impresso requested by voice, an utterance
+discarded past a 30-second deadline, the scaled total and certainty level, and a
+training with its help intact. It needs `livekit-server`, `uv` and a migrated
+`backend_dev` database (or `DATABASE_URL`). The `Simulated Exam E2E` workflow runs it
+on every pull request that touches the backend, the voice worker or the stack.
 
 ### Production deploy (Fly)
 
