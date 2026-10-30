@@ -45,6 +45,15 @@ namespace StationFakePhoenix
 		"estimates": {"total": null, "scored_subtotal": "0", "scored_max": "0", "eligible_max": "0", "unresolved": []}
 	})");
 
+	// A simulated exam's result adds its score (#426).
+	const TCHAR* ExamResultBody = TEXT(R"({
+		"schema_version": "2", "session_id": "stub-session", "status": "completed", "placeholder": false,
+		"criteria": [], "coverage": {"assessed": 1, "uncertain": 1, "not_observable": 0, "not_applicable": 0},
+		"estimates": {"total": null, "scored_subtotal": "6", "scored_max": "8", "eligible_max": "10",
+			"unresolved": [{"id": "c2", "status": "uncertain"}]},
+		"scaled_total": "7.5", "certainty_level": 4, "incomplete": true
+	})");
+
 	// A simulated exam is voice only (#422): Phoenix refuses its typed input.
 	const TCHAR* TypedTurnRefusedBody = TEXT(R"({
 		"error": "typed_input_not_allowed",
@@ -180,6 +189,31 @@ void FStationClientFakePhoenixSpec::Define()
 				{
 					TestFalse(Result.HasError() ? *FString::Printf(TEXT("error %s"), *Result.GetError().Code) : TEXT("result"),
 						Result.HasError());
+					Done.Execute();
+				});
+			});
+		});
+
+	LatentIt("hands a simulated exam's score to the caller", FTimespan::FromSeconds(20),
+		[this](const FDoneDelegate& Done)
+		{
+			Server.Route(TEXT("/api/v2/stations/active/sessions/stub-session/result"), EHttpServerRequestVerbs::VERB_GET, 0.f,
+				[]() { return FString(ExamResultBody); });
+			Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)
+			{
+				if (!TestFalse("start", Started.HasError()))
+				{
+					Done.Execute();
+					return;
+				}
+				Client->FetchResult([this, Done](const TStationResult<FStationResult>& Result)
+				{
+					if (TestFalse("result", Result.HasError()))
+					{
+						TestEqual("scaled total", Result.GetValue().ScaledTotal, TEXT("7.5"));
+						TestEqual("level", Result.GetValue().CertaintyLevel, 4);
+						TestTrue("incomplete", Result.GetValue().bIncomplete);
+					}
 					Done.Execute();
 				});
 			});
