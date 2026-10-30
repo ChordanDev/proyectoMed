@@ -96,7 +96,8 @@ Phoenix decides this; the client only waits for it.
   gets no outcome event, and the worker leaves the room without an `error` event,
   so the run is not taken for a lost voice. The worker times the start from the
   key press on Phoenix's clock, so no machine's own clock moves this boundary: the
-  tolerance covers the network trips of the key press and of `server_now`.
+  tolerance covers the key press reaching the worker. The trip of `server_now`
+  makes the stamp slightly early, so it uses none of the tolerance.
 - At zero, call `FinishSession(EStationFinishReason::Timer)` as usual. Phoenix
   answers when its evidence window closes: when an utterance that started after
   the deadline arrives, or at most 5 seconds after the deadline. That is well inside the request timeout
