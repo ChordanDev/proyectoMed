@@ -1289,6 +1289,58 @@ class MockSTT:
         return self._stream
 
 
+class AudioOnlyVoiceWiringTest(unittest.IsolatedAsyncioTestCase):
+    """The job's context decides whether its patient is audio only (#423)."""
+
+    async def voice_of_a_job(self, mode: str | None) -> worker.PatientVoice:
+        context = {"language": "pt-BR", "keyterms": [], "last_turn_id": 0}
+        if mode is not None:
+            context["mode"] = mode
+
+        def handler(request):
+            return httpx.Response(200, json=context)
+
+        room = MockRoom()
+        room.name = "station-session-s1"
+        ctx = SimpleNamespace(
+            room=room,
+            connect=AsyncMock(),
+            wait_for_participant=AsyncMock(return_value=MockParticipant("learner-s1")),
+            shutdown=Mock(),
+        )
+        voices = []
+
+        async def run_transcribe(
+            room, learner, context, tracker, phoenix, voice=None, meter=None
+        ):
+            voices.append(voice)
+            room._connected = False
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"PHOENIX_URL": "http://phoenix", "VOICE_WORKER_SECRET": "secret"},
+            ),
+            patch.object(worker, "PhoenixClient", return_value=phoenix(handler)),
+            patch.object(worker, "transcribe", side_effect=run_transcribe),
+            patch.object(worker, "build_tts", return_value=None),
+            patch.object(worker, "publish", new=AsyncMock()),
+        ):
+            await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
+
+        self.assertEqual(len(voices), 1)
+        return voices[0]
+
+    async def test_a_simulated_exam_job_keeps_its_patient_audio_only(self):
+        self.assertTrue((await self.voice_of_a_job("simulated_exam")).audio_only)
+
+    async def test_a_training_job_shows_its_patient_text(self):
+        self.assertFalse((await self.voice_of_a_job("training")).audio_only)
+
+    async def test_a_job_on_an_older_phoenix_shows_its_patient_text(self):
+        self.assertFalse((await self.voice_of_a_job(None)).audio_only)
+
+
 class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_fresh_job_bootstrap_allocates_above_context_floor(self):
         # Offline wire-contract proof; real Phoenix admission is covered by controller tests.
