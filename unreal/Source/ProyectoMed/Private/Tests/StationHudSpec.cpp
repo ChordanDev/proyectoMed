@@ -278,6 +278,34 @@ void FStationHudUnitSpec::Define()
 		TestEqual(TEXT("the reader is open"), Hud->DocumentViewer->GetVisibility(), ESlateVisibility::Visible);
 	});
 
+	// #462: the document's dim stops at the requests, which stay in reach beside the sheet.
+	It("keeps the exam requests over the dimmed scene while a document is open", [this]()
+	{
+		UStationHudWidget* Hud = MakeHud(MakeFlow(EStationTrainingMode::Text));
+		const UPanelWidget* Root = Cast<UPanelWidget>(Hud->GetRootWidget());
+		TestTrue(TEXT("the drawer over the dim"), Root->GetChildIndex(Hud->ExamDrawer) > Root->GetChildIndex(Hud->DocumentViewer));
+		TestTrue(TEXT("the dim over the time"), Root->GetChildIndex(Hud->DocumentViewer) > Root->GetChildIndex(Hud->TimerPanel));
+	});
+
+	It("outlines the request cards and their status labels, in the Cine look", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Text);
+		FStationExamRequest& Request = Flow->ExamRequests.AddDefaulted_GetRef();
+		Request.Text = TEXT("Hemograma");
+		Request.Reply.Decision = EStationImpressoDecision::Unavailable;
+		UStationHudWidget* Hud = MakeHud(Flow);
+
+		int32 Outlined = 0;
+		UWidgetTree::ForWidgetAndChildren(Hud->ExamCardBox, [&Outlined](UWidget* Widget)
+		{
+			if (const UBorder* Border = Cast<UBorder>(Widget))
+			{
+				Outlined += Border->Background.OutlineSettings.Width > 0.f ? 1 : 0;
+			}
+		});
+		TestEqual(TEXT("the card and its status label"), Outlined, 2);
+	});
+
 	It("redraws the conversation only when what it shows changes", [this]()
 	{
 		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
@@ -323,12 +351,14 @@ void FStationHudUnitSpec::Define()
 			return Found;
 		};
 
-		// The timer, the conversation, the exam drawer and the two buttons' grounds: the panel's colour.
+		// The timer, the conversation, the exam drawer and the two buttons' grounds: the panel's
+		// colour. The exam cards share it, opaque; they are checked below.
+		const TArray<UBorder*> Cards = Borders(Hud->ExamCardBox);
 		int32 Panels = 0;
 		for (UBorder* Border : Borders(Hud->GetRootWidget()))
 		{
 			const FLinearColor Fill = Border->Background.TintColor.GetSpecifiedColor();
-			if (Fill.Equals(StationUi::Panel.CopyWithNewOpacity(Fill.A)))
+			if (!Cards.Contains(Border) && Fill.Equals(StationUi::Panel.CopyWithNewOpacity(Fill.A)))
 			{
 				++Panels;
 				TestTrue(TEXT("a panel is translucent"), Fill.A < 1.f);
@@ -343,7 +373,6 @@ void FStationHudUnitSpec::Define()
 			TestEqual(TEXT("a bubble is opaque"), Alpha(Bubble->Background), 1.f);
 		}
 
-		const TArray<UBorder*> Cards = Borders(Hud->ExamCardBox);
 		TestTrue(TEXT("the request's card"), Cards.Num() > 0);
 		for (UBorder* Card : Cards)
 		{
