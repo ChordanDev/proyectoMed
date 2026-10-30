@@ -7,12 +7,20 @@ defmodule Backend.Stations.TrainingOvertimeTest do
   @learner %{role: :learner, modality: :text, text: "Pergunta"}
 
   setup do
-    keys = [:station_duration_ms, :training_overtime_ms, :turn_grace_ms]
+    keys = [
+      :station_duration_ms,
+      :training_overtime_ms,
+      :turn_grace_ms,
+      :simulated_exam_evidence_window_ms
+    ]
+
     previous = Map.new(keys, &{&1, Application.get_env(:backend, &1)})
 
     Application.put_env(:backend, :station_duration_ms, 40)
     Application.put_env(:backend, :training_overtime_ms, 200)
     Application.put_env(:backend, :turn_grace_ms, 50)
+    # A simulated exam completes when its evidence window closes (#424).
+    Application.put_env(:backend, :simulated_exam_evidence_window_ms, 0)
 
     on_exit(fn ->
       Enum.each(previous, fn

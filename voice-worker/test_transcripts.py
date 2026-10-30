@@ -2,6 +2,7 @@
 import asyncio
 import json
 import unittest
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -273,6 +274,13 @@ class ProviderErrorTest(unittest.TestCase):
         self.assertNotIn("dg_secret", str(failure))
 
 
+def without_speech_start(body: dict) -> dict:
+    """A posted final without its `speech_started_at` (#424), checked to be ISO 8601."""
+    body = dict(body)
+    datetime.fromisoformat(body.pop("speech_started_at"))
+    return body
+
+
 def phoenix(handler):
     return PhoenixClient(
         "http://phoenix", "secret", "s1", transport=httpx.MockTransport(handler)
@@ -312,6 +320,35 @@ class PhoenixClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply.turn_id, 1)
             self.assertEqual(reply.generation_id, 1)
             self.assertEqual(reply.reply_text, "Estou sentindo uma forte dor no peito.")
+
+    # Issue #424: Phoenix decides with it whether an utterance started before a
+    # simulated exam's deadline.
+    async def test_commit_sends_when_the_utterance_started(self):
+        started = datetime(2026, 10, 29, 12, 9, 59, 500000, tzinfo=UTC)
+
+        def handler(request):
+            body = json.loads(request.content)
+            self.assertEqual(
+                body,
+                {
+                    "turn_id": 1,
+                    "text": "Onde dói?",
+                    "speech_started_at": "2026-10-29T12:09:59.500000+00:00",
+                },
+            )
+            return httpx.Response(
+                201,
+                json={
+                    "status": "kept",
+                    "turn_id": 1,
+                    "generation_id": 1,
+                    "addressee": "patient",
+                },
+            )
+
+        async with phoenix(handler) as client:
+            reply = await client.commit(1, "Onde dói?", speech_started_at=started)
+            self.assertTrue(reply.is_kept_receipt())
 
     async def test_commit_posts_turn_and_reports_duplicates(self):
         def handler(request):
@@ -867,10 +904,71 @@ class TurnTrackerSentenceTest(unittest.TestCase):
         self.assertIsNone(tracker.accept_sentence(self.sentence(text=" ")))
 
 
+class SpeechStartTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #424: each final carries when the learner started saying it."""
+
+    async def test_each_final_carries_when_its_utterance_started(self):
+        first = datetime(2026, 10, 29, 12, 9, 58, tzinfo=UTC)
+        times = iter([first, first + timedelta(seconds=3)])
+        tracker = TurnTracker("s1", last_turn_id=0, clock=lambda: next(times))
+        queue: asyncio.Queue = asyncio.Queue()
+        published: list[dict] = []
+
+        async with ControllablePhoenixClient() as client:
+            client.commit_events[1] = asyncio.Event()
+            stream = asyncio.create_task(
+                process_speech_stream(
+                    MockStream(queue), tracker, client, on_publish=published.append
+                )
+            )
+            for item in [
+                event(SpeechEventType.START_OF_SPEECH),
+                event(INTERIM, "Onde"),
+                event(FINAL, "Onde dói?"),
+                event(END),
+            ]:
+                queue.put_nowait(item)
+            # The next utterance starts once the first was posted, so it does not
+            # speak over a turn still queued (#193).
+            await asyncio.wait_for(client.commit_events[1].wait(), 1)
+            for item in [event(INTERIM, "Tem"), event(FINAL, "Tem febre?"), event(END)]:
+                queue.put_nowait(item)
+            queue.put_nowait(None)
+            await asyncio.wait_for(stream, 2)
+
+        self.assertEqual(
+            client.speech_starts, {1: first, 2: first + timedelta(seconds=3)}
+        )
+        # The room's learner events are unchanged.
+        self.assertTrue(all("speech_started_at" not in item for item in published))
+
+    async def test_a_final_after_a_reconnect_starts_from_its_own_speech(self):
+        times = iter(
+            [
+                datetime(2026, 10, 29, 12, 0, tzinfo=UTC),
+                datetime(2026, 10, 29, 12, 5, tzinfo=UTC),
+            ]
+        )
+        tracker = TurnTracker("s1", last_turn_id=0, clock=lambda: next(times))
+        tracker.heard_speech()
+        # The worker drops a half utterance when the learner reconnects.
+        tracker.drop_utterance()
+        tracker.heard_speech()
+        tracker.handle(event(FINAL, "Oi"))
+        self.assertIsNotNone(tracker.handle(event(END)))
+
+        self.assertEqual(
+            tracker.last_final_speech_started_at,
+            datetime(2026, 10, 29, 12, 5, tzinfo=UTC),
+        )
+
+
 class ControllablePhoenixClient(PhoenixClient):
     def __init__(self):
         super().__init__("http://phoenix", "secret", "s1")
         self.commit_calls: list[tuple[int, str]] = []
+        # When the learner started each committed turn (#424), by turn id.
+        self.speech_starts: dict[int, datetime | None] = {}
         self.cancel_calls: list[dict] = []
         self.commit_events: dict[int, asyncio.Event] = {}
         self.commit_delays: dict[int, asyncio.Event] = {}
@@ -885,9 +983,12 @@ class ControllablePhoenixClient(PhoenixClient):
         # asyncio.Event the stream waits for before going on.
         self.streams: dict[int, list] = {}
 
-    async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
+    async def commit(
+        self, turn_id: int, text: str, on_sentence=None, speech_started_at=None
+    ) -> VoiceTurnReply:
         self.call_log.append(("commit_start", turn_id, text))
         self.commit_calls.append((turn_id, text))
+        self.speech_starts[turn_id] = speech_started_at
         if turn_id in self.commit_events:
             self.commit_events[turn_id].set()
         if turn_id in self.commit_delays:
@@ -1060,7 +1161,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                         usage.append(json.loads(request.content))
                         return httpx.Response(202, json={"status": "recorded"})
                     body = json.loads(request.content)
-                    posted.append(body)
+                    posted.append(without_speech_start(body))
                     if body["turn_id"] < expected:
                         return httpx.Response(409, json={"error": "stale_generation"})
                     return httpx.Response(
@@ -1163,7 +1264,7 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             if request.url.path.endswith("/cancel"):
                 # The timer already completed the session on the server.
                 return httpx.Response(422, json={"error": "session_completed"})
-            posted.append(json.loads(request.content))
+            posted.append(without_speech_start(json.loads(request.content)))
             return httpx.Response(409, json={"error": "station_time_elapsed"})
 
         room = MockRoom()
@@ -1223,6 +1324,84 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             any("s1: station_time_elapsed" in line for line in logs.output), logs.output
         )
         self.assertFalse(any("Late question" in line for line in logs.output))
+
+    async def test_past_a_simulated_exams_deadline_phoenix_ending_the_run_publishes_no_error(
+        self,
+    ):
+        # Issue #424: the worker went silent at the deadline, and Phoenix discards
+        # an utterance that started after it. The job ends, but a fatal `error`
+        # event would read as a lost voice on a client whose own clock has not yet
+        # reached zero, which invalidates a simulated exam: the client ends the
+        # run by its timer instead.
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "last_turn_id": 0,
+                        "language": "pt-BR",
+                        "keyterms": [],
+                        "mode": "simulated_exam",
+                        "deadline_at": "2026-10-29T12:10:00Z",
+                        "server_now": "2026-10-29T12:10:00Z",
+                    },
+                )
+            if request.url.path.endswith("/usage"):
+                return httpx.Response(202, json={"status": "recorded"})
+            if request.url.path.endswith("/cancel"):
+                return httpx.Response(422, json={"error": "session_completed"})
+            return httpx.Response(409, json={"error": "station_time_elapsed"})
+
+        room = MockRoom()
+        room.name = "station-session-s1"
+        ctx = SimpleNamespace(
+            room=room,
+            connect=AsyncMock(),
+            wait_for_participant=AsyncMock(return_value=MockParticipant("learner-s1")),
+            shutdown=Mock(),
+        )
+        queue = asyncio.Queue()
+        for speech_event in [event(FINAL, "Depois do fim"), event(END), None]:
+            queue.put_nowait(speech_event)
+        stream = MockStream(queue)
+        stream.end_input = Mock()
+
+        async def run_transcribe(
+            room, learner, context, tracker, phoenix, voice=None, meter=None
+        ):
+            await asyncio.sleep(0)  # the deadline already passed: silent now
+            await transcribe(
+                room,
+                learner,
+                context,
+                tracker,
+                phoenix,
+                stt=MockSTT(stream),
+                audio=MockAudioStream(),
+                voice=voice,
+            )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"PHOENIX_URL": "http://phoenix", "VOICE_WORKER_SECRET": "secret"},
+            ),
+            patch.object(worker, "PhoenixClient", return_value=phoenix(handler)),
+            patch.object(worker, "transcribe", side_effect=run_transcribe),
+            patch.object(worker, "build_tts", return_value=None),
+            patch.object(worker, "publish", new=AsyncMock()) as publish,
+            self.assertLogs("voice-worker", level="INFO") as logs,
+        ):
+            await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
+
+        errors = [
+            call.args[1] for call in publish.await_args_list if "error" in call.args[1]
+        ]
+        self.assertEqual(errors, [])
+        ctx.shutdown.assert_called_once()
+        self.assertTrue(
+            any("s1: station_time_elapsed" in line for line in logs.output), logs.output
+        )
 
     async def test_cancel_first_fences_held_http_admission_and_transport_retry(self):
         # Offline protocol model, paired with real GenServer/controller tests.
