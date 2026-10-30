@@ -39,6 +39,8 @@
 BEGIN_DEFINE_SPEC(FStationCardSnapshotSpec, "ProyectoMed.StationCards.Snapshot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	FString OutDir;
+	/** Keeps the screens built for a picture: a scrim does not outlive its Slate widgets. */
+	mutable TArray<TSharedRef<SWidget>> Held;
 
 	UStationRunFlow* MakeFlow(EStationMicPermission Permission,
 		EStationSessionMode SessionMode = EStationSessionMode::Training) const;
@@ -76,7 +78,7 @@ UStationBriefWidget* FStationCardSnapshotSpec::MakeBrief(UStationRunFlow* Flow) 
 {
 	UWorld* World = GEngine->GetWorldContexts()[0].World();
 	UStationBriefWidget* Brief = CreateWidget<UStationBriefWidget>(World);
-	Brief->TakeWidget();
+	Held.Add(Brief->TakeWidget());
 	Brief->SetFlow(Flow);
 	Brief->Refresh();
 	return Brief;
@@ -132,6 +134,11 @@ void FStationCardSnapshotSpec::Define()
 	BeforeEach([this]()
 	{
 		OutDir = FPlatformMisc::GetEnvironmentVariable(TEXT("STATION_HUD_SNAPSHOT_DIR"));
+	});
+
+	AfterEach([this]()
+	{
+		Held.Reset();
 	});
 
 	It("renders the Cine kit", [this]()
@@ -223,7 +230,6 @@ void FStationCardSnapshotSpec::Define()
 		Save(CreateWidget<UStationMicrophoneWidget>(World), TEXT("pre-1-microphone"));
 		Save(CreateWidget<UStationMenuWidget>(World), TEXT("pre-1b-menu"));
 		UStationMenuWidget* ExamSelected = CreateWidget<UStationMenuWidget>(World);
-		// Held: a scrim does not outlive the Slate widgets it was built for.
 		const TSharedRef<SWidget> ExamSelectedSlate = ExamSelected->TakeWidget();
 		ExamSelected->HandleSelectSimulatedExam();
 		ExamSelected->NativeTick(FGeometry(), 10.f);
