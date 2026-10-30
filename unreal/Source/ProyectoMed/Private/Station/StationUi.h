@@ -24,10 +24,15 @@ namespace StationUi
 	const FLinearColor Accent(0.13f, 0.45f, 0.86f, 1.f);
 	const FLinearColor Caution(0.95f, 0.66f, 0.22f, 1.f);
 
-	// The in-run side panel and the documents it opens: opaque, so the scene
-	// behind never mixes with what the learner reads. Given as sRGB, like the
-	// web palette they come from.
+	// The palette of the cards and the in-run HUD. Given as sRGB, like the web
+	// palette it comes from. Only the HUD's panels are see-through (`HudPanel`);
+	// what the learner reads or types on them (bubbles, inputs, exam cards, the
+	// document's sheet) keeps an opaque surface of its own (#444).
 	const FLinearColor Panel(FColor(0x1B, 0x1B, 0x1A));
+	/** How much of the in-run HUD's panels covers the scene behind them; tune it here (#444). */
+	const float HudPanelOpacity = 0.6f;
+	/** The in-run HUD's panels: the top bar, the conversation and the exam drawer. */
+	const FLinearColor HudPanel = Panel.CopyWithNewOpacity(HudPanelOpacity);
 	const FLinearColor PanelEdge(FColor(0x44, 0x44, 0x41));
 	const FLinearColor Raised(FColor(0x2C, 0x2C, 0x2A));
 	const FLinearColor RaisedHover(FColor(0x3A, 0x3A, 0x38));
@@ -89,7 +94,7 @@ namespace StationUi
 
 	/**
 	 * A full-screen dimmed backdrop that centers one card of at most `MaxWidth`, in the
-	 * in-run panels' look (opaque, rounded and outlined); returns the card's column.
+	 * panels' look, but opaque (rounded and outlined); returns the card's column.
 	 */
 	UVerticalBox* MakeCenteredCard(UWidgetTree& Tree, float MaxWidth, float MaxHeight);
 
