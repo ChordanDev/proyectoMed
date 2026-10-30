@@ -11,7 +11,9 @@ speech events the turn handling already knows:
 - a release (mute) asks Deepgram to finalize, then ends the turn with an
   END_OF_SPEECH once the transcript has been quiet for `RELEASE_QUIET_S`, at most
   `RELEASE_MAX_SETTLE_S` after the release. Deepgram does not promise an answer to
-  a finalize, so a last interim that never became final stands in for it;
+  a finalize, so a last interim that never became final stands in for it. A press
+  with no words ends the same way: nothing is committed, and the next utterance
+  does not inherit its speech start (#424);
 - transcript that arrives after that end, and before the next press, belongs to the
   ended turn and is dropped. Pressing again before the end continues the turn.
 
@@ -196,8 +198,8 @@ class PushToTalk:
                     alternatives=self._pending_interim.alternatives,
                 )
             )
-        if self._heard:
-            self._ready.append(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+        # Even with no words: it commits nothing, but ends the press's speech start.
+        self._ready.append(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
         self._state = _State.IDLE
         self._heard = False
         self._pending_interim = None

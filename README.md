@@ -538,7 +538,9 @@ below changes for it, not even when the browser mutes its track on its own
 end of speech no longer ends a turn while the key is held. A mute is the release: the
 worker sends Deepgram `Finalize` and ends the turn once the transcript has been quiet for
 0.3 s, at most 1.5 s after the release (Deepgram does not promise an answer to
-`Finalize`, so a last interim that never became final stands in for it). Transcript that
+`Finalize`, so a last interim that never became final stands in for it). A press with no
+words ends the same way at that bound: it commits nothing, and the next utterance does not
+inherit its speech start. Transcript that
 arrives after that, before the next press, belongs to the ended turn and is dropped;
 pressing again before the turn ends continues it. The mute is the only signal because the
 learner token cannot publish data. With `VOICE_MODE=realtime`
