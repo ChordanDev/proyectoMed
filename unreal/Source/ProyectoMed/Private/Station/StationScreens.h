@@ -146,6 +146,10 @@ private:
 	UFUNCTION()
 	void HandleRetry();
 
+	/** Back to the room from a running simulated exam's brief (#425). */
+	UFUNCTION()
+	void HandleCloseBrief();
+
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
 
@@ -186,9 +190,17 @@ private:
 	UPROPERTY()
 	TObjectPtr<UHorizontalBox> TrainingsRow;
 
+	/** When the time starts, and in a simulated exam when its scenario and tasks show (#425). */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> TimerNote;
+
 	/** A simulated exam's one way in ("Prova simulada", #421), by voice. */
 	UPROPERTY()
 	TObjectPtr<UButton> SimulatedExamButton;
+
+	/** Back to the room, over which a running simulated exam shows its brief (#425). */
+	UPROPERTY()
+	TObjectPtr<UButton> CloseButton;
 
 	/** What a simulated exam is, or why it cannot start. */
 	UPROPERTY()
@@ -307,6 +319,10 @@ private:
 	UFUNCTION()
 	void HandleFinish();
 
+	/** A simulated exam's brief, over the room (#425). */
+	UFUNCTION()
+	void HandleOpenBrief();
+
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
 
@@ -416,8 +432,13 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> ModeText;
 
+	/** The Station Timer; a simulated exam has the desk clock instead (#425). */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> TimerText;
+
+	/** Opens a simulated exam's brief where a training shows its timer (#425). */
+	UPROPERTY()
+	TObjectPtr<UButton> BriefButton;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> FallbackText;

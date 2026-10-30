@@ -10,6 +10,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Station/Patient/StationPatientGaze.h"
+#include "Station/StationDeskClock.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
 #include "Station/Voice/StationMicrophone.h"
@@ -66,13 +67,25 @@ void AStationPlayerController::BeginPlay()
 	MicrophoneScreen->AddToViewport();
 	Menu->AddToViewport();
 	Notice->AddToViewport();
-	Brief->AddToViewport();
 	Hud->AddToViewport();
+	// Over the HUD: a running simulated exam shows its brief over the room (#425).
+	Brief->AddToViewport(1);
 	Feedback->AddToViewport();
 	Invalidated->AddToViewport();
 
 	Microphone = NewObject<UStationMicrophone>(this);
 	PreparePatientVoice();
+
+	// The room's clock and its start and end beeps (#425).
+	TActorIterator<AStationDeskClock> Clock(GetWorld());
+	DeskClock = Clock ? *Clock : nullptr;
+	Flow->OnExamCue.AddWeakLambda(this, [this](EStationExamCue Cue)
+	{
+		if (AStationDeskClock* Room = DeskClock.Get())
+		{
+			Room->PlayCue(Cue);
+		}
+	});
 
 	if (FSlateApplication::IsInitialized())
 	{
@@ -89,6 +102,15 @@ void AStationPlayerController::BeginPlay()
 	Flow->OnChanged.AddUObject(this, &AStationPlayerController::Render);
 	Flow->Begin(Subsystem->GetClient());
 	Render();
+}
+
+void AStationPlayerController::PlayerTick(float DeltaTime)
+{
+	Super::PlayerTick(DeltaTime);
+	if (Flow && DeskClock.IsValid())
+	{
+		DeskClock->ShowTime(Flow->GetDeskClockTime());
+	}
 }
 
 void AStationPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -138,7 +160,7 @@ void AStationPlayerController::Render()
 	MicrophoneScreen->SetVisibility(Step == EStationRunStep::Microphone ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	Menu->SetVisibility(Step == EStationRunStep::Menu ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	Notice->SetVisibility(Step == EStationRunStep::Notice ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	Brief->SetVisibility(Step == EStationRunStep::Brief || Step == EStationRunStep::Starting
+	Brief->SetVisibility(Step == EStationRunStep::Brief || Step == EStationRunStep::Starting || Flow->IsBriefOpen()
 		? ESlateVisibility::Visible
 		: ESlateVisibility::Collapsed);
 	Hud->SetVisibility(bRunning ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);

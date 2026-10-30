@@ -8,6 +8,7 @@
 
 #include "StationPlayerController.generated.h"
 
+class AStationDeskClock;
 class UStationBriefWidget;
 class UStationFeedbackWidget;
 class UStationHudWidget;
@@ -38,6 +39,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	/** Sets the desk clock (#425) from the run flow every frame. */
+	virtual void PlayerTick(float DeltaTime) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void SetupInputComponent() override;
 
@@ -102,6 +105,8 @@ private:
 
 	TWeakObjectPtr<AActor> StationCamera;
 	TWeakObjectPtr<AActor> MenuCamera;
+	/** The analog clock on the office desk (#425); a level without one has none. */
+	TWeakObjectPtr<AStationDeskClock> DeskClock;
 
 	/** The input mode last applied: game and UI during a run, UI only around it. */
 	TOptional<bool> bAppliedRunInputMode;

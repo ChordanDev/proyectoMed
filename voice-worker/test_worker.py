@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import unittest
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
@@ -800,6 +801,109 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 2"])
         # The kept receipt settles the turn: cleanup has nothing to fence.
         self.assertEqual(self.client.cancel_calls, [])
+
+    @staticmethod
+    def exam_context(seconds_left: float, mode: str = "simulated_exam") -> dict:
+        # Phoenix's clock, as `GET context` returns it (#424).
+        now = datetime(2026, 10, 29, 12, 9, 59, tzinfo=UTC)
+        return {
+            "mode": mode,
+            "server_now": now.isoformat().replace("+00:00", "Z"),
+            "deadline_at": (now + timedelta(seconds=seconds_left))
+            .isoformat()
+            .replace("+00:00", "Z"),
+        }
+
+    async def test_a_simulated_exam_speaks_nothing_after_its_deadline(self):
+        # Issue #424: the reply being spoken at the deadline stops there, and no
+        # later reply is published or spoken. A kept turn is still reported.
+        self.voice.silence_at_deadline(self.exam_context(0.05))
+        self.client.replies[2] = VoiceTurnReply(2, "committed", 2, "Tarde demais")
+        self.client.replies[3] = VoiceTurnReply(3, "kept", 3, addressee="patient")
+        task = self.connect()
+        await self.say("onde dói")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+        await asyncio.sleep(0.1)
+        self.tts.streams[0].queue.put_nowait(chunk("a2"))
+        await settle()
+        await self.say("tem febre")
+        await self.say("última frase")
+        await settle()
+        await self.disconnect(task)
+
+        frames = [payload for kind, payload in self.room.timeline if kind == "frame"]
+        self.assertEqual(frames, ["a1"])
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
+        patient = [e for e in self.room.patient_events() if e.get("role") == "patient"]
+        self.assertEqual([e["turn_id"] for e in patient], [1])
+        self.assertIn(
+            {
+                "session_id": "s1",
+                "turn_id": 3,
+                "generation_id": 3,
+                "role": "examiner",
+                "status": "kept",
+            },
+            self.room.patient_events(),
+        )
+
+    async def test_the_deadline_counts_from_when_the_context_arrived(self):
+        # Issue #424: the job connects to the room after reading the context, so
+        # the time since then is already spent; the deadline does not move later.
+        loop = asyncio.get_running_loop()
+        self.voice.silence_at_deadline(
+            self.exam_context(0.3), received_at=loop.time() - 0.25
+        )
+        task = self.connect()
+        await self.say("onde dói")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+        await asyncio.sleep(0.1)
+        self.tts.streams[0].queue.put_nowait(chunk("a2"))
+        await settle()
+        await self.disconnect(task)
+
+        self.assertTrue(self.voice.silent)
+        frames = [payload for kind, payload in self.room.timeline if kind == "frame"]
+        self.assertEqual(frames, ["a1"])
+
+    async def test_a_reply_published_across_the_deadline_is_not_spoken(self):
+        # Issue #424: the deadline falls while the reply's text is being published.
+        participant = self.room.local_participant
+        publish_data = participant.publish_data
+
+        async def slow_patient_text(data, topic="transcript", reliable=True):
+            if json.loads(data).get("role") == "patient":
+                await asyncio.sleep(0.1)
+            await publish_data(data, topic=topic, reliable=reliable)
+
+        participant.publish_data = slow_patient_text
+        self.voice.silence_at_deadline(self.exam_context(0.03))
+        task = self.connect()
+        await self.say("onde dói")
+        await asyncio.sleep(0.15)
+        await settle()
+        await self.disconnect(task)
+
+        self.assertTrue(self.voice.silent)
+        self.assertEqual(self.tts.texts, [])
+
+    async def test_a_training_or_an_older_context_keeps_speaking_past_the_deadline(
+        self,
+    ):
+        # Trainings keep their grace (#256): only a simulated exam goes silent.
+        self.voice.silence_at_deadline(self.exam_context(0.0, mode="training"))
+        self.voice.silence_at_deadline({"mode": "simulated_exam"})
+        task = self.connect()
+        await asyncio.sleep(0.02)
+        await self.say("onde dói")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+        await self.disconnect(task)
+
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
+        self.assertIn(("frame", "a1"), self.room.timeline)
 
     async def test_examiner_addressed_turn_publishes_an_acknowledgement_and_speaks_nothing(
         self,

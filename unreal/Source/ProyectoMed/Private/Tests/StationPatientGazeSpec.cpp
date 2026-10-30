@@ -20,7 +20,7 @@
 
 namespace
 {
-	constexpr float Frame = 1.f / 60.f;
+	constexpr float FrameSeconds = 1.f / 60.f;
 
 	/** What a stretch of gaze did, frame by frame. */
 	struct FGazeRun
@@ -58,7 +58,7 @@ namespace
 
 	/** Runs `Model` for `Seconds` in `Mode`, with the learner at `ToLearner`. */
 	FGazeRun Run(FStationGazeModel& Model, EStationGazeMode Mode, float Seconds,
-		FStationGazeAngles ToLearner = {}, float Step = Frame)
+		FStationGazeAngles ToLearner = {}, float Step = FrameSeconds)
 	{
 		FGazeRun Out;
 		EStationGazePhase Phase = Model.GetPhase();
@@ -137,7 +137,7 @@ namespace
 		// A phase ends on the frame after its time runs out.
 		return !Values.ContainsByPredicate([Range](float Value)
 		{
-			return Value < Range.Min - Frame || Value > Range.Max + 2.f * Frame;
+			return Value < Range.Min - FrameSeconds || Value > Range.Max + 2.f * FrameSeconds;
 		});
 	}
 }
@@ -236,7 +236,7 @@ void FStationPatientGazeUnitSpec::Define()
 		{
 			FStationGazeModel Model(3);
 			Run(Model, EStationGazeMode::Resting, 0.5f);
-			Model.Tick(Frame, EStationGazeMode::Listening, {});
+			Model.Tick(FrameSeconds, EStationGazeMode::Listening, {});
 			TestEqual("looks at the learner", Model.GetPhase(), EStationGazePhase::Contact);
 		});
 
@@ -277,8 +277,8 @@ void FStationPatientGazeUnitSpec::Define()
 		{
 			FStationGazeModel Model(19);
 			const FGazeRun Gaze = Run(Model, EStationGazeMode::Answering, 120.f, { 10.f, -5.f });
-			TestTrue("eyes", Gaze.LargestEyeStep <= StationGaze::EyeMaxSpeed * Frame + 0.01f);
-			TestTrue("head", Gaze.LargestHeadStep <= StationGaze::HeadMaxSpeed * Frame + 0.01f);
+			TestTrue("eyes", Gaze.LargestEyeStep <= StationGaze::EyeMaxSpeed * FrameSeconds + 0.01f);
+			TestTrue("head", Gaze.LargestHeadStep <= StationGaze::HeadMaxSpeed * FrameSeconds + 0.01f);
 
 			FStationGazeModel Slow(19);
 			const FGazeRun Long = Run(Slow, EStationGazeMode::Listening, 10.f, { 20.f, 10.f }, 0.5f);
@@ -306,10 +306,10 @@ void FStationPatientGazeUnitSpec::Define()
 		It("turns the head part of the way and the eyes the rest", [this]()
 		{
 			FStationGazeModel Model(29);
-			Model.Tick(Frame, EStationGazeMode::Listening, { 12.f, 6.f });
+			Model.Tick(FrameSeconds, EStationGazeMode::Listening, { 12.f, 6.f });
 			for (int32 Step = 0; Step < 60; ++Step)
 			{
-				Model.Tick(Frame, EStationGazeMode::Listening, { 12.f, 6.f });
+				Model.Tick(FrameSeconds, EStationGazeMode::Listening, { 12.f, 6.f });
 			}
 			TestTrue("the head turns", Model.GetHead().Yaw > 2.f && Model.GetHead().Pitch > 1.f);
 			TestTrue("the eyes turn too", Model.GetEyes().Yaw > 2.f && Model.GetEyes().Pitch > 1.f);
@@ -375,12 +375,12 @@ BEGIN_DEFINE_SPEC(FStationPatientGazeSceneSpec, "ProyectoMed.PatientGaze.Scene",
 	/** Advances the gaze, then the body and the face, as a frame of the game does. */
 	void Step(float Seconds)
 	{
-		for (float Time = 0.f; Time < Seconds; Time += Frame)
+		for (float Time = 0.f; Time < Seconds; Time += FrameSeconds)
 		{
-			Gaze->TickComponent(Frame, LEVELTICK_All, nullptr);
+			Gaze->TickComponent(FrameSeconds, LEVELTICK_All, nullptr);
 			for (USkeletalMeshComponent* Mesh : { Body, Face })
 			{
-				Mesh->TickAnimation(Frame, false);
+				Mesh->TickAnimation(FrameSeconds, false);
 				Mesh->RefreshBoneTransforms(nullptr);
 				Mesh->FinalizeBoneTransform();
 			}
@@ -520,11 +520,11 @@ void FStationPatientGazeSceneSpec::Define()
 		{
 			// Without the gaze's own ticks, which would set the eyes again.
 			FaceAnim->SetEyeGaze(Asked, 1.f);
-			for (float Time = 0.f; Time < 0.5f; Time += Frame)
+			for (float Time = 0.f; Time < 0.5f; Time += FrameSeconds)
 			{
 				for (USkeletalMeshComponent* Mesh : { Body, Face })
 				{
-					Mesh->TickAnimation(Frame, false);
+					Mesh->TickAnimation(FrameSeconds, false);
 					Mesh->RefreshBoneTransforms(nullptr);
 					Mesh->FinalizeBoneTransform();
 				}

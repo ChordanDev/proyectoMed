@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Antes da estação · Prova simulada</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win"></i><i class="doc"></i><i class="desk"></i></div>
+<div class="scene-tag">[Cena do consultório ao fundo]</div>
+<div class="scrim-left" aria-hidden="true"></div>
+
+<a class="ghost" href="Catalog.dc.html" style="position: absolute; left: 96px; top: 64px">‹ Escolher outra estação</a>
+
+<div style="position: absolute; left: 96px; bottom: 88px; width: 700px; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 12px"><span aria-hidden="true" style="display: block; width: 32px; height: 4px; border-radius: 2px; background: #f2a65a"></span><span class="eyebrow" style="color: #f2a65a">Prova simulada · Antes de começar</span></div>
+<h1 class="h1">Como no dia da prova</h1>
+<p class="body">Cirurgia Geral · caso sorteado. O cenário e as tarefas aparecem quando a estação começar.</p>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 32px">
+<div style="display: flex; gap: 14px"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f2a65a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg><p class="small">Só por voz e sem ajuda.</p></div>
+<div style="display: flex; gap: 14px"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f2a65a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><p class="small">10 minutos, incluindo a leitura do cenário.</p></div>
+<div style="display: flex; gap: 14px"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f2a65a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2 2M9 2h6"></path></svg><p class="small">O relógio fica na mesa. Não há contagem na tela.</p></div>
+<div style="display: flex; gap: 14px"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f2a65a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><path d="M11 5 6 9H3v6h3l5 4zM16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"></path></svg><p class="small">Um sinal sonoro marca o início e o fim. Às 10:00 a estação termina.</p></div>
+</div>
+
+<sc-if value="{{ hasWarning }}" hint-placeholder-val="{{ false }}">
+<p class="small" style="color: #f2c89a; max-width: 620px">{{ warning }}</p>
+</sc-if>
+
+<div style="display: flex; align-items: center; gap: 20px">
+<a class="btn btn-exam" href="HudExam.dc.html" aria-disabled="{{ disabledAttr }}" style="{{ startStyle }}">Iniciar prova simulada<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0b1116" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+<sc-if value="{{ hasWarning }}" hint-placeholder-val="{{ false }}"><a class="btn btn-secondary" href="BriefTraining.dc.html">Fazer um treino</a></sc-if>
+</div>
+<p class="fine">Não é nota oficial do Revalida.</p>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"enum","options":["ready","voiceUnavailable","micBlocked"],"default":"ready"},"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const s = this.props.state ?? 'ready';
+    const warnings = {
+      voiceUnavailable: 'A prova simulada é feita só por voz, que não está disponível agora. Você ainda pode fazer um treino.',
+      micBlocked: 'A prova simulada é feita só por voz e o microfone está bloqueado. Libere o acesso nos ajustes de privacidade do sistema e abra o app de novo. Você ainda pode fazer um treino.'
+    };
+    const blocked = s !== 'ready';
+    return {
+      hasWarning: blocked,
+      warning: warnings[s] ?? '',
+      disabledAttr: blocked ? 'true' : 'false',
+      startStyle: blocked ? 'opacity:.45; pointer-events:none' : ''
+    };
+  }
+}
+</script>
+</body>
+</html>

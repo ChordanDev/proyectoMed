@@ -412,6 +412,104 @@ void FStationRunUnitSpec::Define()
 		TestFalse("gone once a later line joins", Flow->GetVoice().bExaminerNoted);
 	});
 
+	// #425 (#318 T3b): the examiner of a simulated exam stays silent, but the remark is kept.
+	It("shows no examiner's note in a simulated exam, and keeps the remark", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		FStationVoiceEvent Spoken;
+		Spoken.Kind = EStationVoiceEventKind::Learner;
+		Spoken.TurnId = 1;
+		Spoken.bFinal = true;
+		Spoken.Text = TEXT("Vou examinar o abdome.");
+		Flow->HandleVoiceEvent(Spoken);
+		FStationVoiceEvent Noted;
+		Noted.Kind = EStationVoiceEventKind::ExaminerAcknowledged;
+		Noted.TurnId = 1;
+		Flow->HandleVoiceEvent(Noted);
+		TestFalse("no \"Anotado.\"", Flow->GetVoice().bExaminerNoted);
+		if (TestEqual("the remark stays in the conversation", Flow->GetTranscript().Num(), 1))
+		{
+			TestEqual("as the learner said it", Flow->GetTranscript()[0].Text, FString(TEXT("Vou examinar o abdome.")));
+		}
+	});
+
+	// #425: the HUD counts down only in a training; a simulated exam has the desk clock.
+	It("counts the Station Timer on screen in a training only", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		TestTrue("a training", Flow->ShowsStationTimer());
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		TestFalse("a simulated exam", Flow->ShowsStationTimer());
+	});
+
+	// #425: the official finishing beep, only when the time is up.
+	It("sounds the end of a simulated exam once its time is up, and never on an early finish or in a training", [this]()
+	{
+		auto MakeRunning = [](EStationSessionMode SessionMode, const TSharedRef<TArray<EStationExamCue>>& Cues)
+		{
+			UStationClient* Client = NewObject<UStationClient>();
+			Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+			UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+			Flow->Client = Client;
+			Flow->SessionMode = SessionMode;
+			Flow->Mode = EStationTrainingMode::Voice;
+			Flow->Step = EStationRunStep::Running;
+			Flow->OnExamCue.AddLambda([Cues](EStationExamCue Cue) { Cues->Add(Cue); });
+			return Flow;
+		};
+
+		// Without a session the Station Timer reads zero: the time is up.
+		const TSharedRef<TArray<EStationExamCue>> Exam = MakeShared<TArray<EStationExamCue>>();
+		UStationRunFlow* Flow = MakeRunning(EStationSessionMode::SimulatedExam, Exam);
+		Flow->CheckStationTimer();
+		TestTrue("one end sound", *Exam == TArray<EStationExamCue>{EStationExamCue::End});
+		// Phoenix found this clock a moment ahead of its deadline: the run goes on, then ends again.
+		Flow->Step = EStationRunStep::Running;
+		Flow->CheckStationTimer();
+		TestEqual("still one end sound", Exam->Num(), 1);
+
+		const TSharedRef<TArray<EStationExamCue>> Early = MakeShared<TArray<EStationExamCue>>();
+		MakeRunning(EStationSessionMode::SimulatedExam, Early)->Finish();
+		TestEqual("no sound when the learner finishes early", Early->Num(), 0);
+
+		const TSharedRef<TArray<EStationExamCue>> Training = MakeShared<TArray<EStationExamCue>>();
+		MakeRunning(EStationSessionMode::Training, Training)->ExpireTimer();
+		TestEqual("no sound in a training", Training->Num(), 0);
+	});
+
+	// #425 (#318 T3): reading the brief counts inside the simulated exam's time.
+	It("shows a simulated exam's scenario and tasks only once its time runs, and keeps them at hand", [this]()
+	{
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Step = EStationRunStep::Brief;
+		TestTrue("a training's brief", Flow->CanReadBrief());
+
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		TestFalse("not on a simulated exam's brief", Flow->CanReadBrief());
+		Flow->OpenBrief();
+		TestFalse("nor opened there", Flow->IsBriefOpen());
+		Flow->Step = EStationRunStep::Starting;
+		TestFalse("nor while it starts", Flow->CanReadBrief());
+
+		Flow->Step = EStationRunStep::Running;
+		TestTrue("once its time runs", Flow->CanReadBrief());
+		Flow->OpenBrief();
+		TestTrue("opened over the room", Flow->IsBriefOpen());
+		Flow->CloseBrief();
+		TestFalse("closed", Flow->IsBriefOpen());
+		Flow->OpenBrief();
+		TestTrue("opened again", Flow->IsBriefOpen());
+
+		Flow->Step = EStationRunStep::Finishing;
+		TestFalse("not once the run is over", Flow->IsBriefOpen());
+
+		UStationRunFlow* Training = NewObject<UStationRunFlow>();
+		Training->Step = EStationRunStep::Running;
+		Training->OpenBrief();
+		TestFalse("a training's run is unchanged", Training->IsBriefOpen());
+	});
+
 	// Barge-in (#193): the worker publishes one event at a time; these build them.
 	auto Spoken = [](EStationVoiceEventKind Kind, int32 TurnId, const TCHAR* Text = TEXT(""),
 		int32 Segment = INDEX_NONE, bool bFinal = false)

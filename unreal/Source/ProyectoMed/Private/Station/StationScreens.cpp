@@ -450,7 +450,7 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 			"Caso clínico fictício, criado para treino educacional. Não corresponde a um paciente real."),
 			15, false, StationUi::Muted, 24.f);
 
-		StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("TimerNote",
+		TimerNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("TimerNote",
 			"O tempo da estação começa a contar quando você entrar."), 15, false, StationUi::Muted, 16.f);
 
 		UHorizontalBox* Trainings = WidgetTree->ConstructWidget<UHorizontalBox>();
@@ -481,6 +481,11 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 		SimulatedExamNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("SimulatedExamNote",
 			"Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
 			14, false, StationUi::Muted, 10.f);
+
+		// A running simulated exam shows this brief over the room (#425).
+		CloseButton = StationUi::AddButton(*WidgetTree, *FooterBox, LOCTEXT("CloseBrief", "Voltar ao consultório"), 14.f);
+		CloseButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleCloseBrief);
+		StationUi::MakePrimary(*CloseButton);
 	}
 	return Super::RebuildWidget();
 }
@@ -504,7 +509,8 @@ void UStationBriefWidget::Refresh()
 	ErrorText->SetText(Flow->GetErrorText());
 	StationUi::SetShown(RetryButton, !Station && !Flow->IsStationLoading());
 
-	StationUi::SetShown(BriefBox, Station != nullptr);
+	// A simulated exam's scenario and tasks show only once its time runs (#425, #318 T3).
+	StationUi::SetShown(BriefBox, Station != nullptr && Flow->CanReadBrief());
 	StationUi::SetShown(FooterBox, Station != nullptr);
 	if (!Station)
 	{
@@ -512,9 +518,16 @@ void UStationBriefWidget::Refresh()
 	}
 
 	const bool bExam = Flow->GetSessionMode() == EStationSessionMode::SimulatedExam;
-	HeadingText->SetText(bExam
-		? LOCTEXT("SimulatedExamHeading", "Prova simulada · Antes de entrar na estação")
+	const bool bRunning = Flow->GetStep() == EStationRunStep::Running;
+	HeadingText->SetText(bExam && bRunning ? LOCTEXT("SimulatedExamRunningHeading", "Prova simulada · Cenário e tarefas")
+		: bExam ? LOCTEXT("SimulatedExamHeading", "Prova simulada · Antes de entrar na estação")
 		: LOCTEXT("TrainingHeading", "Treino · Antes de entrar na estação"));
+	StationUi::SetShown(MenuButton, !bRunning);
+	StationUi::SetShown(CloseButton, bRunning);
+	StationUi::SetShown(TimerNote, !bRunning);
+	TimerNote->SetText(bExam
+		? LOCTEXT("SimulatedExamTimerNote", "O cenário e as tarefas aparecem quando a prova começar, com o tempo já correndo.")
+		: LOCTEXT("TimerNote", "O tempo da estação começa a contar quando você entrar."));
 	TitleText->SetText(FText::FromString(Station->DisplayTitle));
 	ScenarioText->SetText(FText::FromString(Station->Scenario));
 	TaskList->ClearChildren();
@@ -534,8 +547,8 @@ void UStationBriefWidget::Refresh()
 		: LOCTEXT("VoiceNote", "No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."));
 
 	// The simulated exam stays in view when it cannot start, so the learner reads why.
-	StationUi::SetShown(SimulatedExamButton, bExam);
-	StationUi::SetShown(SimulatedExamNote, bExam);
+	StationUi::SetShown(SimulatedExamButton, bExam && !bRunning);
+	StationUi::SetShown(SimulatedExamNote, bExam && !bRunning);
 	const FText ExamUnavailable = SimulatedExamUnavailableText(*Station, Flow->GetMicrophonePermission());
 	SimulatedExamButton->SetIsEnabled(Flow->CanEnterSimulatedExam());
 	SimulatedExamNote->SetText(ExamUnavailable.IsEmpty()
@@ -567,6 +580,14 @@ void UStationBriefWidget::HandleSimulatedExam()
 	}
 }
 
+void UStationBriefWidget::HandleCloseBrief()
+{
+	if (Flow)
+	{
+		Flow->CloseBrief();
+	}
+}
+
 void UStationBriefWidget::HandleBackToMenu()
 {
 	if (Flow)
@@ -590,7 +611,7 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		UOverlay* Root = WidgetTree->ConstructWidget<UOverlay>();
 		WidgetTree->RootWidget = Root;
 
-		UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(28.f, 14.f, 28.f, 18.f),
+		UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(28.f, 14.f, 28.f, 18.f),
 			StationUi::PanelEdge, 1.f);
 		if (UOverlaySlot* Slot = Root->AddChildToOverlay(Panel))
 		{
@@ -604,6 +625,12 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		ModeText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 14, false, StationUi::Muted, 0.f);
 		TimerText = StationUi::AddText(*WidgetTree, *Column, FormatStationTimer(FTimespan::Zero()), 40, true,
 			StationUi::Ink, 2.f);
+		BriefButton = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("OpenBrief", "Cenário e tarefas"), 8.f);
+		BriefButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleOpenBrief);
+		if (UVerticalBoxSlot* BriefSlot = Cast<UVerticalBoxSlot>(BriefButton->Slot))
+		{
+			BriefSlot->SetHorizontalAlignment(HAlign_Center);
+		}
 		FallbackText = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("VoiceFallback", "Voz indisponível — usando texto."),
 			14, false, StationUi::Caution, 4.f);
 		VoiceStatusText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 14, false, StationUi::Muted, 4.f);
@@ -642,7 +669,7 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 		Slot->SetPadding(FMargin(24.f, 24.f, 0.f, 24.f));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(SidePanelPadding, 18.f),
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(SidePanelPadding, 18.f),
 		StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
@@ -864,7 +891,7 @@ void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
 		Slot->SetPadding(FMargin(0.f, 24.f, 24.f, 24.f));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 12.f, FMargin(SidePanelPadding, 18.f),
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(SidePanelPadding, 18.f),
 		StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
@@ -1462,6 +1489,14 @@ void UStationHudWidget::HandleFinish()
 	}
 }
 
+void UStationHudWidget::HandleOpenBrief()
+{
+	if (Flow)
+	{
+		Flow->OpenBrief();
+	}
+}
+
 void UStationHudWidget::Refresh()
 {
 	if (!Flow || !ModeText)
@@ -1469,9 +1504,13 @@ void UStationHudWidget::Refresh()
 		return;
 	}
 	FinishButton->SetIsEnabled(Flow->CanFinish());
-	ModeText->SetText(Flow->GetMode() == EStationTrainingMode::Voice
-		? LOCTEXT("VoiceTrainingLabel", "Treino por voz · Tempo restante")
+	// A simulated exam shows no countdown, only the desk clock in the room (#425).
+	const bool bExam = Flow->GetSessionMode() == EStationSessionMode::SimulatedExam;
+	ModeText->SetText(bExam ? LOCTEXT("SimulatedExamLabel", "Prova simulada")
+		: Flow->GetMode() == EStationTrainingMode::Voice ? LOCTEXT("VoiceTrainingLabel", "Treino por voz · Tempo restante")
 		: LOCTEXT("TextTrainingLabel", "Treino por texto · Tempo restante"));
+	StationUi::SetShown(TimerText, Flow->ShowsStationTimer());
+	StationUi::SetShown(BriefButton, bExam);
 	StationUi::SetShown(FallbackText, Flow->IsVoiceFallback());
 
 	const FStationVoiceView& Voice = Flow->GetVoice();

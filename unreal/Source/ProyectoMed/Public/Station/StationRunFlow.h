@@ -71,6 +71,16 @@ enum class EStationTrainingMode : uint8
 	Voice,
 };
 
+/** A sound of the exam room in a simulated exam (#425), as the official entry and finishing beeps. */
+UENUM()
+enum class EStationExamCue : uint8
+{
+	/** The time starts running. */
+	Start,
+	/** The time is up. */
+	End,
+};
+
 /** One exam or impresso request of this run and Phoenix's decision on it. */
 USTRUCT()
 struct PROYECTOMED_API FStationExamRequest
@@ -217,7 +227,8 @@ public:
 	 * Starts a simulated exam ("Prova simulada", #421): a voice run with audio consent
 	 * that Phoenix records as a simulated exam for the whole run. The microphone is
 	 * asked for first if the system never did; without it the brief stays, with the
-	 * reason. Until #422-#426, the run itself behaves like a voice training.
+	 * reason. The run is voice only (#422) and shows the exam room (#425); #423, #424
+	 * and #426 change it further.
 	 */
 	void EnterSimulatedExam();
 
@@ -303,6 +314,42 @@ public:
 	 * exams are asked aloud (`AskExamAloud`).
 	 */
 	bool AllowsTypedInput() const { return SessionMode != EStationSessionMode::SimulatedExam; }
+
+	/**
+	 * Whether the HUD counts the Station Timer: a training does; a simulated exam shows
+	 * no countdown, only the desk clock in the room (#425).
+	 */
+	bool ShowsStationTimer() const;
+
+	/**
+	 * The station's scenario and tasks may be shown: on a training's brief, and in a
+	 * simulated exam only once its time runs, so reading them counts inside it (#318 T3).
+	 */
+	bool CanReadBrief() const;
+
+	/**
+	 * A running simulated exam shows its brief over the room. It opens when the time
+	 * starts, and the learner closes it and opens it again at will.
+	 */
+	bool IsBriefOpen() const;
+
+	/** Shows the brief again in a running simulated exam; does nothing otherwise. */
+	void OpenBrief();
+
+	/** Back to the room from the brief. */
+	void CloseBrief();
+
+	/**
+	 * The time of day the desk clock shows (#425), in this machine's time zone: by
+	 * Phoenix's clock (`GetServerTime`) once it is known, by the machine's before.
+	 */
+	FDateTime GetDeskClockTime() const;
+
+	/**
+	 * Broadcast for the room to sound a cue in a simulated exam: `Start` once its time
+	 * runs, `End` once the run ends because its time is up (#425). Never in a training.
+	 */
+	TMulticastDelegate<void(EStationExamCue)> OnExamCue;
 
 	/**
 	 * True while the run is running, takes typed input (`AllowsTypedInput`), no
@@ -626,6 +673,10 @@ private:
 	bool bLoadingStation = false;
 	bool bReloadingTranscript = false;
 	bool bVoiceFallback = false;
+	/** A running simulated exam shows its brief (`IsBriefOpen`). */
+	bool bBriefOpen = false;
+	/** The `End` cue of this run sounded. */
+	bool bEndCueSounded = false;
 	EStationInvalidation Invalidation = EStationInvalidation::PhoenixLost;
 	FStationMicrophoneSetup Microphone;
 	FStationVoiceView Voice;

@@ -3,9 +3,10 @@ defmodule BackendWeb.VoiceWorkerController do
   Server-to-server API for the Python voice worker (#118, #119).
 
     * `GET  /api/internal/voice/sessions/:id` — context before streaming audio
-      to Deepgram (language, station keyterms, last committed turn).
+      to Deepgram (language, station keyterms, last committed turn), and the
+      Station Mode with `deadline_at` and `server_now` (#424).
     * `POST /api/internal/voice/sessions/:id/transcripts` — processes one final
-      transcript as a learner turn via `Backend.Stations.process_voice_turn/3`,
+      transcript as a learner turn via `Backend.Stations.process_voice_turn/4`,
       returning only verified `reply_text` with `turn_id` and `generation_id` on success.
       A refused patient reply keeps the learner turn and answers `201` with
       `status: "kept"`, `addressee: "patient"` and no text (#269). A turn Jev
@@ -30,6 +31,13 @@ defmodule BackendWeb.VoiceWorkerController do
       the deadline, any turn on a session the timer completed, or a reply that
       missed the deadline grace window. Unlike `409 stale_generation`, which only
       drops one superseded turn, this ends the voice session and must not be retried.
+      The optional `speech_started_at` (ISO 8601 with an offset) is when the worker
+      heard the utterance start; a malformed one is `400 invalid_transcript`. A
+      simulated exam has no grace for the dialogue (#424): after its deadline an
+      utterance that started before it is kept with `201`, `status: "kept"`,
+      `addressee: "patient"` and no text, like the turn whose reply the deadline
+      cut; one that started after it, or names no start, answers `409
+      station_time_elapsed`.
     * `POST /api/internal/voice/sessions/:id/cancel` — cancels a pending voice
       generation via `Backend.Stations.cancel_voice_turn/2`.
     * `POST /api/internal/voice/sessions/:id/usage` — the worker's audio usage
@@ -59,14 +67,18 @@ defmodule BackendWeb.VoiceWorkerController do
 
   def create_transcript(conn, %{"id" => session_id} = params) do
     case validate_transcript(params) do
-      {:ok, turn_id, text} ->
+      {:ok, turn_id, text, opts} ->
         if sentence_stream?(conn) do
           {result, conn} =
-            Stations.stream_voice_turn(session_id, turn_id, text, conn, &send_sentence/2)
+            Stations.stream_voice_turn(session_id, turn_id, text, conn, &send_sentence/2, opts)
 
           finish_transcript(conn, turn_id, result)
         else
-          render_transcript(conn, turn_id, Stations.process_voice_turn(session_id, turn_id, text))
+          render_transcript(
+            conn,
+            turn_id,
+            Stations.process_voice_turn(session_id, turn_id, text, opts)
+          )
         end
 
       {:error, reason} ->
@@ -248,15 +260,28 @@ defmodule BackendWeb.VoiceWorkerController do
   defp validate_turn_id(%{"turn_id" => _}), do: {:error, :invalid_turn_id}
   defp validate_turn_id(_params), do: {:ok, nil}
 
-  defp validate_transcript(%{"turn_id" => turn_id, "text" => text})
+  defp validate_transcript(%{"turn_id" => turn_id, "text" => text} = params)
        when is_integer(turn_id) and turn_id > 0 and is_binary(text) do
-    case String.trim(text) do
-      "" -> {:error, :invalid_transcript}
-      trimmed -> {:ok, turn_id, trimmed}
+    with {:ok, opts} <- validate_speech_start(params) do
+      case String.trim(text) do
+        "" -> {:error, :invalid_transcript}
+        trimmed -> {:ok, turn_id, trimmed, opts}
+      end
     end
   end
 
   defp validate_transcript(_params), do: {:error, :invalid_transcript}
+
+  defp validate_speech_start(%{"speech_started_at" => value}) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, started_at, _offset} -> {:ok, [speech_started_at: started_at]}
+      {:error, _reason} -> {:error, :invalid_transcript}
+    end
+  end
+
+  defp validate_speech_start(%{"speech_started_at" => nil}), do: {:ok, []}
+  defp validate_speech_start(%{"speech_started_at" => _other}), do: {:error, :invalid_transcript}
+  defp validate_speech_start(_params), do: {:ok, []}
 
   defp authenticate(conn, _opts) do
     secret = Application.get_env(:backend, :voice_worker_secret)

@@ -2282,13 +2282,19 @@ defmodule Backend.StationsTest do
   end
 
   describe "station deadline on voice turns (#201)" do
+    # The dialogue grace (#256) is a training's at its cap: a simulated exam has
+    # none (#424, see voice_worker_controller_test.exs). With no overtime the
+    # cap is the deadline.
     setup do
       original_duration = Application.get_env(:backend, :station_duration_ms)
       original_grace = Application.get_env(:backend, :turn_grace_ms)
+      original_overtime = Application.get_env(:backend, :training_overtime_ms)
+      Application.put_env(:backend, :training_overtime_ms, 0)
 
       on_exit(fn ->
         restore_env(:station_duration_ms, original_duration)
         restore_env(:turn_grace_ms, original_grace)
+        restore_env(:training_overtime_ms, original_overtime)
       end)
 
       Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
@@ -2301,7 +2307,7 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :station_duration_ms, 300)
       Application.put_env(:backend, :turn_grace_ms, 3_000)
 
-      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      session = Stations.create_session(%{audio_consent: true})
 
       # A generation in flight keeps the session active past the deadline.
       first = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
@@ -2326,7 +2332,7 @@ defmodule Backend.StationsTest do
 
     test "a voice turn on a session completed by the timer returns :station_time_elapsed" do
       Application.put_env(:backend, :station_duration_ms, 30)
-      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      session = Stations.create_session(%{audio_consent: true})
 
       wait_until(fn ->
         match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
@@ -2340,7 +2346,7 @@ defmodule Backend.StationsTest do
 
       refute_receive {:adapter_called, _}
 
-      assert {:ok, %{messages: [], completion_reason: :timer}} =
+      assert {:ok, %{messages: [], completion_reason: :cap}} =
                Stations.get_session(session.session_id)
     end
 
@@ -2348,7 +2354,7 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :station_duration_ms, 200)
       Application.put_env(:backend, :turn_grace_ms, 100)
 
-      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      session = Stations.create_session(%{audio_consent: true})
       task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
       assert_receive {:adapter_called, _}, 1000
 
@@ -2358,7 +2364,7 @@ defmodule Backend.StationsTest do
       end)
 
       assert {:ok, forced} = Stations.get_session(session.session_id)
-      assert forced.completion_reason == :timer
+      assert forced.completion_reason == :cap
       assert forced.messages == []
 
       send(task.pid, {:resume_adapter, "A dor começou durante uma caminhada."})
@@ -2369,11 +2375,11 @@ defmodule Backend.StationsTest do
       assert Map.get(forced, :failed_voice_turn) == nil
     end
 
-    test "a reply resolving inside the grace window succeeds and the timer completes the session" do
+    test "a reply resolving inside the grace window succeeds and the cap completes the session" do
       Application.put_env(:backend, :station_duration_ms, 300)
       Application.put_env(:backend, :turn_grace_ms, 3_000)
 
-      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      session = Stations.create_session(%{audio_consent: true})
       task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
       assert_receive {:adapter_called, _}, 1000
 
@@ -2392,7 +2398,7 @@ defmodule Backend.StationsTest do
 
       assert {:ok, completed} = Stations.get_session(session.session_id)
       assert completed.status == :completed
-      assert completed.completion_reason == :timer
+      assert completed.completion_reason == :cap
 
       assert Enum.map(completed.messages, &{&1.role, &1.text}) == [
                {:learner, "Fala"},

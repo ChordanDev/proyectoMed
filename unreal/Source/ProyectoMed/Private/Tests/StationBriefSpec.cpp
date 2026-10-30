@@ -13,6 +13,7 @@
 #include "Components/Button.h"
 #include "Components/HorizontalBox.h"
 #include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
@@ -179,6 +180,39 @@ void FStationBriefUnitSpec::Define()
 		TestFalse("simulated exam disabled", Brief->SimulatedExamButton->GetIsEnabled());
 		TestEqual("the reason, in Brazilian Portuguese", Brief->SimulatedExamNote->GetText().ToString(),
 			SimulatedExamUnavailableText(*Flow->GetStation(), EStationMicPermission::Granted).ToString());
+	});
+
+	// #425 (#318 T3): the scenario and tasks are read with the time already running.
+	It("keeps a simulated exam's scenario and tasks for when its time runs, then shows them over the room", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted);
+		UStationBriefWidget* Brief = MakeBrief(Flow);
+		TestFalse("no scenario or tasks before", IsShown(Brief->BriefBox));
+		TestEqual("says when they show", Brief->TimerNote->GetText().ToString(),
+			FString(TEXT("O cenário e as tarefas aparecem quando a prova começar, com o tempo já correndo.")));
+		TestFalse("no way back to the room yet", IsShown(Brief->CloseButton));
+
+		Flow->Step = EStationRunStep::Running;
+		Flow->OpenBrief();
+		Brief->Refresh();
+		TestTrue("the scenario and tasks", IsShown(Brief->BriefBox));
+		TestTrue("its tasks", Texts(Brief->TaskList).Contains(TEXT("•  Obter anamnese dirigida.")));
+		TestFalse("no way in any more", IsShown(Brief->SimulatedExamButton));
+		TestFalse("no way out to the menu", IsShown(Brief->MenuButton));
+		TestFalse("no note on the time", IsShown(Brief->TimerNote));
+		TestTrue("back to the room", IsShown(Brief->CloseButton) && Texts(Brief->CloseButton).Contains(TEXT("Voltar ao consultório")));
+		Brief->HandleCloseBrief();
+		TestFalse("closed", Flow->IsBriefOpen());
+	});
+
+	It("shows a training's scenario and tasks on its brief, as before", [this]()
+	{
+		UStationBriefWidget* Brief = MakeBrief(
+			MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
+		TestTrue("the scenario and tasks", IsShown(Brief->BriefBox));
+		TestEqual("the note on the time", Brief->TimerNote->GetText().ToString(),
+			FString(TEXT("O tempo da estação começa a contar quando você entrar.")));
+		TestFalse("no way back to a room", IsShown(Brief->CloseButton));
 	});
 
 	It("leads back to the menu from the brief", [this]()

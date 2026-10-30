@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Menu principal</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.mode{all:unset;cursor:pointer;display:flex;flex-direction:column;gap:14px;transition:opacity 260ms ease}
+.mode:focus-visible{outline:2px solid #ffffff;outline-offset:10px;border-radius:6px}
+.arrow{transition:opacity 220ms ease,transform 220ms ease}
+</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win"></i><i class="doc"></i><i class="desk"></i></div>
+<div class="scene-tag">[Cena atual: médico sentado · câmera do menu]</div>
+<div class="scrim-left" aria-hidden="true"></div>
+
+<div class="brand">
+<div class="wordmark">Proyecto<span style="color: {{ trainingAccent }}">Med</span></div>
+<div class="muted">Estações práticas do Revalida</div>
+</div>
+
+<nav aria-label="Menu principal" style="position: absolute; left: 96px; bottom: 96px; width: 700px; display: flex; flex-direction: column; gap: 44px">
+
+<div style="display: flex; align-items: center; gap: 24px">
+<button class="mode" aria-pressed="{{ trainingPressed }}" onClick="{{ pickTraining }}" onFocus="{{ pickTraining }}" style="{{ trainingDim }}">
+<span style="display: flex; align-items: center; gap: 20px">
+<span aria-hidden="true" style="display: block; width: 32px; height: 4px; border-radius: 2px; background: {{ trainingAccent }}"></span>
+<span style="font-size: 64px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.05; color: #ffffff">Treino</span>
+</span>
+<span style="padding-left: 52px; font-size: 18px; font-weight: 500; color: #c9d4db">Pratique a estação no seu ritmo, por texto ou por voz.</span>
+<span style="padding-left: 52px; display: flex; gap: 8px">
+<span class="chip">Texto ou voz</span><span class="chip">Relógio à vista</span><span class="chip">Com ajuda</span>
+</span>
+</button>
+<a class="enter arrow" href="Catalog.dc.html" aria-label="Entrar no treino" tabindex="{{ trainingTab }}" style="{{ trainingArrow }}"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0b1116" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+</div>
+
+<div style="display: flex; align-items: center; gap: 24px">
+<button class="mode" aria-pressed="{{ examPressed }}" onClick="{{ pickExam }}" onFocus="{{ pickExam }}" style="{{ examDim }}">
+<span style="display: flex; align-items: center; gap: 20px">
+<span aria-hidden="true" style="display: block; width: 32px; height: 4px; border-radius: 2px; background: {{ examAccent }}"></span>
+<span style="font-size: 64px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.05; color: #ffffff">Prova simulada</span>
+</span>
+<span style="padding-left: 52px; font-size: 18px; font-weight: 500; color: #c9d4db">Uma estação completa, como no dia da prova prática.</span>
+<span style="padding-left: 52px; display: flex; gap: 8px; align-items: center">
+<span class="chip">Só voz</span><span class="chip">Sem ajuda</span><span class="chip">10 minutos</span>
+<span style="margin-left: 8px; font-size: 13px; color: #a9b7c1">Não é nota oficial do Revalida.</span>
+</span>
+</button>
+<a class="enter arrow" href="Catalog.dc.html?mode=exam" aria-label="Entrar na prova simulada" tabindex="{{ examTab }}" style="{{ examArrow }}"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0b1116" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+</div>
+
+<div style="display: flex; gap: 32px; padding-left: 52px; color: #a9b7c1">
+<a class="ghost" href="History.dc.html">Histórico</a>
+<a class="ghost" href="Settings.dc.html">Ajustes</a>
+<button class="ghost">Sair</button>
+</div>
+</nav>
+
+<div class="hints" aria-hidden="true">
+<span><span class="kbd">↑↓</span>Escolher</span>
+<span><span class="kbd">Enter</span>Entrar</span>
+<span><span class="kbd">Esc</span>Sair</span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"startMode":{"editor":"enum","options":["training","exam"],"default":"training"},"dimOpacity":{"editor":"range","min":0.2,"max":0.9,"step":0.05,"default":0.45},"trainingAccent":{"editor":"color","default":"#5fd0bf","options":["#5fd0bf","#7cb8ff","#e8eef2"]},"examAccent":{"editor":"color","default":"#f2a65a","options":["#f2a65a","#ff8a7a","#e8eef2"]},"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: null };
+  }
+  renderVals() {
+    const t = this.props.trainingAccent ?? '#5fd0bf';
+    const e = this.props.examAccent ?? '#f2a65a';
+    const dim = this.props.dimOpacity ?? 0.45;
+    const sel = this.state.sel ?? this.props.startMode ?? 'training';
+    const onT = sel === 'training';
+    const arrow = (on, c) => 'background:' + c + '; opacity:' + (on ? 1 : 0) + '; transform:translateX(' + (on ? 0 : -8) + 'px); pointer-events:' + (on ? 'auto' : 'none');
+    return {
+      trainingAccent: t,
+      examAccent: e,
+      trainingDim: 'opacity:' + (onT ? 1 : dim),
+      examDim: 'opacity:' + (onT ? dim : 1),
+      trainingArrow: arrow(onT, t),
+      examArrow: arrow(!onT, e),
+      trainingTab: onT ? '0' : '-1',
+      examTab: onT ? '-1' : '0',
+      trainingPressed: onT ? 'true' : 'false',
+      examPressed: onT ? 'false' : 'true',
+      pickTraining: () => this.setState({ sel: 'training' }),
+      pickExam: () => this.setState({ sel: 'exam' })
+    };
+  }
+}
+</script>
+</body>
+</html>
