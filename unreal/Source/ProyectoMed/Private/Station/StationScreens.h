@@ -268,7 +268,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> SimulatedExamNote;
 
-	/** What a simulated exam is, and that it is no official grade. */
+	/** That a simulated exam is no official grade. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> SimulatedExamFine;
 

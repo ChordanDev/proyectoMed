@@ -539,17 +539,16 @@ namespace
 		return Line;
 	}
 
-	/** A way into a training: what it is, then an arrow, in an outlined box. */
-	UButton* AddTrainingOption(UWidgetTree& Tree, UVerticalBox& Parent, const FText& Title, const FText& Description)
+	/** A way into a training: its name, then an arrow, in an outlined box. */
+	UButton* AddTrainingOption(UWidgetTree& Tree, UVerticalBox& Parent, const FText& Title)
 	{
 		UHorizontalBox* Row = Tree.ConstructWidget<UHorizontalBox>();
-		UVerticalBox* Words = Tree.ConstructWidget<UVerticalBox>();
-		if (UHorizontalBoxSlot* WordsSlot = Row->AddChildToHorizontalBox(Words))
+		if (UHorizontalBoxSlot* TitleSlot = Row->AddChildToHorizontalBox(
+				MakeText(Tree, Title, StationUi::FontBold, 20.f, StationUi::InkTitle)))
 		{
-			WordsSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			TitleSlot->SetVerticalAlignment(VAlign_Center);
 		}
-		AddLine(Tree, *Words, Title, StationUi::FontBold, 20.f, StationUi::InkTitle, 0.f);
-		AddLine(Tree, *Words, Description, StationUi::FontMedium, 15.f, StationUi::InkBody, 4.f);
 		if (UHorizontalBoxSlot* ArrowSlot = Row->AddChildToHorizontalBox(
 				MakeText(Tree, FText::FromString(TEXT("→")), StationUi::FontBold, 22.f, StationUi::Ink)))
 		{
@@ -706,7 +705,7 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 			BelowSlot->SetPadding(FMargin(0.f, 18.f, 0.f, 0.f));
 		}
 		AddExamRule(*WidgetTree, *RulesBelow, LOCTEXT("ExamRuleClock", "O relógio fica na mesa. Não há contagem na tela."), 0.f);
-		AddExamRule(*WidgetTree, *RulesBelow, LOCTEXT("ExamRuleSignals", "Um sinal sonoro marca o início e o fim. Às 10:00 a estação termina."), 32.f);
+		AddExamRule(*WidgetTree, *RulesBelow, LOCTEXT("ExamRuleSignals", "Um sinal sonoro marca o início e o fim."), 32.f);
 
 		SimulatedExamNote = AddLine(*WidgetTree, *ExamBox, FText::GetEmpty(), StationUi::FontMedium, 15.f, StationUi::Caution, 28.f);
 		UHorizontalBox* ExamActions = WidgetTree->ConstructWidget<UHorizontalBox>();
@@ -725,8 +724,7 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 		{
 			InsteadSlot->SetPadding(FMargin(20.f, 0.f, 0.f, 0.f));
 		}
-		SimulatedExamFine = AddLine(*WidgetTree, *ExamBox, LOCTEXT("SimulatedExamNote",
-			"Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
+		SimulatedExamFine = AddLine(*WidgetTree, *ExamBox, LOCTEXT("MenuExamNotOfficial", "Não é nota oficial do Revalida."),
 			StationUi::FontRegular, 13.f, StationUi::Muted, 28.f);
 
 		// A running simulated exam shows this brief over the room (#425).
@@ -751,11 +749,9 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 		Panel->SetContent(Trainings);
 		AddLine(*WidgetTree, *Trainings, LOCTEXT("TrainingsTitle", "Como você quer treinar?"), StationUi::FontBold, 28.f,
 			StationUi::InkTitle, 0.f, -15);
-		VoiceButton = AddTrainingOption(*WidgetTree, *Trainings, LOCTEXT("VoiceTraining", "Por voz"),
-			LOCTEXT("VoiceTrainingNote", "Converse com o paciente falando."));
+		VoiceButton = AddTrainingOption(*WidgetTree, *Trainings, LOCTEXT("VoiceTraining", "Por voz"));
 		VoiceButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleVoiceTraining);
-		TextButton = AddTrainingOption(*WidgetTree, *Trainings, LOCTEXT("TextTraining", "Por texto"),
-			LOCTEXT("TextTrainingNote", "Escreva as suas perguntas."));
+		TextButton = AddTrainingOption(*WidgetTree, *Trainings, LOCTEXT("TextTraining", "Por texto"));
 		TextButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleTextTraining);
 		VoiceBlockedNote = AddLine(*WidgetTree, *Trainings, LOCTEXT("VoiceBlocked",
 			"O microfone está bloqueado. Para treinar por voz, libere o acesso nos ajustes de privacidade do sistema e abra o app de novo."),

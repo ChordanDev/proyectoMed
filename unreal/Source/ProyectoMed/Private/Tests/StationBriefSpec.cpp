@@ -326,8 +326,8 @@ void FStationBriefUnitSpec::Define()
 		TestTrue("its label", Texts(Brief->SimulatedExamButton).Contains(TEXT("Iniciar prova simulada")));
 		TestEqual("in the Prova simulada accent", Brief->SimulatedExamButton->GetStyle().Normal.TintColor.GetSpecifiedColor(),
 			StationUi::ProvaAccent);
-		TestTrue("what a simulated exam is", Brief->SimulatedExamFine->GetText().ToString().Contains(TEXT("Só por voz")));
-		TestTrue("not an official grade", Brief->SimulatedExamFine->GetText().ToString().Contains(TEXT("Não é nota oficial do Revalida.")));
+		TestEqual("not an official grade, and no repeat of the rules", Brief->SimulatedExamFine->GetText().ToString(),
+			FString(TEXT("Não é nota oficial do Revalida.")));
 		TestFalse("no warning", IsShown(Brief->SimulatedExamNote));
 		TestFalse("no training offered", IsShown(Brief->TrainingInsteadButton));
 	});
@@ -342,7 +342,7 @@ void FStationBriefUnitSpec::Define()
 		TestTrue("voice and no help", Rules.Contains(TEXT("Só por voz e sem ajuda.")));
 		TestTrue("ten minutes", Rules.Contains(TEXT("10 minutos, incluindo a leitura do cenário.")));
 		TestTrue("the clock", Rules.Contains(TEXT("O relógio fica na mesa. Não há contagem na tela.")));
-		TestTrue("the signals", Rules.Contains(TEXT("Um sinal sonoro marca o início e o fim. Às 10:00 a estação termina.")));
+		TestTrue("the signals", Rules.Contains(TEXT("Um sinal sonoro marca o início e o fim.")));
 		TestTrue("its title", Texts(Brief->ExamBox).Contains(TEXT("Como no dia da prova")));
 
 		Flow->Step = EStationRunStep::Running;
@@ -392,12 +392,10 @@ void FStationBriefUnitSpec::Define()
 
 		TestTrue("the panel", IsShown(Brief->TrainingsPanel));
 		TestTrue("its question", Texts(Brief->TrainingsPanel).Contains(TEXT("Como você quer treinar?")));
-		const TArray<FString> Voice = Texts(Brief->VoiceButton);
-		TestTrue("by voice", Voice.Contains(TEXT("Por voz")));
-		TestTrue("what that is", Voice.Contains(TEXT("Converse com o paciente falando.")));
-		const TArray<FString> Text = Texts(Brief->TextButton);
-		TestTrue("by text", Text.Contains(TEXT("Por texto")));
-		TestTrue("what that is", Text.Contains(TEXT("Escreva as suas perguntas.")));
+		TestEqual("by voice, nothing else to explain", Texts(Brief->VoiceButton),
+			TArray<FString>{TEXT("Por voz"), TEXT("→")});
+		TestEqual("by text, nothing else to explain", Texts(Brief->TextButton),
+			TArray<FString>{TEXT("Por texto"), TEXT("→")});
 		TestEqual("who handles the voice", Brief->VoiceNote->GetText().ToString(),
 			FString(TEXT("No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente.")));
 		TestFalse("the microphone is fine", IsShown(Brief->VoiceBlockedNote));
