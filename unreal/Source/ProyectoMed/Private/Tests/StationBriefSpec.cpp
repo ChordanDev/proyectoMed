@@ -141,7 +141,7 @@ void FStationBriefUnitSpec::Define()
 		Menu->TakeWidget();
 
 		const TArray<FString> Training = Texts(Menu->TrainingButton);
-		TestTrue("text or voice", Training.Contains(TEXT("Texto ou voz")));
+		TestFalse("text or voice is in its description, not a trait", Training.Contains(TEXT("Texto ou voz")));
 		TestTrue("the clock in view", Training.Contains(TEXT("Relógio à vista")));
 		TestTrue("with help", Training.Contains(TEXT("Com ajuda")));
 		const TArray<FString> Exam = Texts(Menu->SimulatedExamButton);
