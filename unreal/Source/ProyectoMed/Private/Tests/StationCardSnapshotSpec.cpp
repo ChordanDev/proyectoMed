@@ -222,6 +222,15 @@ void FStationCardSnapshotSpec::Define()
 		UWorld* World = GEngine->GetWorldContexts()[0].World();
 		Save(CreateWidget<UStationMicrophoneWidget>(World), TEXT("pre-1-microphone"));
 		Save(CreateWidget<UStationMenuWidget>(World), TEXT("pre-1b-menu"));
+		UStationMenuWidget* ExamSelected = CreateWidget<UStationMenuWidget>(World);
+		// Held: a scrim does not outlive the Slate widgets it was built for.
+		const TSharedRef<SWidget> ExamSelectedSlate = ExamSelected->TakeWidget();
+		ExamSelected->HandleSelectSimulatedExam();
+		ExamSelected->NativeTick(FGeometry(), 10.f);
+		Save(ExamSelectedSlate, TEXT("pre-1c-menu-exam-selected"));
+		// What the keyboard's focus looks like on a mode.
+		ExamSelected->SimulatedExamButton->OnReceivedFocus.ExecuteIfBound();
+		Save(ExamSelectedSlate, TEXT("pre-1d-menu-keyboard"));
 		Save(CreateWidget<UStationNoticeWidget>(World), TEXT("pre-2-notice"));
 		Save(MakeBrief(MakeFlow(EStationMicPermission::NotDetermined)), TEXT("pre-3-brief"));
 		Save(MakeBrief(MakeFlow(EStationMicPermission::Denied)), TEXT("pre-4-brief-microphone-blocked"));

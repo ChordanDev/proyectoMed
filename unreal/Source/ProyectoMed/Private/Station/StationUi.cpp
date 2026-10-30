@@ -338,6 +338,22 @@ UButton* StationUi::MakeEnterArrow(UWidgetTree& Tree, const FLinearColor& Accent
 	return Button;
 }
 
+UButton* StationUi::MakeContentButton(UWidgetTree& Tree, UWidget& Content, const FMargin& RingSpace)
+{
+	UButton* Button = Tree.ConstructWidget<UButton>();
+	FButtonLook Look;
+	Look.Radius = 6.f;
+	ApplyWithFocusRing(*Button, StyleFor(Look));
+	Button->SetBackgroundColor(FLinearColor::White);
+	if (UButtonSlot* Slot = Cast<UButtonSlot>(Button->AddChild(&Content)))
+	{
+		Slot->SetPadding(RingSpace);
+		Slot->SetHorizontalAlignment(HAlign_Fill);
+		Slot->SetVerticalAlignment(VAlign_Fill);
+	}
+	return Button;
+}
+
 UWidget* StationUi::MakeScrim(UWidgetTree& Tree)
 {
 	UNativeWidgetHost* Host = Tree.ConstructWidget<UNativeWidgetHost>();

@@ -48,8 +48,9 @@ struct FStationCriterionResult;
 struct FStationResult;
 
 /**
- * The main menu, like a game's title screen (#421): the learner chooses a training
- * or a simulated exam, over the consultation room seen from the menu camera.
+ * The main menu in the Cine layout (#421, #456): the learner chooses a training or a
+ * simulated exam, over the consultation room seen from the menu camera. Both modes
+ * stay in view; the selected one is lit and carries the arrow that enters it.
  */
 UCLASS()
 class UStationMenuWidget : public UUserWidget
@@ -62,12 +63,22 @@ public:
 	/** The learner leaves the app. */
 	FSimpleDelegate OnQuit;
 
+	/** Selects the training each time the menu opens. */
+	virtual void SetVisibility(ESlateVisibility InVisibility) override;
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 private:
 	friend class FStationBriefUnitSpec;
+	friend class FStationCardSnapshotSpec;
 
+	/** Lights `Mode` and shows only its arrow; what changes opacity fades in `NativeTick`. */
+	void SelectMode(EStationSessionMode Mode);
+
+	/** The arrows: each enters its mode. */
 	UFUNCTION()
 	void HandleTraining();
 
@@ -75,17 +86,37 @@ private:
 	void HandleSimulatedExam();
 
 	UFUNCTION()
+	void HandleSelectTraining();
+
+	UFUNCTION()
+	void HandleSelectSimulatedExam();
+
+	UFUNCTION()
 	void HandleQuit();
+
+	/** The mode the arrow and Enter enter. Also what `NativeTick` fades towards. */
+	EStationSessionMode SelectedMode;
 
 	/** A solid background that hides the scene until the office behind the menu exists (#431). */
 	UPROPERTY()
 	TObjectPtr<UBorder> Backdrop;
 
+	/** Everything a mode says about itself. Selects it; only its arrow enters it. */
 	UPROPERTY()
 	TObjectPtr<UButton> TrainingButton;
 
 	UPROPERTY()
 	TObjectPtr<UButton> SimulatedExamButton;
+
+	UPROPERTY()
+	TObjectPtr<UButton> TrainingArrow;
+
+	UPROPERTY()
+	TObjectPtr<UButton> SimulatedExamArrow;
+
+	/** Shown, disabled, until the history exists (#338). */
+	UPROPERTY()
+	TObjectPtr<UButton> HistoryButton;
 
 	/** Shown, disabled, until the settings exist. */
 	UPROPERTY()

@@ -1019,6 +1019,7 @@ so a colour or a control changes in one place. The tokens are those of
 | 32×4 mode mark | `MakeModeMark` |
 | Buttons | `AddButton`, then `MakePrimary`, `MakeExam`, `MakeDanger`, `MakeSecondary` or `MakeGhost` |
 | Round enter arrow | `MakeEnterArrow` |
+| A whole block that acts as a button, such as a menu mode | `MakeContentButton` |
 | Chip, panel, keyboard hint | `MakeChip`, `MakePanel`, `MakeKeyHint` |
 | Text in Manrope 400–800 | `AddText`, or `Font` with a weight |
 
@@ -1163,13 +1164,14 @@ STATION_HUD_SNAPSHOT_DIR=/tmp/hud "/Users/Shared/Epic Games/UE_5.8/Engine/Binari
 
 `ProyectoMed.StationCards.Snapshot` (in `StationCardSnapshotSpec.cpp`) does the
 same for the full-screen cards around the run: the microphone disclosure, the
-main menu (#421), the Pre-Station Notice, a training's brief (loaded, microphone
+main menu (each mode selected, keyboard focus on a mode), the Pre-Station Notice, a training's brief (loaded, microphone
 blocked, loading, failed), a simulated exam's brief (ready, microphone blocked,
 no realtime voice), the invalidated run and the feedback (grading, graded,
 scrolled to the end). It writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it
 with `-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
 `ProyectoMed.StationCards.Unit` (in `StationBriefSpec.cpp`) checks what the main
-menu and each mode's brief offer, and needs nothing else.
+menu and each mode's brief offer, and how the menu selects and enters a mode by
+click, arrow keys, focus and Enter. It needs nothing else.
 
 The stack test checks four things:
 
