@@ -9,7 +9,7 @@ import json
 import logging
 import sys
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError
@@ -202,6 +202,22 @@ class VoiceTurnReply:
         )
 
 
+def phoenix_clock(
+    context: dict, received_at: float, monotonic: Callable[[], float]
+) -> Callable[[], datetime] | None:
+    """The current time on Phoenix's clock (#473), or `None` without a `server_now`.
+
+    It is the context's `server_now` plus the time since the context arrived:
+    `received_at` is that moment on `monotonic`, so the worker's wall clock plays
+    no part. A context from an older Phoenix has no `server_now`.
+    """
+    try:
+        server_now = datetime.fromisoformat(context["server_now"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return lambda: server_now + timedelta(seconds=monotonic() - received_at)
+
+
 class TurnTracker:
     """Turns Deepgram interim/final/end-of-speech events into session- and turn-scoped events.
 
@@ -213,7 +229,8 @@ class TurnTracker:
     After each final, `last_final_speech_started_at` (#424) is the UTC time, on
     `clock`, the learner was first heard in that utterance (`heard_speech`), or
     `None` if never. Phoenix uses it to decide whether the utterance started
-    before a simulated exam's deadline.
+    before a simulated exam's deadline, so the worker passes `phoenix_clock` here
+    (#473); without one, `clock` is the worker's wall clock.
     """
 
     def __init__(

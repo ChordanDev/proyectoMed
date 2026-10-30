@@ -437,10 +437,15 @@ The worker log shows it registered with the LiveKit server.
    different: it drops one superseded or cancelled turn and the session keeps going.
 
    A simulated exam has no grace window for the dialogue (#424). The worker sends
-   `speech_started_at` (ISO 8601) with each final transcript. After the deadline
-   Phoenix keeps an utterance that started less than 500 ms after `deadline_at`
-   (`speech_start_tolerance_ms`) with `201`, `status: "kept"` and no reply, and
-   answers `409` for any other. The reply in flight at the deadline is never
+   `speech_started_at` (ISO 8601) with each final transcript, on Phoenix's clock
+   (#473): the context's `server_now` plus the monotonic time since the context
+   arrived, so a difference between the two hosts' clocks does not move the
+   boundary. A context without `server_now` falls back to the worker's wall clock.
+   After the deadline Phoenix keeps an utterance that started less than 500 ms
+   after `deadline_at` (`speech_start_tolerance_ms`, for the key press reaching
+   the worker; the trip of `server_now` makes the stamp slightly early and uses
+   none of it) with `201`, `status: "kept"` and no reply, and answers `409` for
+   any other. The reply in flight at the deadline is never
    released: its learner turn is kept the same way. The run waits at most 5 s
    (`simulated_exam_evidence_window_ms`) after the deadline for late transcripts,
    and less when an utterance that started after the deadline arrives. The worker

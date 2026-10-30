@@ -963,6 +963,161 @@ class SpeechStartTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class SpeechStartOnPhoenixClockTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #473: the worker's wall clock does not move the speech start."""
+
+    DEADLINE = datetime(2026, 10, 29, 12, 10, tzinfo=UTC)
+    TOLERANCE = timedelta(milliseconds=500)
+
+    @staticmethod
+    def context(server_now: datetime) -> dict:
+        return {
+            "mode": "simulated_exam",
+            "deadline_at": "2026-10-29T12:10:00Z",
+            "server_now": server_now.isoformat().replace("+00:00", "Z"),
+        }
+
+    async def speech_start_sent_by_the_worker(
+        self, context: dict, wall_clock: datetime
+    ) -> datetime:
+        """Run a job on a worker whose wall clock reads `wall_clock`, one utterance."""
+        sent: list[str] = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "last_turn_id": 0,
+                        "language": "pt-BR",
+                        "keyterms": [],
+                        **context,
+                    },
+                )
+            if request.url.path.endswith("/usage"):
+                return httpx.Response(202, json={"status": "recorded"})
+            if request.url.path.endswith("/cancel"):
+                return httpx.Response(422, json={"error": "session_completed"})
+            sent.append(json.loads(request.content)["speech_started_at"])
+            return httpx.Response(409, json={"error": "station_time_elapsed"})
+
+        class WorkerDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return wall_clock
+
+        room = MockRoom()
+        room.name = "station-session-s1"
+        ctx = SimpleNamespace(
+            room=room,
+            connect=AsyncMock(),
+            wait_for_participant=AsyncMock(return_value=MockParticipant("learner-s1")),
+            shutdown=Mock(),
+        )
+        queue: asyncio.Queue = asyncio.Queue()
+        for speech_event in [
+            event(SpeechEventType.START_OF_SPEECH),
+            event(FINAL, "Onde dói?"),
+            event(END),
+            None,
+        ]:
+            queue.put_nowait(speech_event)
+        stream = MockStream(queue)
+        stream.end_input = Mock()
+
+        async def run_transcribe(
+            room, learner, context, tracker, phoenix, voice=None, meter=None
+        ):
+            await transcribe(
+                room,
+                learner,
+                context,
+                tracker,
+                phoenix,
+                stt=MockSTT(stream),
+                audio=MockAudioStream(),
+                voice=voice,
+            )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"PHOENIX_URL": "http://phoenix", "VOICE_WORKER_SECRET": "secret"},
+            ),
+            patch.object(worker, "PhoenixClient", return_value=phoenix(handler)),
+            patch.object(worker, "transcribe", side_effect=run_transcribe),
+            patch.object(worker, "build_tts", return_value=None),
+            patch.object(worker, "publish", new=AsyncMock()),
+            patch.object(transcripts, "datetime", WorkerDatetime),
+        ):
+            await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
+
+        self.assertEqual(len(sent), 1)
+        return datetime.fromisoformat(sent[0])
+
+    async def test_an_utterance_before_the_deadline_stays_before_it(self):
+        server_now = self.DEADLINE - timedelta(seconds=1)
+        for drift in (2, -2):
+            with self.subTest(worker_clock_ahead_by=drift):
+                started = await self.speech_start_sent_by_the_worker(
+                    self.context(server_now),
+                    wall_clock=server_now + timedelta(seconds=drift),
+                )
+                self.assertLess(started, self.DEADLINE)
+
+    async def test_an_utterance_after_the_tolerance_stays_after_it(self):
+        server_now = self.DEADLINE + timedelta(seconds=1)
+        for drift in (2, -2):
+            with self.subTest(worker_clock_ahead_by=drift):
+                started = await self.speech_start_sent_by_the_worker(
+                    self.context(server_now),
+                    wall_clock=server_now + timedelta(seconds=drift),
+                )
+                self.assertGreaterEqual(started, self.DEADLINE + self.TOLERANCE)
+
+    async def test_a_context_without_server_now_keeps_the_wall_clock(self):
+        wall_clock = datetime(2026, 10, 29, 12, 9, 59, tzinfo=UTC)
+        started = await self.speech_start_sent_by_the_worker({}, wall_clock)
+        self.assertEqual(started, wall_clock)
+
+    async def test_a_malformed_server_now_keeps_the_wall_clock(self):
+        wall_clock = datetime(2026, 10, 29, 12, 9, 59, tzinfo=UTC)
+        started = await self.speech_start_sent_by_the_worker(
+            {"server_now": "not a time"}, wall_clock
+        )
+        self.assertEqual(started, wall_clock)
+
+    def test_the_stamp_is_server_now_plus_the_time_since_the_context_arrived(self):
+        server_now = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
+        readings = iter([107.5, 130.25])
+        tracker = TurnTracker(
+            "s1",
+            last_turn_id=0,
+            clock=transcripts.phoenix_clock(
+                self.context(server_now),
+                received_at=100.0,
+                monotonic=lambda: next(readings),
+            ),
+        )
+
+        tracker.heard_speech()
+        tracker.heard_speech()  # the same utterance keeps its first stamp
+        tracker.handle(event(FINAL, "Onde dói?"))
+        tracker.handle(event(END))
+        self.assertEqual(
+            tracker.last_final_speech_started_at,
+            server_now + timedelta(seconds=7.5),
+        )
+
+        tracker.heard_speech()
+        tracker.handle(event(FINAL, "Tem febre?"))
+        tracker.handle(event(END))
+        self.assertEqual(
+            tracker.last_final_speech_started_at,
+            server_now + timedelta(seconds=30.25),
+        )
+
+
 class ControllablePhoenixClient(PhoenixClient):
     def __init__(self):
         super().__init__("http://phoenix", "secret", "s1")

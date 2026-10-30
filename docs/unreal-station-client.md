@@ -94,7 +94,10 @@ Phoenix decides this; the client only waits for it.
   the deadline. The worker reports it like a refused reply (`PatientUnanswered`).
 - An utterance that starts after the deadline (500 ms tolerance) is discarded. It
   gets no outcome event, and the worker leaves the room without an `error` event,
-  so the run is not taken for a lost voice.
+  so the run is not taken for a lost voice. The worker times the start from the
+  key press on Phoenix's clock, so no machine's own clock moves this boundary: the
+  tolerance covers the key press reaching the worker. The trip of `server_now`
+  makes the stamp slightly early, so it uses none of the tolerance.
 - At zero, call `FinishSession(EStationFinishReason::Timer)` as usual. Phoenix
   answers when its evidence window closes: when an utterance that started after
   the deadline arrives, or at most 5 seconds after the deadline. That is well inside the request timeout

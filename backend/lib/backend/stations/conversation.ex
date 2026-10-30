@@ -34,9 +34,11 @@ defmodule Backend.Stations.Conversation do
   # timeout, which `FinishSession(Timer)` waits under.
   @default_simulated_exam_evidence_window_ms :timer.seconds(5)
   # An utterance counts as started before a simulated exam's deadline when the
-  # worker's `speech_started_at` is less than this after it (#424). It covers the
-  # clock difference between the voice worker and Phoenix and the delay before
-  # the speech recognizer reports that speech started.
+  # worker's `speech_started_at` is less than this after it (#424). The worker
+  # stamps it on Phoenix's clock (#473), so a clock difference between the hosts
+  # does not reach it. This covers the key press reaching the worker. `server_now`
+  # reaching the worker in the context makes the stamp slightly early instead, so
+  # that trip widens the boundary and uses none of this.
   @default_speech_start_tolerance_ms 500
   # Reasons of the automatic end: `:timer` for a real test, `:cap` for a training.
   @timer_reasons [:timer, :cap]
