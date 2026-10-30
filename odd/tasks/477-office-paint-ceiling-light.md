@@ -23,9 +23,9 @@ Delivery: `ask-on-risk`. Checks: rendered views from `StationView`, the Unreal a
 | T1 | S10 | inline | done | Lock ID 60282893 taken before any edit |
 | T2 | S8 | inline (Blender MCP) | done | `SM_CeilingLight`, 104 faces, source in `~/Documents/Programacion/proyectoMedBlender` (L4, L8) |
 | T3 | S1, S2, S3, S6, S9 | inline (Unreal MCP, editor Python) | done | Level diff against the baseline (L6, L9) |
-| T4 | S3, S4 | inline (Unreal MCP, PIE `HighResShot`) | done; awaits S5 | L7, L8 |
+| T4 | S3, S4 | inline (Unreal MCP, PIE `HighResShot`) | done | L7, L8, L13 |
 | T5 | S7 | inline | done | L10; docs updated |
-| T6 | S5 | human | pending | PIE screenshot sent to the human |
+| T6 | S5 | human | done | L13 |
 
 ## Log
 
@@ -41,3 +41,4 @@ Delivery: `ask-on-risk`. Checks: rendered views from `StationView`, the Unreal a
 - L10 (2026-10-30): Frame time with the #319 command, read from its CSV metadata. Dropping the first 60 frames reproduces the baseline exactly (15.4 mean, 22.3 p95, 23.0 worst). Final scene, two runs: 14.9 and 15.0 ms mean, 15.4 and 15.5 ms p95, 42.2 and 19.9 ms worst, 14.3 ms GPU, 1.4 ms game thread. Other sessions were building and running Unreal on the same Mac.
 - L11 (2026-10-30, human): "Lo quiero un poquito mas notorio, muy poco". At the first tint the lit back wall matched the white cabinet door (#D8D4C6 against #DAD3C6). `M_Paint_Clinic` went from (0.66, 0.71, 0.66) to (0.61, 0.675, 0.62); (0.56, 0.64, 0.58) read as a plain green, more than asked. Only that base colour constant changed, so the frame time in L10 was not measured again.
 - L12 (2026-10-30, human): "Me gustó el que habías dicho que era mas de lo que pedí, ahí me gustaba". `M_Paint_Clinic` is now (0.56, 0.64, 0.58). Again only that constant changed, so L10 stands.
+- L13 (2026-10-30, human): "Apruebo la captura PIE final de #477." This covers the capture at commit 735f64e, taken from `StationView` without the HUD.
