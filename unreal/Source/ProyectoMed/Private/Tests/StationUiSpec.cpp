@@ -228,6 +228,21 @@ void FStationUiSpec::Define()
 			TestTrue(TEXT("the enter arrow"), Height(*StationUi::MakeEnterArrow(*Tree, StationUi::TreinoAccent)) >= 44.f);
 		});
 
+		It("keep the mockups' heights: 52 px for a filled one, 44 px for a ghost", [this]()
+		{
+			TestEqual(TEXT("filled"), Height(*MakeButton(StationUi::MakePrimary)), 52.f, 1.5f);
+			TestEqual(TEXT("ghost"), Height(*MakeButton(StationUi::MakeGhost)), 44.f, 1.5f);
+		});
+
+		It("set their labels at the mockups' sizes", [this]()
+		{
+			const auto Size = [](UPanelWidget& Button) { return LabelOf(Button)->GetFont().Size; };
+			TestEqual(TEXT("primary, 16 px"), Size(*MakeButton(StationUi::MakePrimary)), 12.f);
+			TestEqual(TEXT("secondary, 16 px"), Size(*MakeButton(StationUi::MakeSecondary)), 12.f);
+			TestEqual(TEXT("ghost, 15 px"), Size(*MakeButton(StationUi::MakeGhost)), 11.25f);
+			TestEqual(TEXT("the enter arrow, 26 px"), Size(*StationUi::MakeEnterArrow(*Tree, StationUi::TreinoAccent)), 19.5f);
+		});
+
 		It("fill with their kind's colour under a readable label", [this]()
 		{
 			const auto Fills = [this](const TCHAR* What, UButton& Button, const FLinearColor& Fill, const FLinearColor& Ink)
@@ -364,6 +379,27 @@ void FStationUiSpec::Define()
 			{
 				TestEqual(TEXT("the words"), Label->GetText().ToString(), FString(TEXT("Só voz")));
 			}
+		});
+
+		It("sets a chip at the mockups' 13 px", [this]()
+		{
+			TestEqual(TEXT("13 px"), LabelOf(*StationUi::MakeChip(*Tree, FText::FromString(TEXT("Só voz"))))->GetFont().Size, 9.75f);
+		});
+
+		It("sets a keyboard hint at the mockups' sizes", [this]()
+		{
+			UHorizontalBox* Hint = StationUi::MakeKeyHint(*Tree, FText::FromString(TEXT("Esc")), FText::FromString(TEXT("Sair")));
+			TArray<UWidget*> Found;
+			UWidgetTree::GetChildWidgets(Hint, Found);
+			TArray<float> Sizes;
+			for (UWidget* Widget : Found)
+			{
+				if (const UTextBlock* Text = Cast<UTextBlock>(Widget))
+				{
+					Sizes.Add(Text->GetFont().Size);
+				}
+			}
+			TestEqual(TEXT("the key at 12 px, what it does at 13 px"), Sizes, TArray<float>{9.f, 9.75f});
 		});
 
 		It("builds a see-through panel", [this]()
