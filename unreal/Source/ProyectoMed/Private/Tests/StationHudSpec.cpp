@@ -355,6 +355,48 @@ void FStationHudUnitSpec::Define()
 		Controller->Destroy();
 	});
 
+	// #425: a learner's remark to the examiner, which Phoenix notes without a reply.
+	auto NoteExaminer = [](UStationRunFlow& Flow)
+	{
+		FStationVoiceEvent Spoken;
+		Spoken.Kind = EStationVoiceEventKind::Learner;
+		Spoken.TurnId = 1;
+		Spoken.bFinal = true;
+		Spoken.Text = TEXT("Vou examinar o abdome.");
+		Flow.HandleVoiceEvent(Spoken);
+		FStationVoiceEvent Noted;
+		Noted.Kind = EStationVoiceEventKind::ExaminerAcknowledged;
+		Noted.TurnId = 1;
+		Flow.HandleVoiceEvent(Noted);
+	};
+
+	It("shows no countdown and no examiner's note in a simulated exam, and keeps its brief at hand", [this, NoteExaminer]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		NoteExaminer(*Flow);
+		UStationHudWidget* Hud = MakeHud(Flow);
+		TestEqual("no countdown", Hud->TimerText->GetVisibility(), ESlateVisibility::Collapsed);
+		TestEqual("named a simulated exam", Hud->ModeText->GetText().ToString(), FString(TEXT("Prova simulada")));
+		TestFalse("no \"Anotado.\"", Texts(Hud->TranscriptBox).Contains(TEXT("Examinador: Anotado.")));
+		TestTrue("the remark is shown", Texts(Hud->TranscriptBox).Contains(TEXT("Vou examinar o abdome.")));
+		TestEqual("the brief at hand", Hud->BriefButton->GetVisibility(), ESlateVisibility::Visible);
+		TestTrue("its label", Texts(Hud->BriefButton).Contains(TEXT("Cenário e tarefas")));
+		Hud->HandleOpenBrief();
+		TestTrue("opens the brief", Flow->IsBriefOpen());
+	});
+
+	It("keeps the countdown and the examiner's note in a training", [this, NoteExaminer]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		NoteExaminer(*Flow);
+		UStationHudWidget* Hud = MakeHud(Flow);
+		TestEqual("the countdown", Hud->TimerText->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual("named a training", Hud->ModeText->GetText().ToString(), FString(TEXT("Treino por voz · Tempo restante")));
+		TestTrue("\"Anotado.\"", Texts(Hud->TranscriptBox).Contains(TEXT("Examinador: Anotado.")));
+		TestEqual("no brief button", Hud->BriefButton->GetVisibility(), ESlateVisibility::Collapsed);
+	});
+
 	It("keeps the typed turn and the typed exam request in a training", [this]()
 	{
 		UStationHudWidget* Hud = MakeHud(MakeFlow(EStationTrainingMode::Text));

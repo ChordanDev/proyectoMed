@@ -139,6 +139,12 @@ public:
 	FTimespan GetRemainingTime() const;
 	FTimespan GetRemainingTimeAt(double LocalSeconds) const;
 
+	/**
+	 * Phoenix's clock now (UTC), anchored to its last `server_now`, for the scene's desk
+	 * clock (#425). Unset until Phoenix has sent one. It keeps running after the run ends.
+	 */
+	TOptional<FDateTime> GetServerTime() const;
+
 private:
 	void AcceptSession(const FStationSession& InSession, const FDateTime& ServerNow);
 
