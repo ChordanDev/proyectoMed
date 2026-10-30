@@ -118,7 +118,10 @@ PROYECTOMED_API FText StationInvalidatedTitle(EStationSessionMode SessionMode);
 /** Why the run is over, in Brazilian Portuguese, for the invalidated screen. */
 PROYECTOMED_API FText StationInvalidatedText(EStationSessionMode SessionMode, EStationInvalidation Reason);
 
-/** The Station Timer as `mm:ss`, rounding partial seconds up so it reads 00:00 only at the deadline. */
+/**
+ * The Station Timer as `mm:ss`, rounding partial seconds up so it reads 00:00 only at
+ * the deadline. Past it, a negative `Remaining` reads as the overtime, `+mm:ss` (#461).
+ */
 PROYECTOMED_API FText FormatStationTimer(const FTimespan& Remaining);
 
 /** Where the flow asks for the microphone and remembers that it did; tests replace it. */
@@ -471,15 +474,16 @@ public:
 
 	/**
 	 * Ends the run as `Finish` does, with the reason `timer`. Phoenix refuses it
-	 * before its deadline: the run then goes on, with the deadline read again.
+	 * before `deadline_at`: the run then goes on, with the deadline read again.
 	 * The flow also calls it when Phoenix refuses a turn or exam request because
 	 * Phoenix already ended the run, for example after the Mac slept.
 	 */
 	void ExpireTimer();
 
 	/**
-	 * Calls `ExpireTimer` once the Station Timer reads zero, and ends an exam mode the
-	 * learner did not speak into once it expires. The interface calls it every frame.
+	 * Calls `ExpireTimer` at the end Phoenix set for the run, `cap_at`, and ends an exam
+	 * mode the learner did not speak into once it expires. A training runs on past the
+	 * Station Timer's zero until then (#323). The interface calls it every frame.
 	 */
 	void CheckStationTimer();
 

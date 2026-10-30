@@ -174,6 +174,13 @@ struct STATIONCLIENT_API FStationSession
 	UPROPERTY(BlueprintReadOnly, Category = "Station")
 	FDateTime DeadlineAt;
 
+	/**
+	 * UTC. Phoenix ends the run here: a training may run on past `DeadlineAt` until
+	 * then, and a simulated exam's is `DeadlineAt` itself. Phoenix owns it too.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	FDateTime CapAt;
+
 	/** UTC. Phoenix forgets the session after this. */
 	UPROPERTY(BlueprintReadOnly, Category = "Station")
 	FDateTime ExpiresAt;

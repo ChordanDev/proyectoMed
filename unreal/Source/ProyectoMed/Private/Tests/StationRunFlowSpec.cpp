@@ -81,6 +81,8 @@ void FStationRunUnitSpec::Define()
 		TestEqual("one second gone", FormatStationTimer(FTimespan::FromSeconds(599)).ToString(), TEXT("09:59"));
 		TestEqual("partial second rounds up", FormatStationTimer(FTimespan::FromSeconds(0.3)).ToString(), TEXT("00:01"));
 		TestEqual("deadline", FormatStationTimer(FTimespan::Zero()).ToString(), TEXT("00:00"));
+		TestEqual("overtime counts up", FormatStationTimer(FTimespan::FromSeconds(-200)).ToString(), TEXT("+03:20"));
+		TestEqual("whole seconds of overtime", FormatStationTimer(FTimespan::FromSeconds(-0.3)).ToString(), TEXT("+00:00"));
 	});
 
 	It("shows Phoenix's message only for Phoenix error statuses", [this]()

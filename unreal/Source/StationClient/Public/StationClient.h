@@ -140,6 +140,16 @@ public:
 	FTimespan GetRemainingTimeAt(double LocalSeconds) const;
 
 	/**
+	 * `GetRemainingTime`, negative once the run is past its deadline: a training's
+	 * overtime (#323). Zero without an active session.
+	 */
+	FTimespan GetSignedRemainingTime() const;
+	FTimespan GetSignedRemainingTimeAt(double LocalSeconds) const;
+
+	/** Time left until Phoenix ends the run (`cap_at`), never negative. Zero without an active session. */
+	FTimespan GetRunTimeLeft() const;
+
+	/**
 	 * Phoenix's clock now (UTC), anchored to its last `server_now`, for the scene's desk
 	 * clock (#425). Unset until Phoenix has sent one. It keeps running after the run ends.
 	 */
@@ -147,6 +157,9 @@ public:
 
 private:
 	void AcceptSession(const FStationSession& InSession, const FDateTime& ServerNow);
+
+	/** An active session on an anchored clock: the Station Timer has something to count. */
+	bool IsCounting() const;
 
 	/** The URL of a route under the current session, for example `/voice`. */
 	FString SessionUrl(const TCHAR* Suffix) const;

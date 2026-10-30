@@ -217,6 +217,7 @@ bool StationJson::ParseSession(const FJsonObject& Json, FStationSession& Out, FD
 		|| !ParseSessionMode(Json, Out.Mode)
 		|| !ParseDate(Json, TEXT("started_at"), Out.StartedAt)
 		|| !ParseDate(Json, TEXT("deadline_at"), Out.DeadlineAt)
+		|| !ParseDate(Json, TEXT("cap_at"), Out.CapAt)
 		|| !ParseDate(Json, TEXT("expires_at"), Out.ExpiresAt)
 		|| !ParseDate(Json, TEXT("server_now"), OutServerNow))
 	{

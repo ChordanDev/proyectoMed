@@ -16,6 +16,11 @@ FDateTime FStationClock::ServerTimeAt(double LocalSeconds) const
 
 FTimespan FStationClock::RemainingAt(const FDateTime& Deadline, double LocalSeconds) const
 {
-	const FTimespan Remaining = Deadline - ServerTimeAt(LocalSeconds);
+	const FTimespan Remaining = SignedRemainingAt(Deadline, LocalSeconds);
 	return Remaining > FTimespan::Zero() ? Remaining : FTimespan::Zero();
+}
+
+FTimespan FStationClock::SignedRemainingAt(const FDateTime& Deadline, double LocalSeconds) const
+{
+	return Deadline - ServerTimeAt(LocalSeconds);
 }

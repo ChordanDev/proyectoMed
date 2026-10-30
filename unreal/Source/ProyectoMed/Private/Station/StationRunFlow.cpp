@@ -77,7 +77,12 @@ namespace
 
 FText FormatStationTimer(const FTimespan& Remaining)
 {
-	const int64 Seconds = FMath::Max<int64>(0, FMath::CeilToInt64(Remaining.GetTotalSeconds()));
+	if (Remaining < FTimespan::Zero())
+	{
+		const int64 Over = FMath::FloorToInt64(-Remaining.GetTotalSeconds());
+		return FText::FromString(FString::Printf(TEXT("+%02lld:%02lld"), Over / 60, Over % 60));
+	}
+	const int64 Seconds = FMath::CeilToInt64(Remaining.GetTotalSeconds());
 	return FText::FromString(FString::Printf(TEXT("%02lld:%02lld"), Seconds / 60, Seconds % 60));
 }
 
@@ -735,8 +740,10 @@ void UStationRunFlow::CheckStationTimer()
 		ResetSpokenExam();
 		OnChanged.Broadcast();
 	}
+	// The end of the run is Phoenix's `cap_at`, not the Station Timer's zero: a training
+	// goes on into its overtime, and a simulated exam's `cap_at` is its deadline (#323).
 	if (CanFinish() && FPlatformTime::Seconds() >= TimerRetryNotBefore
-		&& Client->GetRemainingTime() <= FTimespan::Zero())
+		&& Client->GetRunTimeLeft() <= FTimespan::Zero())
 	{
 		ExpireTimer();
 	}

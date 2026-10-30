@@ -39,6 +39,7 @@ namespace StationClientTests
 		"started_at": "2026-10-21T12:00:00.123456Z",
 		"expires_at": "2026-10-21T12:30:00.123456Z",
 		"deadline_at": "2026-10-21T12:10:00.123456Z",
+		"cap_at": "2026-10-21T12:20:00.123456Z",
 		"server_now": "2026-10-21T12:00:00.200000Z"
 	})");
 }
@@ -68,6 +69,14 @@ void FStationClientUnitSpec::Define()
 		{
 			const FStationClock Clock = FStationClock::Anchor(ServerNow, 0.0);
 			TestEqual("past the deadline", Clock.RemainingAt(Deadline, 3600.0), FTimespan::Zero());
+		});
+
+		It("goes on below zero past the deadline when asked for the signed time (#323)", [this, ServerNow, Deadline]()
+		{
+			const FStationClock Clock = FStationClock::Anchor(ServerNow, 0.0);
+			TestEqual("before the deadline", Clock.SignedRemainingAt(Deadline, 60.0), FTimespan::FromMinutes(9));
+			TestEqual("at the deadline", Clock.SignedRemainingAt(Deadline, 600.0), FTimespan::Zero());
+			TestEqual("past the deadline", Clock.SignedRemainingAt(Deadline, 800.0), FTimespan::FromSeconds(-200));
 		});
 
 		It("is not anchored until a server time is given", [this]()
@@ -201,6 +210,23 @@ void FStationClientUnitSpec::Define()
 		{
 			const TSharedRef<FJsonObject> Json = ParseObject(SessionJson);
 			Json->RemoveField(TEXT("session_id"));
+			FStationSession Session;
+			FDateTime ServerNow;
+			TestFalse("parsed", StationJson::ParseSession(*Json, Session, ServerNow));
+		});
+
+		It("reads when Phoenix ends the run (#323)", [this]()
+		{
+			FStationSession Session;
+			FDateTime ServerNow;
+			TestTrue("parsed", StationJson::ParseSession(*ParseObject(SessionJson), Session, ServerNow));
+			TestEqual("twenty minutes in", Session.CapAt - Session.StartedAt, FTimespan::FromMinutes(20));
+		});
+
+		It("rejects a session without its end", [this]()
+		{
+			const TSharedRef<FJsonObject> Json = ParseObject(SessionJson);
+			Json->RemoveField(TEXT("cap_at"));
 			FStationSession Session;
 			FDateTime ServerNow;
 			TestFalse("parsed", StationJson::ParseSession(*Json, Session, ServerNow));
