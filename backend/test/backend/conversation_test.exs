@@ -2013,6 +2013,27 @@ defmodule Backend.ConversationTest do
       assert {:ok, %{messages: [%{role: :learner, text: "Onde dói?"}]}} = Conversation.fetch(id)
       assert {:ok, nil} = Conversation.active_generation(id)
     end
+
+    test "a late turn discarded before the deadline message is handled completes the run cleanly" do
+      for speech_started_at <- [nil, DateTime.add(DateTime.utc_now(), 1, :second)] do
+        session = Conversation.start(%{mode: :simulated_exam})
+        id = session.session_id
+        pid = Process.whereis(StationConversation)
+
+        # The clock passed the deadline, but no evidence window is armed yet.
+        past = DateTime.add(DateTime.utc_now(), -10, :millisecond)
+        [{^id, stored}] = :ets.lookup(StationConversation, id)
+        true = :ets.insert(StationConversation, {id, %{stored | deadline_at: past, cap_at: past}})
+
+        assert {:error, :station_time_elapsed} =
+                 Conversation.begin_voice_turn(id, 1, "Tarde", speech_started_at)
+
+        assert Process.whereis(StationConversation) == pid
+
+        assert {:ok, %{status: :completed, completion_reason: :timer, messages: []}} =
+                 Conversation.fetch(id)
+      end
+    end
   end
 
   describe "Conversation process restart" do
