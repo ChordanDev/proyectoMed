@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Microfone</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win"></i><i class="doc"></i><i class="desk"></i></div>
+<div class="scene-tag">[Cena do consultório ao fundo]</div>
+<div class="scrim-left" aria-hidden="true"></div>
+
+<div class="brand"><div class="wordmark">Proyecto<span style="color: #5fd0bf">Med</span></div></div>
+
+<div style="position: absolute; left: 96px; bottom: 96px; width: 640px; display: flex; flex-direction: column; gap: 28px">
+<div class="eyebrow">Antes de começar</div>
+<h1 class="h1">Microfone</h1>
+<p class="body">No treino por voz você conversa com o paciente pelo microfone.</p>
+
+<div style="display: flex; flex-direction: column; gap: 16px; padding-left: 4px">
+<div style="display: flex; gap: 16px; align-items: flex-start">
+<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5fd0bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>
+<p class="small">O microfone só fica ligado durante uma estação por voz.</p>
+</div>
+<div style="display: flex; gap: 16px; align-items: flex-start">
+<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5fd0bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><path d="M4 12h3l3-7 4 14 3-7h3"></path></svg>
+<p class="small">Durante a estação, o seu áudio é enviado à Deepgram, que o transcreve, e a resposta do paciente é gerada em voz pela Cartesia.</p>
+</div>
+<div style="display: flex; gap: 16px; align-items: flex-start">
+<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5fd0bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>
+<p class="small">O ProyectoMed não guarda o seu áudio nem a transcrição depois da estação.</p>
+</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 16px; margin-top: 8px">
+<button class="btn btn-primary">Permitir microfone</button>
+<button class="btn btn-secondary">Agora não</button>
+</div>
+<p class="fine">Você também pode treinar por texto, sem microfone.</p>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

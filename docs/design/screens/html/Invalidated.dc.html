@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Estação invalidada</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win" style="left: 38%"></i><i class="pat" style="left: 52%; top: 26%"></i><i class="desk" style="left: 0"></i></div>
+<div class="scrim-left" aria-hidden="true"></div>
+
+<div style="position: absolute; left: 96px; bottom: 96px; width: 660px; display: flex; flex-direction: column; gap: 26px">
+<svg aria-hidden="true" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#ff8a7a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a15 15 0 0 1 20 0M5.5 12a10 10 0 0 1 13 0M9 15.5a5 5 0 0 1 6 0M12 19h.01M3 3l18 18"></path></svg>
+<h1 class="h1">{{ title }}</h1>
+<p class="body">{{ body }}</p>
+<p class="small">Reinicie a estação para começar de novo.</p>
+<div style="display: flex; align-items: center; gap: 16px">
+<a class="btn" href="{{ restartHref }}" style="background: {{ accent }}; color: #0b1116">Reiniciar estação</a>
+<a class="btn btn-secondary" href="Main.dc.html">Voltar ao menu</a>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"variant":{"editor":"enum","options":["trainingServer","examVoice","examServer"],"default":"examVoice"},"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const v = this.props.variant ?? 'examVoice';
+    const exam = v !== 'trainingServer';
+    const bodies = {
+      trainingServer: 'A conexão com o servidor caiu e o treino não pode continuar. Esta tentativa não tem resultado nem feedback.',
+      examVoice: 'A voz ou o microfone falhou, e a prova simulada é feita só por voz. Esta tentativa não tem resultado nem penalidade.',
+      examServer: 'A conexão com o servidor caiu e a prova simulada não pode continuar. Esta tentativa não tem resultado nem penalidade.'
+    };
+    return {
+      title: exam ? 'Prova simulada invalidada' : 'Treino invalidado',
+      body: bodies[v],
+      accent: exam ? '#f2a65a' : '#5fd0bf',
+      restartHref: exam ? 'BriefExam.dc.html' : 'BriefTraining.dc.html'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Ferramenta educacional</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win"></i><i class="doc"></i><i class="desk"></i></div>
+<div class="scene-tag">[Cena do consultório ao fundo]</div>
+<div class="scrim-left" aria-hidden="true"></div>
+
+<div class="brand"><div class="wordmark">Proyecto<span style="color: #5fd0bf">Med</span></div></div>
+
+<div style="position: absolute; left: 96px; bottom: 96px; width: 700px; display: flex; flex-direction: column; gap: 26px">
+<div class="eyebrow">Aviso · aparece uma vez</div>
+<h1 class="h1">Ferramenta educacional</h1>
+<p class="body">Ferramenta educacional independente para treino de habilidades clínicas. Não insira dados de pacientes reais.</p>
+
+<div class="panel" style="padding: 22px 24px; display: flex; flex-direction: column; gap: 14px">
+<div class="eyebrow" style="font-size: 12px">Quem processa a estação</div>
+<div style="display: flex; justify-content: space-between; gap: 24px"><span class="h3">Deepgram</span><span class="small">Transcreve o seu áudio</span></div>
+<hr class="rule">
+<div style="display: flex; justify-content: space-between; gap: 24px"><span class="h3">Cartesia</span><span class="small">Gera a voz do paciente</span></div>
+<hr class="rule">
+<div style="display: flex; justify-content: space-between; gap: 24px"><span class="h3">[Provedor]</span><span class="small">[Demais provedores da lista do servidor]</span></div>
+</div>
+
+<p class="fine" style="max-width: 600px">Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.</p>
+
+<div><button class="btn btn-primary">Entendi</button></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

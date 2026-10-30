@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Escolher estação</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win"></i><i class="doc"></i><i class="desk"></i></div>
+<div class="scrim-full" aria-hidden="true"></div>
+
+<div style="position: absolute; inset: 0; padding: 64px 96px; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; justify-content: space-between; align-items: center">
+<a class="ghost" href="Main.dc.html">‹ Menu</a>
+<span class="muted">Simulações de hoje: <strong style="color: #ffffff">[n] de [n]</strong></span>
+</div>
+
+<div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 40px">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 12px"><span aria-hidden="true" style="display: block; width: 32px; height: 4px; border-radius: 2px; background: {{ accent }}"></span><span class="eyebrow" style="color: {{ accent }}">{{ modeLabel }}</span></div>
+<h1 class="h1">Escolha a estação</h1>
+</div>
+<div style="display: flex; align-items: center; gap: 12px">
+<label for="caseNumber" class="muted">Caso nº</label>
+<input id="caseNumber" class="field" placeholder="Ex.: 127" style="width: 140px">
+</div>
+</div>
+
+<div role="tablist" aria-label="Área" style="display: flex; gap: 10px; flex-wrap: wrap">
+<sc-for list="{{ areas }}" as="a" hint-placeholder-count="6">
+<button class="tab" role="tab" aria-selected="{{ a.selected }}" onClick="{{ a.pick }}" style="{{ a.style }}">{{ a.name }}</button>
+</sc-for>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+<a class="card" href="BriefTraining.dc.html" style="padding: 28px; gap: 18px; min-height: 196px; border-color: {{ accent }}; text-decoration: none">
+<span style="display: flex; justify-content: space-between; align-items: center">
+<span class="eyebrow" style="color: {{ accent }}">Sorteio</span>
+<svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#e8eef2" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"></path></svg>
+</span>
+<span class="h2">Estação aleatória</span>
+<span class="small">Um caso sorteado em {{ areaPhrase }}, como no dia da prova.</span>
+</a>
+<sc-for list="{{ cases }}" as="c" hint-placeholder-count="5">
+<a class="card" href="BriefTraining.dc.html" style="padding: 28px; gap: 14px; min-height: 196px; text-decoration: none">
+<span style="display: flex; justify-content: space-between; align-items: center">
+<span class="eyebrow">Caso {{ c.number }} · {{ c.area }}</span>
+<sc-if value="{{ c.done }}" hint-placeholder-val="{{ false }}"><span class="chip">Feita</span></sc-if>
+</span>
+<span class="h3" style="font-size: 22px; line-height: 1.3">{{ c.theme }}</span>
+<span class="small" style="margin-top: auto">{{ c.actors }}</span>
+</a>
+</sc-for>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"mode":{"editor":"enum","options":["training","exam"],"default":"training"},"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { area: 'Todas' };
+  }
+  renderVals() {
+    const exam = (this.props.mode ?? 'training') === 'exam';
+    const accent = exam ? '#f2a65a' : '#5fd0bf';
+    const names = ['Todas', 'Clínica Médica', 'Cirurgia Geral', 'Ginecologia e Obstetrícia', 'Pediatria', 'Medicina de Família e Comunidade'];
+    const all = [
+      { number: '[nº]', area: 'Cirurgia Geral', theme: 'Abdome agudo inflamatório — apendicite aguda', actors: 'Paciente', done: true },
+      { number: '[nº]', area: 'Pediatria', theme: '[Tema do caso]', actors: 'Criança · Acompanhante fala', done: false },
+      { number: '[nº]', area: 'Clínica Médica', theme: '[Tema do caso]', actors: 'Paciente', done: false },
+      { number: '[nº]', area: 'Ginecologia e Obstetrícia', theme: '[Tema do caso]', actors: 'Paciente · Acompanhante', done: false },
+      { number: '[nº]', area: 'Medicina de Família e Comunidade', theme: '[Tema do caso]', actors: 'Paciente', done: false }
+    ];
+    const area = this.state.area;
+    return {
+      accent: accent,
+      modeLabel: exam ? 'Prova simulada' : 'Treino',
+      areaPhrase: area === 'Todas' ? 'qualquer área' : area,
+      areas: names.map((n) => ({
+        name: n,
+        selected: n === area ? 'true' : 'false',
+        style: n === area ? 'background:#e8eef2; color:#0b1116; border-color:#e8eef2' : '',
+        pick: () => this.setState({ area: n })
+      })),
+      cases: all.filter((c) => area === 'Todas' || c.area === area)
+    };
+  }
+}
+</script>
+</body>
+</html>
