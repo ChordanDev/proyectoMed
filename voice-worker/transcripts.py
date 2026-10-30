@@ -8,6 +8,8 @@ import asyncio
 import json
 import logging
 import sys
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 import httpx
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError
@@ -207,10 +209,19 @@ class TurnTracker:
     committed as exactly one learner turn at END_OF_SPEECH. Turn ids continue after the
     authoritative allocation floor, covering committed and cancelled turn IDs.
     Tracks active generation identity and cancels/rejects superseded or duplicate replies.
+
+    After each final, `last_final_speech_started_at` (#424) is the UTC time, on
+    `clock`, the learner was first heard in that utterance (`heard_speech`), or
+    `None` if never. Phoenix uses it to decide whether the utterance started
+    before a simulated exam's deadline.
     """
 
     def __init__(
-        self, session_id: str, last_turn_id: int, turn_id_floor: int | None = None
+        self,
+        session_id: str,
+        last_turn_id: int,
+        turn_id_floor: int | None = None,
+        clock: Callable[[], datetime] | None = None,
     ):
         self.session_id = session_id
         allocation_floor = max(last_turn_id, turn_id_floor or 0)
@@ -224,6 +235,9 @@ class TurnTracker:
         self._stale_turn_floor = allocation_floor
         # Newest turn the learner has spoken in, even one never committed (#325).
         self.last_speech_turn_id = 0
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._speech_started_at: datetime | None = None
+        self.last_final_speech_started_at: datetime | None = None
 
     def handle(self, event: SpeechEvent) -> dict | None:
         if event.type == SpeechEventType.INTERIM_TRANSCRIPT:
@@ -233,12 +247,22 @@ class TurnTracker:
             if text:
                 self.segments.append(text)
             return self._event(False)
-        if event.type == SpeechEventType.END_OF_SPEECH and self.segments:
+        if event.type == SpeechEventType.END_OF_SPEECH:
+            speech_started_at = self._speech_started_at
+            self._speech_started_at = None
+            if not self.segments:
+                return None
             final = self._event(True)
+            self.last_final_speech_started_at = speech_started_at
             self.segments = []
             self.turn_id += 1
             return final
         return None
+
+    def drop_utterance(self) -> None:
+        """Forget a half utterance, e.g. when the learner reconnects."""
+        self.segments = []
+        self._speech_started_at = None
 
     def cancel(
         self, generation_id: int | None = None, turn_id: int | None = None
@@ -319,8 +343,13 @@ class TurnTracker:
         return reply
 
     def heard_speech(self) -> None:
-        """The learner speaks in the current turn: a typed reply before it is stale (#325)."""
+        """The learner speaks in the current turn: a typed reply before it is stale (#325).
+
+        The first time in an utterance it also records when its speech started (#424).
+        """
         self.last_speech_turn_id = max(self.last_speech_turn_id, self.turn_id)
+        if self._speech_started_at is None:
+            self._speech_started_at = self._clock()
 
     def accept_typed_reply(self, reply: VoiceTurnReply) -> VoiceTurnReply | None:
         """Accept the approved reply to a typed turn (#325) while it is still current.
@@ -415,8 +444,17 @@ class PhoenixClient:
         """POSTs the job's provider usage (#342): counts only, never content."""
         return await self._request("POST", self._path + "/usage", json=report)
 
-    async def commit(self, turn_id: int, text: str, on_sentence=None) -> VoiceTurnReply:
+    async def commit(
+        self,
+        turn_id: int,
+        text: str,
+        on_sentence=None,
+        speech_started_at: datetime | None = None,
+    ) -> VoiceTurnReply:
         """Commits a final transcript; returns typed VoiceTurnReply.
+
+        `speech_started_at` (#424), when known, is sent as ISO 8601 so Phoenix can
+        decide whether the utterance started before a simulated exam's deadline.
 
         Each attempt waits for the server budget (`turn_timeout`, #269), and a
         transport failure is retried `turn_retries` times: `turn_id` makes the retry
@@ -428,7 +466,9 @@ class PhoenixClient:
         is Phoenix's final result. Once a sentence was handed over the request is
         never retried: a retry could only answer `duplicate`.
         """
-        body = {"turn_id": turn_id, "text": text}
+        body: dict = {"turn_id": turn_id, "text": text}
+        if speech_started_at is not None:
+            body["speech_started_at"] = speech_started_at.isoformat()
         path = self._path + "/transcripts"
         attempts_left = self._turn_retries
         handed_over = False
@@ -668,6 +708,8 @@ class TurnManager:
         self._active_commit_tasks: set[asyncio.Task] = set()
         self._queued_commit: tuple[int, str] | None = None
         self._speech_ended_at: dict[int, float] = {}
+        # When the learner started each queued final (#424), by turn id.
+        self._speech_started_at: dict[int, datetime | None] = {}
         self._queued_task: asyncio.Task | None = None
         self._cancel_requested_turns: set[int] = set()
         self._local_cancel_turn: int | None = None
@@ -730,7 +772,9 @@ class TurnManager:
             return self.pending_cancel_task
         return None
 
-    def commit_turn(self, turn_id: int, text: str) -> asyncio.Task:
+    def commit_turn(
+        self, turn_id: int, text: str, speech_started_at: datetime | None = None
+    ) -> asyncio.Task:
         """Queue a normalized final without blocking the speech reader.
 
         Superseded queued finals share one admission task; its result identifies
@@ -747,6 +791,7 @@ class TurnManager:
         self._queued_commit = (turn_id, text)
         # End of the learner's utterance, for the first-audio latency log (#271).
         self._speech_ended_at[turn_id] = asyncio.get_running_loop().time()
+        self._speech_started_at[turn_id] = speech_started_at
         if len(self._unresolved_cancel_turns) >= self.MAX_DISPATCHED_TURNS:
             self._cancel_requested_turns.update(
                 turn
@@ -853,8 +898,11 @@ class TurnManager:
             # reporting duplicate). Only correlated server evidence releases it.
             self._unresolved_cancel_turns.add(turn_id)
             speech_ended_at = self._speech_ended_at.pop(turn_id, None)
+            speech_started_at = self._speech_started_at.pop(turn_id, None)
             for older in [t for t in self._speech_ended_at if t < turn_id]:
                 del self._speech_ended_at[older]  # superseded before dispatch
+            for older in [t for t in self._speech_started_at if t < turn_id]:
+                del self._speech_started_at[older]
             streamed = False
 
             async def on_sentence(sentence: VoiceTurnReply) -> None:
@@ -873,7 +921,12 @@ class TurnManager:
                     if asyncio.iscoroutine(result):
                         await result
 
-            reply = await self.phoenix.commit(turn_id, text, on_sentence=on_sentence)
+            reply = await self.phoenix.commit(
+                turn_id,
+                text,
+                on_sentence=on_sentence,
+                speech_started_at=speech_started_at,
+            )
             reply.speech_ended_at = speech_ended_at
             if (
                 isinstance(reply, VoiceTurnReply)
@@ -1077,7 +1130,11 @@ async def process_speech_stream(
             if event is None:
                 continue
             if event["final"]:
-                turn_manager.commit_turn(event["turn_id"], event["text"])
+                turn_manager.commit_turn(
+                    event["turn_id"],
+                    event["text"],
+                    tracker.last_final_speech_started_at,
+                )
             if on_publish:
                 res = on_publish(event)
                 if asyncio.iscoroutine(res):

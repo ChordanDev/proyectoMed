@@ -12,7 +12,10 @@ impresso_requested` with its outcome, and nothing is spoken. Every reply event n
 or `companion`, #341), and each actor speaks with the Cartesia voice its voice key maps
 to in `CARTESIA_VOICE_IDS` (#398), on the one patient track. The reply Phoenix approved
 for a typed turn arrives from the server on the data topic "typed-reply" and is spoken the
-same way, with no text event: the learner already has its text (#325). When the job ends it reports
+same way, with no text event: the learner already has its text (#325). In a simulated exam
+the patient never speaks after the deadline (#424): playback stops at the `deadline_at`
+Phoenix's context names, and no later reply is published or spoken. Each final transcript
+carries when the learner started saying it. When the job ends it reports
 its provider usage (Deepgram audio seconds, Cartesia characters, LiveKit
 participant minutes, #342) to Phoenix. Never logs transcript text, reply text or audio.
 """
@@ -24,6 +27,7 @@ import logging
 import math
 import os
 import sys
+from datetime import datetime
 
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, JobRequest, cli
@@ -109,6 +113,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 else None
             )
             voice = PatientVoice(ctx.room, player, session_id)
+            voice.silence_at_deadline(context)
             await voice.start()
             typed_voice = voice
             ctx.room.on(
@@ -120,7 +125,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 learner = await ctx.wait_for_participant(
                     identity=f"learner-{session_id}"
                 )
-                tracker.segments = []  # never glue a half utterance onto the next connection
+                tracker.drop_utterance()  # never glue a half utterance onto the next connection
                 meter.join(learner.identity)
                 try:
                     await transcribe(
@@ -338,6 +343,9 @@ class PatientVoice:
     learner; a failure there is published content-free and never stops the job. A text
     event the room rejects is reported the same way (`text_delivery_failed`) and the
     reply is still spoken.
+
+    In a simulated exam the patient never speaks after the deadline (#424, see
+    `silence_at_deadline`).
     """
 
     def __init__(self, room, player: SpeechPlayer | None, session_id: str = ""):
@@ -348,6 +356,33 @@ class PatientVoice:
         # Last queued speech as (generation_id, turn_id, task): sentences of one
         # streamed reply (#271) are spoken in order, each after the previous one.
         self._tail: tuple[int | None, int, asyncio.Task] | None = None
+        # Past a simulated exam's deadline nothing more is spoken (#424).
+        self.silent = False
+        self._deadline: asyncio.TimerHandle | None = None
+        self._silencing: asyncio.Task | None = None
+
+    def silence_at_deadline(self, context) -> None:
+        """Go silent at a simulated exam's deadline (#424).
+
+        The delay is `deadline_at - server_now` from Phoenix's context, so the
+        worker's own clock does not move the deadline. At it, the reply being
+        spoken stops, and no later reply is published or spoken; a kept turn or a
+        spoken exam request is still reported. A training, or a context from an
+        older Phoenix without the deadline, never goes silent.
+        """
+        if context.get("mode") != "simulated_exam":
+            return
+        try:
+            deadline = datetime.fromisoformat(context["deadline_at"])
+            server_now = datetime.fromisoformat(context["server_now"])
+        except (KeyError, TypeError, ValueError):
+            return
+        delay = max(0.0, (deadline - server_now).total_seconds())
+        self._deadline = asyncio.get_running_loop().call_later(delay, self._fall_silent)
+
+    def _fall_silent(self) -> None:
+        self.silent = True
+        self._silencing = asyncio.create_task(self.stop())
 
     async def start(self) -> None:
         """Publish the patient track ahead of the first reply; a failure is retried then."""
@@ -367,6 +402,8 @@ class PatientVoice:
             return
         if reply.is_kept_receipt():
             await self._acknowledge(reply)
+            return
+        if self.silent:
             return
         event = {
             "session_id": self.session_id,
@@ -399,6 +436,8 @@ class PatientVoice:
         A synthesis failure is logged content-free and publishes nothing: the learner's
         screen has no spoken turn to mark as failed.
         """
+        if self.silent:
+            return
         task = asyncio.create_task(self._speak(reply, report_failure=False))
         self._tail = (reply.generation_id, reply.turn_id, task)
         self._tasks.add(task)
@@ -508,6 +547,8 @@ class PatientVoice:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def aclose(self) -> None:
+        if self._deadline is not None:
+            self._deadline.cancel()
         await self.stop()
         if self.player is not None:
             await self.player.aclose()
