@@ -21,7 +21,7 @@ namespace StationFakePhoenix
 	const TCHAR* SessionBody = TEXT(R"({
 		"session_id": "stub-session", "station_id": "s", "station_version": "1", "audio_consent": false,
 		"started_at": "2026-10-21T12:00:00Z", "expires_at": "2026-10-21T12:30:00Z",
-		"deadline_at": "2026-10-21T12:10:00Z", "server_now": "2026-10-21T12:00:00Z"
+		"deadline_at": "2026-10-21T12:10:00Z", "cap_at": "2026-10-21T12:20:00Z", "server_now": "2026-10-21T12:00:00Z"
 	})");
 
 	FString ShowBody(const TCHAR* Status)
@@ -29,7 +29,7 @@ namespace StationFakePhoenix
 		return FString::Printf(TEXT(R"({
 			"session_id": "stub-session", "station_id": "s", "station_version": "1", "audio_consent": false,
 			"started_at": "2026-10-21T12:00:00Z", "expires_at": "2026-10-21T12:30:00Z",
-			"deadline_at": "2026-10-21T12:10:00Z", "status": "%s", "completion_reason": %s,
+			"deadline_at": "2026-10-21T12:10:00Z", "cap_at": "2026-10-21T12:20:00Z", "status": "%s", "completion_reason": %s,
 			"messages": [], "server_now": "2026-10-21T12:01:00Z"
 		})"), Status, FCString::Strcmp(Status, TEXT("completed")) == 0 ? TEXT("\"user\"") : TEXT("null"));
 	}
@@ -79,7 +79,7 @@ namespace StationFakePhoenix
 		return FString::Printf(TEXT(R"({
 			"session_id": "stub-session", "station_id": "s", "station_version": "1", "audio_consent": true,
 			"mode": "simulated_exam", "started_at": "2026-10-21T12:00:00Z", "expires_at": "2026-10-21T12:30:00Z",
-			"deadline_at": "2026-10-21T12:10:00Z", "status": "completed", "completion_reason": "timer",
+			"deadline_at": "2026-10-21T12:10:00Z", "cap_at": "2026-10-21T12:10:00Z", "status": "completed", "completion_reason": "timer",
 			"messages": [%s], "server_now": "2026-10-21T12:10:04Z"
 		})"), Messages);
 	}

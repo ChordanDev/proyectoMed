@@ -16,6 +16,9 @@ struct STATIONCLIENT_API FStationClock
 	/** Time left until `Deadline` at a local monotonic instant, never negative. */
 	FTimespan RemainingAt(const FDateTime& Deadline, double LocalSeconds) const;
 
+	/** `RemainingAt`, negative by how far past `Deadline` the instant is. */
+	FTimespan SignedRemainingAt(const FDateTime& Deadline, double LocalSeconds) const;
+
 	bool IsAnchored() const { return bAnchored; }
 
 private:

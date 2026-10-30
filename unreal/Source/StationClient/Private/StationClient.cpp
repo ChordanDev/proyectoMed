@@ -362,11 +362,27 @@ FTimespan UStationClient::GetRemainingTime() const
 
 FTimespan UStationClient::GetRemainingTimeAt(double LocalSeconds) const
 {
-	if (!Session.IsSet() || Session->Status == EStationSessionStatus::Completed || !Clock.IsAnchored())
-	{
-		return FTimespan::Zero();
-	}
-	return Clock.RemainingAt(Session->DeadlineAt, LocalSeconds);
+	return IsCounting() ? Clock.RemainingAt(Session->DeadlineAt, LocalSeconds) : FTimespan::Zero();
+}
+
+FTimespan UStationClient::GetSignedRemainingTime() const
+{
+	return GetSignedRemainingTimeAt(FPlatformTime::Seconds());
+}
+
+FTimespan UStationClient::GetSignedRemainingTimeAt(double LocalSeconds) const
+{
+	return IsCounting() ? Clock.SignedRemainingAt(Session->DeadlineAt, LocalSeconds) : FTimespan::Zero();
+}
+
+FTimespan UStationClient::GetRunTimeLeft() const
+{
+	return IsCounting() ? Clock.RemainingAt(Session->CapAt, FPlatformTime::Seconds()) : FTimespan::Zero();
+}
+
+bool UStationClient::IsCounting() const
+{
+	return Session.IsSet() && Session->Status != EStationSessionStatus::Completed && Clock.IsAnchored();
 }
 
 TOptional<FDateTime> UStationClient::GetServerTime() const

@@ -57,6 +57,9 @@ minutes today). The client anchors Phoenix's `server_now` to the local monotonic
 clock, so `GetRemainingTime()` ignores changes to the machine's date and time.
 
 - It returns zero before a run, after the deadline, and once the run is completed.
+- `GetSignedRemainingTime()` is the same time, negative past the deadline: a
+  training's overtime.
+- `GetRunTimeLeft()` is the time left until Phoenix ends the run (`cap_at`).
 - `RefreshSession` re-anchors the clock to Phoenix.
 - The monotonic clock stops while the Mac sleeps, so after a sleep the timer shows
   more time than is left. Phoenix still refuses late turns with
@@ -65,9 +68,9 @@ clock, so `GetRemainingTime()` ignores changes to the machine's date and time.
 - `GetServerTime()` is Phoenix's clock now (UTC), from the same anchor. It is
   unset until Phoenix has sent a `server_now`, and keeps running after the run.
   The scene's desk clock uses it ([#425](#the-prova-simulada-exam-room-issue-425)).
-- At zero, call `FinishSession(EStationFinishReason::Timer)`. If Phoenix answers
-  `deadline_not_reached` (409), the local clock ran ahead: call `RefreshSession`
-  and keep counting.
+- When `GetRunTimeLeft()` reads zero, call `FinishSession(EStationFinishReason::Timer)`.
+  If Phoenix answers `deadline_not_reached` (409), the local clock ran ahead: call
+  `RefreshSession` and keep counting.
 
 ### Training overtime (#323)
 
@@ -77,9 +80,13 @@ keeps accepting turns and impresso requests after it, until `cap_at`
 `completion_reason: "cap"`, and later turns get `station_time_elapsed` (409).
 `expires_at` stays after `cap_at`, so the result can still be read.
 
-- Do not call `FinishSession(EStationFinishReason::Timer)` at zero in a training:
-  show that the expected time is over and count the overtime up. The learner
-  finishes whenever they choose (`user`).
+- Do not call `FinishSession(EStationFinishReason::Timer)` at the deadline in a
+  training: show that the expected time is over and count the overtime up. The
+  learner finishes whenever they choose (`user`).
+- The client never works out `cap_at`: it reads it from the session. At `cap_at`
+  the run flow calls `ExpireTimer`, which loads the result of the run Phoenix ended.
+- The HUD reads "Tempo restante" and counts down, then "Tempo esgotado · além do
+  tempo" in the Prova simulada accent, counting up (`+03:20`).
 - In a real test (`"simulated_exam"`), `cap_at` equals `deadline_at`: the run ends
   at ten minutes with `completion_reason: "timer"` and there is no overtime.
 
@@ -128,7 +135,8 @@ All operations are methods of `UStationClient`. Each one takes a
 | `ForgetSession` | none | Clears the local session at once and leaves the room, for a run Phoenix stopped answering; call `DiscardSession` first so Phoenix forgets it too if it is back | #196 |
 
 Synchronous accessors: `GetSession()` (null without a run), `GetRemainingTime()`
-(and `GetRemainingTimeAt(LocalSeconds)` for tests), `GetServerTime()`, `GetPhoenixBaseUrl()` and
+(and `GetRemainingTimeAt(LocalSeconds)` for tests), `GetSignedRemainingTime()` (and
+`GetSignedRemainingTimeAt(LocalSeconds)`), `GetRunTimeLeft()`, `GetServerTime()`, `GetPhoenixBaseUrl()` and
 `SetPhoenixBaseUrl()`. `FStationClock` is the public helper behind the timer.
 
 Known limits, for the slices that build on them:
@@ -1045,7 +1053,7 @@ so a colour or a control changes in one place. The tokens are those of
 
 Buttons and the enter arrow are at least 44 px tall. They gain a white ring while the
 keyboard has them, and a click does not draw it. `HudPanelOpacity` stays at the 60%
-approved in #444 until the HUD's own Cine issue. `Font` loads Manrope by path, so
+approved in #444; the Cine HUD keeps it (#461). `Font` loads Manrope by path, so
 `DefaultGame.ini` cooks `/Game/Station/UI/Fonts` on purpose.
 
 ## Not in the interface yet
@@ -1173,7 +1181,7 @@ changes.
 
 `ProyectoMed.StationHud.Snapshot` (in `StationHudSnapshotSpec.cpp`) renders the
 in-run HUD in chosen states (exam panel closed and open, recording, the
-document reader, a text training) to PNG files, to judge its look without
+document reader, a text training, the overtime, a lost voice, a training's brief) to PNG files, to judge its look without
 playing a run to each state. It asserts nothing about the look, needs an RHI
 (the runner's `-nullrhi` skips it), and writes only when
 `STATION_HUD_SNAPSHOT_DIR` names a folder:

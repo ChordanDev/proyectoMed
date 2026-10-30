@@ -42,10 +42,23 @@ namespace
 
 	// The side panels' layout, shared by the conversation and the exam requests.
 	constexpr float SidePanelWidth = 440.f;
-	constexpr float SidePanelPadding = 20.f;
+	constexpr float SidePanelPadding = 24.f;
+	/** How far the HUD stays from the screen's edges. */
+	constexpr float HudEdge = 32.f;
+	/** Wide enough for "+00:00", so the timer's panel holds still: Manrope's digits differ in width. */
+	constexpr float TimerColumnWidth = 148.f;
+	/** The voice's long notices wrap, so the timer's panel keeps clear of the panels beside it. */
+	constexpr float VoiceStatusWrapWidth = 200.f;
+	constexpr float VoiceStatusMinWidth = 190.f;
+	/** "Tempo esgotado ·" on one line and "além do tempo" on the next, so the overtime stays as wide as the time left. */
+	constexpr float TimerLabelWrapWidth = 125.f;
+	constexpr float BriefReaderWidth = 600.f;
+	/** The conversation's bubbles in the mockups; opaque, like everything read on a panel (#444). */
+	const FLinearColor LearnerBubbleFill(FColor(0x22, 0x4A, 0x45));
+	const FLinearColor PatientBubbleFill(FColor(0x24, 0x31, 0x3B));
 	/** How far a bubble stays from the other side, so the two speakers read apart. */
 	constexpr float BubbleIndent = 48.f;
-	constexpr float BubblePadding = 12.f;
+	constexpr float BubblePadding = 14.f;
 	/** Room the conversation's scroll bar takes once it shows. */
 	constexpr float ScrollBarAllowance = 12.f;
 	/** The widest a chat bubble's text runs, so it wraps inside the panel. */
@@ -67,6 +80,39 @@ namespace
 	{
 		Text.SetAutoWrapText(false);
 		Text.SetWrapTextAt(Width);
+	}
+
+	/** A rule across a side panel's `Column`. */
+	void AddRule(UWidgetTree& Tree, UVerticalBox& Column, const FLinearColor& Color, float SpaceAbove)
+	{
+		UBorder* Rule = Tree.ConstructWidget<UBorder>();
+		Rule->SetBrushColor(Color);
+		Rule->SetPadding(FMargin(0.f, 0.5f));
+		if (UVerticalBoxSlot* RuleSlot = Column.AddChildToVerticalBox(Rule))
+		{
+			RuleSlot->SetPadding(FMargin(0.f, SpaceAbove, 0.f, 0.f));
+		}
+	}
+
+	/** A microphone drawn from rounded boxes: the capsule, its stand and its base. */
+	void AddMicrophoneIcon(UWidgetTree& Tree, UVerticalBox& Icon, const FLinearColor& Color, float Scale)
+	{
+		const auto AddPart = [&Tree, &Icon, &Color, Scale](float Width, float Height, float Radius, bool bOutlined, float SpaceAbove)
+		{
+			USizeBox* PartSize = Tree.ConstructWidget<USizeBox>();
+			PartSize->SetWidthOverride(Width * Scale);
+			PartSize->SetHeightOverride(Height * Scale);
+			if (UVerticalBoxSlot* PartSlot = Icon.AddChildToVerticalBox(PartSize))
+			{
+				PartSlot->SetHorizontalAlignment(HAlign_Center);
+				PartSlot->SetPadding(FMargin(0.f, SpaceAbove * Scale, 0.f, 0.f));
+			}
+			PartSize->SetContent(StationUi::MakeRounded(Tree, bOutlined ? FLinearColor::Transparent : Color,
+				Radius * Scale, FMargin(0.f), Color, bOutlined ? 3.f * Scale : 0.f));
+		};
+		AddPart(18.f, 28.f, 9.f, true, 0.f);
+		AddPart(3.f, 7.f, 1.5f, false, 2.f);
+		AddPart(18.f, 3.f, 1.5f, false, 0.f);
 	}
 
 	/** Phoenix's category of a released document, as the learner reads it. */
@@ -918,48 +964,111 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		UOverlay* Root = WidgetTree->ConstructWidget<UOverlay>();
 		WidgetTree->RootWidget = Root;
 
-		UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(28.f, 14.f, 28.f, 18.f),
-			StationUi::PanelEdge, 1.f);
-		if (UOverlaySlot* Slot = Root->AddChildToOverlay(Panel))
-		{
-			Slot->SetHorizontalAlignment(HAlign_Center);
-			Slot->SetVerticalAlignment(VAlign_Top);
-			Slot->SetPadding(FMargin(0.f, 24.f, 0.f, 0.f));
-		}
-
-		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
-		Panel->SetContent(Column);
-		ModeText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 14, false, StationUi::Muted, 0.f);
-		TimerText = StationUi::AddText(*WidgetTree, *Column, FormatStationTimer(FTimespan::Zero()), 40, true,
-			StationUi::Ink, 2.f);
-		BriefButton = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("OpenBrief", "Cenário e tarefas"), 8.f);
-		BriefButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleOpenBrief);
-		if (UVerticalBoxSlot* BriefSlot = Cast<UVerticalBoxSlot>(BriefButton->Slot))
-		{
-			BriefSlot->SetHorizontalAlignment(HAlign_Center);
-		}
-		FallbackText = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("VoiceFallback", "Voz indisponível — usando texto."),
-			14, false, StationUi::Caution, 4.f);
-		VoiceStatusText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 14, false, StationUi::Muted, 4.f);
-		ModeText->SetJustification(ETextJustify::Center);
-		TimerText->SetJustification(ETextJustify::Center);
-		FallbackText->SetJustification(ETextJustify::Center);
-		VoiceStatusText->SetJustification(ETextJustify::Center);
-
-		FinishButton = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("FinishStation", "Finalizar estação"), 12.f);
-		FinishButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleFinish);
-		StationUi::MakeDanger(*FinishButton);
-		if (UVerticalBoxSlot* FinishSlot = Cast<UVerticalBoxSlot>(FinishButton->Slot))
-		{
-			FinishSlot->SetHorizontalAlignment(HAlign_Center);
-		}
-
+		BuildBriefReader(*Root);
 		BuildConversation(*Root);
-		BuildExamTab(*Root);
+		BuildSideActions(*Root);
 		BuildExamDrawer(*Root);
+		BuildTimerPanel(*Root);
 		BuildDocumentViewer(*Root);
 	}
 	return Super::RebuildWidget();
+}
+
+void UStationHudWidget::BuildTimerPanel(UOverlay& Root)
+{
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(26.f, 14.f, 18.f, 14.f),
+		StationUi::PanelEdge, 1.f);
+	TimerPanel = Panel;
+	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Panel))
+	{
+		Slot->SetHorizontalAlignment(HAlign_Center);
+		Slot->SetVerticalAlignment(VAlign_Top);
+		Slot->SetPadding(FMargin(0.f, HudEdge, 0.f, 0.f));
+	}
+	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
+	Panel->SetContent(Row);
+
+	USizeBox* TimeSize = WidgetTree->ConstructWidget<USizeBox>();
+	TimeSize->SetWidthOverride(TimerColumnWidth);
+	TimerColumn = TimeSize;
+	if (UHorizontalBoxSlot* TimeSlot = Row->AddChildToHorizontalBox(TimeSize))
+	{
+		TimeSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	UVerticalBox* Time = WidgetTree->ConstructWidget<UVerticalBox>();
+	TimeSize->SetContent(Time);
+	TimerLabelText = MakeText(*WidgetTree, LOCTEXT("TimeLeft", "Tempo restante"), StationUi::FontBold, 11.f, StationUi::Muted, 120);
+	TimerLabelText->SetTextTransformPolicy(ETextTransformPolicy::ToUpper);
+	WrapAt(*TimerLabelText, TimerLabelWrapWidth);
+	Time->AddChild(TimerLabelText);
+	TimerText = MakeText(*WidgetTree, FormatStationTimer(FTimespan::Zero()), StationUi::FontExtraBold, 40.f, StationUi::InkTitle, 20);
+	if (UVerticalBoxSlot* TimerSlot = Time->AddChildToVerticalBox(TimerText))
+	{
+		TimerSlot->SetPadding(FMargin(0.f, 2.f, 0.f, 0.f));
+	}
+
+	USizeBox* DividerSize = WidgetTree->ConstructWidget<USizeBox>();
+	DividerSize->SetWidthOverride(1.f);
+	TimerDivider = DividerSize;
+	UBorder* Divider = WidgetTree->ConstructWidget<UBorder>();
+	Divider->SetBrushColor(StationUi::PanelEdge);
+	DividerSize->SetContent(Divider);
+	if (UHorizontalBoxSlot* DividerSlot = Row->AddChildToHorizontalBox(DividerSize))
+	{
+		DividerSlot->SetPadding(FMargin(24.f, 0.f, 24.f, 0.f));
+	}
+
+	USizeBox* StatusSize = WidgetTree->ConstructWidget<USizeBox>();
+	StatusSize->SetMinDesiredWidth(VoiceStatusMinWidth);
+	if (UHorizontalBoxSlot* StatusSlot = Row->AddChildToHorizontalBox(StatusSize))
+	{
+		StatusSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	UVerticalBox* Status = WidgetTree->ConstructWidget<UVerticalBox>();
+	StatusSize->SetContent(Status);
+
+	UHorizontalBox* Voice = WidgetTree->ConstructWidget<UHorizontalBox>();
+	VoiceRow = Voice;
+	Status->AddChild(Voice);
+	USizeBox* DotSize = WidgetTree->ConstructWidget<USizeBox>();
+	DotSize->SetWidthOverride(10.f);
+	DotSize->SetHeightOverride(10.f);
+	VoiceDot = StationUi::MakeRounded(*WidgetTree, FLinearColor::White, 5.f, FMargin(0.f));
+	DotSize->SetContent(VoiceDot);
+	if (UHorizontalBoxSlot* DotSlot = Voice->AddChildToHorizontalBox(DotSize))
+	{
+		DotSlot->SetVerticalAlignment(VAlign_Top);
+		DotSlot->SetPadding(FMargin(0.f, 5.f, 8.f, 0.f));
+	}
+	VoiceStatusText = MakeText(*WidgetTree, FText::GetEmpty(), StationUi::FontSemiBold, 14.f, StationUi::Ink);
+	WrapAt(*VoiceStatusText, VoiceStatusWrapWidth);
+	Voice->AddChild(VoiceStatusText);
+
+	FallbackText = MakeText(*WidgetTree, LOCTEXT("VoiceFallback", "Voz indisponível — usando texto."), StationUi::FontSemiBold, 14.f,
+		StationUi::Caution);
+	WrapAt(*FallbackText, VoiceStatusWrapWidth);
+	Status->AddChild(FallbackText);
+
+	ModeText = MakeText(*WidgetTree, FText::GetEmpty(), StationUi::FontRegular, 13.f, StationUi::Muted);
+	if (UVerticalBoxSlot* ModeSlot = Status->AddChildToVerticalBox(ModeText))
+	{
+		ModeSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
+	}
+
+	FinishButton = StationUi::AddButton(*WidgetTree, *Row, LOCTEXT("FinishStation", "Finalizar estação"));
+	FinishButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleFinish);
+	StationUi::MakeDanger(*FinishButton);
+	// The mockups' smaller button, 44 px tall, to sit in the panel.
+	if (UTextBlock* Label = Cast<UTextBlock>(FinishButton->GetChildAt(0)))
+	{
+		Label->SetFont(StationUi::MockupFont(StationUi::FontBold, 14.f));
+		Label->SetMargin(FMargin(18.f, 12.5f));
+	}
+	if (UHorizontalBoxSlot* FinishSlot = Cast<UHorizontalBoxSlot>(FinishButton->Slot))
+	{
+		FinishSlot->SetPadding(FMargin(24.f, 0.f, 0.f, 0.f));
+		FinishSlot->SetVerticalAlignment(VAlign_Center);
+	}
 }
 
 void UStationHudWidget::BuildConversation(UOverlay& Root)
@@ -973,33 +1082,68 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 	{
 		Slot->SetHorizontalAlignment(HAlign_Left);
 		Slot->SetVerticalAlignment(VAlign_Fill);
-		Slot->SetPadding(FMargin(24.f, 24.f, 0.f, 24.f));
+		Slot->SetPadding(FMargin(HudEdge, HudEdge, 0.f, HudEdge));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(SidePanelPadding, 18.f),
-		StationUi::PanelEdge, 1.f);
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(0.f), StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
 	Panel->SetContent(Column);
-	StationUi::AddText(*WidgetTree, *Column, LOCTEXT("ConversationTitle", "Conversa"), 20, true, StationUi::Ink, 0.f);
+	if (UVerticalBoxSlot* TitleSlot = Column->AddChildToVerticalBox(
+			MakeText(*WidgetTree, LOCTEXT("ConversationTitle", "Conversa"), StationUi::FontBold, 18.f, StationUi::InkTitle)))
+	{
+		TitleSlot->SetPadding(FMargin(SidePanelPadding, 20.f));
+	}
+	AddRule(*WidgetTree, *Column, StationUi::PanelEdge, 0.f);
 
+	// The newest line sits above the footer, and a short conversation stays down there with it.
 	TranscriptScroll = WidgetTree->ConstructWidget<UScrollBox>();
+	TranscriptScroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
 	if (UVerticalBoxSlot* ScrollSlot = Column->AddChildToVerticalBox(TranscriptScroll))
 	{
 		ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-		ScrollSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+		ScrollSlot->SetVerticalAlignment(VAlign_Bottom);
+		ScrollSlot->SetPadding(FMargin(SidePanelPadding, 20.f, SidePanelPadding, 0.f));
 	}
 	TranscriptBox = WidgetTree->ConstructWidget<UVerticalBox>();
 	TranscriptScroll->AddChild(TranscriptBox);
 
-	TurnErrorText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 15, false, StationUi::Caution, 8.f);
-
-	UBorder* Rule = WidgetTree->ConstructWidget<UBorder>();
-	Rule->SetBrushColor(StationUi::PanelEdge);
-	Rule->SetPadding(FMargin(0.f, 0.5f));
-	if (UVerticalBoxSlot* RuleSlot = Column->AddChildToVerticalBox(Rule))
+	UHorizontalBox* Talking = WidgetTree->ConstructWidget<UHorizontalBox>();
+	PatientTalkingRow = Talking;
+	if (UVerticalBoxSlot* TalkingSlot = Column->AddChildToVerticalBox(Talking))
 	{
-		RuleSlot->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
+		TalkingSlot->SetPadding(FMargin(SidePanelPadding, 12.f, SidePanelPadding, 0.f));
+	}
+	if (UHorizontalBoxSlot* LabelSlot = Talking->AddChildToHorizontalBox(
+			MakeText(*WidgetTree, LOCTEXT("PatientTalking", "Paciente falando"), StationUi::FontRegular, 13.f, StationUi::Muted)))
+	{
+		LabelSlot->SetVerticalAlignment(VAlign_Center);
+		LabelSlot->SetPadding(FMargin(0.f, 0.f, 7.f, 0.f));
+	}
+	for (const float Height : {10.f, 18.f, 12.f, 20.f})
+	{
+		USizeBox* Bar = WidgetTree->ConstructWidget<USizeBox>();
+		Bar->SetWidthOverride(3.f);
+		Bar->SetHeightOverride(Height);
+		Bar->SetContent(StationUi::MakeRounded(*WidgetTree, StationUi::Muted, 1.5f, FMargin(0.f)));
+		if (UHorizontalBoxSlot* BarSlot = Talking->AddChildToHorizontalBox(Bar))
+		{
+			BarSlot->SetVerticalAlignment(VAlign_Center);
+			BarSlot->SetPadding(FMargin(3.f, 0.f, 0.f, 0.f));
+		}
+	}
+
+	TurnErrorText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 15, false, StationUi::Caution, 0.f);
+	if (UVerticalBoxSlot* ErrorSlot = Cast<UVerticalBoxSlot>(TurnErrorText->Slot))
+	{
+		ErrorSlot->SetPadding(FMargin(SidePanelPadding, 8.f, SidePanelPadding, 0.f));
+	}
+
+	AddRule(*WidgetTree, *Column, StationUi::PanelEdge, 14.f);
+	UVerticalBox* Footer = WidgetTree->ConstructWidget<UVerticalBox>();
+	if (UVerticalBoxSlot* FooterSlot = Column->AddChildToVerticalBox(Footer))
+	{
+		FooterSlot->SetPadding(FMargin(SidePanelPadding, 20.f));
 	}
 
 	// Push-to-talk (#419): in a voice training the learner holds this button, or the
@@ -1007,22 +1151,31 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 	TalkButton = WidgetTree->ConstructWidget<UButton>();
 	TalkButton->OnPressed.AddDynamic(this, &UStationHudWidget::HandlePressTalk);
 	TalkButton->OnReleased.AddDynamic(this, &UStationHudWidget::HandleReleaseTalk);
-	TalkText = WidgetTree->ConstructWidget<UTextBlock>();
-	TalkText->SetFont(StationUi::Font(StationUi::FontBold, 15));
-	TalkText->SetJustification(ETextJustify::Center);
-	TalkText->SetColorAndOpacity(FSlateColor(StationUi::Ink));
-	TalkButton->AddChild(TalkText);
-	if (UVerticalBoxSlot* TalkSlot = Column->AddChildToVerticalBox(TalkButton))
+	UHorizontalBox* TalkContent = WidgetTree->ConstructWidget<UHorizontalBox>();
+	if (UButtonSlot* ContentSlot = Cast<UButtonSlot>(TalkButton->AddChild(TalkContent)))
 	{
-		TalkSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+		ContentSlot->SetPadding(FMargin(0.f));
+	}
+	TalkIcon = WidgetTree->ConstructWidget<UVerticalBox>();
+	if (UHorizontalBoxSlot* IconSlot = TalkContent->AddChildToHorizontalBox(TalkIcon))
+	{
+		IconSlot->SetVerticalAlignment(VAlign_Center);
+		IconSlot->SetPadding(FMargin(0.f, 0.f, 12.f, 0.f));
+	}
+	TalkText = WidgetTree->ConstructWidget<UTextBlock>();
+	TalkText->SetFont(StationUi::MockupFont(StationUi::FontBold, 16.f));
+	if (UHorizontalBoxSlot* TextSlot = TalkContent->AddChildToHorizontalBox(TalkText))
+	{
+		TextSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	if (UVerticalBoxSlot* TalkSlot = Footer->AddChildToVerticalBox(TalkButton))
+	{
+		TalkSlot->SetPadding(FMargin(0.f, 0.f, 0.f, 12.f));
 	}
 
 	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
 	TurnRow = Row;
-	if (UVerticalBoxSlot* RowSlot = Column->AddChildToVerticalBox(Row))
-	{
-		RowSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
-	}
+	Footer->AddChild(Row);
 
 	TurnInput = WidgetTree->ConstructWidget<UEditableTextBox>();
 	TurnInput->SetHintText(LOCTEXT("TurnHint", "Mensagem ao paciente"));
@@ -1105,27 +1258,29 @@ void UStationHudWidget::AddMessage(EStationSpeaker Speaker, const FString& Text,
 	UVerticalBox* Message = WidgetTree->ConstructWidget<UVerticalBox>();
 	if (UVerticalBoxSlot* MessageSlot = TranscriptBox->AddChildToVerticalBox(Message))
 	{
-		MessageSlot->SetPadding(FMargin(bLearner ? BubbleIndent : 0.f, TranscriptBox->GetChildrenCount() > 1 ? 12.f : 0.f,
+		MessageSlot->SetPadding(FMargin(bLearner ? BubbleIndent : 0.f, TranscriptBox->GetChildrenCount() > 1 ? 14.f : 0.f,
 			bLearner ? 0.f : BubbleIndent, 0.f));
 		MessageSlot->SetHorizontalAlignment(bLearner ? HAlign_Right : HAlign_Left);
 	}
-	UTextBlock* Who = StationUi::AddText(*WidgetTree, *Message,
-		bLearner ? LOCTEXT("LearnerSpeaker", "Você") : LOCTEXT("PatientSpeaker", "Paciente"), 13, true, StationUi::Muted, 0.f);
-	if (UVerticalBoxSlot* WhoSlot = Cast<UVerticalBoxSlot>(Who->Slot))
+	UTextBlock* Who = MakeText(*WidgetTree, bLearner ? LOCTEXT("LearnerSpeaker", "Você") : LOCTEXT("PatientSpeaker", "Paciente"),
+		StationUi::FontRegular, 13.f, StationUi::Muted);
+	if (UVerticalBoxSlot* WhoSlot = Message->AddChildToVerticalBox(Who))
 	{
 		WhoSlot->SetHorizontalAlignment(bLearner ? HAlign_Right : HAlign_Left);
 	}
-	UBorder* Bubble = StationUi::MakeRounded(*WidgetTree, bLearner ? StationUi::LearnerBubble : StationUi::Raised, 10.f,
-		FMargin(BubblePadding, 8.f));
+	UBorder* Bubble = StationUi::MakeRounded(*WidgetTree, bLearner ? LearnerBubbleFill : PatientBubbleFill, 12.f,
+		FMargin(BubblePadding, 12.f));
+	// The corner nearest its speaker stays tight.
+	FSlateBrush Shape = Bubble->Background;
+	Shape.OutlineSettings.CornerRadii = bLearner ? FVector4(12.f, 12.f, 4.f, 12.f) : FVector4(12.f, 12.f, 12.f, 4.f);
+	Bubble->SetBrush(Shape);
 	if (UVerticalBoxSlot* BubbleSlot = Message->AddChildToVerticalBox(Bubble))
 	{
 		BubbleSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
 		BubbleSlot->SetHorizontalAlignment(bLearner ? HAlign_Right : HAlign_Left);
 	}
-	UTextBlock* Body = WidgetTree->ConstructWidget<UTextBlock>();
-	Body->SetText(FText::FromString(Text));
-	Body->SetFont(StationUi::Font(StationUi::FontRegular, 16));
-	Body->SetColorAndOpacity(FSlateColor(bInProgress ? StationUi::Muted : StationUi::Ink));
+	UTextBlock* Body = MakeText(*WidgetTree, FText::FromString(Text), StationUi::FontRegular, 15.f,
+		bInProgress ? StationUi::Muted : StationUi::Ink);
 	// A fixed wrap width: auto wrap lays a new block out unwrapped for one frame,
 	// wider than the panel, before it wraps.
 	Body->SetWrapTextAt(BubbleWrapWidth);
@@ -1161,26 +1316,100 @@ void UStationDocumentLink::HandleClicked()
 	}
 }
 
-void UStationHudWidget::BuildExamTab(UOverlay& Root)
+void UStationHudWidget::BuildSideActions(UOverlay& Root)
 {
-	ExamTab = WidgetTree->ConstructWidget<UButton>();
-	FButtonStyle Style;
-	Style.SetNormal(StationUi::RoundedBrush(StationUi::PanelSolid, 10.f, StationUi::PanelEdge, 1.f));
-	Style.SetHovered(StationUi::RoundedBrush(StationUi::Raised, 10.f, StationUi::PanelEdge, 1.f));
-	Style.SetPressed(StationUi::RoundedBrush(StationUi::Raised, 10.f, StationUi::PanelEdge, 1.f));
-	ExamTab->SetStyle(Style);
-	ExamTab->OnClicked.AddDynamic(this, &UStationHudWidget::HandleOpenExams);
-	ExamTabText = WidgetTree->ConstructWidget<UTextBlock>();
-	ExamTabText->SetFont(StationUi::Font(StationUi::FontBold, 17));
-	ExamTabText->SetColorAndOpacity(FSlateColor(StationUi::Ink));
-	ExamTabText->SetMargin(FMargin(18.f, 12.f));
-	ExamTab->AddChild(ExamTabText);
-	if (UOverlaySlot* Slot = Root.AddChildToOverlay(ExamTab))
+	UVerticalBox* Actions = WidgetTree->ConstructWidget<UVerticalBox>();
+	SideActions = Actions;
+	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Actions))
 	{
 		Slot->SetHorizontalAlignment(HAlign_Right);
 		Slot->SetVerticalAlignment(VAlign_Top);
-		Slot->SetPadding(FMargin(0.f, 24.f, 24.f, 0.f));
+		Slot->SetPadding(FMargin(0.f, HudEdge, HudEdge, 0.f));
 	}
+
+	// An outlined button on a panel's ground, so it reads over the scene.
+	const auto AddAction = [this, Actions](const FText& Label, float SpaceAbove)
+	{
+		UBorder* Ground = StationUi::MakeRounded(*WidgetTree, StationUi::Panel, 8.f, FMargin(0.f));
+		if (UVerticalBoxSlot* GroundSlot = Actions->AddChildToVerticalBox(Ground))
+		{
+			GroundSlot->SetHorizontalAlignment(HAlign_Right);
+			GroundSlot->SetPadding(FMargin(0.f, SpaceAbove, 0.f, 0.f));
+		}
+		UButton* Button = StationUi::AddButton(*WidgetTree, *Ground, Label);
+		StationUi::MakeSecondary(*Button);
+		// The mockups' 48 px, a little shorter than the kit's button.
+		if (UTextBlock* Text = Cast<UTextBlock>(Button->GetChildAt(0)))
+		{
+			Text->SetMargin(FMargin(24.f, 13.f));
+		}
+		return Button;
+	};
+	BriefButton = AddAction(LOCTEXT("OpenBrief", "Cenário e tarefas"), 0.f);
+	BriefButton->OnClicked.AddDynamic(this, &UStationHudWidget::HandleOpenBrief);
+	ExamTab = AddAction(LOCTEXT("ExamsTab", "Exames"), 12.f);
+	ExamTab->OnClicked.AddDynamic(this, &UStationHudWidget::HandleOpenExams);
+	ExamTabText = Cast<UTextBlock>(ExamTab->GetChildAt(0));
+}
+
+void UStationHudWidget::BuildBriefReader(UOverlay& Root)
+{
+	// A training's brief over the scene, under everything else on the HUD: the clock stays
+	// in view, and the learner can go on talking to the patient while reading it (#461).
+	UBorder* Screen = WidgetTree->ConstructWidget<UBorder>();
+	Screen->SetBrushColor(StationUi::Backdrop);
+	Screen->SetHorizontalAlignment(HAlign_Left);
+	Screen->SetPadding(FMargin(HudEdge + SidePanelWidth + HudEdge, 160.f, HudEdge, HudEdge));
+	BriefReader = Screen;
+	StationUi::SetShown(BriefReader, false);
+	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Screen))
+	{
+		Slot->SetHorizontalAlignment(HAlign_Fill);
+		Slot->SetVerticalAlignment(VAlign_Fill);
+	}
+	USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>();
+	Size->SetWidthOverride(BriefReaderWidth);
+	Screen->SetContent(Size);
+	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
+	Size->SetContent(Column);
+
+	UHorizontalBox* Eyebrow = WidgetTree->ConstructWidget<UHorizontalBox>();
+	Column->AddChild(Eyebrow);
+	if (UHorizontalBoxSlot* MarkSlot = Eyebrow->AddChildToHorizontalBox(StationUi::MakeModeMark(*WidgetTree, StationUi::TreinoAccent)))
+	{
+		MarkSlot->SetVerticalAlignment(VAlign_Center);
+		MarkSlot->SetPadding(FMargin(0.f, 0.f, 12.f, 0.f));
+	}
+	UTextBlock* Heading = MakeText(*WidgetTree, LOCTEXT("TrainingRunningHeading", "Treino · Cenário e tarefas"), StationUi::FontBold, 13.f,
+		StationUi::TreinoAccent, 120);
+	Heading->SetTextTransformPolicy(ETextTransformPolicy::ToUpper);
+	Eyebrow->AddChild(Heading);
+
+	UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>();
+	if (UVerticalBoxSlot* ScrollSlot = Column->AddChildToVerticalBox(Scroll))
+	{
+		ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		ScrollSlot->SetPadding(FMargin(0.f, 26.f, 0.f, 0.f));
+	}
+	UVerticalBox* Box = WidgetTree->ConstructWidget<UVerticalBox>();
+	Scroll->AddChild(Box);
+	BriefTitleText = AddLine(*WidgetTree, *Box, FText::GetEmpty(), StationUi::FontBold, 32.f, StationUi::InkTitle, 0.f, -30);
+	AddLine(*WidgetTree, *Box, LOCTEXT("ScenarioHeading", "Cenário de atuação"), StationUi::FontBold, 18.f, StationUi::InkTitle, 26.f);
+	BriefScenarioText = AddLine(*WidgetTree, *Box, FText::GetEmpty(), StationUi::FontMedium, 18.f, StationUi::InkBody, 10.f);
+	AddLine(*WidgetTree, *Box, LOCTEXT("TasksHeading", "Tarefas"), StationUi::FontBold, 18.f, StationUi::InkTitle, 26.f);
+	BriefTaskList = WidgetTree->ConstructWidget<UVerticalBox>();
+	Box->AddChild(BriefTaskList);
+
+	UButton* Close = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("CloseBrief", "Voltar ao consultório"), 18.f);
+	Close->OnClicked.AddDynamic(this, &UStationHudWidget::HandleCloseBriefReader);
+	StationUi::MakePrimary(*Close);
+	if (UVerticalBoxSlot* CloseSlot = Cast<UVerticalBoxSlot>(Close->Slot))
+	{
+		CloseSlot->SetHorizontalAlignment(HAlign_Left);
+	}
+	AddLine(*WidgetTree, *Column, LOCTEXT("FictionalNote",
+		"Caso clínico fictício, criado para treino educacional. Não corresponde a um paciente real."),
+		StationUi::FontRegular, 13.f, StationUi::Muted, 18.f);
 }
 
 void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
@@ -1318,25 +1547,9 @@ void UStationHudWidget::BuildMicrophone(UVerticalBox& Footer)
 	AskAloudButton->OnReleased.AddDynamic(this, &UStationHudWidget::HandleReleaseExamAloud);
 	ButtonSize->SetContent(AskAloudButton);
 
-	// A microphone drawn from rounded boxes: the capsule, its stand and its base.
 	UVerticalBox* Icon = WidgetTree->ConstructWidget<UVerticalBox>();
 	AskAloudButton->AddChild(Icon);
-	auto AddPart = [this, Icon](float Width, float Height, float Radius, bool bOutlined, float SpaceAbove)
-	{
-		USizeBox* PartSize = WidgetTree->ConstructWidget<USizeBox>();
-		PartSize->SetWidthOverride(Width);
-		PartSize->SetHeightOverride(Height);
-		if (UVerticalBoxSlot* PartSlot = Icon->AddChildToVerticalBox(PartSize))
-		{
-			PartSlot->SetHorizontalAlignment(HAlign_Center);
-			PartSlot->SetPadding(FMargin(0.f, SpaceAbove, 0.f, 0.f));
-		}
-		PartSize->SetContent(StationUi::MakeRounded(*WidgetTree, bOutlined ? FLinearColor::Transparent : StationUi::Ink,
-			Radius, FMargin(0.f), StationUi::Ink, bOutlined ? 3.f : 0.f));
-	};
-	AddPart(18.f, 28.f, 9.f, true, 0.f);
-	AddPart(3.f, 7.f, 1.5f, false, 2.f);
-	AddPart(18.f, 3.f, 1.5f, false, 0.f);
+	AddMicrophoneIcon(*WidgetTree, *Icon, StationUi::Ink, 1.f);
 
 	// A fixed height, so the panel never jumps as the status changes.
 	USizeBox* StatusSize = WidgetTree->ConstructWidget<USizeBox>();
@@ -1703,13 +1916,13 @@ void UStationHudWidget::OpenDocument(const FString& ImpressoId)
 void UStationHudWidget::OpenExams()
 {
 	StationUi::SetShown(ExamDrawer, true);
-	StationUi::SetShown(ExamTab, false);
+	StationUi::SetShown(SideActions, false);
 }
 
 void UStationHudWidget::CloseExams()
 {
 	StationUi::SetShown(ExamDrawer, false);
-	StationUi::SetShown(ExamTab, true);
+	StationUi::SetShown(SideActions, true);
 }
 
 void UStationHudWidget::RequestExam()
@@ -1798,10 +2011,50 @@ void UStationHudWidget::HandleFinish()
 
 void UStationHudWidget::HandleOpenBrief()
 {
-	if (Flow)
+	if (!Flow)
+	{
+		return;
+	}
+	if (Flow->GetSessionMode() == EStationSessionMode::SimulatedExam)
 	{
 		Flow->OpenBrief();
+		return;
 	}
+	const FStationSummary* Station = Flow->GetStation();
+	if (!Station)
+	{
+		return;
+	}
+	BriefTitleText->SetText(FText::FromString(Station->DisplayTitle));
+	BriefScenarioText->SetText(FText::FromString(Station->Scenario));
+	BriefTaskList->ClearChildren();
+	for (const FString& Task : Station->Tasks)
+	{
+		AddLine(*WidgetTree, *BriefTaskList, FText::FromString(TEXT("•  ") + Task), StationUi::FontRegular, 17.f, StationUi::InkBody, 8.f);
+	}
+	StationUi::SetShown(BriefReader, true);
+}
+
+void UStationHudWidget::HandleCloseBriefReader()
+{
+	StationUi::SetShown(BriefReader, false);
+}
+
+void UStationHudWidget::RefreshTimer()
+{
+	if (Flow && Flow->GetClient() && Flow->ShowsStationTimer())
+	{
+		ShowStationTime(Flow->GetClient()->GetSignedRemainingTime());
+	}
+}
+
+void UStationHudWidget::ShowStationTime(const FTimespan& Left)
+{
+	const bool bOvertime = Left < FTimespan::Zero();
+	TimerText->SetText(FormatStationTimer(Left));
+	TimerText->SetColorAndOpacity(FSlateColor(bOvertime ? StationUi::ProvaAccent : StationUi::InkTitle));
+	TimerLabelText->SetText(bOvertime ? LOCTEXT("TimeOver", "Tempo esgotado · além do tempo") : LOCTEXT("TimeLeft", "Tempo restante"));
+	TimerLabelText->SetColorAndOpacity(FSlateColor(bOvertime ? StationUi::ProvaAccent : StationUi::Muted));
 }
 
 void UStationHudWidget::Refresh()
@@ -1810,42 +2063,55 @@ void UStationHudWidget::Refresh()
 	{
 		return;
 	}
+	if (Flow->GetStep() != EStationRunStep::Running)
+	{
+		StationUi::SetShown(BriefReader, false);
+	}
 	FinishButton->SetIsEnabled(Flow->CanFinish());
 	// A simulated exam shows no countdown, only the desk clock in the room (#425).
 	const bool bExam = Flow->GetSessionMode() == EStationSessionMode::SimulatedExam;
 	ModeText->SetText(bExam ? LOCTEXT("SimulatedExamLabel", "Prova simulada")
-		: Flow->GetMode() == EStationTrainingMode::Voice ? LOCTEXT("VoiceTrainingLabel", "Treino por voz · Tempo restante")
-		: LOCTEXT("TextTrainingLabel", "Treino por texto · Tempo restante"));
-	StationUi::SetShown(TimerText, Flow->ShowsStationTimer());
-	StationUi::SetShown(BriefButton, bExam);
+		: Flow->GetMode() == EStationTrainingMode::Voice ? LOCTEXT("VoiceTrainingLabel", "Treino por voz")
+		: LOCTEXT("TextTrainingLabel", "Treino por texto"));
+	for (UWidget* Part : {TimerColumn.Get(), TimerDivider.Get(), static_cast<UWidget*>(TimerText.Get())})
+	{
+		StationUi::SetShown(Part, Flow->ShowsStationTimer());
+	}
+	RefreshTimer();
 	StationUi::SetShown(FallbackText, Flow->IsVoiceFallback());
 
 	const FStationVoiceView& Voice = Flow->GetVoice();
 	const bool bVoiceRun = Flow->GetMode() == EStationTrainingMode::Voice && !Flow->IsVoiceFallback();
+	const FLinearColor Accent = bExam ? StationUi::ProvaAccent : StationUi::TreinoAccent;
 	FText Status;
+	FLinearColor Dot = StationUi::Muted;
 	if (Voice.bLost)
 	{
 		Status = LOCTEXT("VoiceLost", "A voz caiu. O tempo da estação continua.");
+		Dot = StationUi::DangerInk;
 	}
 	else if (Voice.bMicrophoneUnavailable)
 	{
 		Status = LOCTEXT("MicrophoneUnavailable", "Microfone indisponível. Continue por escrito.");
+		Dot = StationUi::DangerInk;
 	}
 	else if (Voice.State == EStationVoiceState::Ready)
 	{
 		Status = LOCTEXT("VoiceReady", "Voz conectada");
+		Dot = Accent;
 	}
 	else if (Voice.State == EStationVoiceState::Reconnecting)
 	{
 		Status = LOCTEXT("VoiceReconnecting", "Reconectando a voz...");
+		Dot = StationUi::ProvaAccent;
 	}
 	else if (Voice.State != EStationVoiceState::Disconnected)
 	{
 		Status = LOCTEXT("VoiceConnecting", "Conectando a voz...");
 	}
-	StationUi::SetShown(VoiceStatusText, bVoiceRun && !Status.IsEmpty());
+	StationUi::SetShown(VoiceRow, bVoiceRun && !Status.IsEmpty());
 	VoiceStatusText->SetText(Status);
-	VoiceStatusText->SetColorAndOpacity(Voice.bLost ? StationUi::Caution : StationUi::Muted);
+	VoiceDot->SetBrushColor(Dot);
 
 	RefreshConversation();
 	RefreshTalk();
@@ -1860,6 +2126,10 @@ void UStationHudWidget::RefreshTalk()
 	}
 	const bool bShown = Flow->ShouldRequestExamsAloud(); // a voice training whose voice and microphone work
 	StationUi::SetShown(TalkButton, bShown);
+	// Hidden, not collapsed, where it can come back: the conversation must not jump each time.
+	PatientTalkingRow->SetVisibility(Flow->IsPatientAnswering() ? ESlateVisibility::SelfHitTestInvisible
+		: bShown ? ESlateVisibility::Hidden
+		: ESlateVisibility::Collapsed);
 	if (!bShown)
 	{
 		return;
@@ -1874,21 +2144,28 @@ void UStationHudWidget::RefreshTalk()
 	{
 		TalkText->SetText(Label);
 	}
-	if (TalkLookTalking.IsSet() && TalkLookTalking.GetValue() == bTalking)
+	const FLinearColor Fill = bTalking ? StationUi::Recording
+		: Flow->GetSessionMode() == EStationSessionMode::SimulatedExam ? StationUi::ProvaAccent
+		: StationUi::TreinoAccent;
+	if (TalkLookFill.IsSet() && TalkLookFill.GetValue() == Fill)
 	{
 		return;
 	}
-	TalkLookTalking = bTalking;
-	const FLinearColor Fill = bTalking ? StationUi::Recording : StationUi::Raised;
-	const FLinearColor Edge = bTalking ? StationUi::RecordingInk : StationUi::Quiet;
+	TalkLookFill = Fill;
+	const FLinearColor Ink = bTalking ? StationUi::InkTitle : StationUi::InkOnAccent;
+	const FLinearColor Edge = bTalking ? StationUi::RecordingInk : Fill;
 	FButtonStyle Style;
-	Style.SetNormal(StationUi::RoundedBrush(Fill, 10.f, Edge, 1.5f));
-	Style.SetHovered(StationUi::RoundedBrush(bTalking ? Fill : StationUi::RaisedHover, 10.f, bTalking ? Edge : StationUi::Ink, 1.5f));
-	Style.SetPressed(StationUi::RoundedBrush(Fill, 10.f, Edge, 1.5f));
-	Style.SetDisabled(StationUi::RoundedBrush(StationUi::Raised, 10.f, StationUi::PanelEdge, 1.5f));
-	Style.SetNormalPadding(FMargin(12.f, 12.f));
-	Style.SetPressedPadding(FMargin(12.f, 12.f));
+	Style.SetNormal(StationUi::RoundedBrush(Fill, 30.f, Edge, 1.5f));
+	Style.SetHovered(StationUi::RoundedBrush(Fill, 30.f, StationUi::InkTitle, 1.5f));
+	Style.SetPressed(StationUi::RoundedBrush(Fill, 30.f, Edge, 1.5f));
+	Style.SetDisabled(StationUi::RoundedBrush(StationUi::Raised, 30.f, StationUi::PanelEdge, 1.5f));
+	// With the label's line, the mockups' 60 px.
+	Style.SetNormalPadding(FMargin(12.f, 19.f));
+	Style.SetPressedPadding(FMargin(12.f, 19.f));
 	TalkButton->SetStyle(Style);
+	TalkText->SetColorAndOpacity(FSlateColor(Ink));
+	TalkIcon->ClearChildren();
+	AddMicrophoneIcon(*WidgetTree, *TalkIcon, Ink, 0.62f);
 }
 
 void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -1896,7 +2173,7 @@ void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	if (Flow && Flow->GetClient() && TimerText)
 	{
-		TimerText->SetText(FormatStationTimer(Flow->GetClient()->GetRemainingTime()));
+		RefreshTimer();
 		Flow->CheckStationTimer();
 	}
 	RefreshTalk();

@@ -109,6 +109,11 @@ UStationRunFlow* FStationHudSnapshotSpec::MakeFlow(EStationTrainingMode Mode) co
 	Flow->ExamRequests.Add(Request(TEXT("Raio X de tórax"), EStationImpressoDecision::Unavailable,
 		TEXT("Este exame não está disponível nesta estação.")));
 	Flow->ReleasedImpressos = {PhysicalExam(), BloodCount()};
+	FStationSummary Station;
+	Station.DisplayTitle = TEXT("Abdome agudo inflamatório — apendicite aguda");
+	Station.Scenario = TEXT("Você atende em um pronto atendimento de hospital geral, com laboratório e exames de imagem disponíveis.");
+	Station.Tasks = {TEXT("Realize a anamnese dirigida."), TEXT("Solicite os exames necessários."), TEXT("Explique a conduta ao paciente.")};
+	Flow->Station = Station;
 	return Flow;
 }
 
@@ -119,7 +124,7 @@ UStationHudWidget* FStationHudSnapshotSpec::MakeHud(UStationRunFlow* Flow) const
 	Hud->TakeWidget();
 	Hud->SetFlow(Flow);
 	Hud->Refresh();
-	Hud->TimerText->SetText(FText::FromString(TEXT("08:42")));
+	Hud->ShowStationTime(FTimespan::FromSeconds(462));
 	return Hud;
 }
 
@@ -216,6 +221,23 @@ void FStationHudSnapshotSpec::Define()
 		Sent.bFinal = true;
 		Answering->HandleVoiceEvent(Sent);
 		Save(MakeHud(Answering), TEXT("8-voice-patient-answering"));
+
+		// #461: the three states of HudTraining.png, the longest timer panel, and the brief.
+		Hud = MakeHud(MakeFlow(EStationTrainingMode::Voice));
+		Hud->ShowStationTime(FTimespan::FromSeconds(-200));
+		Save(Hud, TEXT("9-overtime"));
+
+		UStationRunFlow* VoiceLost = MakeFlow(EStationTrainingMode::Voice);
+		VoiceLost->Voice.bLost = true;
+		Save(MakeHud(VoiceLost), TEXT("10-voice-lost"));
+
+		Hud = MakeHud(VoiceLost);
+		Hud->ShowStationTime(FTimespan::FromSeconds(-200));
+		Save(Hud, TEXT("11-overtime-voice-lost"));
+
+		Hud = MakeHud(MakeFlow(EStationTrainingMode::Voice));
+		Hud->HandleOpenBrief();
+		Save(Hud, TEXT("12-brief-over-scene"));
 	});
 }
 

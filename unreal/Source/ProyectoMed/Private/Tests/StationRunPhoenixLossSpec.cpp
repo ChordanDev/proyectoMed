@@ -2,10 +2,15 @@
 // served in-process: it can leave a call unanswered (a gateway's 503) while it still
 // answers the check that follows, which a real Phoenix cannot be made to do. It also
 // holds a typed turn's reply for as long as a test needs, to check when the patient's
-// voice of that reply may play (#325).
+// voice of that reply may play (#325), and answers from a moment past the deadline
+// without a test waiting for it, to check how a run ends (#461).
 // `http://127.0.0.1:9` stands for a Phoenix that answers nothing at all.
 
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/TextBlock.h"
 #include "Containers/Ticker.h"
+#include "Engine/Engine.h"
 #include "HttpPath.h"
 #include "HttpRouteHandle.h"
 #include "HttpServerModule.h"
@@ -14,6 +19,7 @@
 #include "IHttpRouter.h"
 #include "Misc/AutomationTest.h"
 #include "Station/StationRunFlow.h"
+#include "Station/StationScreens.h"
 #include "StationClient.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -28,15 +34,26 @@ namespace StationPhoenixLoss
 	const TCHAR* SessionBody = TEXT(R"({
 		"session_id": "stub-session", "station_id": "s", "station_version": "1", "audio_consent": true,
 		"started_at": "2026-10-27T12:00:00Z", "expires_at": "2026-10-27T12:30:00Z",
-		"deadline_at": "2026-10-27T12:10:00Z", "server_now": "2026-10-27T12:00:00Z"
+		"deadline_at": "2026-10-27T12:10:00Z", "cap_at": "2026-10-27T12:20:00Z", "server_now": "2026-10-27T12:00:00Z"
 	})");
 
 	const TCHAR* ShowBody = TEXT(R"({
 		"session_id": "stub-session", "station_id": "s", "station_version": "1", "audio_consent": true,
 		"started_at": "2026-10-27T12:00:00Z", "expires_at": "2026-10-27T12:30:00Z",
-		"deadline_at": "2026-10-27T12:10:00Z", "status": "active", "completion_reason": null,
+		"deadline_at": "2026-10-27T12:10:00Z", "cap_at": "2026-10-27T12:20:00Z", "status": "active", "completion_reason": null,
 		"messages": [], "server_now": "2026-10-27T12:01:00Z"
 	})");
+
+	/** The run as Phoenix shows it at `ServerNow`: ten minutes in at 12:10:00. */
+	FString RunBody(const TCHAR* Mode, const TCHAR* CapAt, const TCHAR* ServerNow)
+	{
+		return FString::Printf(TEXT(R"({
+			"session_id": "stub-session", "station_id": "s", "station_version": "1", "audio_consent": true,
+			"mode": "%s", "started_at": "2026-10-27T12:00:00Z", "expires_at": "2026-10-27T12:30:00Z",
+			"deadline_at": "2026-10-27T12:10:00Z", "cap_at": "%s", "status": "active", "completion_reason": null,
+			"messages": [], "server_now": "%s"
+		})"), Mode, CapAt, ServerNow);
+	}
 
 	const TCHAR* FinishBody = TEXT(R"({
 		"session_id": "stub-session", "status": "completed", "completed_at": "2026-10-27T12:05:00Z",
@@ -178,6 +195,47 @@ BEGIN_DEFINE_SPEC(FStationRunPhoenixLossSpec, "ProyectoMed.StationRun.Unit.Phoen
 		TestTrue("the patient is silenced", *Silenced > 0);
 		TestNull("the room is left", Client->GetVoice());
 	}
+
+	/** Every text of a HUD on `Flow`, as it reads now. */
+	TArray<FString> HudTexts()
+	{
+		UStationHudWidget* Hud = CreateWidget<UStationHudWidget>(GEngine->GetWorldContexts()[0].World());
+		Hud->TakeWidget();
+		Hud->SetFlow(Flow);
+		Hud->Refresh();
+		TArray<FString> Found;
+		UWidgetTree::ForWidgetAndChildren(Hud->GetRootWidget(), [&Found](UWidget* Widget)
+		{
+			if (const UTextBlock* Text = Cast<UTextBlock>(Widget))
+			{
+				Found.Add(Text->GetText().ToString());
+			}
+		});
+		return Found;
+	}
+
+	/** Phoenix answers `Body`, and the client reads it: its clock is then where `Body` says. */
+	void WhenPhoenixShows(const FString& Body, const FDoneDelegate& Done, TFunction<void()> Then)
+	{
+		Server.Route(StationPhoenixLoss::SessionPath, EHttpServerRequestVerbs::VERB_GET, EHttpServerResponseCodes::Ok, Body);
+		Server.Route(FString(StationPhoenixLoss::SessionPath) + TEXT("/finish"), EHttpServerRequestVerbs::VERB_POST,
+			EHttpServerResponseCodes::Ok, StationPhoenixLoss::FinishBody);
+		Client->RefreshSession([this, Done, Then](const TStationResult<FStationSession>& Shown)
+		{
+			if (TestFalse("read the run", Shown.HasError()))
+			{
+				Then();
+				return;
+			}
+			Done.Execute();
+		});
+	}
+
+	bool AskedToFinishByTimer() const
+	{
+		return Server.GetRequests().ContainsByPredicate(
+			[](const FString& Line) { return Line.Contains(TEXT("/finish")) && Line.Contains(TEXT("timer")); });
+	}
 END_DEFINE_SPEC(FStationRunPhoenixLossSpec)
 
 void FStationRunPhoenixLossSpec::Define()
@@ -225,6 +283,58 @@ void FStationRunPhoenixLossSpec::Define()
 		Flow->RemoveFromRoot();
 		Client->RemoveFromRoot();
 		Server.Stop();
+	});
+
+	// #461: the client side of #323.
+	LatentIt("lets a training run on past its deadline and shows how far", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenPhoenixShows(RunBody(TEXT("training"), TEXT("2026-10-27T12:20:00Z"), TEXT("2026-10-27T12:13:20Z")), Done, [this, Done]()
+		{
+			TestTrue("counts past the deadline", Client->GetSignedRemainingTime() <= FTimespan::FromSeconds(-200));
+			TestEqual("the plain timer stays at zero", Client->GetRemainingTime(), FTimespan::Zero());
+			Flow->CheckStationTimer();
+			TestEqual("the run goes on", Flow->GetStep(), EStationRunStep::Running);
+			TestTrue("the learner can still talk", Flow->CanSendTurn());
+			TestTrue("and finish", Flow->CanFinish());
+			TestFalse("Phoenix is not asked to end it", AskedToFinishByTimer());
+			const TArray<FString> Shown = HudTexts();
+			TestTrue("the HUD says the time is over", Shown.Contains(TEXT("Tempo esgotado · além do tempo")));
+			TestTrue("and counts up", Shown.ContainsByPredicate([](const FString& Text) { return Text.StartsWith(TEXT("+03:2")); }));
+			Done.Execute();
+		});
+	});
+
+	LatentIt("ends a training when Phoenix's cap is reached", Timeout, [this](const FDoneDelegate& Done)
+	{
+		WhenPhoenixShows(RunBody(TEXT("training"), TEXT("2026-10-27T12:20:00Z"), TEXT("2026-10-27T12:20:00Z")), Done, [this, Done]()
+		{
+			Flow->CheckStationTimer();
+			TestEqual("the run ends", Flow->GetStep(), EStationRunStep::Finishing);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+			{
+				TestTrue("Phoenix is asked to end it", AskedToFinishByTimer());
+				Done.Execute();
+			});
+		});
+	});
+
+	// In a simulated exam `cap_at` is `deadline_at` (#323, #424).
+	LatentIt("still ends a simulated exam at its deadline, with no overtime", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		WhenPhoenixShows(RunBody(TEXT("simulated_exam"), TEXT("2026-10-27T12:10:00Z"), TEXT("2026-10-27T12:10:00Z")), Done, [this, Done]()
+		{
+			const TArray<FString> Shown = HudTexts();
+			TestFalse("no overtime on screen", Shown.Contains(TEXT("Tempo esgotado · além do tempo")));
+			TestFalse("no count on screen", Shown.ContainsByPredicate([](const FString& Text) { return Text.StartsWith(TEXT("+")); }));
+			Flow->CheckStationTimer();
+			TestEqual("the run ends", Flow->GetStep(), EStationRunStep::Finishing);
+			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()
+			{
+				TestTrue("Phoenix is asked to end it", AskedToFinishByTimer());
+				Done.Execute();
+			});
+		});
 	});
 
 	LatentIt("invalidates the run when a typed turn and the check after it go unanswered", Timeout,
