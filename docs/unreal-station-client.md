@@ -1003,6 +1003,27 @@ What the client does in a simulated exam:
 A training is unchanged: the countdown, "Anotado.", the brief before the run,
 and no sounds.
 
+## The Cine style kit (issue #455)
+
+Every screen builds the Cine look from `StationUi` (`Private/Station/StationUi.h`),
+so a colour or a control changes in one place. The tokens are those of
+[the design README](design/screens/README.md#visual-language): `Ink` and its shades,
+`TreinoAccent`, `ProvaAccent`, `Danger`, `ScrimStops`, `Panel`, `Paper`.
+
+| Piece | Builder |
+| --- | --- |
+| Left-to-right scrim | `MakeScrim`, under the text in an overlay |
+| 32×4 mode mark | `MakeModeMark` |
+| Buttons | `AddButton`, then `MakePrimary`, `MakeExam`, `MakeDanger`, `MakeSecondary` or `MakeGhost` |
+| Round enter arrow | `MakeEnterArrow` |
+| Chip, panel, keyboard hint | `MakeChip`, `MakePanel`, `MakeKeyHint` |
+| Text in Manrope 400–800 | `AddText`, or `Font` with a weight |
+
+Buttons and the enter arrow are at least 44 px tall. They gain a white ring while the
+keyboard has them, and a click does not draw it. `HudPanelOpacity` stays at the 60%
+approved in #444 until the HUD's own Cine issue. `Font` loads Manrope by path, so
+`DefaultGame.ini` cooks `/Game/Station/UI/Fonts` on purpose.
+
 ## Not in the interface yet
 
 The [device login](#learner-login-device-flow) and the bearer header (#337) have

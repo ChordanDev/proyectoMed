@@ -17,6 +17,7 @@
 #include "Engine/Engine.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
+#include "Station/StationUi.h"
 
 BEGIN_DEFINE_SPEC(FStationBriefUnitSpec, "ProyectoMed.StationCards.Unit",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -157,6 +158,8 @@ void FStationBriefUnitSpec::Define()
 		TestFalse("no voice training note", IsShown(Brief->VoiceNote));
 		TestTrue("simulated exam", IsShown(Brief->SimulatedExamButton) && Brief->SimulatedExamButton->GetIsEnabled());
 		TestTrue("its label", Texts(Brief->SimulatedExamButton).Contains(TEXT("Iniciar prova simulada")));
+		TestEqual("in the Prova simulada accent", Brief->SimulatedExamButton->GetStyle().Normal.TintColor.GetSpecifiedColor(),
+			StationUi::ProvaAccent);
 		TestTrue("what a simulated exam is", Brief->SimulatedExamNote->GetText().ToString().Contains(TEXT("Só por voz")));
 	});
 
