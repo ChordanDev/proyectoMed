@@ -78,7 +78,8 @@ enum class EStationVoiceState : uint8
 	Reconnecting,
 	/**
 	 * Joining or publishing failed or took too long, or the voice worker never joined
-	 * or did not come back; `GetFailure()` says why. Final: the link has left the room.
+	 * or did not come back; `GetFailure()` says why. Final: nothing more is heard or
+	 * sent, and the link leaves the room once any SDK call under way returns.
 	 */
 	Failed,
 };

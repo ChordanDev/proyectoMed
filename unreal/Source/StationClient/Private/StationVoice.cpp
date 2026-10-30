@@ -546,7 +546,8 @@ void FStationVoiceLink::SetState(EStationVoiceState NewState, const FString& New
 	if (NewState == EStationVoiceState::Failed)
 	{
 		UE_LOG(LogStationClient, Warning, TEXT("Voice link failed: %s"), *NewFailure);
-		// The voice is lost for good: leave the room so nothing more is heard or sent.
+		// The voice is lost for good: nothing more is heard or sent from here, and the
+		// room is left once any SDK call under way returns.
 		if (!bClosed)
 		{
 			bClosed = true;
