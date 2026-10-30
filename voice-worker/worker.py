@@ -336,8 +336,9 @@ def build_stt(context):
 def build_tts(session_id: str, context):
     """Build the Cartesia provider from the worker environment, or None when unset.
 
-    Missing configuration disables patient audio only: replies still reach the room as
-    text, each followed by a `synthesis_failed` event. A blank value counts as missing:
+    Missing configuration disables patient audio only: a training's replies still reach
+    the room as text, and every reply is followed by a `synthesis_failed` event, which
+    ends a real test on the client (#423). A blank value counts as missing:
     the provider would accept it and then fail every reply at request time. The
     session language (`pt-BR`) is sent to Cartesia as its base code (`pt`). With
     `VOICE_WORKER_FAKE_PROVIDERS` on, the patient speaks a tone instead.
@@ -364,17 +365,19 @@ class PatientVoice:
     is published with its `segment` index and spoken after the previous sentence of
     the same generation, while later sentences are still being generated.
 
-    The text event is the only place reply text leaves the worker, and it is published
-    before synthesis starts so the learner can read the reply whatever happens to the
-    audio. Playback runs in background tasks, so the speech reader keeps hearing the
-    learner; a failure there is published content-free and never stops the job. A text
-    event the room rejects is reported the same way (`text_delivery_failed`) and the
-    reply is still spoken.
+    The text event is the only place reply text leaves the worker, and in a training it
+    is published before synthesis starts so the learner can read the reply whatever
+    happens to the audio. Playback runs in background tasks, so the speech reader keeps
+    hearing the learner; a failure there is published content-free and never stops the
+    job. A text
+    or `voice` event the room rejects is reported the same way
+    (`text_delivery_failed`) and the reply is still spoken.
 
     In a simulated exam the patient never speaks after the deadline (#424, see
     `silence_at_deadline`), and with `audio_only` the reply is heard and never read
     (#423): each text event becomes a content-free `voice` event, which the client
-    needs to play the reply and to know its turn ended.
+    needs to play the reply and to know its turn ended. Nothing covers a reply that
+    cannot be spoken, so the client ends the run on its `synthesis_failed`.
     """
 
     def __init__(
@@ -639,7 +642,7 @@ class PatientVoice:
     async def _publish_failure(self, reply: VoiceTurnReply, kind: str) -> None:
         if kind == "text_delivery_failed":
             logger.warning(
-                "patient text not published for session %s turn %d generation %d: %s",
+                "reply event not published for session %s turn %d generation %d: %s",
                 self.session_id,
                 reply.turn_id,
                 reply.generation_id,

@@ -220,7 +220,7 @@ openssl rand -hex 32   # paste as VOICE_WORKER_SECRET
 | `PHOENIX_URL` | `http://localhost:4000` |
 | `VOICE_WORKER_SECRET` | The same secret as Phoenix. |
 | `DEEPGRAM_API_KEY` | Learner speech-to-text. |
-| `CARTESIA_API_KEY` / `CARTESIA_VOICE_ID` | Patient voice. Without them the reply is still shown as text. |
+| `CARTESIA_API_KEY` / `CARTESIA_VOICE_ID` | Patient voice. Without them a training's reply is still shown as text; a real test is invalidated (#423). |
 | `CARTESIA_MODEL` | Optional, default `sonic-3`. |
 | `PHOENIX_TURN_TIMEOUT_S` / `PHOENIX_TURN_RETRIES` | Optional, defaults `35` and `1`. |
 | `VOICE_WORKER_FAKE_PROVIDERS` | Local tests only. Only `true` turns the fake speech-to-text and text-to-speech on; the worker refuses it unless `LIVEKIT_URL` is on loopback. |
@@ -573,7 +573,8 @@ was received the POST is not retried. An
 invalid value keeps the default.
 
 If the key or the voice id is missing the worker keeps transcribing and delivers every
-reply as text followed by a `synthesis_failed` event. The worker asks Cartesia for raw
+training reply as text followed by a `synthesis_failed` event; in a real test the Unreal
+client invalidates the run on that event (#423). The worker asks Cartesia for raw
 16-bit PCM at 24 kHz in Portuguese (the session language `pt-BR` is sent as `pt`).
 It speaks over Cartesia's websocket and opens that connection when it publishes the
 patient track and again after every reply, so the connection is warm between replies (a
@@ -593,6 +594,8 @@ the same `CARTESIA_*` variables (see
 | Patient text          | `{"session_id", "turn_id", "generation_id", "role": "patient", "text"}`                 |
 | Patient sentence      | `{"session_id", "turn_id", "generation_id", "role": "patient", "text", "segment"}` (#271) |
 | Streamed reply ended  | `{"session_id", "turn_id", "generation_id", "role": "patient", "status": "complete"}` (#281) |
+| Real test reply       | `{"session_id", "turn_id", "generation_id", "role": "voice", "status": "speaking"}`, with `segment` when streamed (#423) |
+| Real test reply ended | `{"session_id", "turn_id", "generation_id", "role": "voice", "status": "complete"}` (#423) |
 | Kept learner turn     | `{"session_id", "turn_id", "generation_id", "role": "examiner", "status": "kept"}`      |
 | Speech failure        | `{"session_id", "turn_id", "generation_id", "failure": "synthesis_failed"}`             |
 | Text delivery failure | `{"session_id", "turn_id", "generation_id", "failure": "text_delivery_failed"}`         |
@@ -604,9 +607,11 @@ regeneration ran out of time), Phoenix kept the learner turn without a reply (th
 transcripts endpoint answers `201` with `status: "kept"` and no text), and nothing is
 spoken. It is not a failure. `failure` is not fatal: the worker keeps serving the session. `synthesis_failed` covers
 any provider error, provider disconnect or track publication error, and carries no
-provider message; the patient text for that generation was already delivered.
-`text_delivery_failed` means the room rejected the patient text event: the reply is
-still spoken, and Phoenix keeps the approved text in the session transcript. `error`
+provider message; in a training the patient text for that generation was already
+delivered, and in a real test the Unreal client invalidates the run, because no text covers
+the lost voice (#423). A real test publishes no `role: "patient"` event: its `voice` events
+carry no text or speaker. `text_delivery_failed` means the room rejected the patient text
+or `voice` event: the reply is still spoken, and Phoenix keeps the approved text in the session transcript. `error`
 still means the worker job stopped. A streamed reply ends with one `status: "complete"`
 event once Phoenix settled the turn, after all its sentences; it carries no text. The
 station transcript grows one patient bubble per turn as sentences arrive and reads the
