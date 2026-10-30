@@ -140,10 +140,24 @@ async def entrypoint(ctx: JobContext) -> None:
                 finally:
                     meter.leave(learner.identity)
         except VoiceFailure as failure:
-            logger.warning(
-                "voice worker stopped for session %s: %s", session_id, failure.kind
-            )
-            await publish(ctx.room, {"session_id": session_id, "error": failure.kind})
+            if (
+                failure.kind == "station_time_elapsed"
+                and voice is not None
+                and voice.silent
+            ):
+                # Past a simulated exam's deadline (#424) Phoenix ending the run is
+                # expected: an `error` event would read as a lost voice on a client
+                # whose clock has not yet reached zero, and invalidate the run.
+                logger.info(
+                    "voice worker stopped for session %s: %s", session_id, failure.kind
+                )
+            else:
+                logger.warning(
+                    "voice worker stopped for session %s: %s", session_id, failure.kind
+                )
+                await publish(
+                    ctx.room, {"session_id": session_id, "error": failure.kind}
+                )
         finally:
             if voice is not None:
                 await voice.aclose()

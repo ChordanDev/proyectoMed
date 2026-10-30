@@ -1325,6 +1325,84 @@ class StreamingTurnOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(any("Late question" in line for line in logs.output))
 
+    async def test_past_a_simulated_exams_deadline_phoenix_ending_the_run_publishes_no_error(
+        self,
+    ):
+        # Issue #424: the worker went silent at the deadline, and Phoenix discards
+        # an utterance that started after it. The job ends, but a fatal `error`
+        # event would read as a lost voice on a client whose own clock has not yet
+        # reached zero, which invalidates a simulated exam: the client ends the
+        # run by its timer instead.
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "last_turn_id": 0,
+                        "language": "pt-BR",
+                        "keyterms": [],
+                        "mode": "simulated_exam",
+                        "deadline_at": "2026-10-29T12:10:00Z",
+                        "server_now": "2026-10-29T12:10:00Z",
+                    },
+                )
+            if request.url.path.endswith("/usage"):
+                return httpx.Response(202, json={"status": "recorded"})
+            if request.url.path.endswith("/cancel"):
+                return httpx.Response(422, json={"error": "session_completed"})
+            return httpx.Response(409, json={"error": "station_time_elapsed"})
+
+        room = MockRoom()
+        room.name = "station-session-s1"
+        ctx = SimpleNamespace(
+            room=room,
+            connect=AsyncMock(),
+            wait_for_participant=AsyncMock(return_value=MockParticipant("learner-s1")),
+            shutdown=Mock(),
+        )
+        queue = asyncio.Queue()
+        for speech_event in [event(FINAL, "Depois do fim"), event(END), None]:
+            queue.put_nowait(speech_event)
+        stream = MockStream(queue)
+        stream.end_input = Mock()
+
+        async def run_transcribe(
+            room, learner, context, tracker, phoenix, voice=None, meter=None
+        ):
+            await asyncio.sleep(0)  # the deadline already passed: silent now
+            await transcribe(
+                room,
+                learner,
+                context,
+                tracker,
+                phoenix,
+                stt=MockSTT(stream),
+                audio=MockAudioStream(),
+                voice=voice,
+            )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"PHOENIX_URL": "http://phoenix", "VOICE_WORKER_SECRET": "secret"},
+            ),
+            patch.object(worker, "PhoenixClient", return_value=phoenix(handler)),
+            patch.object(worker, "transcribe", side_effect=run_transcribe),
+            patch.object(worker, "build_tts", return_value=None),
+            patch.object(worker, "publish", new=AsyncMock()) as publish,
+            self.assertLogs("voice-worker", level="INFO") as logs,
+        ):
+            await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
+
+        errors = [
+            call.args[1] for call in publish.await_args_list if "error" in call.args[1]
+        ]
+        self.assertEqual(errors, [])
+        ctx.shutdown.assert_called_once()
+        self.assertTrue(
+            any("s1: station_time_elapsed" in line for line in logs.output), logs.output
+        )
+
     async def test_cancel_first_fences_held_http_admission_and_transport_retry(self):
         # Offline protocol model, paired with real GenServer/controller tests.
         # The POST reaches the transport but is held BEFORE server admission.
