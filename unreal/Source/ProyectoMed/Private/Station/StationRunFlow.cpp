@@ -1146,6 +1146,15 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 			}
 		}
 	}
+	if (Event.Kind == EStationVoiceEventKind::TurnFailure && !AllowsTypedInput()
+		&& Event.Failure.Equals(TEXT("synthesis_failed"), ESearchCase::CaseSensitive))
+	{
+		// A real test's patient is only heard (#423): no text covers a reply it could not
+		// say, so the run is a voice failure and is not graded.
+		LoseVoice();
+		OnChanged.Broadcast();
+		return;
+	}
 	if (Event.TurnId == SpokenExamTurn && Event.Kind == EStationVoiceEventKind::TurnFailure)
 	{
 		// The request may or may not have reached Phoenix: the learner may ask again,
@@ -1226,8 +1235,8 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		bVoiceOutcome = true;
 		break;
 	default:
-		// A refused reply and a failed synthesis change nothing shown, but the
-		// patient no longer answers a failed turn.
+		// A refused reply, or a training's failed synthesis, changes nothing shown, but
+		// the patient no longer answers a failed turn.
 		bVoiceTurnFailed = bVoiceTurnFailed || Event.Kind == EStationVoiceEventKind::TurnFailure;
 		return;
 	}

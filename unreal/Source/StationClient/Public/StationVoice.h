@@ -14,7 +14,7 @@ enum class EStationVoiceEventKind : uint8
 {
 	/** The learner's speech: an interim caption, or the final turn transcript. */
 	Learner,
-	/** One verified sentence of the patient reply, as spoken. */
+	/** One verified sentence of the patient reply, as spoken; with no text in a real test (#423). */
 	PatientText,
 	/** Every sentence of a streamed reply was sent; carries no text. */
 	PatientComplete,
@@ -27,7 +27,7 @@ enum class EStationVoiceEventKind : uint8
 	 * sent it to the impresso request, not to the patient. Nothing is spoken.
 	 */
 	ExaminerImpresso,
-	/** A failure of one turn, for example `synthesis_failed`; the run goes on. */
+	/** A failure of one turn, for example `synthesis_failed`; the run goes on, unless it is a real test's voice (#423). */
 	TurnFailure,
 	/** The worker stopped listening to this run. */
 	Fatal,
@@ -42,7 +42,7 @@ struct STATIONCLIENT_API FStationVoiceEvent
 	bool bFinal = false;
 	/** `PatientText` only: the sentence index of a streamed reply, or INDEX_NONE. */
 	int32 Segment = INDEX_NONE;
-	/** `Learner` and `PatientText`: the text. Shown to the learner, never logged. */
+	/** `Learner` and `PatientText`: the text, if any. Shown to the learner, never logged. */
 	FString Text;
 	/** `TurnFailure` and `Fatal`: the failure code. */
 	FString Failure;

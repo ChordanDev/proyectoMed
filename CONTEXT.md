@@ -74,7 +74,7 @@ If connectivity, microphone capture, or transcription fails during a station, th
 
 ## Station AI Responses
 
-The Station AI replies with synthesized speech and visible Brazilian Portuguese text. The visible response supports accessibility, review, and continuity when audio is unavailable.
+In a training, the Station AI replies with synthesized speech and visible Brazilian Portuguese text. The visible response supports accessibility, review, and continuity when audio is unavailable. A real test is audio only: the patient's reply is heard and never shown as text while the run is active, and the server enforces it on the LiveKit `transcript` topic and in `GET /sessions/:id` (#423); a hand-built `POST .../messages` with `modality: "voice"` is still answered (#445). The feedback may quote patient lines once the run has ended.
 
 ## Rubric-Bound Feedback
 

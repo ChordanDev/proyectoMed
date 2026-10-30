@@ -14,7 +14,9 @@ to in `CARTESIA_VOICE_IDS` (#398), on the one patient track. The reply Phoenix a
 for a typed turn arrives from the server on the data topic "typed-reply" and is spoken the
 same way, with no text event: the learner already has its text (#325). In a simulated exam
 the patient never speaks after the deadline (#424): playback stops at the `deadline_at`
-Phoenix's context names, and no later reply is published or spoken. Each final transcript
+Phoenix's context names, and no later reply is published or spoken. A simulated exam's
+patient is also audio only (#423): no `patient` event reaches the room, only a `voice`
+event with each reply's progress, with no text. Each final transcript
 carries when the learner started saying it. When the job ends it reports
 its provider usage (Deepgram audio seconds, Cartesia characters, LiveKit
 participant minutes, #342) to Phoenix. Never logs transcript text, reply text or audio.
@@ -116,7 +118,9 @@ async def entrypoint(ctx: JobContext) -> None:
                 if tts is not None
                 else None
             )
-            voice = PatientVoice(ctx.room, player, session_id)
+            voice = PatientVoice(
+                ctx.room, player, session_id, audio_only=is_audio_only(context)
+            )
             voice.silence_at_deadline(context, received_at=context_received_at)
             await voice.start()
             typed_voice = voice
@@ -200,6 +204,11 @@ def on_typed_reply(packet, tracker: TurnTracker, voice: "PatientVoice") -> None:
         )
         return
     voice.speak_typed(reply)
+
+
+def is_audio_only(context) -> bool:
+    """A simulated exam's patient is heard, never read (#423); a training's is both."""
+    return context.get("mode") == "simulated_exam"
 
 
 def job_id(ctx) -> str:
@@ -327,8 +336,9 @@ def build_stt(context):
 def build_tts(session_id: str, context):
     """Build the Cartesia provider from the worker environment, or None when unset.
 
-    Missing configuration disables patient audio only: replies still reach the room as
-    text, each followed by a `synthesis_failed` event. A blank value counts as missing:
+    Missing configuration disables patient audio only: a training's replies still reach
+    the room as text, and every reply is followed by a `synthesis_failed` event, which
+    ends a real test on the client (#423). A blank value counts as missing:
     the provider would accept it and then fail every reply at request time. The
     session language (`pt-BR`) is sent to Cartesia as its base code (`pt`). With
     `VOICE_WORKER_FAKE_PROVIDERS` on, the patient speaks a tone instead.
@@ -355,18 +365,28 @@ class PatientVoice:
     is published with its `segment` index and spoken after the previous sentence of
     the same generation, while later sentences are still being generated.
 
-    The text event is the only place reply text leaves the worker, and it is published
-    before synthesis starts so the learner can read the reply whatever happens to the
-    audio. Playback runs in background tasks, so the speech reader keeps hearing the
-    learner; a failure there is published content-free and never stops the job. A text
-    event the room rejects is reported the same way (`text_delivery_failed`) and the
-    reply is still spoken.
+    The text event is the only place reply text leaves the worker, and in a training it
+    is published before synthesis starts so the learner can read the reply whatever
+    happens to the audio. Playback runs in background tasks, so the speech reader keeps
+    hearing the learner; a failure there is published content-free and never stops the
+    job. A text
+    or `voice` event the room rejects is reported the same way
+    (`text_delivery_failed`) and the reply is still spoken.
 
     In a simulated exam the patient never speaks after the deadline (#424, see
-    `silence_at_deadline`).
+    `silence_at_deadline`), and with `audio_only` the reply is heard and never read
+    (#423): each text event becomes a content-free `voice` event, which the client
+    needs to play the reply and to know its turn ended. Nothing covers a reply that
+    cannot be spoken, so the client ends the run on its `synthesis_failed`.
     """
 
-    def __init__(self, room, player: SpeechPlayer | None, session_id: str = ""):
+    def __init__(
+        self,
+        room,
+        player: SpeechPlayer | None,
+        session_id: str = "",
+        audio_only: bool = False,
+    ):
         self.room = room
         self.player = player
         self.session_id = player.session_id if player is not None else session_id
@@ -376,6 +396,7 @@ class PatientVoice:
         self._tail: tuple[int | None, int, asyncio.Task] | None = None
         # Past a simulated exam's deadline nothing more is spoken (#424).
         self.silent = False
+        self.audio_only = audio_only
         self._deadline: asyncio.TimerHandle | None = None
         self._silencing: asyncio.Task | None = None
 
@@ -426,19 +447,8 @@ class PatientVoice:
             return
         if self.silent:
             return
-        event = {
-            "session_id": self.session_id,
-            "turn_id": reply.turn_id,
-            "generation_id": reply.generation_id,
-            "role": "patient",
-            # Who says it (#341); Phoenix labels only a station with a companion.
-            "speaker": reply.speaker if reply.speaker == "companion" else "patient",
-            "text": reply.reply_text,
-        }
-        if reply.index is not None:
-            event["segment"] = reply.index  # one verified sentence of the reply (#271)
         try:
-            await publish(self.room, event)
+            await publish(self.room, self._reply_event(reply))
         except Exception:
             # Called from the speech reader: a room publish error must not stop the
             # job. Phoenix keeps the approved text, and the reply is still spoken.
@@ -452,6 +462,25 @@ class PatientVoice:
         self._tail = (reply.generation_id, reply.turn_id, task)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _reply_event(self, reply: VoiceTurnReply) -> dict:
+        event = {
+            "session_id": self.session_id,
+            "turn_id": reply.turn_id,
+            "generation_id": reply.generation_id,
+        }
+        if self.audio_only:
+            event.update(role="voice", status="speaking")
+        else:
+            event.update(
+                role="patient",
+                # Who says it (#341); Phoenix labels only a station with a companion.
+                speaker=reply.speaker if reply.speaker == "companion" else "patient",
+                text=reply.reply_text,
+            )
+        if reply.index is not None:
+            event["segment"] = reply.index  # one verified sentence of the reply (#271)
+        return event
 
     def speak_typed(self, reply: VoiceTurnReply) -> None:
         """Speak the accepted reply of a typed turn (#325); its text was already shown.
@@ -531,7 +560,7 @@ class PatientVoice:
                     "session_id": self.session_id,
                     "turn_id": reply.turn_id,
                     "generation_id": reply.generation_id,
-                    "role": "patient",
+                    "role": "voice" if self.audio_only else "patient",
                     "status": "complete",
                 },
             )
@@ -613,7 +642,7 @@ class PatientVoice:
     async def _publish_failure(self, reply: VoiceTurnReply, kind: str) -> None:
         if kind == "text_delivery_failed":
             logger.warning(
-                "patient text not published for session %s turn %d generation %d: %s",
+                "reply event not published for session %s turn %d generation %d: %s",
                 self.session_id,
                 reply.turn_id,
                 reply.generation_id,

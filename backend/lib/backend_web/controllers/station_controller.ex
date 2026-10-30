@@ -340,7 +340,7 @@ defmodule BackendWeb.StationController do
           status: to_string(session.status),
           completion_reason:
             session |> Map.get(:completion_reason) |> completion_reason_to_string(),
-          messages: Enum.map(session.messages, &message_to_json/1),
+          messages: session |> visible_messages() |> Enum.map(&message_to_json/1),
           server_now: DateTime.to_iso8601(DateTime.utc_now())
         }
         |> put_station(Stations.session_station(session))
@@ -538,6 +538,13 @@ defmodule BackendWeb.StationController do
 
   defp completion_reason_to_string(nil), do: nil
   defp completion_reason_to_string(reason), do: to_string(reason)
+
+  # A real test's patient is heard, never read, while the run is active (#423); the
+  # feedback quotes it once the run ended.
+  defp visible_messages(%{mode: :simulated_exam, status: :active, messages: messages}),
+    do: Enum.reject(messages, &(&1.role == :patient))
+
+  defp visible_messages(session), do: session.messages
 
   defp message_to_json(msg) do
     json = %{

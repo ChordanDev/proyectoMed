@@ -131,6 +131,26 @@ void FStationVoiceUnitSpec::Define()
 				TestEqual("kind", Complete->Kind, EStationVoiceEventKind::PatientComplete);
 				TestTrue("no text", Complete->Text.IsEmpty());
 			}
+			// #423: a real test's patient is heard only, so its reply comes with no text.
+			const TOptional<FStationVoiceEvent> Speaking = Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"voice","status":"speaking","segment":1})"));
+			if (TestTrue("speaking", Speaking.IsSet()))
+			{
+				TestEqual("speaking kind", Speaking->Kind, EStationVoiceEventKind::PatientText);
+				TestEqual("speaking segment", Speaking->Segment, 1);
+				TestTrue("speaking text", Speaking->Text.IsEmpty());
+			}
+			const TOptional<FStationVoiceEvent> SpeakingWhole = Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"voice","status":"speaking"})"));
+			if (TestTrue("speaking a whole reply", SpeakingWhole.IsSet()))
+			{
+				TestEqual("whole reply, no segment", SpeakingWhole->Segment, INDEX_NONE);
+			}
+			const TOptional<FStationVoiceEvent> Spoken = Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"voice","status":"complete"})"));
+			if (TestTrue("spoken", Spoken.IsSet()))
+			{
+				TestEqual("spoken kind", Spoken->Kind, EStationVoiceEventKind::PatientComplete);
+			}
+			TestFalse("unknown voice status", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"voice","status":"later"})")).IsSet());
+			TestFalse("negative speaking segment", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"voice","status":"speaking","segment":-1})")).IsSet());
 			TestFalse("blank sentence", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"patient","text":" "})")).IsSet());
 			TestFalse("negative segment", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"patient","text":"Oi","segment":-1})")).IsSet());
 			TestFalse("fractional segment", Parse(TEXT(R"({"session_id":"s1","turn_id":3,"role":"patient","text":"Oi","segment":1.5})")).IsSet());

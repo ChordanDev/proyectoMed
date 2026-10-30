@@ -32,6 +32,7 @@ from worker import (
     PatientVoice,
     build_tts,
     build_voice_tts,
+    is_audio_only,
     on_typed_reply,
     phoenix_turn_settings,
     transcribe,
@@ -904,6 +905,127 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
         self.assertIn(("frame", "a1"), self.room.timeline)
+
+    # Issue #423: a real test's patient is heard, never read. The room gets each
+    # reply's progress, which the client needs to play it, with no patient event.
+    def published(self) -> list[dict]:
+        return [
+            json.loads(data)
+            for data, _topic, _reliable in self.room.local_participant.published_data
+        ]
+
+    def assert_no_patient_event_or_text(self, text: str = REPLY_TEXT) -> None:
+        self.assertEqual(
+            [e for e in self.published() if e.get("role") == "patient"], []
+        )
+        for data, _topic, _reliable in self.room.local_participant.published_data:
+            self.assertNotIn(text, data)
+
+    async def test_a_real_test_reply_is_spoken_with_no_patient_event(self):
+        self.voice.audio_only = True
+        task = self.connect()
+        await self.say("onde dói")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+        await self.disconnect(task)
+
+        self.assertEqual(self.tts.texts, [f"{REPLY_TEXT} 1"])
+        self.assert_no_patient_event_or_text()
+        self.assertEqual(
+            [entry for entry in self.room.timeline if "final" not in entry[1]],
+            [
+                (
+                    "data",
+                    {
+                        "session_id": "s1",
+                        "turn_id": 1,
+                        "generation_id": 1,
+                        "role": "voice",
+                        "status": "speaking",
+                    },
+                ),
+                ("frame", "a1"),
+            ],
+        )
+
+    async def test_a_real_test_streamed_reply_is_spoken_with_no_patient_event(self):
+        self.voice.audio_only = True
+        self.client.streams[1] = ["Começou ontem.", "Ainda dói."]
+        task = self.connect()
+        await self.say("quando")
+        await settle()
+        self.tts.streams[0].queue.put_nowait(chunk("s1"))
+        self.tts.streams[0].queue.put_nowait(None)
+        await asyncio.sleep(0.01)
+        self.tts.streams[1].queue.put_nowait(chunk("s2"))
+        self.tts.streams[1].queue.put_nowait(None)
+        await asyncio.sleep(0.01)
+        await self.disconnect(task)
+
+        self.assertEqual(self.tts.texts, ["Começou ontem.", "Ainda dói."])
+        self.assertEqual(self.sources[0].frames, ["s1", "s2"])
+        self.assert_no_patient_event_or_text("Começou ontem.")
+        self.assert_no_patient_event_or_text("Ainda dói.")
+        turn = {"session_id": "s1", "turn_id": 1, "generation_id": 1}
+        self.assertEqual(
+            self.room.patient_events(),
+            [
+                {**turn, "role": "voice", "status": "speaking", "segment": 0},
+                {**turn, "role": "voice", "status": "speaking", "segment": 1},
+                {**turn, "role": "voice", "status": "complete"},
+            ],
+        )
+
+    async def test_a_real_test_keeps_the_learner_events_unchanged(self):
+        self.voice.audio_only = True
+        task = self.connect()
+        self.queue.put_nowait(event(INTERIM, "onde"))
+        await self.say("onde dói")
+        await settle()
+        await self.disconnect(task)
+
+        self.assertEqual(
+            [e for e in self.published() if "final" in e],
+            [
+                {"session_id": "s1", "turn_id": 1, "final": False, "text": "onde"},
+                {"session_id": "s1", "turn_id": 1, "final": False, "text": "onde dói"},
+                {"session_id": "s1", "turn_id": 1, "final": True, "text": "onde dói"},
+            ],
+        )
+
+    async def test_a_real_test_keeps_the_examiner_events(self):
+        self.voice.audio_only = True
+        self.client.replies[1] = VoiceTurnReply(1, "kept", 1, addressee="examiner")
+        self.client.replies[2] = VoiceTurnReply(2, "kept", 2, addressee="patient")
+        task = self.connect()
+        await self.say("vou examinar")
+        await self.say("tem febre")
+        await settle()
+        await self.disconnect(task)
+
+        self.assertEqual(
+            [(e["role"], e["status"]) for e in self.room.patient_events()],
+            [("examiner", "acknowledged"), ("examiner", "kept")],
+        )
+
+    async def test_a_real_test_still_reports_a_synthesis_failure(self):
+        self.voice.audio_only = True
+        self.tts.synthesize_error = APIConnectionError(PROVIDER_SECRET)
+        task = self.connect()
+        await self.say("onde dói")
+        await settle()
+        await self.disconnect(task)
+
+        self.assert_no_patient_event_or_text()
+        self.assertEqual(
+            [e.get("failure") for e in self.room.patient_events() if "failure" in e],
+            ["synthesis_failed"],
+        )
+
+    def test_only_a_simulated_exam_is_audio_only(self):
+        self.assertTrue(is_audio_only({"mode": "simulated_exam"}))
+        self.assertFalse(is_audio_only({"mode": "training"}))
+        self.assertFalse(is_audio_only({}))  # an older Phoenix
 
     async def test_examiner_addressed_turn_publishes_an_acknowledgement_and_speaks_nothing(
         self,
