@@ -19,7 +19,6 @@
 #include "Station/StationRunFlow.h"
 #include "Station/StationUi.h"
 #include "StationClient.h"
-#include "Styling/CoreStyle.h"
 
 #define LOCTEXT_NAMESPACE "StationScreens"
 
@@ -195,7 +194,7 @@ namespace
 	{
 		UTextBlock* Block = Tree.ConstructWidget<UTextBlock>();
 		Block->SetText(Text);
-		Block->SetFont(FCoreStyle::GetDefaultFontStyle(bBold ? "Bold" : "Regular", Size));
+		Block->SetFont(StationUi::Font(bBold ? StationUi::FontBold : StationUi::FontRegular, Size));
 		Block->SetColorAndOpacity(FSlateColor(Color));
 		return Block;
 	}
@@ -230,7 +229,7 @@ namespace
 		UBorder* Badge = StationUi::MakeRounded(Tree, Card.Accent, 12.f, FMargin(0.f));
 		Badge->SetHorizontalAlignment(HAlign_Center);
 		Badge->SetVerticalAlignment(VAlign_Center);
-		Badge->SetContent(MakeText(Tree, Card.Number, 20, true, StationUi::Panel));
+		Badge->SetContent(MakeText(Tree, Card.Number, 20, true, StationUi::InkOnAccent));
 		BadgeSize->SetContent(Badge);
 		if (UHorizontalBoxSlot* BadgeSlot = Row->AddChildToHorizontalBox(BadgeSize))
 		{
@@ -314,14 +313,14 @@ TSharedRef<SWidget> UStationMenuWidget::RebuildWidget()
 			EdgeSlot->SetPadding(FMargin(640.f, 0.f, 0.f, 0.f));
 		}
 		UBorder* Edge = WidgetTree->ConstructWidget<UBorder>();
-		Edge->SetBrushColor(WithAlpha(StationUi::TrainingAccent, 0.45f));
+		Edge->SetBrushColor(WithAlpha(StationUi::TreinoAccent, 0.45f));
 		EdgeSize->SetContent(Edge);
 
 		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
 		Band->SetContent(Column);
 
 		UTextBlock* Overline = MakeText(*WidgetTree, LOCTEXT("MenuOverline", "SIMULADOR DE ESTAÇÕES PRÁTICAS"), 13, true,
-			StationUi::TrainingAccent);
+			StationUi::TreinoAccent);
 		FSlateFontInfo OverlineFont = Overline->GetFont();
 		OverlineFont.LetterSpacing = 240;
 		Overline->SetFont(OverlineFont);
@@ -332,7 +331,7 @@ TSharedRef<SWidget> UStationMenuWidget::RebuildWidget()
 			TitleSlot->SetPadding(FMargin(0.f, 10.f, 0.f, 0.f));
 		}
 		Title->AddChild(MakeText(*WidgetTree, LOCTEXT("MenuTitleFirst", "Proyecto"), 56, true, StationUi::Ink));
-		Title->AddChild(MakeText(*WidgetTree, LOCTEXT("MenuTitleSecond", "Med"), 56, true, StationUi::TrainingAccent));
+		Title->AddChild(MakeText(*WidgetTree, LOCTEXT("MenuTitleSecond", "Med"), 56, true, StationUi::TreinoAccent));
 		StationUi::AddText(*WidgetTree, *Column, LOCTEXT("MenuSubtitle", "Escolha como quer praticar hoje."),
 			18, false, StationUi::Muted, 6.f);
 
@@ -341,14 +340,14 @@ TSharedRef<SWidget> UStationMenuWidget::RebuildWidget()
 			LOCTEXT("MenuTraining", "Treino"),
 			LOCTEXT("MenuTrainingNote", "Pratique por texto ou por voz, com o relógio à vista."),
 			{LOCTEXT("MenuTrainingTextOrVoice", "Texto ou voz"), LOCTEXT("MenuTrainingClock", "Relógio à vista")},
-			StationUi::TrainingFill, StationUi::TrainingHover, StationUi::TrainingAccent}, 40.f);
+			StationUi::TrainingFill, StationUi::TrainingHover, StationUi::TreinoAccent}, 40.f);
 		TrainingButton->OnClicked.AddDynamic(this, &UStationMenuWidget::HandleTraining);
 		SimulatedExamButton = AddModeCard(*WidgetTree, *Column, FMenuCard{
 			FText::FromString(TEXT("02")),
 			LOCTEXT("MenuSimulatedExam", "Prova simulada"),
 			LOCTEXT("MenuSimulatedExamNote", "Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
 			{LOCTEXT("MenuExamVoiceOnly", "Só voz"), LOCTEXT("MenuExamNoHelp", "Sem ajuda"), LOCTEXT("MenuExamMinutes", "10 minutos")},
-			StationUi::ExamFill, StationUi::ExamHover, StationUi::ExamAccent}, 16.f);
+			StationUi::ExamFill, StationUi::ExamHover, StationUi::ProvaAccent}, 16.f);
 		SimulatedExamButton->OnClicked.AddDynamic(this, &UStationMenuWidget::HandleSimulatedExam);
 
 		USpacer* Push = WidgetTree->ConstructWidget<USpacer>();
@@ -477,7 +476,7 @@ TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 		SimulatedExamButton = StationUi::AddButton(*WidgetTree, *FooterBox,
 			LOCTEXT("StartSimulatedExam", "Iniciar prova simulada"), 14.f);
 		SimulatedExamButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleSimulatedExam);
-		StationUi::MakePrimary(*SimulatedExamButton);
+		StationUi::MakeExam(*SimulatedExamButton);
 		SimulatedExamNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("SimulatedExamNote",
 			"Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
 			14, false, StationUi::Muted, 10.f);
@@ -701,7 +700,7 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 	TalkButton->OnPressed.AddDynamic(this, &UStationHudWidget::HandlePressTalk);
 	TalkButton->OnReleased.AddDynamic(this, &UStationHudWidget::HandleReleaseTalk);
 	TalkText = WidgetTree->ConstructWidget<UTextBlock>();
-	TalkText->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 15));
+	TalkText->SetFont(StationUi::Font(StationUi::FontBold, 15));
 	TalkText->SetJustification(ETextJustify::Center);
 	TalkText->SetColorAndOpacity(FSlateColor(StationUi::Ink));
 	TalkButton->AddChild(TalkText);
@@ -817,7 +816,7 @@ void UStationHudWidget::AddMessage(EStationSpeaker Speaker, const FString& Text,
 	}
 	UTextBlock* Body = WidgetTree->ConstructWidget<UTextBlock>();
 	Body->SetText(FText::FromString(Text));
-	Body->SetFont(FCoreStyle::GetDefaultFontStyle("Regular", 16));
+	Body->SetFont(StationUi::Font(StationUi::FontRegular, 16));
 	Body->SetColorAndOpacity(FSlateColor(bInProgress ? StationUi::Muted : StationUi::Ink));
 	// A fixed wrap width: auto wrap lays a new block out unwrapped for one frame,
 	// wider than the panel, before it wraps.
@@ -858,13 +857,13 @@ void UStationHudWidget::BuildExamTab(UOverlay& Root)
 {
 	ExamTab = WidgetTree->ConstructWidget<UButton>();
 	FButtonStyle Style;
-	Style.SetNormal(StationUi::RoundedBrush(StationUi::Panel, 10.f, StationUi::PanelEdge, 1.f));
+	Style.SetNormal(StationUi::RoundedBrush(StationUi::PanelSolid, 10.f, StationUi::PanelEdge, 1.f));
 	Style.SetHovered(StationUi::RoundedBrush(StationUi::Raised, 10.f, StationUi::PanelEdge, 1.f));
 	Style.SetPressed(StationUi::RoundedBrush(StationUi::Raised, 10.f, StationUi::PanelEdge, 1.f));
 	ExamTab->SetStyle(Style);
 	ExamTab->OnClicked.AddDynamic(this, &UStationHudWidget::HandleOpenExams);
 	ExamTabText = WidgetTree->ConstructWidget<UTextBlock>();
-	ExamTabText->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 17));
+	ExamTabText->SetFont(StationUi::Font(StationUi::FontBold, 17));
 	ExamTabText->SetColorAndOpacity(FSlateColor(StationUi::Ink));
 	ExamTabText->SetMargin(FMargin(18.f, 12.f));
 	ExamTab->AddChild(ExamTabText);
@@ -901,7 +900,7 @@ void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
 	Column->AddChild(Header);
 	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>();
 	Title->SetText(LOCTEXT("ExamsTitle", "Exames solicitados"));
-	Title->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 20));
+	Title->SetFont(StationUi::Font(StationUi::FontBold, 20));
 	Title->SetColorAndOpacity(FSlateColor(StationUi::Ink));
 	if (UHorizontalBoxSlot* TitleSlot = Header->AddChildToHorizontalBox(Title))
 	{
@@ -1040,7 +1039,7 @@ void UStationHudWidget::BuildMicrophone(UVerticalBox& Footer)
 		StatusSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
 	}
 	ExamAloudText = WidgetTree->ConstructWidget<UTextBlock>();
-	ExamAloudText->SetFont(FCoreStyle::GetDefaultFontStyle("Regular", 15));
+	ExamAloudText->SetFont(StationUi::Font(StationUi::FontRegular, 15));
 	ExamAloudText->SetJustification(ETextJustify::Center);
 	StatusSize->SetContent(ExamAloudText);
 	MicrophoneLook = EMicrophoneLook::Recording; // forces the first `RefreshMicrophone` to style it
@@ -1214,7 +1213,7 @@ namespace
 		UBorder* Chip = StationUi::MakeRounded(Tree, Fill, 11.f, FMargin(10.f, 3.f));
 		UTextBlock* Text = Tree.ConstructWidget<UTextBlock>();
 		Text->SetText(Label);
-		Text->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 13));
+		Text->SetFont(StationUi::Font(StationUi::FontBold, 13));
 		Text->SetColorAndOpacity(FSlateColor(Ink));
 		Chip->SetContent(Text);
 		return Chip;
@@ -1234,7 +1233,7 @@ namespace
 		Column->AddChild(Row);
 		UTextBlock* Title = Tree.ConstructWidget<UTextBlock>();
 		Title->SetText(FText::FromString(Text));
-		Title->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 16));
+		Title->SetFont(StationUi::Font(StationUi::FontBold, 16));
 		Title->SetColorAndOpacity(FSlateColor(StationUi::Ink));
 		WrapAt(*Title, CardTitleWrapWidth);
 		if (UHorizontalBoxSlot* TitleSlot = Row->AddChildToHorizontalBox(Title))
@@ -1732,7 +1731,7 @@ namespace
 	/** One count of the coverage summary: the number large, in its status's color, over its label. */
 	void AddCountTile(UWidgetTree& Tree, UHorizontalBox& Row, int32 Count, const FText& Label, const FLinearColor& Color)
 	{
-		UBorder* Tile = StationUi::MakeRounded(Tree, StationUi::Panel, 8.f, FMargin(12.f, 8.f));
+		UBorder* Tile = StationUi::MakeRounded(Tree, StationUi::PanelSolid, 8.f, FMargin(12.f, 8.f));
 		if (UHorizontalBoxSlot* TileSlot = Row.AddChildToHorizontalBox(Tile))
 		{
 			TileSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -1817,7 +1816,7 @@ void UStationFeedbackWidget::AddCriterion(int32 Ordinal, const FStationCriterion
 	Card->AddChild(Heading);
 	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>();
 	Title->SetText(FText::Format(LOCTEXT("CriterionHeading", "Critério {0}"), Ordinal));
-	Title->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 18));
+	Title->SetFont(StationUi::Font(StationUi::FontBold, 18));
 	Title->SetColorAndOpacity(FSlateColor(StationUi::Ink));
 	if (UHorizontalBoxSlot* TitleSlot = Heading->AddChildToHorizontalBox(Title))
 	{
@@ -1831,7 +1830,7 @@ void UStationFeedbackWidget::AddCriterion(int32 Ordinal, const FStationCriterion
 	const bool bAssessed = Criterion.Status == EStationCriterionStatus::Assessed;
 	UTextBlock* NoteText = WidgetTree->ConstructWidget<UTextBlock>();
 	NoteText->SetText(Note);
-	NoteText->SetFont(FCoreStyle::GetDefaultFontStyle(bAssessed ? "Bold" : "Regular", bAssessed ? 16 : 14));
+	NoteText->SetFont(StationUi::Font(bAssessed ? StationUi::FontBold : StationUi::FontRegular, bAssessed ? 16 : 14));
 	NoteText->SetColorAndOpacity(FSlateColor(bAssessed ? StationUi::Ink : StationUi::Muted));
 	NoteText->SetJustification(ETextJustify::Right);
 	NoteText->SetAutoWrapText(true);
@@ -1856,7 +1855,7 @@ void UStationFeedbackWidget::AddCriterion(int32 Ordinal, const FStationCriterion
 		{
 			// Laid out like the conversation: the learner's words on the right, the patient's on the left.
 			const bool bLearner = Excerpt.Speaker == EStationSpeaker::Learner;
-			UBorder* Bubble = StationUi::MakeRounded(*WidgetTree, bLearner ? StationUi::LearnerBubble : StationUi::Panel,
+			UBorder* Bubble = StationUi::MakeRounded(*WidgetTree, bLearner ? StationUi::LearnerBubble : StationUi::PanelSolid,
 				10.f, FMargin(12.f, 8.f));
 			if (UVerticalBoxSlot* BubbleSlot = Card->AddChildToVerticalBox(Bubble))
 			{
@@ -1867,7 +1866,7 @@ void UStationFeedbackWidget::AddCriterion(int32 Ordinal, const FStationCriterion
 			Quote->SetText(FText::Format(bLearner
 				? LOCTEXT("EvidenceLearner", "Você: “{0}”")
 				: LOCTEXT("EvidencePatient", "Paciente: “{0}”"), FText::FromString(Excerpt.Text)));
-			Quote->SetFont(FCoreStyle::GetDefaultFontStyle("Regular", 15));
+			Quote->SetFont(StationUi::Font(StationUi::FontRegular, 15));
 			Quote->SetColorAndOpacity(FSlateColor(StationUi::Ink));
 			Quote->SetWrapTextAt(EvidenceWrapWidth);
 			Bubble->SetContent(Quote);

@@ -30,6 +30,10 @@ unreal/**/*.ogg filter=lfs diff=lfs merge=lfs -text
 unreal/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
 unreal/**/*.mov filter=lfs diff=lfs merge=lfs -text
 
+# Fonts, if a raw one is ever kept next to the project; imported ones are `.uasset`.
+unreal/**/*.ttf filter=lfs diff=lfs merge=lfs -text
+unreal/**/*.otf filter=lfs diff=lfs merge=lfs -text
+
 # Platform icons and other binaries kept with the project.
 unreal/**/*.ico filter=lfs diff=lfs merge=lfs -text
 unreal/**/*.icns filter=lfs diff=lfs merge=lfs -text

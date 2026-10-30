@@ -12,7 +12,16 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
+#include "Components/Button.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Components/ScrollBox.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Engine/Engine.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "ImageUtils.h"
@@ -22,6 +31,7 @@
 #include "Slate/WidgetRenderer.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
+#include "Station/StationUi.h"
 #include "TextureResource.h"
 #include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/SOverlay.h"
@@ -35,6 +45,7 @@ BEGIN_DEFINE_SPEC(FStationCardSnapshotSpec, "ProyectoMed.StationCards.Snapshot",
 	UStationBriefWidget* MakeBrief(UStationRunFlow* Flow) const;
 	UStationFeedbackWidget* MakeFeedback(UStationRunFlow* Flow) const;
 	void Save(UUserWidget* Screen, const FString& Name);
+	void Save(TSharedRef<SWidget> Screen, const FString& Name);
 END_DEFINE_SPEC(FStationCardSnapshotSpec)
 
 UStationRunFlow* FStationCardSnapshotSpec::MakeFlow(EStationMicPermission Permission, EStationSessionMode SessionMode) const
@@ -83,11 +94,16 @@ UStationFeedbackWidget* FStationCardSnapshotSpec::MakeFeedback(UStationRunFlow* 
 
 void FStationCardSnapshotSpec::Save(UUserWidget* Screen, const FString& Name)
 {
+	Save(Screen->TakeWidget(), Name);
+}
+
+void FStationCardSnapshotSpec::Save(TSharedRef<SWidget> Screen, const FString& Name)
+{
 	const FVector2D Size(1600.0, 900.0);
 	// A plain backdrop where the scene would be.
 	TSharedRef<SWidget> Root = SNew(SOverlay)
 		+ SOverlay::Slot()[SNew(SColorBlock).Color(FLinearColor(0.16f, 0.17f, 0.18f, 1.f))]
-		+ SOverlay::Slot()[Screen->TakeWidget()];
+		+ SOverlay::Slot()[Screen];
 	// Slate encodes the colors once; a linear target keeps them as the screen shows them.
 	FWidgetRenderer Renderer(true, true);
 	UTextureRenderTarget2D* Target = FWidgetRenderer::CreateTargetFor(Size, TF_Bilinear, false);
@@ -116,6 +132,83 @@ void FStationCardSnapshotSpec::Define()
 	BeforeEach([this]()
 	{
 		OutDir = FPlatformMisc::GetEnvironmentVariable(TEXT("STATION_HUD_SNAPSHOT_DIR"));
+	});
+
+	It("renders the Cine kit", [this]()
+	{
+		if (OutDir.IsEmpty() || !FApp::CanEverRender())
+		{
+			AddInfo(TEXT("Skipped: set STATION_HUD_SNAPSHOT_DIR and run with an RHI."));
+			return;
+		}
+
+		UWidgetTree* Tree = NewObject<UWidgetTree>();
+		UOverlay* Sheet = Tree->ConstructWidget<UOverlay>();
+		Tree->RootWidget = Sheet;
+		if (UOverlaySlot* ScrimSlot = Sheet->AddChildToOverlay(StationUi::MakeScrim(*Tree)))
+		{
+			ScrimSlot->SetHorizontalAlignment(HAlign_Fill);
+			ScrimSlot->SetVerticalAlignment(VAlign_Fill);
+		}
+		UVerticalBox* Column = Tree->ConstructWidget<UVerticalBox>();
+		if (UOverlaySlot* ColumnSlot = Sheet->AddChildToOverlay(Column))
+		{
+			ColumnSlot->SetPadding(FMargin(96.f, 48.f));
+		}
+
+		UHorizontalBox* Mode = Tree->ConstructWidget<UHorizontalBox>();
+		Column->AddChild(Mode);
+		if (UHorizontalBoxSlot* MarkSlot = Mode->AddChildToHorizontalBox(StationUi::MakeModeMark(*Tree, StationUi::TreinoAccent)))
+		{
+			MarkSlot->SetVerticalAlignment(VAlign_Center);
+			MarkSlot->SetPadding(FMargin(0.f, 0.f, 20.f, 0.f));
+		}
+		Mode->AddChild(StationUi::AddText(*Tree, *Column, FText::FromString(TEXT("Treino")), 48, true, StationUi::InkTitle, 0.f));
+		StationUi::AddText(*Tree, *Column, FText::FromString(TEXT("Pratique a estação no seu ritmo.")), 18, false, StationUi::InkBody);
+		StationUi::AddText(*Tree, *Column, FText::FromString(TEXT("Não é nota oficial do Revalida.")), 14, false, StationUi::Muted);
+
+		UButton* Primary = StationUi::AddButton(*Tree, *Column, FText::FromString(TEXT("Entrar")));
+		StationUi::MakeExam(*StationUi::AddButton(*Tree, *Column, FText::FromString(TEXT("Começar a prova")), 12.f));
+		StationUi::MakeDanger(*StationUi::AddButton(*Tree, *Column, FText::FromString(TEXT("Finalizar estação")), 12.f));
+		StationUi::MakeSecondary(*StationUi::AddButton(*Tree, *Column, FText::FromString(TEXT("Agora não")), 12.f));
+		StationUi::MakeGhost(*StationUi::AddButton(*Tree, *Column, FText::FromString(TEXT("Histórico")), 12.f));
+		UButton* Disabled = StationUi::AddButton(*Tree, *Column, FText::FromString(TEXT("Desativado")), 12.f);
+		Disabled->SetIsEnabled(false);
+
+		UHorizontalBox* Row = Tree->ConstructWidget<UHorizontalBox>();
+		if (UVerticalBoxSlot* RowSlot = Column->AddChildToVerticalBox(Row))
+		{
+			RowSlot->SetPadding(FMargin(0.f, 20.f, 0.f, 0.f));
+		}
+		const auto AddToRow = [Row](UWidget* Widget)
+		{
+			if (UHorizontalBoxSlot* Slot = Row->AddChildToHorizontalBox(Widget))
+			{
+				Slot->SetVerticalAlignment(VAlign_Center);
+				Slot->SetPadding(FMargin(0.f, 0.f, 16.f, 0.f));
+			}
+		};
+		AddToRow(StationUi::MakeChip(*Tree, FText::FromString(TEXT("Só voz"))));
+		AddToRow(StationUi::MakeKeyHint(*Tree, FText::FromString(TEXT("Espaço")), FText::FromString(TEXT("Falar"))));
+		AddToRow(StationUi::MakeKeyHint(*Tree, FText::FromString(TEXT("Enter")), FText::FromString(TEXT("Entrar"))));
+		AddToRow(StationUi::MakeKeyHint(*Tree, FText::FromString(TEXT("Esc")), FText::FromString(TEXT("Sair"))));
+		UButton* Arrow = StationUi::MakeEnterArrow(*Tree, StationUi::ProvaAccent);
+		AddToRow(Arrow);
+		AddToRow(StationUi::MakeEnterArrow(*Tree, StationUi::TreinoAccent));
+
+		UBorder* Panel = StationUi::MakePanel(*Tree, FMargin(20.f));
+		Panel->SetContent(StationUi::AddText(*Tree, *Column, FText::FromString(TEXT("Um painel sobre a cena.")), 16, false, StationUi::Ink, 0.f));
+		if (UOverlaySlot* PanelSlot = Sheet->AddChildToOverlay(Panel))
+		{
+			PanelSlot->SetHorizontalAlignment(HAlign_Right);
+			PanelSlot->SetVerticalAlignment(VAlign_Top);
+			PanelSlot->SetPadding(FMargin(0.f, 48.f, 48.f, 0.f));
+		}
+
+		// What the keyboard's focus looks like on two of them.
+		Primary->OnReceivedFocus.ExecuteIfBound();
+		Arrow->OnReceivedFocus.ExecuteIfBound();
+		Save(Sheet->TakeWidget(), TEXT("kit-cine"));
 	});
 
 	It("renders the microphone disclosure, the notice and the brief", [this]()

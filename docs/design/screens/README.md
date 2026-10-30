@@ -54,7 +54,7 @@ Any running station → Invalidated (technical failure)
 | Paper | `#F6F3EC`, ink `#1D2833` | Document viewer |
 | Mode mark | 32×4 px bar in the mode accent | Before every mode title |
 
-All shared rules live in [`html/cine.css`](html/cine.css). The current code accents (`#85B7EB` training, `#F2B661` exam in `StationUi.h`) give way to the Cine accents.
+All shared rules live in [`html/cine.css`](html/cine.css). The Unreal client builds them from one place, `StationUi` (see [the Cine style kit](../../unreal-station-client.md#the-cine-style-kit-issue-455)).
 
 ## Rules for implementers
 
