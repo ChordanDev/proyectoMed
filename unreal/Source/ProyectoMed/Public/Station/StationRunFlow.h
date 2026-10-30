@@ -311,10 +311,10 @@ public:
 	EStationInvalidation GetInvalidation() const { return Invalidation; }
 
 	/**
-	 * Time left until Phoenix renews the daily quota, on Phoenix's clock once it is
-	 * known (`GetServerTime`) and on the machine's before. Zero when `resets_at` has
-	 * passed or Phoenix did not send a readable one. Only shown: the next start is
-	 * still Phoenix's to allow.
+	 * Time left until Phoenix renews the daily quota, on this machine's clock: a
+	 * refused start holds no session, so Phoenix's clock is not known. Zero when
+	 * `resets_at` has passed or Phoenix did not send a readable one. Only shown: the
+	 * next start is still Phoenix's to allow.
 	 */
 	FTimespan GetDailyQuotaTimeLeft() const;
 
@@ -538,6 +538,7 @@ private:
 	friend class FStationBriefUnitSpec;
 	friend class FStationQuotaScreensSpec;
 	friend class FStationQuotaSnapshotSpec;
+	friend class FStationQuotaUnitSpec;
 
 	void LoadStation();
 	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);

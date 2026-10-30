@@ -708,8 +708,7 @@ void UStationRunFlow::CloseBrief()
 
 FTimespan UStationRunFlow::GetDailyQuotaTimeLeft() const
 {
-	const TOptional<FDateTime> Phoenix = Client ? Client->GetServerTime() : TOptional<FDateTime>();
-	const FTimespan Left = DailyQuotaResetsAt - Phoenix.Get(FDateTime::UtcNow());
+	const FTimespan Left = DailyQuotaResetsAt - FDateTime::UtcNow();
 	return Left > FTimespan::Zero() ? Left : FTimespan::Zero();
 }
 

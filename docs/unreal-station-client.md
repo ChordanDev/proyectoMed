@@ -1067,9 +1067,10 @@ status.
 
 - `BackToMenu` leaves both steps. Nothing holds the next start back: whether it
   goes through is Phoenix's answer, also before `resets_at`.
-- `GetDailyQuotaTimeLeft` counts on Phoenix's clock once a session anchored it, and
-  on the machine's before. Without a readable `resets_at`, or once it passes, the
-  countdown leaves the screen.
+- `GetDailyQuotaTimeLeft` counts on the machine's clock: a refused start holds no
+  session, so Phoenix's clock is not known, and a wrong machine clock shows a wrong
+  time left. Without a readable `resets_at`, or once it passes, the countdown leaves
+  the screen.
 - "Ver planos no site" opens `/planos` on the Phoenix the client talks to. Prices
   and plans never show in the client.
 - "Revisar o histórico" stays disabled until the history screen exists (#465).

@@ -255,6 +255,20 @@ void FStationQuotaUnitSpec::Define()
 		});
 	});
 
+	LatentIt("counts the time left on this machine's clock, whatever Phoenix's clock said", Timeout, [this](const FDoneDelegate& Done)
+	{
+		// The fake session's `server_now` is days behind this machine, so an anchored clock would read days more.
+		RefuseStart(EHttpServerResponseCodes::Ok, SessionBody);
+		EnterTraining([this, Done]()
+		{
+			TestEqual("the run", Flow->GetStep(), EStationRunStep::Running);
+			Flow->DailyQuotaResetsAt = FDateTime::UtcNow() + FTimespan::FromHours(5);
+			const double Hours = Flow->GetDailyQuotaTimeLeft().GetTotalHours();
+			TestTrue("five hours by this machine", Hours > 4.9 && Hours <= 5.0);
+			Done.Execute();
+		});
+	});
+
 	LatentIt("still shows the quota screen when Phoenix sends no readable resets_at", Timeout, [this](const FDoneDelegate& Done)
 	{
 		RefuseStart(EHttpServerResponseCodes::TooManyRequests,
