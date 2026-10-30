@@ -306,6 +306,47 @@ void FStationHudUnitSpec::Define()
 		TestEqual(TEXT("the card and its status label"), Outlined, 2);
 	});
 
+	// The owner's review of #499: an answer reads at a glance, green or red.
+	It("paints a released request green and an unavailable one red, and leaves the others neutral", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Text);
+		for (const EStationImpressoDecision Decision : {EStationImpressoDecision::Released, EStationImpressoDecision::Unavailable,
+				 EStationImpressoDecision::AlreadyReleased})
+		{
+			Flow->ExamRequests.AddDefaulted_GetRef().Reply.Decision = Decision;
+		}
+		UStationHudWidget* Hud = MakeHud(Flow);
+
+		const auto Find = [Hud](const TCHAR* Label)
+		{
+			const UTextBlock* Found = nullptr;
+			UWidgetTree::ForWidgetAndChildren(Hud->ExamCardBox, [&Found, Label](UWidget* Widget)
+			{
+				const UTextBlock* Text = Cast<UTextBlock>(Widget);
+				Found = Text && Text->GetText().ToString() == Label ? Text : Found;
+			});
+			return Found;
+		};
+		const auto Ink = [](const UTextBlock* Text) { return Text->GetColorAndOpacity().GetSpecifiedColor(); };
+		const auto Fill = [](const UTextBlock* Text)
+		{
+			return Cast<UBorder>(Text->GetParent())->Background.TintColor.GetSpecifiedColor();
+		};
+
+		const UTextBlock* Released = Find(TEXT("Liberado"));
+		const UTextBlock* Unavailable = Find(TEXT("Não disponível"));
+		const UTextBlock* Before = Find(TEXT("Já liberado"));
+		if (TestNotNull(TEXT("released"), Released) && TestNotNull(TEXT("unavailable"), Unavailable) && TestNotNull(TEXT("already released"), Before))
+		{
+			TestEqual(TEXT("green label"), Ink(Released), StationUi::ReleasedInk);
+			TestEqual(TEXT("on green"), Fill(Released), StationUi::ReleasedFill);
+			TestEqual(TEXT("red label"), Ink(Unavailable), StationUi::DangerInk);
+			TestTrue(TEXT("on red"), Fill(Unavailable).R > 2.f * Fill(Unavailable).G);
+			TestEqual(TEXT("an opaque ground"), Fill(Unavailable).A, 1.f);
+			TestEqual(TEXT("already released stays neutral"), Fill(Before), StationUi::PanelSolid);
+		}
+	});
+
 	It("redraws the conversation only when what it shows changes", [this]()
 	{
 		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);

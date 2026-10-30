@@ -1768,11 +1768,15 @@ namespace
 		return Chip;
 	}
 
-	/** The status of a request, in the kit's outlined pill, on the card's own opaque ground. */
-	UBorder* MakeRequestChip(UWidgetTree& Tree, const FText& Label, const FLinearColor& Ink = StationUi::InkLabel)
+	/** Behind "Não disponível", as dark as `ReleasedFill` is behind "Liberado". */
+	const FLinearColor UnavailableFill(FColor(0x5C, 0x1F, 0x1C));
+
+	/** The status of a request, in the kit's outlined pill, on an opaque ground. */
+	UBorder* MakeRequestChip(UWidgetTree& Tree, const FText& Label, const FLinearColor& Ink = StationUi::InkLabel,
+		const FLinearColor& Fill = StationUi::PanelSolid, const FLinearColor& Edge = StationUi::ChipEdge)
 	{
 		UBorder* Chip = StationUi::MakeChip(Tree, Label);
-		Chip->SetBrush(StationUi::RoundedBrush(StationUi::PanelSolid, 16.f, StationUi::ChipEdge, 1.f));
+		Chip->SetBrush(StationUi::RoundedBrush(Fill, 16.f, Edge, 1.f));
 		if (UTextBlock* Text = Cast<UTextBlock>(Chip->GetContent()))
 		{
 			Text->SetColorAndOpacity(FSlateColor(Ink));
@@ -1818,10 +1822,10 @@ void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
 	const bool bDeclined = Reply.Decision != EStationImpressoDecision::Released
 		&& Reply.Decision != EStationImpressoDecision::AlreadyReleased;
 	UBorder* Chip = Reply.Decision == EStationImpressoDecision::Released
-		? MakeRequestChip(*WidgetTree, LOCTEXT("ExamReleased", "Liberado"))
+		? MakeRequestChip(*WidgetTree, LOCTEXT("ExamReleased", "Liberado"), StationUi::ReleasedInk, StationUi::ReleasedFill, StationUi::ReleasedInk)
 		: Reply.Decision == EStationImpressoDecision::AlreadyReleased
 		? MakeRequestChip(*WidgetTree, LOCTEXT("ExamAlreadyReleased", "Já liberado"))
-		: MakeRequestChip(*WidgetTree, LOCTEXT("ExamUnavailable", "Não disponível"), StationUi::Muted);
+		: MakeRequestChip(*WidgetTree, LOCTEXT("ExamUnavailable", "Não disponível"), StationUi::DangerInk, UnavailableFill, StationUi::DangerInk);
 	UVerticalBox* Column = AddCard(*WidgetTree, *ExamCardBox, Request.Text, Chip, bDeclined ? StationUi::InkBody : StationUi::InkTitle);
 	if (Reply.NewlyReleased.Num() == 1)
 	{
