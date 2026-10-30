@@ -24,7 +24,11 @@ const TCHAR* FStationVoiceLink::PatientTrackName = TEXT("patient-voice");
 namespace
 {
 	const char* TranscriptTopic = "transcript";
-	const char* MicrophoneTrackName = "microphone";
+	/**
+	 * The voice worker treats only a learner microphone with this name as push-to-talk
+	 * (#419); the web client's keeps the default name, and its browser mutes it on its own.
+	 */
+	const char* MicrophoneTrackName = "push-to-talk";
 
 	std::string ToStd(const FString& Value)
 	{
@@ -51,6 +55,8 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 	std::atomic<bool> bReconnecting{false};
 	/** The state is `WaitingForWorker` or `Ready`: microphone audio is sent. */
 	std::atomic<bool> bListening{false};
+	/** Push-to-talk (#419): the learner holds the talk key. Written under `MicLock`. */
+	std::atomic<bool> bMicrophoneOpen{false};
 
 	/** Game thread only: whether the voice can still be heard, and its 10-second watch. */
 	FStationVoiceLiveness Liveness;
@@ -227,7 +233,12 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 					WorkerPresence.OnSeenInScan();
 				}
 			}
-			bPublished = true;
+			{
+				// Published live; muted at once unless the talk key is already held.
+				FScopeLock Lock(&MicLock);
+				bPublished = true;
+				ApplyMicrophone();
+			}
 			PostReadiness();
 		}
 		catch (const std::exception& Error)
@@ -237,10 +248,48 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 		}
 	}
 
+	void SetMicrophoneOpen(bool bOpen)
+	{
+		FScopeLock Lock(&MicLock);
+		if (bMicrophoneOpen == bOpen)
+		{
+			return;
+		}
+		bMicrophoneOpen = bOpen;
+		// A partial frame of the last press never joins the next one.
+		Framer.Reset();
+		ApplyMicrophone();
+	}
+
+	/** Mutes or unmutes the published track to match `bMicrophoneOpen`. Holds `MicLock`. */
+	void ApplyMicrophone()
+	{
+		if (!bAlive || !bPublished || !Track)
+		{
+			return;
+		}
+		try
+		{
+			if (bMicrophoneOpen)
+			{
+				Track->unmute();
+			}
+			else
+			{
+				Track->mute();
+			}
+		}
+		catch (const std::exception& Error)
+		{
+			UE_LOG(LogStationClient, Warning, TEXT("Could not %s the microphone: %hs"),
+				bMicrophoneOpen ? TEXT("open") : TEXT("close"), Error.what());
+		}
+	}
+
 	void PushMicrophone(TConstArrayView<float> Samples, int32 SampleRate, int32 NumChannels)
 	{
 		FScopeLock Lock(&MicLock);
-		if (!bAlive || !bPublished || !bListening || !Source)
+		if (!bAlive || !bPublished || !bListening || !bMicrophoneOpen || !Source)
 		{
 			return;
 		}
@@ -434,6 +483,20 @@ void FStationVoiceLink::Disconnect()
 void FStationVoiceLink::PushMicrophonePcm(TConstArrayView<float> Samples, int32 SampleRate, int32 NumChannels)
 {
 	Impl->PushMicrophone(Samples, SampleRate, NumChannels);
+}
+
+void FStationVoiceLink::SetMicrophoneOpen(bool bOpen)
+{
+	check(IsInGameThread());
+	if (!bClosed)
+	{
+		Impl->SetMicrophoneOpen(bOpen);
+	}
+}
+
+bool FStationVoiceLink::IsMicrophoneOpen() const
+{
+	return !bClosed && Impl->bMicrophoneOpen;
 }
 
 void FStationVoiceLink::SetState(EStationVoiceState NewState, const FString& NewFailure)

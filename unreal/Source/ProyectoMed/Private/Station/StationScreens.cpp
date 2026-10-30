@@ -52,6 +52,23 @@ namespace
 	/** The widest a chat bubble's text runs, so it wraps inside the panel. */
 	constexpr float BubbleWrapWidth =
 		SidePanelWidth - 2.f * SidePanelPadding - BubbleIndent - 2.f * BubblePadding - ScrollBarAllowance;
+	/** The widest a text runs in the exam panel's list, outside a card. */
+	constexpr float ExamListWrapWidth = SidePanelWidth - 2.f * SidePanelPadding - ScrollBarAllowance;
+	constexpr float CardPadding = 14.f;
+	/** The widest a text runs inside a request card. */
+	constexpr float CardWrapWidth = ExamListWrapWidth - 2.f * CardPadding;
+	/** A card's title leaves room beside it for the widest status label, "Não disponível". */
+	constexpr float CardTitleWrapWidth = CardWrapWidth - 150.f;
+
+	/**
+	 * Wraps `Text` at a fixed width. Auto wrap lays a new text out unwrapped for
+	 * one frame, so a list rebuilt with it jumps before it settles.
+	 */
+	void WrapAt(UTextBlock& Text, float Width)
+	{
+		Text.SetAutoWrapText(false);
+		Text.SetWrapTextAt(Width);
+	}
 
 	/** Phoenix's category of a released document, as the learner reads it. */
 	FText DocumentCategoryName(const FString& Category)
@@ -651,6 +668,21 @@ void UStationHudWidget::BuildConversation(UOverlay& Root)
 		RuleSlot->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
 	}
 
+	// Push-to-talk (#419): in a voice training the learner holds this button, or the
+	// space bar, to talk to the patient; releasing it sends what was said.
+	TalkButton = WidgetTree->ConstructWidget<UButton>();
+	TalkButton->OnPressed.AddDynamic(this, &UStationHudWidget::HandlePressTalk);
+	TalkButton->OnReleased.AddDynamic(this, &UStationHudWidget::HandleReleaseTalk);
+	TalkText = WidgetTree->ConstructWidget<UTextBlock>();
+	TalkText->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 15));
+	TalkText->SetJustification(ETextJustify::Center);
+	TalkText->SetColorAndOpacity(FSlateColor(StationUi::Ink));
+	TalkButton->AddChild(TalkText);
+	if (UVerticalBoxSlot* TalkSlot = Column->AddChildToVerticalBox(TalkButton))
+	{
+		TalkSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+	}
+
 	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
 	if (UVerticalBoxSlot* RowSlot = Column->AddChildToVerticalBox(Row))
 	{
@@ -1117,10 +1149,10 @@ void UStationHudWidget::RefreshExamCards()
 	}
 	if (ExamCardBox->GetChildrenCount() == 0)
 	{
-		StationUi::AddText(*WidgetTree, *ExamCardBox, bAloud
+		WrapAt(*StationUi::AddText(*WidgetTree, *ExamCardBox, bAloud
 			? LOCTEXT("NoExamsAloud", "Nenhum exame solicitado ainda. Segure o microfone e diga o que você solicita.")
 			: LOCTEXT("NoExamsTyped", "Nenhum exame solicitado ainda. Descreva abaixo o que você solicita."),
-			15, false, StationUi::Muted, 0.f);
+			15, false, StationUi::Muted, 0.f), ExamListWrapWidth);
 	}
 
 	// Documents released outside these requests, by a turn to the examiner.
@@ -1134,8 +1166,8 @@ void UStationHudWidget::RefreshExamCards()
 	}
 	if (Others.Num() > 0)
 	{
-		StationUi::AddText(*WidgetTree, *ExamCardBox, LOCTEXT("OtherDocuments", "Outros documentos liberados"), 15, true,
-			StationUi::Muted, 10.f);
+		WrapAt(*StationUi::AddText(*WidgetTree, *ExamCardBox, LOCTEXT("OtherDocuments", "Outros documentos liberados"), 15,
+			true, StationUi::Muted, 10.f), ExamListWrapWidth);
 		for (const FStationImpresso* Impresso : Others)
 		{
 			AddDocumentLink(*ExamCardBox, *Impresso);
@@ -1160,7 +1192,7 @@ namespace
 	/** A card's column, with the request and its status label in the first row. */
 	UVerticalBox* AddCard(UWidgetTree& Tree, UVerticalBox& Parent, const FString& Text, UBorder* Chip)
 	{
-		UBorder* Card = StationUi::MakeRounded(Tree, StationUi::Raised, 8.f, FMargin(14.f, 12.f));
+		UBorder* Card = StationUi::MakeRounded(Tree, StationUi::Raised, 8.f, FMargin(CardPadding, 12.f));
 		if (UVerticalBoxSlot* CardSlot = Parent.AddChildToVerticalBox(Card))
 		{
 			CardSlot->SetPadding(FMargin(0.f, Parent.GetChildrenCount() > 1 ? 10.f : 0.f, 0.f, 0.f));
@@ -1173,7 +1205,7 @@ namespace
 		Title->SetText(FText::FromString(Text));
 		Title->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 16));
 		Title->SetColorAndOpacity(FSlateColor(StationUi::Ink));
-		Title->SetAutoWrapText(true);
+		WrapAt(*Title, CardTitleWrapWidth);
 		if (UHorizontalBoxSlot* TitleSlot = Row->AddChildToHorizontalBox(Title))
 		{
 			TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -1212,7 +1244,8 @@ void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
 	}
 	if (Reply.NewlyReleased.Num() == 0 && !Reply.FeedbackMessage.IsEmpty())
 	{
-		StationUi::AddText(*WidgetTree, *Column, FText::FromString(Reply.FeedbackMessage), 14, false, StationUi::Muted, 6.f);
+		WrapAt(*StationUi::AddText(*WidgetTree, *Column, FText::FromString(Reply.FeedbackMessage), 14, false,
+			StationUi::Muted, 6.f), CardWrapWidth);
 	}
 }
 
@@ -1229,7 +1262,8 @@ void UStationHudWidget::AddDocumentLink(UVerticalBox& Parent, const FStationImpr
 		15, StationUi::Link, true);
 	if (UTextBlock* Text = Cast<UTextBlock>(Open->GetChildAt(0)))
 	{
-		Text->SetAutoWrapText(true);
+		// Less the link's own margins, so "›" stays on the label's line.
+		WrapAt(*Text, CardWrapWidth - 12.f);
 	}
 	if (UVerticalBoxSlot* LinkSlot = Parent.AddChildToVerticalBox(Open))
 	{
@@ -1249,8 +1283,13 @@ void UStationHudWidget::RefreshMicrophone()
 	{
 		return;
 	}
-	const EMicrophoneLook Look = !bMicrophoneHeld ? EMicrophoneLook::Idle
-		: !bMicrophoneAccepted ? EMicrophoneLook::Waiting
+	// Shift + space bar holds the exam's talk key too (#419). A press refused while the
+	// patient answers (the first tap of a cut) waits for nothing, so it looks idle.
+	const bool bTalking = Flow && Flow->IsTalkingForExam();
+	const bool bHeld = bMicrophoneHeld || bTalking;
+	const bool bAccepted = bMicrophoneAccepted || bTalking;
+	const EMicrophoneLook Look = !bHeld ? EMicrophoneLook::Idle
+		: !bAccepted ? (Flow && !Flow->CanAskExamAloud() ? EMicrophoneLook::Waiting : EMicrophoneLook::Idle)
 		: Flow && Flow->IsArmingExamAloud() ? EMicrophoneLook::Arming
 		: Flow && (Flow->IsListeningForExam() || Flow->IsSpokenExamInFlight()) ? EMicrophoneLook::Recording
 		: EMicrophoneLook::Idle;
@@ -1298,7 +1337,7 @@ void UStationHudWidget::RefreshMicrophone()
 	}
 	else
 	{
-		ExamAloudText->SetText(LOCTEXT("ExamAloudIdle", "Segure para pedir um exame"));
+		ExamAloudText->SetText(LOCTEXT("ExamAloudIdle", "Segure para pedir (Shift + Espaço)"));
 		ExamAloudText->SetColorAndOpacity(FSlateColor(StationUi::Muted));
 	}
 }
@@ -1358,23 +1397,43 @@ void UStationHudWidget::HandleCloseDocument()
 	StationUi::SetShown(DocumentViewer, false);
 }
 
+void UStationHudWidget::HandlePressTalk()
+{
+	if (Flow)
+	{
+		Flow->PressTalkKey(/*bForExam*/ false, EStationTalkInput::TalkButton);
+	}
+	RefreshTalk();
+}
+
+void UStationHudWidget::HandleReleaseTalk()
+{
+	if (Flow)
+	{
+		Flow->ReleaseTalkKey(EStationTalkInput::TalkButton);
+	}
+	RefreshTalk();
+}
+
 void UStationHudWidget::HandleAskExamAloud()
 {
 	bMicrophoneHeld = true;
-	// Refused while the previous spoken request still waits for Phoenix.
-	bMicrophoneAccepted = Flow && Flow->AskExamAloud();
+	// The exam push-to-talk (#419): refused while the previous spoken request still
+	// waits for Phoenix, and while the patient answers unless the press follows a tap.
+	bMicrophoneAccepted = Flow && Flow->PressTalkKey(/*bForExam*/ true, EStationTalkInput::ExamButton);
 	RefreshMicrophone();
 }
 
 void UStationHudWidget::HandleReleaseExamAloud()
 {
 	bMicrophoneHeld = false;
-	// Only the press the flow took is released to it.
-	if (Flow && bMicrophoneAccepted)
-	{
-		Flow->ReleaseExamAloud();
-	}
 	bMicrophoneAccepted = false;
+	// Every press is released to the flow: a refused one may be the first tap of a cut,
+	// and the flow ignores the release when another input holds the talk key (#419).
+	if (Flow)
+	{
+		Flow->ReleaseTalkKey(EStationTalkInput::ExamButton);
+	}
 	RefreshMicrophone();
 }
 
@@ -1424,7 +1483,7 @@ void UStationHudWidget::Refresh()
 	}
 	else if (Voice.State == EStationVoiceState::Ready)
 	{
-		Status = LOCTEXT("MicrophoneOn", "Microfone ativo");
+		Status = LOCTEXT("VoiceReady", "Voz conectada");
 	}
 	else if (Voice.State == EStationVoiceState::Reconnecting)
 	{
@@ -1439,7 +1498,47 @@ void UStationHudWidget::Refresh()
 	VoiceStatusText->SetColorAndOpacity(Voice.bLost ? StationUi::Caution : StationUi::Muted);
 
 	RefreshConversation();
+	RefreshTalk();
 	RefreshExams();
+}
+
+void UStationHudWidget::RefreshTalk()
+{
+	if (!Flow || !TalkButton)
+	{
+		return;
+	}
+	const bool bShown = Flow->ShouldRequestExamsAloud(); // a voice training whose voice and microphone work
+	StationUi::SetShown(TalkButton, bShown);
+	if (!bShown)
+	{
+		return;
+	}
+	// Disabling a held button would lose its release, so it stays enabled while the run goes on.
+	TalkButton->SetIsEnabled(Flow->CanFinish());
+	const bool bTalking = Flow->IsTalking() && !Flow->IsTalkingForExam();
+	const FText Label = bTalking ? LOCTEXT("TalkTalking", "Falando... solte para enviar")
+		: Flow->IsPatientAnswering() ? LOCTEXT("TalkCut", "Toque e segure para interromper")
+		: LOCTEXT("TalkIdle", "Segure para falar (Espaço)");
+	if (!Label.EqualTo(TalkText->GetText()))
+	{
+		TalkText->SetText(Label);
+	}
+	if (TalkLookTalking.IsSet() && TalkLookTalking.GetValue() == bTalking)
+	{
+		return;
+	}
+	TalkLookTalking = bTalking;
+	const FLinearColor Fill = bTalking ? StationUi::Recording : StationUi::Raised;
+	const FLinearColor Edge = bTalking ? StationUi::RecordingInk : StationUi::Quiet;
+	FButtonStyle Style;
+	Style.SetNormal(StationUi::RoundedBrush(Fill, 10.f, Edge, 1.5f));
+	Style.SetHovered(StationUi::RoundedBrush(bTalking ? Fill : StationUi::RaisedHover, 10.f, bTalking ? Edge : StationUi::Ink, 1.5f));
+	Style.SetPressed(StationUi::RoundedBrush(Fill, 10.f, Edge, 1.5f));
+	Style.SetDisabled(StationUi::RoundedBrush(StationUi::Raised, 10.f, StationUi::PanelEdge, 1.5f));
+	Style.SetNormalPadding(FMargin(12.f, 12.f));
+	Style.SetPressedPadding(FMargin(12.f, 12.f));
+	TalkButton->SetStyle(Style);
 }
 
 void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -1450,6 +1549,7 @@ void UStationHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 		TimerText->SetText(FormatStationTimer(Flow->GetClient()->GetRemainingTime()));
 		Flow->CheckStationTimer();
 	}
+	RefreshTalk();
 	if (MicrophoneRing && MicrophoneLook == EMicrophoneLook::Recording)
 	{
 		// The pulse: grows from the button and fades, about once a second.

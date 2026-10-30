@@ -99,6 +99,11 @@ class FakeSpeechStream:
             if self._quiet_ms >= ENDPOINT_MS:
                 self._end_utterance()
 
+    def flush(self) -> None:
+        # Deepgram's Finalize: the utterance being spoken ends now.
+        if self._speaking and not self._ended:
+            self._end_utterance()
+
     def end_input(self) -> None:
         if self._ended:
             return

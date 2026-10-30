@@ -45,6 +45,13 @@ namespace
 		return Error.Code == TEXT("network_error") || Error.Code == TEXT("http_502")
 			|| Error.Code == TEXT("http_503") || Error.Code == TEXT("http_504");
 	}
+
+	/** How long after its last sound the patient no longer counts as answering (#419). */
+	constexpr double PatientVoiceQuietSeconds = 0.5;
+	/** An int16 sample louder than this is the patient's voice, not the silence between words. */
+	constexpr int32 PatientVoiceLevel = 500;
+	/** How long a typed turn's shown reply waits for its first spoken frame (#419). */
+	constexpr double TypedReplyVoiceSeconds = 2.0;
 }
 
 FText FormatStationTimer(const FTimespan& Remaining)
@@ -373,6 +380,8 @@ bool UStationRunFlow::SendTypedTurn(const FString& Text)
 				if (Self->VoiceTurnId == SentAfterVoiceTurn)
 				{
 					Self->ResumePatient();
+					// Until its voice starts, a single press must not fence it (#419).
+					Self->TypedReplyVoiceUntil = FPlatformTime::Seconds() + TypedReplyVoiceSeconds;
 				}
 			}
 			Self->OnChanged.Broadcast();
@@ -859,6 +868,15 @@ void UStationRunFlow::ResetRun()
 	bVoiceLearnerCommitted = false;
 	VoiceLearnerLine = INDEX_NONE;
 	bVoiceOutcome = false;
+	TalkKey.Reset();
+	bTalkKeyForExam = false;
+	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
+	TalkTailTicker.Reset();
+	PatientHeardAt->store(0.0);
+	PatientSilenced->store(false);
+	CutVoiceTurnId = 0;
+	TypedReplyVoiceUntil = 0.0;
+	bVoiceTurnFailed = false;
 	PendingTurn.Reset();
 	Transcript.Reset();
 	UnsentTurn.Reset();
@@ -866,6 +884,7 @@ void UStationRunFlow::ResetRun()
 	PendingExamRequest.Reset();
 	UnansweredExamRequest.Reset();
 	ExamRequests.Reset();
+	SupersededExamRequests.Reset();
 	ReleasedImpressos.Reset();
 	UnsentExamRequest.Reset();
 	ExamErrorText = FText::GetEmpty();
@@ -922,8 +941,10 @@ void UStationRunFlow::ConnectVoice()
 		}
 	};
 	// Runs on a LiveKit thread: copy the handler so the flow is never touched there.
-	Handlers.OnPatientPcm = [PatientAudio = Patient.Audio](TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
+	Handlers.OnPatientPcm = [PatientAudio = Patient.Audio, HeardAt = PatientHeardAt, Silenced = PatientSilenced](
+		TConstArrayView<int16> Samples, int32 SampleRate, int32 NumChannels)
 	{
+		NotePatientVoice(Samples, *HeardAt, *Silenced);
 		if (PatientAudio)
 		{
 			PatientAudio(Samples, SampleRate, NumChannels);
@@ -940,6 +961,8 @@ void UStationRunFlow::ConnectVoice()
 void UStationRunFlow::HandleVoiceState(EStationVoiceState State)
 {
 	Voice.State = State;
+	// The microphone closes while the voice cannot be heard, and opens again for a key still held.
+	ApplyTalkKey();
 	if (State == EStationVoiceState::Failed)
 	{
 		LoseVoice();
@@ -981,9 +1004,17 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		OnChanged.Broadcast();
 		return;
 	}
-	if (Event.TurnId < VoiceTurnId)
+	if (Event.Kind == EStationVoiceEventKind::ExaminerImpresso && SupersededExamRequests.Contains(Event.TurnId))
 	{
-		return; // a late event of an earlier turn
+		// The learner spoke again before this request's outcome arrived, and the
+		// worker still sent it (#432): it shows as a typed request's does (#434).
+		AddSpokenExamOutcome(SupersededExamRequests.FindAndRemoveChecked(Event.TurnId), Event);
+		OnChanged.Broadcast();
+		return;
+	}
+	if (Event.TurnId < VoiceTurnId || Event.TurnId <= CutVoiceTurnId)
+	{
+		return; // a late event of an earlier turn, or of a turn the learner cut
 	}
 	if (Event.TurnId > VoiceTurnId)
 	{
@@ -1000,6 +1031,7 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		bVoiceLearnerCommitted = false;
 		VoiceLearnerLine = INDEX_NONE;
 		bVoiceOutcome = false;
+		bVoiceTurnFailed = false;
 		Voice.LearnerText.Reset();
 		Voice.PatientText.Reset();
 		Voice.bExaminerNoted = false;
@@ -1020,8 +1052,9 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 	if (Event.TurnId == SpokenExamTurn && Event.Kind == EStationVoiceEventKind::TurnFailure)
 	{
 		// The request may or may not have reached Phoenix: the learner may ask again,
-		// and what Phoenix released is read again.
+		// and what Phoenix released is read again. Nobody answers the failed turn (#419).
 		ResetSpokenExam();
+		bVoiceTurnFailed = true;
 		ExamErrorText = LOCTEXT("ExamRequestFailed", "Não foi possível enviar sua solicitação. Tente novamente.");
 		ReloadReleasedImpressos();
 		OnChanged.Broadcast();
@@ -1095,7 +1128,9 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		bVoiceOutcome = true;
 		break;
 	default:
-		// A refused reply and a failed synthesis change nothing shown.
+		// A refused reply and a failed synthesis change nothing shown, but the
+		// patient no longer answers a failed turn.
+		bVoiceTurnFailed = bVoiceTurnFailed || Event.Kind == EStationVoiceEventKind::TurnFailure;
 		return;
 	}
 	OnChanged.Broadcast();
@@ -1118,13 +1153,126 @@ void UStationRunFlow::ReportMicrophoneUnavailable()
 	OnChanged.Broadcast();
 }
 
+bool UStationRunFlow::CanTalk() const
+{
+	const FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr;
+	return Link && IsListening() && Link->GetState() == EStationVoiceState::Ready;
+}
+
+bool UStationRunFlow::IsPatientAnswering() const
+{
+	// A spoken exam request waits for the examiner, not the patient.
+	const bool bAwaitingReply = bVoiceLearnerCommitted && !bVoiceOutcome && !bVoiceTurnFailed
+		&& VoiceTurnId > CutVoiceTurnId && VoiceTurnId != SpokenExamTurn;
+	const double Now = FPlatformTime::Seconds();
+	return bAwaitingReply || PendingTurn.IsSet() || Now < TypedReplyVoiceUntil
+		|| Now - PatientHeardAt->load() < PatientVoiceQuietSeconds;
+}
+
+bool UStationRunFlow::PressTalkKey(bool bForExam, EStationTalkInput Input)
+{
+	if (!CanTalk() || (bForExam && !CanAskExamAloud()))
+	{
+		return false;
+	}
+	const bool bAnswering = IsPatientAnswering();
+	if (!TalkKey.Press(FPlatformTime::Seconds(), bAnswering, Input))
+	{
+		return false;
+	}
+	bTalkKeyForExam = bForExam;
+	if (bAnswering)
+	{
+		CutPatient();
+	}
+	if (bForExam)
+	{
+		AskExamAloud();
+	}
+	ApplyTalkKey();
+	OnChanged.Broadcast();
+	return true;
+}
+
+void UStationRunFlow::ReleaseTalkKey(EStationTalkInput Input)
+{
+	const bool bWasHeld = TalkKey.IsHeld();
+	TalkKey.Release(FPlatformTime::Seconds(), Input);
+	if (!bWasHeld || TalkKey.IsHeld())
+	{
+		return; // the first tap of a cut, a press that opened nothing, or another input's hold
+	}
+	if (bTalkKeyForExam)
+	{
+		bTalkKeyForExam = false;
+		ReleaseExamAloud();
+	}
+	// Checked every frame: a delayed ticker may fire just before the tail ends and
+	// then wait a whole delay more.
+	FTSTicker::GetCoreTicker().RemoveTicker(TalkTailTicker);
+	TalkTailTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateWeakLambda(this, [this](float)
+	{
+		const bool bInTail = !TalkKey.IsHeld() && TalkKey.IsOpen(FPlatformTime::Seconds());
+		if (!bInTail)
+		{
+			ApplyTalkKey();
+			TalkTailTicker.Reset();
+		}
+		return bInTail;
+	}));
+	OnChanged.Broadcast();
+}
+
+void UStationRunFlow::CutPatient()
+{
+	SilencePatient();
+	PatientHeardAt->store(0.0);
+	TypedReplyVoiceUntil = 0.0;
+	if (VoiceTurnId == SpokenExamTurn)
+	{
+		return; // an exam request's outcome is always kept (#364)
+	}
+	if (!bVoiceOutcome)
+	{
+		// The worker cancels the turn on the press, and Phoenix keeps nothing of it.
+		DropSupersededVoiceTurn();
+	}
+	CutVoiceTurnId = VoiceTurnId;
+}
+
+void UStationRunFlow::NotePatientVoice(TConstArrayView<int16> Samples, std::atomic<double>& HeardAt, const std::atomic<bool>& bSilenced)
+{
+	if (bSilenced)
+	{
+		return; // frames still in flight after a cut never play, so the patient is not answering
+	}
+	for (const int16 Sample : Samples)
+	{
+		if (FMath::Abs(int32(Sample)) > PatientVoiceLevel)
+		{
+			HeardAt.store(FPlatformTime::Seconds());
+			return;
+		}
+	}
+}
+
+void UStationRunFlow::ApplyTalkKey()
+{
+	if (FStationVoiceLink* Link = Client ? Client->GetVoice() : nullptr)
+	{
+		Link->SetMicrophoneOpen(CanTalk() && TalkKey.IsOpen(FPlatformTime::Seconds()));
+	}
+}
+
 void UStationRunFlow::DropSupersededVoiceTurn()
 {
 	Voice.PatientText.Reset();
 	if (SpokenExamTurn != 0)
 	{
 		// The armed mode passes to the next utterance unless Phoenix already took
-		// this one, whose outcome then never arrives: its impressos are read again.
+		// this one, whose outcome may then still arrive (#434): its impressos are
+		// read again now.
+		SupersededExamRequests.Add(SpokenExamTurn, SpokenExamText);
 		SpokenExamTurn = 0;
 		SpokenExamText.Reset();
 		ReloadReleasedImpressos();
@@ -1138,6 +1286,7 @@ void UStationRunFlow::DropSupersededVoiceTurn()
 
 void UStationRunFlow::SilencePatient()
 {
+	PatientSilenced->store(true);
 	if (Patient.Silence)
 	{
 		Patient.Silence();
@@ -1147,9 +1296,13 @@ void UStationRunFlow::SilencePatient()
 void UStationRunFlow::ResumePatient()
 {
 	// Until Phoenix closes the run the room stays, and its sentences still arrive.
-	if (Step == EStationRunStep::Running && Patient.Resume)
+	if (Step == EStationRunStep::Running)
 	{
-		Patient.Resume();
+		PatientSilenced->store(false);
+		if (Patient.Resume)
+		{
+			Patient.Resume();
+		}
 	}
 }
 
@@ -1186,7 +1339,11 @@ void UStationRunFlow::TakeSpokenExamOutcome(const FStationVoiceEvent& Event)
 	Voice.LearnerText.Reset();
 	// Phoenix used the mode for this request.
 	ResetSpokenExam();
+	AddSpokenExamOutcome(Text, Event);
+}
 
+void UStationRunFlow::AddSpokenExamOutcome(const FString& Text, const FStationVoiceEvent& Event)
+{
 	FStationExamRequest& Answered = ExamRequests.AddDefaulted_GetRef();
 	Answered.Text = Text;
 	Answered.Reply = Event.Impresso;

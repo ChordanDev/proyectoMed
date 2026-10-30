@@ -53,7 +53,11 @@ wait_for() { # <seconds> <description> <pid> <command...>
 
 LIVEKIT_ENV=(LIVEKIT_URL="ws://127.0.0.1:$LIVEKIT_PORT" LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret)
 
-livekit-server --dev --bind 127.0.0.1 >"$LOGS/livekit.log" 2>&1 &
+# The agents worker reports its real CPU load even in dev mode, and LiveKit offers a
+# job only to workers under its target load (0.7 by default): with a busy editor the
+# worker would never be sent to the room.
+LIVEKIT_CONFIG=$'keys:\n  devkey: secret\nagents:\n  target_load: 2\n'
+livekit-server --dev --bind 127.0.0.1 --config-body "$LIVEKIT_CONFIG" >"$LOGS/livekit.log" 2>&1 &
 PIDS+=($!)
 MOCK_LLM_REPLY="${VOICE_STACK_PATIENT_REPLY:-Meu nome é Carlos.}" \
   python3 "$ROOT/scripts/voice-stack/mock_openai.py" "$MOCK_PORT" >"$LOGS/mock.log" 2>&1 &

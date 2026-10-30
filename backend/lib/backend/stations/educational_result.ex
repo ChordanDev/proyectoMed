@@ -1,11 +1,12 @@
 defmodule Backend.Stations.EducationalResult do
   @moduledoc false
 
+  alias Backend.Stations.Overtime
   alias Backend.Stations.RubricAssessment.Points
 
   # Only bounded learner-facing categories cross the wire. Tagged reasons may
   # contain evidence IDs or provider detail and must never be inspected here.
-  def serialize(session_id, assessment, package) do
+  def serialize(session_id, assessment, package, session) do
     authored = Map.new(package["rubric"], &{&1["id"], &1})
     criteria = Enum.map(assessment.criteria, &criterion(&1, Map.fetch!(authored, &1.id)))
     estimates = assessment.estimates
@@ -29,6 +30,27 @@ defmodule Backend.Stations.EducationalResult do
         unresolved: Enum.map(estimates.unresolved, &%{id: &1.id, status: to_string(&1.status)})
       }
     }
+    |> put_overtime(estimates, session)
+  end
+
+  # A training adds how long it ran past the expected time and the training
+  # score that deducts it (#323); the rubric estimates stay untouched. A real
+  # test has no overtime, so it adds nothing.
+  defp put_overtime(result, estimates, session) do
+    case Overtime.seconds(session) do
+      nil ->
+        result
+
+      overtime_seconds ->
+        penalty = Overtime.penalty(overtime_seconds)
+        score = Overtime.training_score(estimates.total, penalty)
+
+        Map.merge(result, %{
+          overtime_seconds: overtime_seconds,
+          overtime_penalty: Points.to_decimal_string(penalty),
+          training_score: if(is_nil(score), do: nil, else: Points.to_decimal_string(score))
+        })
+    end
   end
 
   defp criterion(result, authored) do

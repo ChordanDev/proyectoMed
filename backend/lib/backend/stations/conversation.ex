@@ -26,6 +26,10 @@ defmodule Backend.Stations.Conversation do
   @default_purge_interval_ms :timer.minutes(1)
   @default_station_duration_ms :timer.minutes(10)
   @default_turn_grace_ms :timer.seconds(30)
+  # A training runs past its expected end for at most this long (#323).
+  @default_training_overtime_ms :timer.minutes(10)
+  # Reasons of the automatic end: `:timer` for a real test, `:cap` for a training.
+  @timer_reasons [:timer, :cap]
   # `user_id` is the learner that started the session (#337).
   @pinned_station_keys [
     :user_id,
@@ -78,6 +82,7 @@ defmodule Backend.Stations.Conversation do
           started_at: DateTime.t(),
           expires_at: DateTime.t(),
           deadline_at: DateTime.t(),
+          cap_at: DateTime.t(),
           messages: [message()],
           released_impressos: [String.t()],
           impresso_requests: [impresso_request_event()],
@@ -143,9 +148,10 @@ defmodule Backend.Stations.Conversation do
          }
 
   @typep voice_grace :: %{
-           token: reference(),
-           grace_ref: reference() | nil,
-           waiters: [GenServer.from()]
+           required(:token) => reference(),
+           required(:grace_ref) => reference() | nil,
+           required(:waiters) => [GenServer.from()],
+           optional(:reason) => :timer | :cap
          }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -610,6 +616,7 @@ defmodule Backend.Stations.Conversation do
       started_at: now,
       expires_at: DateTime.add(now, timeout_ms(), :millisecond),
       deadline_at: DateTime.add(now, station_duration_ms(), :millisecond),
+      cap_at: DateTime.add(now, hard_end_ms(mode), :millisecond),
       messages: [],
       released_impressos: [],
       impresso_requests: [],
@@ -626,7 +633,7 @@ defmodule Backend.Stations.Conversation do
     session = Map.merge(session, Map.take(attrs, @pinned_station_keys))
 
     true = :ets.insert(__MODULE__, {session.session_id, session})
-    Process.send_after(self(), {:deadline, session.session_id}, station_duration_ms())
+    Process.send_after(self(), {:deadline, session.session_id}, hard_end_ms(mode))
     {:reply, session, state}
   end
 
@@ -1076,15 +1083,17 @@ defmodule Backend.Stations.Conversation do
   end
 
   def handle_info({:deadline, session_id}, state) do
+    reason = hard_end_reason(session_id)
+
     case get_in(state, [:turns, session_id]) do
       %{} = turn ->
-        turn = if turn.first_reason, do: turn, else: %{turn | first_reason: :timer}
+        turn = if turn.first_reason, do: turn, else: %{turn | first_reason: reason}
         turn = ensure_grace_timer(session_id, turn)
         state = put_in(state, [:turns, session_id], turn)
         {:noreply, state}
 
       nil ->
-        {:noreply, defer_or_complete_timer(session_id, [], state)}
+        {:noreply, defer_or_complete_timer(session_id, [], state, reason)}
     end
   end
 
@@ -1107,7 +1116,8 @@ defmodule Backend.Stations.Conversation do
         {:noreply, state}
 
       {_turn, %{token: ^token} = voice_grace} ->
-        reply_waiters(complete_deferred(session_id, :timer), voice_grace.waiters)
+        reason = Map.get(voice_grace, :reason, :timer)
+        reply_waiters(complete_deferred(session_id, reason), voice_grace.waiters)
         state = %{state | voice_graces: Map.delete(state.voice_graces, session_id)}
         {:noreply, state}
 
@@ -1173,17 +1183,21 @@ defmodule Backend.Stations.Conversation do
   defp voice_turn_reply(:legacy, _gen_id), do: {:ok, :committed}
   defp voice_turn_reply(:with_generation, gen_id), do: {:ok, :committed, gen_id}
 
+  # The hard end: the deadline of a real test, the cap of a training (#323).
   defp deadline_passed?(session, now) do
-    DateTime.compare(now, session.deadline_at) != :lt
+    DateTime.compare(now, Map.get(session, :cap_at, session.deadline_at)) != :lt
   end
 
-  defp completed_turn_error(%{completion_reason: :timer}), do: :station_time_elapsed
+  defp completed_turn_error(%{completion_reason: reason}) when reason in @timer_reasons,
+    do: :station_time_elapsed
+
   defp completed_turn_error(_session), do: :completed
 
   defp completed_generation_error(
-         %{completion_reason: :timer, elapsed_generation_id: generation_id},
+         %{completion_reason: reason, elapsed_generation_id: generation_id},
          generation_id
-       ),
+       )
+       when reason in @timer_reasons,
        do: :station_time_elapsed
 
   defp completed_generation_error(_session, _generation_id), do: :completed
@@ -1322,6 +1336,22 @@ defmodule Backend.Stations.Conversation do
     Application.get_env(:backend, :station_duration_ms, @default_station_duration_ms)
   end
 
+  defp training_overtime_ms do
+    Application.get_env(:backend, :training_overtime_ms, @default_training_overtime_ms)
+  end
+
+  # A training lasts its expected time plus the overtime; a real test ends at
+  # the expected time.
+  defp hard_end_ms(:training), do: station_duration_ms() + training_overtime_ms()
+  defp hard_end_ms(:simulated_exam), do: station_duration_ms()
+
+  defp hard_end_reason(session_id) do
+    case fetch_session(session_id) do
+      {:ok, %{mode: :training}} -> :cap
+      _ -> :timer
+    end
+  end
+
   defp turn_grace_ms do
     Application.get_env(:backend, :turn_grace_ms, @default_turn_grace_ms)
   end
@@ -1377,7 +1407,7 @@ defmodule Backend.Stations.Conversation do
   # The one timer decision when no text turn is pending, shared by the deadline
   # and a manual `:timer` completion: a voice generation in flight gets the
   # session's single grace window, otherwise the session completes now.
-  defp defer_or_complete_timer(session_id, waiters, state) do
+  defp defer_or_complete_timer(session_id, waiters, state, reason \\ :timer) do
     case Map.get(state.voice_graces, session_id) do
       %{} = voice_grace ->
         put_voice_grace(state, session_id, %{
@@ -1387,18 +1417,24 @@ defmodule Backend.Stations.Conversation do
 
       nil ->
         if voice_generation_in_flight?(session_id) do
-          arm_voice_grace(state, session_id, waiters)
+          arm_voice_grace(state, session_id, waiters, reason)
         else
-          reply_waiters(complete_now(session_id, :timer), waiters)
+          reply_waiters(complete_now(session_id, reason), waiters)
           state
         end
     end
   end
 
-  defp arm_voice_grace(state, session_id, waiters) do
+  defp arm_voice_grace(state, session_id, waiters, reason) do
     token = make_ref()
     ref = Process.send_after(self(), {:grace_expired, session_id, token}, turn_grace_ms())
-    put_voice_grace(state, session_id, %{token: token, grace_ref: ref, waiters: waiters})
+
+    put_voice_grace(state, session_id, %{
+      token: token,
+      grace_ref: ref,
+      waiters: waiters,
+      reason: reason
+    })
   end
 
   @spec put_voice_grace(map(), String.t(), voice_grace()) :: map()
@@ -1425,8 +1461,14 @@ defmodule Backend.Stations.Conversation do
 
       # The timer's grace window keeps running for a voice generation still in
       # flight, and callers waiting on the timer completion keep waiting with it.
-      turn.first_reason == :timer and is_integer(Map.get(session, :active_generation_id)) ->
-        voice_grace = %{token: turn.token, grace_ref: turn.grace_ref, waiters: turn.waiters}
+      turn.first_reason in @timer_reasons and is_integer(Map.get(session, :active_generation_id)) ->
+        voice_grace = %{
+          token: turn.token,
+          grace_ref: turn.grace_ref,
+          waiters: turn.waiters,
+          reason: turn.first_reason
+        }
+
         {session, put_voice_grace(state, session_id, voice_grace)}
 
       true ->
@@ -1468,7 +1510,7 @@ defmodule Backend.Stations.Conversation do
   defp complete_voice_grace(session_id, state) do
     if Map.has_key?(state.voice_graces, session_id) do
       {voice_grace, state} = pop_voice_grace(state, session_id)
-      result = complete_now(session_id, :timer)
+      result = complete_now(session_id, Map.get(voice_grace, :reason, :timer))
       reply_waiters(result, voice_grace.waiters)
       {result, state}
     else
@@ -1478,9 +1520,9 @@ defmodule Backend.Stations.Conversation do
 
   # Completion that was deferred behind in-flight work. When the timer is the
   # reason, a voice generation still unanswered has run out of time too.
-  defp complete_deferred(session_id, :timer) do
+  defp complete_deferred(session_id, reason) when reason in @timer_reasons do
     expire_voice_generation(session_id)
-    complete_now(session_id, :timer)
+    complete_now(session_id, reason)
   end
 
   defp complete_deferred(session_id, reason), do: complete_now(session_id, reason)

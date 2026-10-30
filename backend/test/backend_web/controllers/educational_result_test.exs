@@ -464,6 +464,98 @@ defmodule BackendWeb.EducationalResultTest do
            }
   end
 
+  describe "training overtime (#323)" do
+    defp complete_rubric_total(id) do
+      fixture = install_fixture()
+      [onset, symptom | _] = fixture["rubric"]
+      extra = Map.put(symptom, "id", "extra")
+
+      fixture =
+        fixture |> Map.put("rubric", [onset, symptom, extra]) |> Map.put("placeholder", false)
+
+      :sys.replace_state(StationLoader, fn _ -> fixture end)
+
+      Application.put_env(:backend, PartialDouble, %{
+        "onset-assessment" => "adequado",
+        "symptom-characterization" => "parcialmente_adequado",
+        "extra" => "inadequado"
+      })
+
+      id
+    end
+
+    defp overtime_by(id, seconds) do
+      {:ok, session} = Backend.Stations.Conversation.fetch(id)
+      deadline_at = DateTime.add(session.completed_at, -seconds, :second)
+      :ets.insert(Backend.Stations.Conversation, {id, %{session | deadline_at: deadline_at}})
+    end
+
+    test "a training finished within the expected time has no overtime and no penalty", %{
+      conn: conn,
+      session_id: id
+    } do
+      complete_rubric_total(id)
+      body = conn |> get("/api/v2/stations/active/sessions/#{id}/result") |> json_response(200)
+
+      assert %{"overtime_seconds" => 0, "overtime_penalty" => "0", "training_score" => "1.125"} =
+               body
+    end
+
+    test "overtime deducts 0.25 per started minute from a separate training score", %{
+      conn: conn,
+      session_id: id
+    } do
+      complete_rubric_total(id)
+      overtime_by(id, 200)
+      body = conn |> get("/api/v2/stations/active/sessions/#{id}/result") |> json_response(200)
+
+      assert %{"overtime_seconds" => 200, "overtime_penalty" => "1", "training_score" => "0.125"} =
+               body
+
+      assert body["estimates"]["total"] == "1.125"
+      assert body["estimates"]["scored_subtotal"] == "1.125"
+    end
+
+    test "the penalty is capped at 2.5 and the training score never goes below zero", %{
+      conn: conn,
+      session_id: id
+    } do
+      complete_rubric_total(id)
+      overtime_by(id, 630)
+      body = conn |> get("/api/v2/stations/active/sessions/#{id}/result") |> json_response(200)
+
+      assert %{"overtime_seconds" => 630, "overtime_penalty" => "2.5", "training_score" => "0"} =
+               body
+    end
+
+    test "the training score is null when the rubric total is null, the overtime still shown", %{
+      conn: conn,
+      session_id: id
+    } do
+      overtime_by(id, 61)
+      body = conn |> get("/api/v2/stations/active/sessions/#{id}/result") |> json_response(200)
+
+      assert body["estimates"]["total"] == nil
+
+      assert %{"overtime_seconds" => 61, "overtime_penalty" => "0.5", "training_score" => nil} =
+               body
+    end
+
+    test "a real test result has no overtime fields", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      {:ok, _} = Stations.complete_session(session.session_id)
+      on_exit(fn -> Stations.discard_session(session.session_id) end)
+
+      body =
+        conn
+        |> get("/api/v2/stations/active/sessions/#{session.session_id}/result")
+        |> json_response(200)
+
+      refute Map.has_key?(body, "overtime_seconds")
+      refute Map.has_key?(body, "training_score")
+    end
+  end
+
   test "empty and all excluded rubrics have no total", %{conn: conn, session_id: id} do
     fixture = install_fixture()
 

@@ -10,11 +10,15 @@
 
 #pragma once
 
+#include "Containers/Ticker.h"
 #include "CoreMinimal.h"
 #include "Station/StationMicPermission.h"
+#include "Station/StationTalkKey.h"
 #include "StationClientTypes.h"
 #include "StationVoice.h"
 #include "UObject/Object.h"
+
+#include <atomic>
 
 #include "StationRunFlow.generated.h"
 
@@ -217,6 +221,40 @@ public:
 	 * capture is not retried on every change and the HUD says so.
 	 */
 	void ReportMicrophoneUnavailable();
+
+	/**
+	 * Push-to-talk (#419): the learner pressed the talk key, the space bar or the
+	 * HUD's talk button. The voice worker hears the learner only while it is held.
+	 * While the patient answers, a single press does nothing: a tap followed by a
+	 * press opens the microphone and cuts the patient at once. With `bForExam` (the
+	 * exam button, or Shift + space bar) the press also arms the exam mode, so what
+	 * is said goes to the impresso request (#364); it needs `CanAskExamAloud`. True
+	 * when the press opened the microphone.
+	 */
+	bool PressTalkKey(bool bForExam = false, EStationTalkInput Input = EStationTalkInput::Keyboard);
+
+	/**
+	 * The learner released the talk key on `Input`. The microphone closes a moment later,
+	 * so the last word still reaches the worker, and the worker then ends the turn at
+	 * once. A release on an input that does not hold the key changes nothing.
+	 */
+	void ReleaseTalkKey(EStationTalkInput Input = EStationTalkInput::Keyboard);
+
+	/** The talk key is held and the microphone open. */
+	bool IsTalking() const { return TalkKey.IsHeld(); }
+
+	/** The talk key is held for an exam request. */
+	bool IsTalkingForExam() const { return TalkKey.IsHeld() && bTalkKeyForExam; }
+
+	/** A press of the talk key can open the microphone: the voice of a running voice training is ready. */
+	bool CanTalk() const;
+
+	/**
+	 * The patient is answering: the learner's spoken or typed turn waits for its reply,
+	 * a typed turn's reply is about to be spoken, or the patient's voice was heard in
+	 * the last half second.
+	 */
+	bool IsPatientAnswering() const;
 
 	/**
 	 * Receives the patient's voice; set it before entering. The flow silences it when
@@ -449,6 +487,16 @@ private:
 	void SilencePatient();
 	void ResumePatient();
 
+	/** The learner cut the patient with the talk key: its voice stops and the turn it answers is dropped. */
+	void CutPatient();
+	/**
+	 * Stamps `HeardAt` when `Samples` of the patient's voice are loud and would play,
+	 * that is unless the patient is silenced. Any thread.
+	 */
+	static void NotePatientVoice(TConstArrayView<int16> Samples, std::atomic<double>& HeardAt, const std::atomic<bool>& bSilenced);
+	/** Opens or closes the voice link's microphone to match the talk key. */
+	void ApplyTalkKey();
+
 	/**
 	 * Phoenix answered the spoken exam turn as dialogue after all (the learner finished
 	 * it after the mode expired): its learner line joins the conversation.
@@ -457,6 +505,9 @@ private:
 
 	/** The outcome of the spoken exam request joins the exam requests. */
 	void TakeSpokenExamOutcome(const FStationVoiceEvent& Event);
+
+	/** A spoken exam request's outcome joins the exam requests, and the released impressos are read again. */
+	void AddSpokenExamOutcome(const FString& Text, const FStationVoiceEvent& Event);
 
 	/** Asks Phoenix to disarm the exam mode. */
 	void DisarmSpokenExam();
@@ -530,6 +581,11 @@ private:
 	/** The spoken turn the armed exam mode went to; 0 while there is none. */
 	int32 SpokenExamTurn = 0;
 	FString SpokenExamText;
+	/**
+	 * Spoken exam requests newer speech superseded before their outcome arrived, by
+	 * turn, with what the learner asked for: Phoenix may have recorded them (#434).
+	 */
+	TMap<int32, FString> SupersededExamRequests;
 	EStationFinishReason FinishReason = EStationFinishReason::User;
 	TOptional<FStationResult> Result;
 	/** `FPlatformTime::Seconds()` before which the timer does not end the run again after Phoenix refused it. */
@@ -552,6 +608,21 @@ private:
 	 */
 	bool bVoiceOutcome = false;
 	FStationPatientOutput Patient;
+	FStationTalkKey TalkKey;
+	/** The held talk key arms the exam mode: its release releases the exam button too. */
+	bool bTalkKeyForExam = false;
+	/** Closes the microphone once the release tail is over. */
+	FTSTicker::FDelegateHandle TalkTailTicker;
+	/** `FPlatformTime::Seconds()` when the patient's voice was last heard; written on a LiveKit thread. */
+	TSharedRef<std::atomic<double>, ESPMode::ThreadSafe> PatientHeardAt = MakeShared<std::atomic<double>, ESPMode::ThreadSafe>(0.0);
+	/** The patient is silenced (`SilencePatient`) until its next reply resumes it; read on a LiveKit thread. */
+	TSharedRef<std::atomic<bool>, ESPMode::ThreadSafe> PatientSilenced = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
+	/** The spoken turn the learner cut with the talk key; its late events are dropped. */
+	int32 CutVoiceTurnId = 0;
+	/** `FPlatformTime::Seconds()` until which a typed turn's reply, already shown, waits for its voice. */
+	double TypedReplyVoiceUntil = 0.0;
+	/** The current spoken turn failed, for example its synthesis: the patient will not answer it. */
+	bool bVoiceTurnFailed = false;
 	/**
 	 * Changes with every new, discarded or invalidated run. A Phoenix answer for an
 	 * earlier one is dropped.

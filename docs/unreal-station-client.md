@@ -66,6 +66,20 @@ clock, so `GetRemainingTime()` ignores changes to the machine's date and time.
   `deadline_not_reached` (409), the local clock ran ahead: call `RefreshSession`
   and keep counting.
 
+### Training overtime (#323)
+
+In a training, `deadline_at` is the expected end, not the end of the run. Phoenix
+keeps accepting turns and impresso requests after it, until `cap_at`
+(`started_at` + 20 minutes). At `cap_at` Phoenix completes the run with
+`completion_reason: "cap"`, and later turns get `station_time_elapsed` (409).
+`expires_at` stays after `cap_at`, so the result can still be read.
+
+- Do not call `FinishSession(EStationFinishReason::Timer)` at zero in a training:
+  show that the expected time is over and count the overtime up. The learner
+  finishes whenever they choose (`user`).
+- In a real test (`"simulated_exam"`), `cap_at` equals `deadline_at`: the run ends
+  at ten minutes with `completion_reason: "timer"` and there is no overtime.
+
 ## Operations
 
 All operations are methods of `UStationClient`. Each one takes a
@@ -395,6 +409,7 @@ below.
   "started_at": "2026-10-25T15:00:00Z",
   "expires_at": "2026-10-25T15:30:00Z",
   "deadline_at": "2026-10-25T15:10:00Z",
+  "cap_at": "2026-10-25T15:20:00Z",
   "server_now": "2026-10-25T15:00:00Z"
 }
 ```
@@ -553,6 +568,16 @@ the same `invalid_parameters` and `audio_consent_required` errors.
 The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
 which serves the language and speech-to-text keyterms of the session's own
 pinned station.
+
+## Training score (#323)
+
+The result of a training adds, next to `estimates` (which overtime never
+changes): `overtime_seconds` (whole seconds past `deadline_at`, `0` when the
+learner finished within ten minutes), `overtime_penalty` (0.25 points per started
+minute, at most `"2.5"`) and `training_score` (`estimates.total` minus the
+penalty, never below `"0"`, `null` when `estimates.total` is `null`). Phoenix
+computes them; the client only displays them. A real test result has none of
+these fields.
 
 ## Results history (`GET /me/results`, issue #338)
 
@@ -840,8 +865,10 @@ worker, nothing spoken):
 - A barge-in does not drop it: when the learner speaks again before Phoenix's
   answer reaches the worker, the worker still publishes the event of the
   earlier turn (#432), so it can arrive after a `Learner` event of a newer turn.
-  `UStationRunFlow` ignores it there, as a late event of an earlier turn, and
-  reads `ListImpressos` again instead.
+  `UStationRunFlow` remembers each spoken exam request that newer speech
+  superseded, with what the learner asked for, and takes that late event as the
+  request's outcome, even after the learner cut a later reply (#434). It still
+  ignores every other late event of an earlier turn.
 - When the room event is lost (a publish error), the request is still
   recorded: `ListImpressos` shows it.
 
@@ -859,11 +886,15 @@ card marked "Solicitando...", never in the conversation; its
 outcome joins `GetExamRequests` as a typed request's does, and the flow reads
 `ListImpressos` again. A press while that request still waits is refused
 (`AskExamAloud` returns false) and the HUD shows it as waiting, never as
-recording. If the voice is lost while a spoken request waits, its outcome can
-no longer arrive: the request is let go, as a superseded one is, and
-`ListImpressos` is read again. If Phoenix answers that utterance as dialogue instead
-(it ended after `expires_at`), its learner line joins the conversation before
-the reply.
+recording. A request superseded by newer speech is let go: the panel stops
+showing it as waiting, `ListImpressos` is read again, and the mode passes to
+the next utterance while it still listens. Its outcome still joins
+`GetExamRequests` if it arrives later (#434); the newer utterance keeps its own
+state, and Phoenix answers it as dialogue when the first request used the mode.
+If the voice is lost while a spoken request waits, its outcome can no longer
+arrive: the request is let go, and `ListImpressos` is read again. If Phoenix
+answers that utterance as dialogue instead (it ended after `expires_at`), its
+learner line joins the conversation before the reply.
 
 - Errors: `403 no_consent` on a run without audio consent (a typed request
   needs no exam mode), `409 session_completed`, `404 session_not_found`,
@@ -922,6 +953,7 @@ if (const TSharedPtr<FStationVoiceLink, ESPMode::ThreadSafe> Voice = WeakVoice.P
 | Topic | Rule |
 | --- | --- |
 | Microphone | Whatever the caller pushes with `PushMicrophonePcm`: float samples, any rate and channel count. The link resamples to 48 kHz mono, cancels the echo of the patient's voice, then publishes a microphone-source track as `learner-<session>`, which is the only track the voice worker reads. Audio pushed while the state is not `WaitingForWorker` or `Ready` is dropped. |
+| Push-to-talk | The microphone starts closed (#419): the track is published as `push-to-talk`, then muted at once, and pushed audio is dropped. The voice worker treats only a learner microphone with that name as push-to-talk; the web client's keeps its default name, so the mutes its browser makes on its own change nothing. `SetMicrophoneOpen(true)` unmutes it while the learner holds the talk key; `SetMicrophoneOpen(false)` mutes it again. The voice worker hears an unmute as a press, which stops the patient at once, and a mute as the release: it asks Deepgram to finalize and ends the turn once the transcript is quiet (0.3 s, at most 1.5 s), instead of waiting for Deepgram's end of speech. The learner token cannot publish data (#364), so the mute is the only signal. `UStationRunFlow::PressTalkKey`/`ReleaseTalkKey` drive it and keep it open for 150 ms after the release, so the last word reaches the worker before the mute. |
 | States | `Connecting`, then `WaitingForWorker` once the microphone is published, then `Ready` when the `voice-worker` participant is in the room. `Reconnecting` while LiveKit retries the room connection, or once the worker that joined has left; the link returns to `Ready` if both come back. `Failed` (with `GetFailure()`, English, for logs) when joining or publishing fails, when LiveKit drops the room, when the worker has not joined 20 seconds after the microphone was published, or after 10 seconds of `Reconnecting`. `Failed` is final: the link leaves the room at once, so nothing more is heard or sent. |
 | Events | `OnEvent` gets the worker's `transcript` data messages, parsed as strictly as the web client does. Messages for another session, or from anyone but `voice-worker`, are dropped. The kinds are `Learner` (`bFinal` false for an interim caption), `PatientText` (one sentence, `Segment`), `PatientComplete`, `ExaminerAcknowledged`, `PatientUnanswered`, `TurnFailure` and `Fatal`. |
 | Patient voice | `OnPatientPcm` runs on a LiveKit thread every 10 ms of the worker's `patient-voice` track. It must not block. |

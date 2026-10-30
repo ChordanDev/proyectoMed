@@ -142,6 +142,26 @@ class FakeSTTTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(types[-1], SpeechEventType.END_OF_SPEECH)
 
+    # Issue #419: the worker finalizes the utterance when the learner releases the talk key.
+    async def test_flush_ends_the_utterance_being_spoken(self):
+        stream = FakeSTT("Oi").stream()
+        stream.flush()
+        for _ in range(20):
+            stream.push_frame(frame(6000))
+        stream.flush()
+        stream.end_input()
+
+        events = await events_of(stream)
+
+        self.assertEqual(
+            [event.type for event in events],
+            [
+                SpeechEventType.START_OF_SPEECH,
+                SpeechEventType.FINAL_TRANSCRIPT,
+                SpeechEventType.END_OF_SPEECH,
+            ],
+        )
+
     async def test_aclose_ends_the_stream(self):
         stream = FakeSTT("Oi").stream()
         await stream.aclose()

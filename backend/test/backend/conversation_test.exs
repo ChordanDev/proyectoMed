@@ -1288,7 +1288,7 @@ defmodule Backend.ConversationTest do
 
     test "begin_turn rejects a turn at/after the deadline without touching the transcript" do
       Application.put_env(:backend, :station_duration_ms, 30)
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       Process.sleep(60)
 
@@ -1303,7 +1303,7 @@ defmodule Backend.ConversationTest do
     end
 
     test "begin_turn/resolve_turn appends a patient reply for a turn accepted before the deadline" do
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _session, token} =
                StationConversation.begin_turn(session.session_id, %{
@@ -1330,7 +1330,7 @@ defmodule Backend.ConversationTest do
 
     test "the deadline timer auto-completes an active session with reason :timer exactly once" do
       Application.put_env(:backend, :station_duration_ms, 30)
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       Process.sleep(120)
 
@@ -1349,7 +1349,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 30)
       Application.put_env(:backend, :turn_grace_ms, 200)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _session, token} =
                StationConversation.begin_turn(session.session_id, %{
@@ -1384,7 +1384,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 30)
       Application.put_env(:backend, :turn_grace_ms, 50)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _session, token} =
                StationConversation.begin_turn(session.session_id, %{
@@ -1436,7 +1436,7 @@ defmodule Backend.ConversationTest do
         Application.put_env(:backend, :station_duration_ms, 50)
         Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-        session = Conversation.start()
+        session = Conversation.start(%{mode: :simulated_exam})
 
         # A pending text turn keeps the session active past the deadline.
         assert {:ok, pending, _token} =
@@ -1460,7 +1460,7 @@ defmodule Backend.ConversationTest do
 
       test "#{entrypoint} rejects a turn on a session completed by the timer" do
         Application.put_env(:backend, :station_duration_ms, 30)
-        session = Conversation.start()
+        session = Conversation.start(%{mode: :simulated_exam})
 
         wait_until(fn ->
           match?({:ok, %{status: :completed}}, Conversation.fetch(session.session_id))
@@ -1478,7 +1478,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 50)
       Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       Process.sleep(150)
@@ -1491,7 +1491,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 50)
       Application.put_env(:backend, :turn_grace_ms, 400)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       # Past the deadline, inside the grace window.
@@ -1513,7 +1513,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 50)
       Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       Process.sleep(150)
@@ -1536,7 +1536,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 30)
       Application.put_env(:backend, :turn_grace_ms, 60)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _} =
                Conversation.append_message(session.session_id, %{
@@ -1569,7 +1569,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 50)
       Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _session, token} =
                StationConversation.begin_turn(session.session_id, %{
@@ -1608,7 +1608,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 50)
       Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _session, token} =
                StationConversation.begin_turn(session.session_id, %{
@@ -1641,7 +1641,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 30)
       Application.put_env(:backend, :turn_grace_ms, 60)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _session, token} =
                StationConversation.begin_turn(session.session_id, %{
@@ -1677,7 +1677,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 50)
       Application.put_env(:backend, :turn_grace_ms, 200)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       Process.sleep(120)
@@ -1697,7 +1697,7 @@ defmodule Backend.ConversationTest do
     test "a manual :timer completion with only a voice generation in flight waits for the reply inside grace" do
       Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
@@ -1720,7 +1720,7 @@ defmodule Backend.ConversationTest do
     test "a manual :timer completion left unanswered is replied at grace expiry without the voice learner message" do
       Application.put_env(:backend, :turn_grace_ms, 150)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
@@ -1742,7 +1742,7 @@ defmodule Backend.ConversationTest do
     test "a manual completion with a non-timer reason still completes at once with a voice generation in flight" do
       Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       waiter = Task.async(fn -> Conversation.complete(session.session_id, :user) end)
@@ -1760,7 +1760,7 @@ defmodule Backend.ConversationTest do
       Application.put_env(:backend, :station_duration_ms, 100)
       Application.put_env(:backend, :turn_grace_ms, 300)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       # The client's finish arrives before the server deadline fires.
@@ -1796,7 +1796,7 @@ defmodule Backend.ConversationTest do
       test "#{label} during a manual :timer voice grace completes the session at once" do
         Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-        session = Conversation.start()
+        session = Conversation.start(%{mode: :simulated_exam})
         assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
         waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
@@ -1829,7 +1829,7 @@ defmodule Backend.ConversationTest do
         Application.put_env(:backend, :station_duration_ms, 50)
         Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-        session = Conversation.start()
+        session = Conversation.start(%{mode: :simulated_exam})
         assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
         # Past the deadline, far inside the grace window.
@@ -1853,7 +1853,7 @@ defmodule Backend.ConversationTest do
         Application.put_env(:backend, :station_duration_ms, 50)
         Application.put_env(:backend, :turn_grace_ms, 2_000)
 
-        session = Conversation.start()
+        session = Conversation.start(%{mode: :simulated_exam})
 
         # The voice turn begins first so it holds generation 1 (#325).
         assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
@@ -1887,7 +1887,7 @@ defmodule Backend.ConversationTest do
       test "#{label} does not settle an armed voice grace while a text turn is pending" do
         Application.put_env(:backend, :turn_grace_ms, 600)
 
-        session = Conversation.start()
+        session = Conversation.start(%{mode: :simulated_exam})
         assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
         # The client's finish arrives before the deadline and arms the voice grace;
@@ -1919,7 +1919,7 @@ defmodule Backend.ConversationTest do
     test "a stale cancel during the voice grace leaves the window and the generation untouched" do
       Application.put_env(:backend, :turn_grace_ms, 400)
 
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
       assert {:ok, :committed, 1} = Conversation.begin_voice_turn(session.session_id, 1, "Fala")
 
       waiter = Task.async(fn -> Conversation.complete(session.session_id, :timer) end)
@@ -1945,7 +1945,7 @@ defmodule Backend.ConversationTest do
     end
 
     test "text rollback removes its own learner message when a voice message was appended after it" do
-      session = Conversation.start()
+      session = Conversation.start(%{mode: :simulated_exam})
 
       assert {:ok, _session, token} =
                StationConversation.begin_turn(session.session_id, %{
