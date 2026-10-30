@@ -62,7 +62,7 @@ All shared rules live in [`html/cine.css`](html/cine.css). The current code acce
 - **Placeholders are not content.** `[Tema do caso]`, `[valor]`, `[n] de [n]` and `[Cena …]` mark data that comes from the server or the 3D scene.
 - **Sample data is labelled.** Screens marked "EXEMPLO — DADOS FICTÍCIOS" show invented results only to fill the layout.
 - **Main menu interaction.** Both modes are always visible. The unselected one is dimmed (about 45% opacity). Selecting a mode by click, arrow keys or focus lights it up and fades in its round arrow button. Nothing moves or resizes.
-- **History keeps only cited phrases.** As decided on 2026-10-30, history shows the correction and the learner phrases cited in it, never the full conversation or audio (CONTEXT.md "MVP Data Retention").
+- **History keeps only cited phrases.** As decided on 2026-10-29, history shows the correction and the learner phrases cited in it, never the full conversation or audio (CONTEXT.md "MVP Data Retention").
 
 ## Out of scope
 
