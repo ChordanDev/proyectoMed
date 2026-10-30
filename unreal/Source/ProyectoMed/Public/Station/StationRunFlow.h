@@ -518,6 +518,7 @@ private:
 	// Test access to the voice event handling (StationRunFlowSpec.cpp).
 	friend class FStationRunUnitSpec;
 	friend class FStationRunPhoenixLossSpec;
+	friend class FStationRunAudioOnlySpec;
 	friend class FStationHudSnapshotSpec;
 	friend class FStationHudUnitSpec;
 	friend class FStationCardSnapshotSpec;

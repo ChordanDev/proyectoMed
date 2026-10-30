@@ -1537,8 +1537,9 @@ defmodule Backend.Stations do
   Deepgram's limit; see `SttKeyterms`, #292), so they stay server-side.
   `last_turn_id` is the committed learner cursor. `turn_id_floor` also covers
   cancelled turn IDs; a fresh worker must allocate strictly above this floor.
-  `mode` is the Station Mode, and `deadline_at` with `server_now` let the
-  worker stop speaking at a simulated exam's deadline (#424).
+  `mode` is the Station Mode, which keeps a simulated exam's patient audio only
+  (#423), and `deadline_at` with `server_now` let the worker stop speaking at a
+  simulated exam's deadline (#424).
   """
   @spec voice_worker_context(String.t()) ::
           {:ok,

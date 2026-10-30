@@ -129,6 +129,23 @@ TOptional<FStationVoiceEvent> ParseStationVoiceEvent(TConstArrayView<uint8> Payl
 			Event.Kind = EStationVoiceEventKind::PatientText;
 			return Event;
 		}
+		if (Role.Equals(TEXT("voice"), ESearchCase::CaseSensitive))
+		{
+			// A real test's patient is heard only (#423): the worker sends how the reply
+			// goes, with no text, and the turn runs as it does for a shown reply.
+			if (Status.Equals(TEXT("complete"), ESearchCase::CaseSensitive))
+			{
+				Event.Kind = EStationVoiceEventKind::PatientComplete;
+				return Event;
+			}
+			if (Status.Equals(TEXT("speaking"), ESearchCase::CaseSensitive)
+				&& (!Body->HasField(TEXT("segment")) || ReadWholeNumber(*Body, TEXT("segment"), 0, Event.Segment)))
+			{
+				Event.Kind = EStationVoiceEventKind::PatientText;
+				return Event;
+			}
+			return {};
+		}
 		if (Role.Equals(TEXT("examiner"), ESearchCase::CaseSensitive))
 		{
 			if (Status.Equals(TEXT("acknowledged"), ESearchCase::CaseSensitive))
