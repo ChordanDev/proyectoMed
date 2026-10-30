@@ -2103,8 +2103,6 @@ UWidget* UStationFeedbackWidget::BuildExamScreen()
 	SummaryScroll->AddChild(ExamSummaryBox);
 
 	StationUi::AddText(*WidgetTree, *Left, ResultDisclaimer(), 10, false, StationUi::Muted, 14.f);
-	StationUi::AddText(*WidgetTree, *Left, LOCTEXT("ExamBackDiscards",
-		"Ao voltar ao menu, esta tentativa é descartada e não poderá ser recuperada."), 10, false, StationUi::Muted, 6.f);
 	ExamErrorText = StationUi::AddText(*WidgetTree, *Left, FText::GetEmpty(), 11, false, StationUi::Caution, 6.f);
 	ExamBackButton = StationUi::AddButton(*WidgetTree, *Left, LOCTEXT("BackToMenu", "Voltar ao menu"), 14.f);
 	ExamBackButton->OnClicked.AddDynamic(this, &UStationFeedbackWidget::HandleRestart);

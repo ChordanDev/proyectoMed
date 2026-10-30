@@ -500,6 +500,9 @@ void FStationHudUnitSpec::Define()
 		TestTrue("exact points", Shown.Contains(TEXT("6 / 8")));
 		TestTrue("no points for what was left out", Shown.Contains(TEXT("sem pontos")));
 		TestTrue("no fictional mark on a real result", Feedback->ExamSampleMark->GetVisibility() == ESlateVisibility::Collapsed);
+		// The result is already stored when this screen shows: leaving does not lose it.
+		TestFalse("no claim that the attempt is gone", Shown.ContainsByPredicate(
+			[](const FString& Text) { return Text.Contains(TEXT("não poderá ser recuperada")); }));
 		for (const FString& Text : Shown)
 		{
 			for (const TCHAR* Claim : {TEXT("Aprovado"), TEXT("Reprovado"), TEXT("Certificado"), TEXT("Pronto para")})
