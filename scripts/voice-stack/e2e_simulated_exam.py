@@ -301,6 +301,7 @@ async def simulated_exam() -> None:
     finished = await wait_until_completed(session_id)
     check(finished["completion_reason"] == "timer", "the deadline ended the run")
     await asyncio.sleep(LATE_REPLY_SETTLE_S)
+    finished = show_session(session_id)
     check(
         len(by_role(finished, "learner")) == kept,
         "the utterance after the deadline was discarded",
