@@ -828,10 +828,11 @@ defmodule BackendWeb.StationControllerTest do
 
       Process.sleep(60)
 
+      # A simulated exam is voice only (#422): its late turn is a voice turn.
       conn =
         post(conn, ~p"/api/stations/active/sessions/#{late_session.session_id}/messages", %{
           "role" => "learner",
-          "modality" => "text",
+          "modality" => "voice",
           "text" => "Chegou tarde"
         })
 
