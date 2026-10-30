@@ -124,6 +124,23 @@ class FakeSTTTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(types.count(SpeechEventType.END_OF_SPEECH), 2)
 
+    async def test_a_scripted_transcript_gives_each_utterance_its_line(self):
+        stream = FakeSTT("Oi|Quero o exame físico.|Tchau").stream()
+        for _ in range(4):
+            for amplitude, count in ((6000, 20), (0, 60)):
+                for _ in range(count):
+                    stream.push_frame(frame(amplitude))
+        stream.end_input()
+
+        finals = [
+            event.alternatives[0].text
+            for event in await events_of(stream)
+            if event.type == SpeechEventType.FINAL_TRANSCRIPT
+        ]
+
+        # The last line repeats, so a longer conversation never runs out.
+        self.assertEqual(finals, ["Oi", "Quero o exame físico.", "Tchau", "Tchau"])
+
     async def test_silence_and_quiet_noise_produce_nothing(self):
         stream = FakeSTT("Oi").stream()
         for _ in range(100):

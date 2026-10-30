@@ -1,0 +1,118 @@
+name: Simulated Exam E2E
+
+# Runs a full Prova simulada and one training end to end (#427): Phoenix, a local
+# LiveKit server and the voice worker, with every provider faked, so it needs no
+# network access to a provider and no API keys. Only pull requests that touch those
+# pieces run it. Draft pull requests are skipped until they are marked ready for
+# review.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - backend/**
+      - voice-worker/**
+      - scripts/run-simulated-exam-e2e.sh
+      - scripts/run-voice-stack.sh
+      - scripts/voice-stack/**
+      - .github/workflows/simulated-exam-e2e.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: simulated-exam-e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Simulated Exam E2E
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Phoenix runs under MIX_ENV=dev, against the backend_dev database.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          version-file: backend/.tool-versions
+          version-type: strict
+
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: voice-worker/uv.lock
+
+      # Restore only: the Pull Request Validation job saves this cache on develop.
+      - name: Restore backend dependencies and build
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            backend/deps
+            backend/_build
+          key: >-
+            mix-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{
+            steps.beam.outputs.elixir-version }}-${{ hashFiles('backend/mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      # The version and checksum of the release's `checksums.txt`.
+      - name: Install LiveKit server
+        env:
+          LIVEKIT_VERSION: 1.13.10
+          LIVEKIT_SHA256: c25a3e45fb922e9a93c6443d10c0ed041ba64342097e38632331736630283165
+        run: |
+          archive="$RUNNER_TEMP/livekit.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/livekit/livekit/releases/download/v$LIVEKIT_VERSION/livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz"
+          echo "$LIVEKIT_SHA256  $archive" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/livekit"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/livekit" livekit-server
+          echo "$RUNNER_TEMP/livekit" >> "$GITHUB_PATH"
+
+      - name: Install backend dependencies
+        run: ( cd backend && mix deps.get )
+
+      # Compiled here so that the stack's Phoenix start only has to boot.
+      - name: Compile Phoenix
+        run: ( cd backend && MIX_ENV=dev mix compile )
+
+      - name: Create and migrate the dev database
+        run: ( cd backend && MIX_ENV=dev mix ecto.create && MIX_ENV=dev mix ecto.migrate )
+
+      - name: Install worker dependencies
+        run: ( cd voice-worker && uv sync --locked )
+
+      - name: Run a Prova simulada and a training
+        env:
+          # The stack keeps its logs under TMPDIR: a failure uploads them.
+          TMPDIR: ${{ runner.temp }}
+        run: scripts/run-simulated-exam-e2e.sh
+
+      - name: Upload the voice stack logs
+        # A hung stack ends in a cancelled job, not a failed one.
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-stack-logs
+          path: ${{ runner.temp }}/voice-stack.*/
+          retention-days: 7
