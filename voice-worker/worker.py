@@ -45,6 +45,7 @@ from transcripts import (
     VoiceTurnReply,
     classify_provider_error,
     parse_typed_reply,
+    phoenix_clock,
     process_speech_stream,
 )
 from usage import UsageMeter, report_usage
@@ -90,7 +91,8 @@ async def entrypoint(ctx: JobContext) -> None:
         try:
             # Consent/active check happens before any audio reaches Deepgram.
             context = await phoenix.context()
-            context_received_at = asyncio.get_running_loop().time()
+            loop = asyncio.get_running_loop()
+            context_received_at = loop.time()
             await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
             connected = True
             meter.join("voice-worker")
@@ -100,6 +102,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 session_id,
                 context["last_turn_id"],
                 turn_id_floor=context.get("turn_id_floor"),
+                clock=phoenix_clock(context, context_received_at, loop.time),
             )
             tts = build_tts(session_id, context)
             player = (
