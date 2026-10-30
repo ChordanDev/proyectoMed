@@ -27,11 +27,11 @@ Delivery: `ask-on-risk`. Checks: the Unreal automation specs that touch the scen
 | ID | Specs | Route | Status | Evidence |
 | --- | --- | --- | --- | --- |
 | T1 | S16 | inline | done | Clip comparison in Blender (Log L3) |
-| T2 | S1, S5, S7, S14, S15 | inline (Blender MCP) | done | Log L5 |
-| T3 | S12, S13 | inline | partial: FBX exported; LFS size pending the Unreal import | Log L6 |
-| T4 | S2, S3, S9, S10, S16 | inline (Unreal MCP) | blocked: unreal-mcp refuses connections | |
-| T5 | S4, S5, S6, S8 | inline (Unreal MCP) | blocked | |
-| T6 | S11, S12, S13, docs | inline | pending | |
+| T2 | S1, S5, S7, S14, S15 | inline (Blender MCP) | done | Log L5, L7, L8; 1264b5e |
+| T3 | S12, S13 | inline | done | about 36 MB of LFS; licences in docs; 3d839c6 |
+| T4 | S2, S3, S9, S10, S16 | inline (Unreal MCP + headless Python) | done; S9 needs the human PIE and packaged check | Log L9; 1437242, 608a602 |
+| T5 | S4, S5, S6, S8 | inline (Unreal MCP) | done | Log L10; 2cf708f |
+| T6 | S11, S12, S13, docs | inline | done | Log L11; 98/98 specs |
 
 ## Log
 
@@ -57,3 +57,6 @@ Delivery: `ask-on-risk`. Checks: the Unreal automation specs that touch the scen
   Applied:
   - The laptop was replaced with SM_Monitor: a 19.5" panel (0.45 x 0.27 m) on a short neck and a small foot, 1.065 m tall overall on the desk.
   - It sits at the desk's left corner (-0.53, -0.04), turned 42° toward the doctor. In StationView it enters the frame from the bottom-left edge, so it never reads as floating, and the couch pad and frame stay visible above it.
+- L9 (2026-10-29): Idle-2 and Idle-3 were joined in Blender into one seamless 9.4 s loop and retargeted in a headless editor with auto-generated IK Rigs (RTG_YBot_To_Patient). The seated pose fixes the distance from the hips to the feet, so the patient actor sits at z -38 and SM_VisitorChair has a 41.5 cm seat. Human (2026-10-29): "fijate que el respaldar de la silla está como desfasado y la persona está todavía volando un poco"; the backrest and uprights now tilt together, and the seat was refitted.
+- L10 (2026-10-29): Human: "Tenés que fijarte que después el cartel de la estación que dice finalizar estación y eso no tape al metahumano". At FOV 70 and pitch -10, the HUD's timer panel covered the forehead. Human: "Usá la opción B: FOV 80° y cámara a −6,5°."
+- L11 (2026-10-29): 98/98 automation specs pass on the merged develop code (PatientVoice, StationHud, StationCards, StationRun.Unit, StationTalkKey). Frame time on the M4 Pro with 24 GB: 15.4 ms mean, 22.3 ms p95, GPU-bound.

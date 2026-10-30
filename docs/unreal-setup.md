@@ -221,6 +221,13 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   and **Finalizar estação** panel, clear of the conversation panel on the left
   and of the exam drawer on the right, with the desk in view; check all three
   after any change.
+- Frame time on the reference Mac (Apple M4 Pro, 24 GB, macOS 27), Development
+  build, `-game -windowed -ResX=1920 -ResY=1080`, seated patient and the office
+  lit, 1740 frames after one second of warm-up: 15.4 ms mean (about 65 fps),
+  14.5 ms median, 22.3 ms p95, 23.0 ms worst. The GPU bounds it (14.9 ms mean);
+  the game thread takes 1.3 ms. Measured with
+  `-csvCaptureFrames=1800 -csvExitOnCompletion`; the CSV lands in
+  `~/Library/Application Support/Epic/UnrealEngine/5.8/Saved/Profiling/CSV`.
 
 #### Third-party assets in the scene
 
