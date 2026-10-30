@@ -66,7 +66,13 @@ namespace
 		SidePanelWidth - 2.f * SidePanelPadding - BubbleIndent - 2.f * BubblePadding - ScrollBarAllowance;
 	/** The widest a text runs in the exam panel's list, outside a card. */
 	constexpr float ExamListWrapWidth = SidePanelWidth - 2.f * SidePanelPadding - ScrollBarAllowance;
-	constexpr float CardPadding = 14.f;
+	constexpr float CardPadding = 18.f;
+	/** Over the document's dim, as the mockups' `.scrim-full` there. */
+	const FLinearColor DocumentDim = StationUi::ScrimColor.CopyWithNewOpacity(0.7f);
+	/** The sheet's place on screen: clear of the exam requests on the right. */
+	const FMargin DocumentMargin(140.f, 72.f, 0.f, 72.f);
+	constexpr float DocumentWidth = 760.f;
+	constexpr float DocumentSidePadding = 48.f;
 	/** The widest a text runs inside a request card. */
 	constexpr float CardWrapWidth = ExamListWrapWidth - 2.f * CardPadding;
 	/** A card's title leaves room beside it for the widest status label, "Não disponível". */
@@ -133,6 +139,21 @@ namespace
 		return FText::FromString(Category);
 	}
 
+	/** One line of a document, wrapped to the sheet. */
+	void AddSheetLine(UWidgetTree& Tree, UVerticalBox& Body, const FString& Text, FName Weight, float Pixels,
+		const FLinearColor& Color, float SpaceAbove)
+	{
+		UTextBlock* Line = Tree.ConstructWidget<UTextBlock>();
+		Line->SetText(FText::FromString(Text));
+		Line->SetFont(StationUi::MockupFont(Weight, Pixels));
+		Line->SetColorAndOpacity(FSlateColor(Color));
+		Line->SetAutoWrapText(true);
+		if (UVerticalBoxSlot* LineSlot = Body.AddChildToVerticalBox(Line))
+		{
+			LineSlot->SetPadding(FMargin(0.f, SpaceAbove, 0.f, 0.f));
+		}
+	}
+
 	/**
 	 * A released document's Markdown as the learner reads it: a `- **Label:** text`
 	 * item shows its label over its text, a `**Heading:**` line as a heading, and a
@@ -163,18 +184,17 @@ namespace
 				{
 					const FString Label = Line.Mid(2, Close - 2).TrimStartAndEnd();
 					const FString Rest = Line.Mid(Close + 2).TrimStartAndEnd().Replace(TEXT("**"), TEXT(""));
-					StationUi::AddText(Tree, Body, FText::FromString(Label), bItem ? 15 : 17, true,
+					AddSheetLine(Tree, Body, Label, StationUi::FontBold, bItem ? 13.f : 16.f,
 						bItem ? StationUi::PaperMuted : StationUi::PaperInk, Space);
 					if (!Rest.IsEmpty())
 					{
-						StationUi::AddText(Tree, Body, FText::FromString(Rest), 17, false, StationUi::PaperInk, 2.f);
+						AddSheetLine(Tree, Body, Rest, StationUi::FontRegular, 16.f, StationUi::PaperInk, 2.f);
 					}
 					continue;
 				}
 			}
 			const FString Text = Line.Replace(TEXT("**"), TEXT(""));
-			StationUi::AddText(Tree, Body, FText::FromString(bItem ? TEXT("•  ") + Text : Text), 17, false,
-				StationUi::PaperInk, Space);
+			AddSheetLine(Tree, Body, bItem ? TEXT("•  ") + Text : Text, StationUi::FontRegular, 16.f, StationUi::PaperInk, Space);
 		}
 	}
 
@@ -967,9 +987,10 @@ TSharedRef<SWidget> UStationHudWidget::RebuildWidget()
 		BuildBriefReader(*Root);
 		BuildConversation(*Root);
 		BuildSideActions(*Root);
-		BuildExamDrawer(*Root);
 		BuildTimerPanel(*Root);
 		BuildDocumentViewer(*Root);
+		// Over the document's dim: the other requests stay in reach beside the sheet.
+		BuildExamDrawer(*Root);
 	}
 	return Super::RebuildWidget();
 }
@@ -1424,22 +1445,21 @@ void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
 	{
 		Slot->SetHorizontalAlignment(HAlign_Right);
 		Slot->SetVerticalAlignment(VAlign_Fill);
-		Slot->SetPadding(FMargin(0.f, 24.f, 24.f, 24.f));
+		Slot->SetPadding(FMargin(0.f, HudEdge, HudEdge, HudEdge));
 	}
 
-	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(SidePanelPadding, 18.f),
-		StationUi::PanelEdge, 1.f);
+	UBorder* Panel = StationUi::MakeRounded(*WidgetTree, StationUi::HudPanel, 12.f, FMargin(0.f), StationUi::PanelEdge, 1.f);
 	Size->SetContent(Panel);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
 	Panel->SetContent(Column);
 
 	UHorizontalBox* Header = WidgetTree->ConstructWidget<UHorizontalBox>();
-	Column->AddChild(Header);
-	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>();
-	Title->SetText(LOCTEXT("ExamsTitle", "Exames solicitados"));
-	Title->SetFont(StationUi::Font(StationUi::FontBold, 20));
-	Title->SetColorAndOpacity(FSlateColor(StationUi::Ink));
-	if (UHorizontalBoxSlot* TitleSlot = Header->AddChildToHorizontalBox(Title))
+	if (UVerticalBoxSlot* HeaderSlot = Column->AddChildToVerticalBox(Header))
+	{
+		HeaderSlot->SetPadding(FMargin(SidePanelPadding, 16.f, 16.f, 16.f));
+	}
+	if (UHorizontalBoxSlot* TitleSlot = Header->AddChildToHorizontalBox(
+			MakeText(*WidgetTree, LOCTEXT("ExamsTitle", "Exames solicitados"), StationUi::FontBold, 18.f, StationUi::InkTitle)))
 	{
 		TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		TitleSlot->SetVerticalAlignment(VAlign_Center);
@@ -1451,28 +1471,24 @@ void UStationHudWidget::BuildExamDrawer(UOverlay& Root)
 	{
 		CloseSlot->SetVerticalAlignment(VAlign_Center);
 	}
+	AddRule(*WidgetTree, *Column, StationUi::PanelEdge, 0.f);
 
 	UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>();
+	Scroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
 	if (UVerticalBoxSlot* ScrollSlot = Column->AddChildToVerticalBox(Scroll))
 	{
 		ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-		ScrollSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+		ScrollSlot->SetPadding(FMargin(SidePanelPadding, 20.f, SidePanelPadding, 0.f));
 	}
 	ExamCardBox = WidgetTree->ConstructWidget<UVerticalBox>();
 	Scroll->AddChild(ExamCardBox);
 
 	// The footer: hold the microphone in a voice training, type in a text one.
-	UBorder* Rule = WidgetTree->ConstructWidget<UBorder>();
-	Rule->SetBrushColor(StationUi::PanelEdge);
-	Rule->SetPadding(FMargin(0.f, 0.5f));
-	if (UVerticalBoxSlot* RuleSlot = Column->AddChildToVerticalBox(Rule))
-	{
-		RuleSlot->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
-	}
+	AddRule(*WidgetTree, *Column, StationUi::PanelEdge, 14.f);
 	UVerticalBox* Footer = WidgetTree->ConstructWidget<UVerticalBox>();
 	if (UVerticalBoxSlot* FooterSlot = Column->AddChildToVerticalBox(Footer))
 	{
-		FooterSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+		FooterSlot->SetPadding(FMargin(SidePanelPadding, 20.f));
 	}
 	BuildMicrophone(*Footer);
 
@@ -1560,7 +1576,7 @@ void UStationHudWidget::BuildMicrophone(UVerticalBox& Footer)
 		StatusSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
 	}
 	ExamAloudText = WidgetTree->ConstructWidget<UTextBlock>();
-	ExamAloudText->SetFont(StationUi::Font(StationUi::FontRegular, 15));
+	ExamAloudText->SetFont(StationUi::MockupFont(StationUi::FontRegular, 13.f));
 	ExamAloudText->SetJustification(ETextJustify::Center);
 	StatusSize->SetContent(ExamAloudText);
 	MicrophoneLook = EMicrophoneLook::Recording; // forces the first `RefreshMicrophone` to style it
@@ -1569,11 +1585,12 @@ void UStationHudWidget::BuildMicrophone(UVerticalBox& Footer)
 
 void UStationHudWidget::BuildDocumentViewer(UOverlay& Root)
 {
-	// A released document, read over the scene like a printed sheet.
+	// A released document, read over the dimmed scene like a printed sheet.
 	UBorder* Dim = WidgetTree->ConstructWidget<UBorder>();
-	Dim->SetBrushColor(FLinearColor(0.f, 0.f, 0.f, 0.6f));
-	Dim->SetHorizontalAlignment(HAlign_Center);
-	Dim->SetVerticalAlignment(VAlign_Center);
+	Dim->SetBrushColor(DocumentDim);
+	Dim->SetHorizontalAlignment(HAlign_Left);
+	Dim->SetVerticalAlignment(VAlign_Fill);
+	Dim->SetPadding(DocumentMargin);
 	DocumentViewer = Dim;
 	StationUi::SetShown(DocumentViewer, false);
 	if (UOverlaySlot* Slot = Root.AddChildToOverlay(Dim))
@@ -1583,10 +1600,9 @@ void UStationHudWidget::BuildDocumentViewer(UOverlay& Root)
 	}
 
 	USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>();
-	Size->SetWidthOverride(760.f);
-	Size->SetMaxDesiredHeight(780.f);
+	Size->SetWidthOverride(DocumentWidth);
 	Dim->SetContent(Size);
-	UBorder* Sheet = StationUi::MakeRounded(*WidgetTree, StationUi::Paper, 12.f, FMargin(0.f));
+	UBorder* Sheet = StationUi::MakeRounded(*WidgetTree, StationUi::Paper, 6.f, FMargin(0.f));
 	Size->SetContent(Sheet);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>();
 	Sheet->SetContent(Column);
@@ -1594,27 +1610,39 @@ void UStationHudWidget::BuildDocumentViewer(UOverlay& Root)
 	UHorizontalBox* Header = WidgetTree->ConstructWidget<UHorizontalBox>();
 	if (UVerticalBoxSlot* HeaderSlot = Column->AddChildToVerticalBox(Header))
 	{
-		HeaderSlot->SetPadding(FMargin(28.f, 22.f, 18.f, 14.f));
+		HeaderSlot->SetPadding(FMargin(DocumentSidePadding, 40.f, DocumentSidePadding, 22.f));
 	}
 	UVerticalBox* Titles = WidgetTree->ConstructWidget<UVerticalBox>();
 	if (UHorizontalBoxSlot* TitlesSlot = Header->AddChildToHorizontalBox(Titles))
 	{
 		TitlesSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	}
-	DocumentCategoryText = StationUi::AddText(*WidgetTree, *Titles, FText::GetEmpty(), 14, false, StationUi::PaperMuted, 0.f);
-	DocumentTitleText = StationUi::AddText(*WidgetTree, *Titles, FText::GetEmpty(), 22, true, StationUi::PaperInk, 2.f);
+	DocumentCategoryText = MakeText(*WidgetTree, FText::GetEmpty(), StationUi::FontBold, 13.f, StationUi::PaperMuted, 120);
+	DocumentCategoryText->SetTextTransformPolicy(ETextTransformPolicy::ToUpper);
+	Titles->AddChild(DocumentCategoryText);
+	DocumentTitleText = MakeText(*WidgetTree, FText::GetEmpty(), StationUi::FontBold, 34.f, StationUi::PaperInk, -20);
+	DocumentTitleText->SetAutoWrapText(true);
+	if (UVerticalBoxSlot* TitleSlot = Titles->AddChildToVerticalBox(DocumentTitleText))
+	{
+		TitleSlot->SetPadding(FMargin(0.f, 8.f, 0.f, 0.f));
+	}
 	UButton* Close = StationUi::MakeFlatButton(*WidgetTree, FText::FromString(TEXT("×")), 28, StationUi::PaperInk);
 	Close->SetToolTipText(LOCTEXT("CloseDocument", "Fechar documento"));
 	Close->OnClicked.AddDynamic(this, &UStationHudWidget::HandleCloseDocument);
 	if (UHorizontalBoxSlot* CloseSlot = Header->AddChildToHorizontalBox(Close))
 	{
 		CloseSlot->SetVerticalAlignment(VAlign_Top);
+		CloseSlot->SetPadding(FMargin(16.f, 0.f, 0.f, 0.f));
 	}
 
-	UBorder* Rule = WidgetTree->ConstructWidget<UBorder>();
-	Rule->SetBrushColor(StationUi::PaperEdge);
-	Rule->SetPadding(FMargin(0.f, 0.5f));
-	Column->AddChild(Rule);
+	USizeBox* RuleInset = WidgetTree->ConstructWidget<USizeBox>();
+	if (UVerticalBoxSlot* RuleSlot = Column->AddChildToVerticalBox(RuleInset))
+	{
+		RuleSlot->SetPadding(FMargin(DocumentSidePadding, 0.f));
+	}
+	UVerticalBox* RuleColumn = WidgetTree->ConstructWidget<UVerticalBox>();
+	RuleInset->SetContent(RuleColumn);
+	AddRule(*WidgetTree, *RuleColumn, StationUi::PaperEdge, 0.f);
 
 	DocumentScroll = WidgetTree->ConstructWidget<UScrollBox>();
 	if (UVerticalBoxSlot* ScrollSlot = Column->AddChildToVerticalBox(DocumentScroll))
@@ -1625,7 +1653,7 @@ void UStationHudWidget::BuildDocumentViewer(UOverlay& Root)
 	DocumentScroll->AddChild(DocumentBody);
 	if (UScrollBoxSlot* BodySlot = Cast<UScrollBoxSlot>(DocumentBody->Slot))
 	{
-		BodySlot->SetPadding(FMargin(28.f, 10.f, 28.f, 26.f));
+		BodySlot->SetPadding(FMargin(DocumentSidePadding, 22.f, DocumentSidePadding, 40.f));
 	}
 }
 
@@ -1700,10 +1728,10 @@ void UStationHudWidget::RefreshExamCards()
 	}
 	if (ExamCardBox->GetChildrenCount() == 0)
 	{
-		WrapAt(*StationUi::AddText(*WidgetTree, *ExamCardBox, bAloud
+		WrapAt(*AddLine(*WidgetTree, *ExamCardBox, bAloud
 			? LOCTEXT("NoExamsAloud", "Nenhum exame solicitado ainda. Segure o microfone e diga o que você solicita.")
 			: LOCTEXT("NoExamsTyped", "Nenhum exame solicitado ainda. Descreva abaixo o que você solicita."),
-			15, false, StationUi::Muted, 0.f), ExamListWrapWidth);
+			StationUi::FontMedium, 15.f, StationUi::Muted, 0.f), ExamListWrapWidth);
 	}
 
 	// Documents released outside these requests, by a turn to the examiner.
@@ -1717,8 +1745,8 @@ void UStationHudWidget::RefreshExamCards()
 	}
 	if (Others.Num() > 0)
 	{
-		WrapAt(*StationUi::AddText(*WidgetTree, *ExamCardBox, LOCTEXT("OtherDocuments", "Outros documentos liberados"), 15,
-			true, StationUi::Muted, 10.f), ExamListWrapWidth);
+		WrapAt(*AddLine(*WidgetTree, *ExamCardBox, LOCTEXT("OtherDocuments", "Outros documentos liberados"),
+			StationUi::FontBold, 14.f, StationUi::Muted, 12.f), ExamListWrapWidth);
 		for (const FStationImpresso* Impresso : Others)
 		{
 			AddDocumentLink(*ExamCardBox, *Impresso);
@@ -1740,26 +1768,41 @@ namespace
 		return Chip;
 	}
 
-	/** A card's column, with the request and its status label in the first row. */
-	UVerticalBox* AddCard(UWidgetTree& Tree, UVerticalBox& Parent, const FString& Text, UBorder* Chip)
+	/** Behind "Não disponível", as dark as `ReleasedFill` is behind "Liberado". */
+	const FLinearColor UnavailableFill(FColor(0x5C, 0x1F, 0x1C));
+
+	/** The status of a request, in the kit's outlined pill, on an opaque ground. */
+	UBorder* MakeRequestChip(UWidgetTree& Tree, const FText& Label, const FLinearColor& Ink = StationUi::InkLabel,
+		const FLinearColor& Fill = StationUi::PanelSolid, const FLinearColor& Edge = StationUi::ChipEdge)
 	{
-		UBorder* Card = StationUi::MakeRounded(Tree, StationUi::Raised, 8.f, FMargin(CardPadding, 12.f));
+		UBorder* Chip = StationUi::MakeChip(Tree, Label);
+		Chip->SetBrush(StationUi::RoundedBrush(Fill, 16.f, Edge, 1.f));
+		if (UTextBlock* Text = Cast<UTextBlock>(Chip->GetContent()))
+		{
+			Text->SetColorAndOpacity(FSlateColor(Ink));
+		}
+		return Chip;
+	}
+
+	/** A card's column, with the request and its status label in the first row. */
+	UVerticalBox* AddCard(UWidgetTree& Tree, UVerticalBox& Parent, const FString& Text, UBorder* Chip,
+		const FLinearColor& TitleInk = StationUi::InkTitle)
+	{
+		UBorder* Card = StationUi::MakeRounded(Tree, StationUi::PanelSolid, 10.f, FMargin(CardPadding, 16.f), StationUi::PanelEdge, 1.f);
 		if (UVerticalBoxSlot* CardSlot = Parent.AddChildToVerticalBox(Card))
 		{
-			CardSlot->SetPadding(FMargin(0.f, Parent.GetChildrenCount() > 1 ? 10.f : 0.f, 0.f, 0.f));
+			CardSlot->SetPadding(FMargin(0.f, Parent.GetChildrenCount() > 1 ? 12.f : 0.f, 0.f, 0.f));
 		}
 		UVerticalBox* Column = Tree.ConstructWidget<UVerticalBox>();
 		Card->SetContent(Column);
 		UHorizontalBox* Row = Tree.ConstructWidget<UHorizontalBox>();
 		Column->AddChild(Row);
-		UTextBlock* Title = Tree.ConstructWidget<UTextBlock>();
-		Title->SetText(FText::FromString(Text));
-		Title->SetFont(StationUi::Font(StationUi::FontBold, 16));
-		Title->SetColorAndOpacity(FSlateColor(StationUi::Ink));
+		UTextBlock* Title = MakeText(Tree, FText::FromString(Text), StationUi::FontBold, 16.f, TitleInk);
 		WrapAt(*Title, CardTitleWrapWidth);
 		if (UHorizontalBoxSlot* TitleSlot = Row->AddChildToHorizontalBox(Title))
 		{
 			TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			TitleSlot->SetVerticalAlignment(VAlign_Center);
 		}
 		if (UHorizontalBoxSlot* ChipSlot = Row->AddChildToHorizontalBox(Chip))
 		{
@@ -1776,12 +1819,14 @@ void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
 	// Phoenix's feedback is the whole answer: a declined request shows that it
 	// was declined and nothing else.
 	const FStationImpressoReply& Reply = Request.Reply;
+	const bool bDeclined = Reply.Decision != EStationImpressoDecision::Released
+		&& Reply.Decision != EStationImpressoDecision::AlreadyReleased;
 	UBorder* Chip = Reply.Decision == EStationImpressoDecision::Released
-		? MakeChip(*WidgetTree, LOCTEXT("ExamReleased", "Liberado"), StationUi::ReleasedFill, StationUi::ReleasedInk)
+		? MakeRequestChip(*WidgetTree, LOCTEXT("ExamReleased", "Liberado"), StationUi::ReleasedInk, StationUi::ReleasedFill, StationUi::ReleasedInk)
 		: Reply.Decision == EStationImpressoDecision::AlreadyReleased
-		? MakeChip(*WidgetTree, LOCTEXT("ExamAlreadyReleased", "Já liberado"), StationUi::NeutralFill, StationUi::NeutralInk)
-		: MakeChip(*WidgetTree, LOCTEXT("ExamUnavailable", "Não disponível"), StationUi::DeclinedFill, StationUi::DeclinedInk);
-	UVerticalBox* Column = AddCard(*WidgetTree, *ExamCardBox, Request.Text, Chip);
+		? MakeRequestChip(*WidgetTree, LOCTEXT("ExamAlreadyReleased", "Já liberado"))
+		: MakeRequestChip(*WidgetTree, LOCTEXT("ExamUnavailable", "Não disponível"), StationUi::DangerInk, UnavailableFill, StationUi::DangerInk);
+	UVerticalBox* Column = AddCard(*WidgetTree, *ExamCardBox, Request.Text, Chip, bDeclined ? StationUi::InkBody : StationUi::InkTitle);
 	if (Reply.NewlyReleased.Num() == 1)
 	{
 		AddDocumentLink(*Column, Reply.NewlyReleased[0], LOCTEXT("OpenOneDocument", "Ver documento  ›"));
@@ -1795,15 +1840,15 @@ void UStationHudWidget::AddExamCard(const FStationExamRequest& Request)
 	}
 	if (Reply.NewlyReleased.Num() == 0 && !Reply.FeedbackMessage.IsEmpty())
 	{
-		WrapAt(*StationUi::AddText(*WidgetTree, *Column, FText::FromString(Reply.FeedbackMessage), 14, false,
-			StationUi::Muted, 6.f), CardWrapWidth);
+		WrapAt(*AddLine(*WidgetTree, *Column, FText::FromString(Reply.FeedbackMessage), StationUi::FontRegular, 13.f,
+			StationUi::Muted, 10.f), CardWrapWidth);
 	}
 }
 
 void UStationHudWidget::AddPendingExamCard(const FString& Text)
 {
-	AddCard(*WidgetTree, *ExamCardBox, Text,
-		MakeChip(*WidgetTree, LOCTEXT("ExamPending", "Solicitando..."), StationUi::NeutralFill, StationUi::NeutralInk));
+	AddCard(*WidgetTree, *ExamCardBox, Text, MakeRequestChip(*WidgetTree, LOCTEXT("ExamPending", "Solicitando..."), StationUi::Muted),
+		StationUi::InkBody);
 }
 
 void UStationHudWidget::AddDocumentLink(UVerticalBox& Parent, const FStationImpresso& Impresso, const FText& Label)
@@ -1813,12 +1858,13 @@ void UStationHudWidget::AddDocumentLink(UVerticalBox& Parent, const FStationImpr
 		15, StationUi::Link, true);
 	if (UTextBlock* Text = Cast<UTextBlock>(Open->GetChildAt(0)))
 	{
+		Text->SetFont(StationUi::MockupFont(StationUi::FontSemiBold, 15.f));
 		// Less the link's own margins, so "›" stays on the label's line.
 		WrapAt(*Text, CardWrapWidth - 12.f);
 	}
 	if (UVerticalBoxSlot* LinkSlot = Parent.AddChildToVerticalBox(Open))
 	{
-		LinkSlot->SetPadding(FMargin(-6.f, 6.f, 0.f, 0.f));
+		LinkSlot->SetPadding(FMargin(-6.f, 8.f, 0.f, 0.f));
 		LinkSlot->SetHorizontalAlignment(HAlign_Left);
 	}
 	UStationDocumentLink* Link = NewObject<UStationDocumentLink>(this);
