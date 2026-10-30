@@ -58,6 +58,7 @@ defmodule BackendWeb.StationController do
         started_at: DateTime.to_iso8601(session.started_at),
         expires_at: DateTime.to_iso8601(session.expires_at),
         deadline_at: DateTime.to_iso8601(session.deadline_at),
+        cap_at: DateTime.to_iso8601(session.cap_at),
         server_now: DateTime.to_iso8601(DateTime.utc_now())
       })
     else
@@ -264,6 +265,7 @@ defmodule BackendWeb.StationController do
         completion_reason: to_string(session.completion_reason),
         mode: mode_to_string(session),
         deadline_at: DateTime.to_iso8601(session.deadline_at),
+        cap_at: DateTime.to_iso8601(session.cap_at),
         server_now: DateTime.to_iso8601(DateTime.utc_now())
       })
     else
@@ -318,6 +320,7 @@ defmodule BackendWeb.StationController do
           started_at: DateTime.to_iso8601(session.started_at),
           expires_at: DateTime.to_iso8601(session.expires_at),
           deadline_at: DateTime.to_iso8601(session.deadline_at),
+          cap_at: DateTime.to_iso8601(session.cap_at),
           status: to_string(session.status),
           completion_reason:
             session |> Map.get(:completion_reason) |> completion_reason_to_string(),
