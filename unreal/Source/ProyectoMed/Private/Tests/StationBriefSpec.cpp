@@ -320,13 +320,145 @@ void FStationBriefUnitSpec::Define()
 			MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
 
 		TestTrue("titled as a simulated exam", Brief->HeadingText->GetText().ToString().StartsWith(TEXT("Prova simulada")));
-		TestFalse("no trainings", IsShown(Brief->TrainingsRow));
+		TestFalse("no trainings", IsShown(Brief->TrainingsPanel));
 		TestFalse("no voice training note", IsShown(Brief->VoiceNote));
 		TestTrue("simulated exam", IsShown(Brief->SimulatedExamButton) && Brief->SimulatedExamButton->GetIsEnabled());
 		TestTrue("its label", Texts(Brief->SimulatedExamButton).Contains(TEXT("Iniciar prova simulada")));
 		TestEqual("in the Prova simulada accent", Brief->SimulatedExamButton->GetStyle().Normal.TintColor.GetSpecifiedColor(),
 			StationUi::ProvaAccent);
-		TestTrue("what a simulated exam is", Brief->SimulatedExamNote->GetText().ToString().Contains(TEXT("Só por voz")));
+		TestEqual("not an official grade, and no repeat of the rules", Brief->SimulatedExamFine->GetText().ToString(),
+			FString(TEXT("Não é nota oficial do Revalida.")));
+		TestFalse("no warning", IsShown(Brief->SimulatedExamNote));
+		TestFalse("no training offered", IsShown(Brief->TrainingInsteadButton));
+	});
+
+	It("lists a simulated exam's rules before it starts, and only then", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted);
+		UStationBriefWidget* Brief = MakeBrief(Flow);
+
+		TestTrue("the rules in view", IsShown(Brief->ExamBox));
+		const TArray<FString> Rules = Texts(Brief->ExamRules);
+		TestTrue("voice and no help", Rules.Contains(TEXT("Só por voz e sem ajuda.")));
+		TestTrue("ten minutes", Rules.Contains(TEXT("10 minutos, incluindo a leitura do cenário.")));
+		TestTrue("the clock", Rules.Contains(TEXT("O relógio fica na mesa. Não há contagem na tela.")));
+		TestTrue("the signals", Rules.Contains(TEXT("Um sinal sonoro marca o início e o fim.")));
+		TestTrue("its title", Texts(Brief->ExamBox).Contains(TEXT("Como no dia da prova")));
+
+		Flow->Step = EStationRunStep::Running;
+		Flow->OpenBrief();
+		Brief->Refresh();
+		TestFalse("gone once it runs", IsShown(Brief->ExamBox));
+	});
+
+	It("leaves the scene in view before a simulated exam, and hides it on any brief", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted);
+		UStationBriefWidget* Exam = MakeBrief(Flow);
+		TestTrue("the left scrim", IsShown(Exam->LeftScrim));
+		TestFalse("no full scrim", IsShown(Exam->FullScrim));
+		TestEqual("the pointer passes the scrim", Exam->LeftScrim->GetVisibility(), ESlateVisibility::HitTestInvisible);
+
+		Flow->Step = EStationRunStep::Running;
+		Flow->OpenBrief();
+		Exam->Refresh();
+		TestTrue("the full scrim over the room", IsShown(Exam->FullScrim));
+		TestFalse("no left scrim", IsShown(Exam->LeftScrim));
+
+		UStationBriefWidget* Training = MakeBrief(
+			MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
+		TestTrue("a training's brief too", IsShown(Training->FullScrim));
+	});
+
+	It("marks the brief in its mode's accent", [this]()
+	{
+		UStationBriefWidget* Training = MakeBrief(
+			MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
+		TestTrue("the training's mark", IsShown(Training->TrainingMark));
+		TestFalse("not the exam's", IsShown(Training->ExamMark));
+		TestEqual("its heading", Training->HeadingText->GetColorAndOpacity().GetSpecifiedColor(), StationUi::TreinoAccent);
+
+		UStationBriefWidget* Exam = MakeBrief(
+			MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
+		TestTrue("the exam's mark", IsShown(Exam->ExamMark));
+		TestFalse("not the training's", IsShown(Exam->TrainingMark));
+		TestEqual("its heading", Exam->HeadingText->GetColorAndOpacity().GetSpecifiedColor(), StationUi::ProvaAccent);
+	});
+
+	It("asks how to train, by voice or by text", [this]()
+	{
+		UStationBriefWidget* Brief = MakeBrief(
+			MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
+
+		TestTrue("the panel", IsShown(Brief->TrainingsPanel));
+		TestTrue("its question", Texts(Brief->TrainingsPanel).Contains(TEXT("Como você quer treinar?")));
+		TestEqual("by voice, nothing else to explain", Texts(Brief->VoiceButton),
+			TArray<FString>{TEXT("Por voz"), TEXT("→")});
+		TestEqual("by text, nothing else to explain", Texts(Brief->TextButton),
+			TArray<FString>{TEXT("Por texto"), TEXT("→")});
+		TestEqual("who handles the voice", Brief->VoiceNote->GetText().ToString(),
+			FString(TEXT("No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente.")));
+		TestFalse("the microphone is fine", IsShown(Brief->VoiceBlockedNote));
+		TestEqual("voice solid", Brief->VoiceButton->GetRenderOpacity(), 1.f);
+	});
+
+	It("disables only the voice training, and says why, when the microphone is blocked", [this]()
+	{
+		UStationBriefWidget* Brief = MakeBrief(
+			MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Realtime, EStationMicPermission::Denied));
+
+		TestFalse("voice disabled", Brief->VoiceButton->GetIsEnabled());
+		TestEqual("and faded", Brief->VoiceButton->GetRenderOpacity(), 0.45f);
+		TestTrue("text still works", Brief->TextButton->GetIsEnabled());
+		TestEqual("and stays solid", Brief->TextButton->GetRenderOpacity(), 1.f);
+		TestTrue("the reason in view", IsShown(Brief->VoiceBlockedNote));
+		TestEqual("the reason", Brief->VoiceBlockedNote->GetText().ToString(), FString(TEXT(
+			"O microfone está bloqueado. Para treinar por voz, libere o acesso nos ajustes de privacidade do sistema e abra o app de novo.")));
+		TestTrue("the providers still named", IsShown(Brief->VoiceNote)
+			&& Brief->VoiceNote->GetText().ToString().Contains(TEXT("Deepgram")));
+	});
+
+	It("offers no voice training, and no reason, on a station without voice", [this]()
+	{
+		UStationBriefWidget* Brief = MakeBrief(
+			MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Off, EStationMicPermission::Denied));
+
+		TestFalse("no voice", IsShown(Brief->VoiceButton));
+		TestFalse("no reason", IsShown(Brief->VoiceBlockedNote));
+		TestFalse("no providers", IsShown(Brief->VoiceNote));
+		TestTrue("text", IsShown(Brief->TextButton) && Brief->TextButton->GetIsEnabled());
+	});
+
+	It("shows the case's fictional note with its scenario and tasks", [this]()
+	{
+		const FString Note = TEXT("Caso clínico fictício, criado para treino educacional. Não corresponde a um paciente real.");
+		UStationBriefWidget* Training = MakeBrief(
+			MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
+		TestTrue("on a training's", IsShown(Training->FictionalNote));
+		TestEqual("the note", Training->FictionalNote->GetText().ToString(), Note);
+
+		UStationBriefWidget* Exam = MakeBrief(
+			MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted));
+		TestFalse("not before a simulated exam", IsShown(Exam->FictionalNote));
+	});
+
+	It("says when the station is loading, and offers a retry when it fails", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationSessionMode::Training, EStationVoiceMode::Realtime, EStationMicPermission::Granted);
+		Flow->Station.Reset();
+		Flow->bLoadingStation = true;
+		UStationBriefWidget* Brief = MakeBrief(Flow);
+		TestTrue("loading", IsShown(Brief->StatusText));
+		TestEqual("what it says", Brief->StatusText->GetText().ToString(), FString(TEXT("Carregando cenário e tarefas...")));
+		TestFalse("no ways in yet", IsShown(Brief->TrainingsPanel));
+		TestFalse("no way back to a room", IsShown(Brief->CloseButton));
+		TestFalse("no retry yet", IsShown(Brief->RetryButton));
+
+		Flow->bLoadingStation = false;
+		Flow->ErrorText = FText::FromString(TEXT("Falhou."));
+		Brief->Refresh();
+		TestTrue("the error", IsShown(Brief->ErrorText));
+		TestTrue("the retry", IsShown(Brief->RetryButton) && Texts(Brief->RetryButton).Contains(TEXT("Tentar novamente")));
 	});
 
 	It("keeps the simulated exam in view but disabled, with the reason, when the microphone is blocked", [this]()
@@ -338,6 +470,9 @@ void FStationBriefUnitSpec::Define()
 		TestFalse("simulated exam disabled", Brief->SimulatedExamButton->GetIsEnabled());
 		TestEqual("the reason, in Brazilian Portuguese", Brief->SimulatedExamNote->GetText().ToString(),
 			SimulatedExamUnavailableText(*Flow->GetStation(), EStationMicPermission::Denied).ToString());
+		TestTrue("the reason in view", IsShown(Brief->SimulatedExamNote));
+		TestTrue("a training offered", IsShown(Brief->TrainingInsteadButton)
+			&& Texts(Brief->TrainingInsteadButton).Contains(TEXT("Fazer um treino")));
 	});
 
 	It("keeps the simulated exam in view but disabled, with the reason, without realtime voice", [this]()
@@ -349,6 +484,23 @@ void FStationBriefUnitSpec::Define()
 		TestFalse("simulated exam disabled", Brief->SimulatedExamButton->GetIsEnabled());
 		TestEqual("the reason, in Brazilian Portuguese", Brief->SimulatedExamNote->GetText().ToString(),
 			SimulatedExamUnavailableText(*Flow->GetStation(), EStationMicPermission::Granted).ToString());
+		TestTrue("the reason in view", IsShown(Brief->SimulatedExamNote));
+		TestTrue("a training offered", IsShown(Brief->TrainingInsteadButton)
+			&& Texts(Brief->TrainingInsteadButton).Contains(TEXT("Fazer um treino")));
+	});
+
+	It("leads a simulated exam that cannot start to a training's brief", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Denied);
+		Flow->bNoticeAcknowledged = true;
+		UStationBriefWidget* Brief = MakeBrief(Flow);
+
+		Brief->TrainingInsteadButton->OnClicked.Broadcast();
+		TestEqual("still on a brief", Flow->GetStep(), EStationRunStep::Brief);
+		TestEqual("a training's", Flow->GetSessionMode(), EStationSessionMode::Training);
+		Brief->Refresh();
+		TestTrue("its ways in", IsShown(Brief->TrainingsPanel));
+		TestFalse("no more exam rules", IsShown(Brief->ExamBox));
 	});
 
 	// #425 (#318 T3): the scenario and tasks are read with the time already running.
@@ -357,7 +509,7 @@ void FStationBriefUnitSpec::Define()
 		UStationRunFlow* Flow = MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted);
 		UStationBriefWidget* Brief = MakeBrief(Flow);
 		TestFalse("no scenario or tasks before", IsShown(Brief->BriefBox));
-		TestEqual("says when they show", Brief->TimerNote->GetText().ToString(),
+		TestEqual("says when they show", Brief->ExamLeadText->GetText().ToString(),
 			FString(TEXT("O cenário e as tarefas aparecem quando a prova começar, com o tempo já correndo.")));
 		TestFalse("no way back to the room yet", IsShown(Brief->CloseButton));
 
@@ -389,7 +541,7 @@ void FStationBriefUnitSpec::Define()
 		UStationRunFlow* Flow = MakeFlow(EStationSessionMode::SimulatedExam, EStationVoiceMode::Realtime, EStationMicPermission::Granted);
 		UStationBriefWidget* Brief = MakeBrief(Flow);
 
-		TestTrue("the way back", IsShown(Brief->MenuButton) && Texts(Brief->MenuButton).Contains(TEXT("‹ Voltar ao menu")));
+		TestTrue("the way back", IsShown(Brief->MenuButton) && Texts(Brief->MenuButton).Contains(TEXT("‹ Escolher outra estação")));
 		Brief->HandleBackToMenu();
 		TestEqual("on the menu", Flow->GetStep(), EStationRunStep::Menu);
 	});

@@ -517,78 +517,259 @@ void UStationNoticeWidget::HandleAcknowledge()
 	OnAcknowledged.ExecuteIfBound();
 }
 
+namespace
+{
+	/** What cannot be chosen right now, in the mockups: faded, as a disabled button fades its own label. */
+	constexpr float UnavailableOpacity = 0.45f;
+	/** The brief's edges, in the mockups: past the way back on top, and at the screen's sides. */
+	const FMargin BriefPadding(96.f, 144.f, 96.f, 64.f);
+	constexpr float TrainingsPanelWidth = 460.f;
+	constexpr float ExamColumnWidth = 700.f;
+	/** The mockups' tight title, as a share of Manrope's own line. */
+	constexpr float BriefTitleLineHeight = 0.8f;
+
+	/** Text that wraps under what `Parent` already holds. */
+	UTextBlock* AddLine(UWidgetTree& Tree, UVerticalBox& Parent, const FText& Text, FName Weight, float Pixels,
+		const FLinearColor& Color, float SpaceAbove, int32 LetterSpacing = 0)
+	{
+		UTextBlock* Line = MakeText(Tree, Text, Weight, Pixels, Color, LetterSpacing);
+		Line->SetAutoWrapText(true);
+		if (UVerticalBoxSlot* Slot = Parent.AddChildToVerticalBox(Line))
+		{
+			Slot->SetPadding(FMargin(0.f, SpaceAbove, 0.f, 0.f));
+		}
+		return Line;
+	}
+
+	/** A way into a training: its name, then an arrow, in an outlined box. */
+	UButton* AddTrainingOption(UWidgetTree& Tree, UVerticalBox& Parent, const FText& Title)
+	{
+		UHorizontalBox* Row = Tree.ConstructWidget<UHorizontalBox>();
+		if (UHorizontalBoxSlot* TitleSlot = Row->AddChildToHorizontalBox(
+				MakeText(Tree, Title, StationUi::FontBold, 20.f, StationUi::InkTitle)))
+		{
+			TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			TitleSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		if (UHorizontalBoxSlot* ArrowSlot = Row->AddChildToHorizontalBox(
+				MakeText(Tree, FText::FromString(TEXT("→")), StationUi::FontBold, 22.f, StationUi::Ink)))
+		{
+			ArrowSlot->SetVerticalAlignment(VAlign_Center);
+			ArrowSlot->SetPadding(FMargin(16.f, 0.f, 0.f, 0.f));
+		}
+
+		UBorder* Box = StationUi::MakeRounded(Tree, FLinearColor::Transparent, 12.f, FMargin(24.f), StationUi::ChipEdge, 1.f);
+		Box->SetContent(Row);
+		UButton* Button = StationUi::MakeContentButton(Tree, *Box, FMargin(0.f));
+		if (UVerticalBoxSlot* Slot = Parent.AddChildToVerticalBox(Button))
+		{
+			Slot->SetPadding(FMargin(0.f, 18.f, 0.f, 0.f));
+		}
+		return Button;
+	}
+
+	/** One rule of a simulated exam, marked in its accent, in half of `Row`. */
+	void AddExamRule(UWidgetTree& Tree, UHorizontalBox& Row, const FText& Rule, float SpaceBefore)
+	{
+		USizeBox* DotSize = Tree.ConstructWidget<USizeBox>();
+		DotSize->SetWidthOverride(10.f);
+		DotSize->SetHeightOverride(10.f);
+		DotSize->SetContent(StationUi::MakeRounded(Tree, StationUi::ProvaAccent, 5.f, FMargin(0.f)));
+
+		UHorizontalBox* Cell = Tree.ConstructWidget<UHorizontalBox>();
+		if (UHorizontalBoxSlot* DotSlot = Cell->AddChildToHorizontalBox(DotSize))
+		{
+			DotSlot->SetVerticalAlignment(VAlign_Top);
+			DotSlot->SetPadding(FMargin(0.f, 6.f, 14.f, 0.f));
+		}
+		UTextBlock* Text = MakeText(Tree, Rule, StationUi::FontMedium, 15.f, StationUi::InkBody);
+		Text->SetAutoWrapText(true);
+		if (UHorizontalBoxSlot* TextSlot = Cell->AddChildToHorizontalBox(Text))
+		{
+			TextSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		}
+
+		if (UHorizontalBoxSlot* CellSlot = Row.AddChildToHorizontalBox(Cell))
+		{
+			CellSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			CellSlot->SetPadding(FMargin(SpaceBefore, 0.f, 0.f, 0.f));
+		}
+	}
+}
+
 TSharedRef<SWidget> UStationBriefWidget::RebuildWidget()
 {
 	if (WidgetTree && !WidgetTree->RootWidget)
 	{
-		UVerticalBox* Footer = nullptr;
-		UVerticalBox* Column = StationUi::MakeFooterCard(*WidgetTree, 860.f, 860.f, Footer);
-		FooterBox = Footer;
-		MenuButton = StationUi::MakeFlatButton(*WidgetTree, LOCTEXT("BackToMenu", "‹ Voltar ao menu"), 16, StationUi::Link);
+		UOverlay* Screen = WidgetTree->ConstructWidget<UOverlay>();
+		WidgetTree->RootWidget = Screen;
+		const auto Place = [Screen](UWidget* Widget, EHorizontalAlignment Horizontal, EVerticalAlignment Vertical, const FMargin& Padding)
+		{
+			if (UOverlaySlot* Slot = Screen->AddChildToOverlay(Widget))
+			{
+				Slot->SetHorizontalAlignment(Horizontal);
+				Slot->SetVerticalAlignment(Vertical);
+				Slot->SetPadding(Padding);
+			}
+		};
+
+		FullScrim = WidgetTree->ConstructWidget<UBorder>();
+		FullScrim->SetBrushColor(StationUi::Backdrop);
+		Place(FullScrim, HAlign_Fill, VAlign_Fill, FMargin(0.f));
+		LeftScrim = StationUi::MakeScrim(*WidgetTree);
+		Place(LeftScrim, HAlign_Fill, VAlign_Fill, FMargin(0.f));
+
+		// "Escolher outra estação" leads to the menu until the catalog exists (#459).
+		MenuButton = StationUi::AddButton(*WidgetTree, *Screen, LOCTEXT("ChooseAnotherStation", "‹ Escolher outra estação"));
 		MenuButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleBackToMenu);
-		if (UVerticalBoxSlot* MenuSlot = Column->AddChildToVerticalBox(MenuButton))
+		StationUi::MakeGhost(*MenuButton);
+		if (UOverlaySlot* MenuSlot = Cast<UOverlaySlot>(MenuButton->Slot))
 		{
 			MenuSlot->SetHorizontalAlignment(HAlign_Left);
-			MenuSlot->SetPadding(FMargin(-6.f, 0.f, 0.f, 0.f));
+			MenuSlot->SetVerticalAlignment(VAlign_Top);
+			MenuSlot->SetPadding(FMargin(96.f, 64.f, 0.f, 0.f));
 		}
-		HeadingText = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("BriefHeading", "Antes de entrar na estação"), 16, true,
-			StationUi::Muted, 12.f);
 
-		StatusText = StationUi::AddText(*WidgetTree, *Column, LOCTEXT("BriefLoading", "Carregando cenário e tarefas..."), 18);
-		ErrorText = StationUi::AddText(*WidgetTree, *Column, FText::GetEmpty(), 18, false, StationUi::Caution);
-		RetryButton = StationUi::AddButton(*WidgetTree, *Column, LOCTEXT("Retry", "Tentar novamente"));
+		UHorizontalBox* Columns = WidgetTree->ConstructWidget<UHorizontalBox>();
+		Place(Columns, HAlign_Fill, VAlign_Fill, BriefPadding);
+		BriefColumn = WidgetTree->ConstructWidget<UVerticalBox>();
+		if (UHorizontalBoxSlot* ColumnSlot = Columns->AddChildToHorizontalBox(BriefColumn))
+		{
+			ColumnSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		}
+
+		UHorizontalBox* Eyebrow = WidgetTree->ConstructWidget<UHorizontalBox>();
+		BriefColumn->AddChild(Eyebrow);
+		for (UWidget* Mark : {TrainingMark = StationUi::MakeModeMark(*WidgetTree, StationUi::TreinoAccent),
+				 ExamMark = StationUi::MakeModeMark(*WidgetTree, StationUi::ProvaAccent)})
+		{
+			if (UHorizontalBoxSlot* MarkSlot = Eyebrow->AddChildToHorizontalBox(Mark))
+			{
+				MarkSlot->SetVerticalAlignment(VAlign_Center);
+				MarkSlot->SetPadding(FMargin(0.f, 0.f, 12.f, 0.f));
+			}
+		}
+		HeadingText = MakeText(*WidgetTree, LOCTEXT("BriefHeading", "Antes de entrar na estação"), StationUi::FontBold, 13.f,
+			StationUi::TreinoAccent, 120);
+		HeadingText->SetTextTransformPolicy(ETextTransformPolicy::ToUpper);
+		Eyebrow->AddChild(HeadingText);
+
+		StatusText = AddLine(*WidgetTree, *BriefColumn, LOCTEXT("BriefLoading", "Carregando cenário e tarefas..."),
+			StationUi::FontMedium, 18.f, StationUi::InkBody, 26.f);
+		ErrorText = AddLine(*WidgetTree, *BriefColumn, FText::GetEmpty(), StationUi::FontMedium, 18.f, StationUi::Caution, 26.f);
+		RetryButton = StationUi::AddButton(*WidgetTree, *BriefColumn, LOCTEXT("Retry", "Tentar novamente"));
 		RetryButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleRetry);
 		StationUi::MakePrimary(*RetryButton);
 
+		// Scrolls, so the way in and the note stay in view however long the case runs.
+		UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>();
+		if (UVerticalBoxSlot* ScrollSlot = BriefColumn->AddChildToVerticalBox(Scroll))
+		{
+			ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			ScrollSlot->SetPadding(FMargin(0.f, 26.f, 0.f, 0.f));
+		}
 		BriefBox = WidgetTree->ConstructWidget<UVerticalBox>();
-		Column->AddChild(BriefBox);
-		TitleText = StationUi::AddText(*WidgetTree, *BriefBox, FText::GetEmpty(), 30, true);
-		StationUi::AddText(*WidgetTree, *BriefBox, LOCTEXT("ScenarioHeading", "Cenário de atuação"), 20, true,
-			StationUi::Ink, 24.f);
-		ScenarioText = StationUi::AddText(*WidgetTree, *BriefBox, FText::GetEmpty(), 18);
-		StationUi::AddText(*WidgetTree, *BriefBox, LOCTEXT("TasksHeading", "Tarefas"), 20, true, StationUi::Ink, 24.f);
+		Scroll->AddChild(BriefBox);
+		TitleText = AddLine(*WidgetTree, *BriefBox, FText::GetEmpty(), StationUi::FontBold, 48.f, StationUi::InkTitle, 0.f, -60);
+		TitleText->SetLineHeightPercentage(BriefTitleLineHeight);
+		AddLine(*WidgetTree, *BriefBox, LOCTEXT("ScenarioHeading", "Cenário de atuação"), StationUi::FontBold, 18.f, StationUi::InkTitle, 26.f);
+		ScenarioText = AddLine(*WidgetTree, *BriefBox, FText::GetEmpty(), StationUi::FontMedium, 18.f, StationUi::InkBody, 10.f);
+		AddLine(*WidgetTree, *BriefBox, LOCTEXT("TasksHeading", "Tarefas"), StationUi::FontBold, 18.f, StationUi::InkTitle, 26.f);
 		TaskList = WidgetTree->ConstructWidget<UVerticalBox>();
 		BriefBox->AddChild(TaskList);
-		StationUi::AddText(*WidgetTree, *BriefBox, LOCTEXT("FictionalNote",
-			"Caso clínico fictício, criado para treino educacional. Não corresponde a um paciente real."),
-			15, false, StationUi::Muted, 24.f);
 
-		TimerNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("TimerNote",
-			"O tempo da estação começa a contar quando você entrar."), 15, false, StationUi::Muted, 16.f);
-
-		UHorizontalBox* Trainings = WidgetTree->ConstructWidget<UHorizontalBox>();
-		TrainingsRow = Trainings;
-		if (UVerticalBoxSlot* TrainingsSlot = FooterBox->AddChildToVerticalBox(Trainings))
+		// A simulated exam's rules and way in, instead of the brief it keeps for its start (#425).
+		USizeBox* ExamSize = WidgetTree->ConstructWidget<USizeBox>();
+		ExamSize->SetWidthOverride(ExamColumnWidth);
+		if (UVerticalBoxSlot* ExamSlot = BriefColumn->AddChildToVerticalBox(ExamSize))
 		{
-			TrainingsSlot->SetPadding(FMargin(0.f, 14.f, 0.f, 0.f));
+			ExamSlot->SetHorizontalAlignment(HAlign_Left);
 		}
-		TextButton = StationUi::AddButton(*WidgetTree, *Trainings, LOCTEXT("TextTraining", "Treino por texto"));
-		TextButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleTextTraining);
-		StationUi::MakePrimary(*TextButton);
-		VoiceButton = StationUi::AddButton(*WidgetTree, *Trainings, LOCTEXT("VoiceTraining", "Treino por voz"));
-		VoiceButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleVoiceTraining);
-		StationUi::MakePrimary(*VoiceButton);
-		if (UHorizontalBoxSlot* VoiceSlot = Cast<UHorizontalBoxSlot>(VoiceButton->Slot))
+		ExamBox = WidgetTree->ConstructWidget<UVerticalBox>();
+		ExamSize->SetContent(ExamBox);
+		AddLine(*WidgetTree, *ExamBox, LOCTEXT("SimulatedExamTitle", "Como no dia da prova"), StationUi::FontBold, 56.f,
+			StationUi::InkTitle, 0.f, -60);
+		ExamLeadText = AddLine(*WidgetTree, *ExamBox, LOCTEXT("SimulatedExamTimerNote",
+			"O cenário e as tarefas aparecem quando a prova começar, com o tempo já correndo."),
+			StationUi::FontMedium, 18.f, StationUi::InkBody, 20.f);
+		ExamRules = WidgetTree->ConstructWidget<UVerticalBox>();
+		if (UVerticalBoxSlot* RulesSlot = ExamBox->AddChildToVerticalBox(ExamRules))
 		{
-			VoiceSlot->SetPadding(FMargin(12.f, 0.f, 0.f, 0.f));
+			RulesSlot->SetPadding(FMargin(0.f, 28.f, 0.f, 0.f));
 		}
-		VoiceNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("VoiceNote",
-			"No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."),
-			14, false, StationUi::Muted, 10.f);
+		UHorizontalBox* RulesAbove = WidgetTree->ConstructWidget<UHorizontalBox>();
+		ExamRules->AddChild(RulesAbove);
+		AddExamRule(*WidgetTree, *RulesAbove, LOCTEXT("ExamRuleVoice", "Só por voz e sem ajuda."), 0.f);
+		AddExamRule(*WidgetTree, *RulesAbove, LOCTEXT("ExamRuleMinutes", "10 minutos, incluindo a leitura do cenário."), 32.f);
+		UHorizontalBox* RulesBelow = WidgetTree->ConstructWidget<UHorizontalBox>();
+		if (UVerticalBoxSlot* BelowSlot = ExamRules->AddChildToVerticalBox(RulesBelow))
+		{
+			BelowSlot->SetPadding(FMargin(0.f, 18.f, 0.f, 0.f));
+		}
+		AddExamRule(*WidgetTree, *RulesBelow, LOCTEXT("ExamRuleClock", "O relógio fica na mesa. Não há contagem na tela."), 0.f);
+		AddExamRule(*WidgetTree, *RulesBelow, LOCTEXT("ExamRuleSignals", "Um sinal sonoro marca o início e o fim."), 32.f);
 
+		SimulatedExamNote = AddLine(*WidgetTree, *ExamBox, FText::GetEmpty(), StationUi::FontMedium, 15.f, StationUi::Caution, 28.f);
+		UHorizontalBox* ExamActions = WidgetTree->ConstructWidget<UHorizontalBox>();
+		if (UVerticalBoxSlot* ActionsSlot = ExamBox->AddChildToVerticalBox(ExamActions))
+		{
+			ActionsSlot->SetPadding(FMargin(0.f, 28.f, 0.f, 0.f));
+		}
 		// A simulated exam's one way in, by voice (#421).
-		SimulatedExamButton = StationUi::AddButton(*WidgetTree, *FooterBox,
-			LOCTEXT("StartSimulatedExam", "Iniciar prova simulada"), 14.f);
+		SimulatedExamButton = StationUi::AddButton(*WidgetTree, *ExamActions, LOCTEXT("StartSimulatedExam", "Iniciar prova simulada"));
 		SimulatedExamButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleSimulatedExam);
 		StationUi::MakeExam(*SimulatedExamButton);
-		SimulatedExamNote = StationUi::AddText(*WidgetTree, *FooterBox, LOCTEXT("SimulatedExamNote",
-			"Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida."),
-			14, false, StationUi::Muted, 10.f);
+		TrainingInsteadButton = StationUi::AddButton(*WidgetTree, *ExamActions, LOCTEXT("TrainingInstead", "Fazer um treino"));
+		TrainingInsteadButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleTrainingInstead);
+		StationUi::MakeSecondary(*TrainingInsteadButton);
+		if (UHorizontalBoxSlot* InsteadSlot = Cast<UHorizontalBoxSlot>(TrainingInsteadButton->Slot))
+		{
+			InsteadSlot->SetPadding(FMargin(20.f, 0.f, 0.f, 0.f));
+		}
+		SimulatedExamFine = AddLine(*WidgetTree, *ExamBox, LOCTEXT("MenuExamNotOfficial", "Não é nota oficial do Revalida."),
+			StationUi::FontRegular, 13.f, StationUi::Muted, 28.f);
 
 		// A running simulated exam shows this brief over the room (#425).
-		CloseButton = StationUi::AddButton(*WidgetTree, *FooterBox, LOCTEXT("CloseBrief", "Voltar ao consultório"), 14.f);
+		CloseButton = StationUi::AddButton(*WidgetTree, *BriefColumn, LOCTEXT("CloseBrief", "Voltar ao consultório"), 18.f);
 		CloseButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleCloseBrief);
 		StationUi::MakePrimary(*CloseButton);
+		FictionalNote = AddLine(*WidgetTree, *BriefColumn, LOCTEXT("FictionalNote",
+			"Caso clínico fictício, criado para treino educacional. Não corresponde a um paciente real."),
+			StationUi::FontRegular, 13.f, StationUi::Muted, 18.f);
+
+		USizeBox* PanelSize = WidgetTree->ConstructWidget<USizeBox>();
+		PanelSize->SetWidthOverride(TrainingsPanelWidth);
+		TrainingsPanel = PanelSize;
+		if (UHorizontalBoxSlot* PanelSlot = Columns->AddChildToHorizontalBox(PanelSize))
+		{
+			PanelSlot->SetVerticalAlignment(VAlign_Top);
+			PanelSlot->SetPadding(FMargin(72.f, 0.f, 0.f, 0.f));
+		}
+		UBorder* Panel = StationUi::MakePanel(*WidgetTree, FMargin(32.f));
+		PanelSize->SetContent(Panel);
+		UVerticalBox* Trainings = WidgetTree->ConstructWidget<UVerticalBox>();
+		Panel->SetContent(Trainings);
+		AddLine(*WidgetTree, *Trainings, LOCTEXT("TrainingsTitle", "Como você quer treinar?"), StationUi::FontBold, 28.f,
+			StationUi::InkTitle, 0.f, -15);
+		VoiceButton = AddTrainingOption(*WidgetTree, *Trainings, LOCTEXT("VoiceTraining", "Por voz"));
+		VoiceButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleVoiceTraining);
+		TextButton = AddTrainingOption(*WidgetTree, *Trainings, LOCTEXT("TextTraining", "Por texto"));
+		TextButton->OnClicked.AddDynamic(this, &UStationBriefWidget::HandleTextTraining);
+		VoiceBlockedNote = AddLine(*WidgetTree, *Trainings, LOCTEXT("VoiceBlocked",
+			"O microfone está bloqueado. Para treinar por voz, libere o acesso nos ajustes de privacidade do sistema e abra o app de novo."),
+			StationUi::FontMedium, 15.f, StationUi::Caution, 18.f);
+		VoiceNote = AddLine(*WidgetTree, *Trainings, LOCTEXT("VoiceNote",
+			"No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."),
+			StationUi::FontRegular, 13.f, StationUi::Muted, 18.f);
+		UBorder* Rule = WidgetTree->ConstructWidget<UBorder>();
+		Rule->SetBrushColor(StationUi::PanelEdge);
+		Rule->SetPadding(FMargin(0.f, 0.5f));
+		if (UVerticalBoxSlot* RuleSlot = Trainings->AddChildToVerticalBox(Rule))
+		{
+			RuleSlot->SetPadding(FMargin(0.f, 18.f, 0.f, 0.f));
+		}
+		TimerNote = AddLine(*WidgetTree, *Trainings, LOCTEXT("TimerNote",
+			"O tempo da estação começa a contar quando você entrar."), StationUi::FontMedium, 15.f, StationUi::InkBody, 18.f);
 	}
 	return Super::RebuildWidget();
 }
@@ -602,6 +783,20 @@ void UStationBriefWidget::Refresh()
 
 	const FStationSummary* Station = Flow->GetStation();
 	const bool bStarting = Flow->GetStep() == EStationRunStep::Starting;
+	const bool bExam = Flow->GetSessionMode() == EStationSessionMode::SimulatedExam;
+	const bool bRunning = Flow->GetStep() == EStationRunStep::Running;
+	// Before it starts, a simulated exam shows its rules over the room, not its brief.
+	const bool bExamStart = bExam && !bRunning && Station != nullptr;
+
+	StationUi::SetShown(FullScrim, !bExamStart);
+	LeftScrim->SetVisibility(bExamStart ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	if (UHorizontalBoxSlot* ColumnSlot = Cast<UHorizontalBoxSlot>(BriefColumn->Slot))
+	{
+		ColumnSlot->SetVerticalAlignment(bExamStart ? VAlign_Bottom : VAlign_Fill);
+	}
+	StationUi::SetShown(TrainingMark, !bExam);
+	StationUi::SetShown(ExamMark, bExam);
+	HeadingText->SetColorAndOpacity(FSlateColor(bExam ? StationUi::ProvaAccent : StationUi::TreinoAccent));
 
 	StationUi::SetShown(StatusText, Flow->IsStationLoading() || bStarting);
 	StatusText->SetText(bStarting
@@ -613,50 +808,50 @@ void UStationBriefWidget::Refresh()
 	StationUi::SetShown(RetryButton, !Station && !Flow->IsStationLoading());
 
 	// A simulated exam's scenario and tasks show only once its time runs (#425, #318 T3).
-	StationUi::SetShown(BriefBox, Station != nullptr && Flow->CanReadBrief());
-	StationUi::SetShown(FooterBox, Station != nullptr);
+	const bool bBriefShown = Station != nullptr && Flow->CanReadBrief();
+	StationUi::SetShown(BriefBox, bBriefShown);
+	StationUi::SetShown(FictionalNote, bBriefShown);
+	StationUi::SetShown(ExamBox, bExamStart);
+	StationUi::SetShown(TrainingsPanel, Station != nullptr && !bExam);
+	StationUi::SetShown(CloseButton, Station != nullptr && bRunning);
 	if (!Station)
 	{
 		return;
 	}
 
-	const bool bExam = Flow->GetSessionMode() == EStationSessionMode::SimulatedExam;
-	const bool bRunning = Flow->GetStep() == EStationRunStep::Running;
 	HeadingText->SetText(bExam && bRunning ? LOCTEXT("SimulatedExamRunningHeading", "Prova simulada · Cenário e tarefas")
 		: bExam ? LOCTEXT("SimulatedExamHeading", "Prova simulada · Antes de entrar na estação")
 		: LOCTEXT("TrainingHeading", "Treino · Antes de entrar na estação"));
 	StationUi::SetShown(MenuButton, !bRunning);
-	StationUi::SetShown(CloseButton, bRunning);
 	StationUi::SetShown(TimerNote, !bRunning);
-	TimerNote->SetText(bExam
-		? LOCTEXT("SimulatedExamTimerNote", "O cenário e as tarefas aparecem quando a prova começar, com o tempo já correndo.")
-		: LOCTEXT("TimerNote", "O tempo da estação começa a contar quando você entrar."));
 	TitleText->SetText(FText::FromString(Station->DisplayTitle));
 	ScenarioText->SetText(FText::FromString(Station->Scenario));
 	TaskList->ClearChildren();
 	for (const FString& Task : Station->Tasks)
 	{
-		StationUi::AddText(*WidgetTree, *TaskList, FText::FromString(TEXT("•  ") + Task), 18, false, StationUi::Ink, 8.f);
+		AddLine(*WidgetTree, *TaskList, FText::FromString(TEXT("•  ") + Task), StationUi::FontRegular, 17.f, StationUi::InkBody, 8.f);
 	}
 
-	TextButton->SetIsEnabled(Flow->CanEnter(EStationTrainingMode::Text));
+	const auto SetAvailable = [](UButton& Button, bool bAvailable)
+	{
+		Button.SetIsEnabled(bAvailable);
+		Button.SetRenderOpacity(bAvailable ? 1.f : UnavailableOpacity);
+	};
+	SetAvailable(*TextButton, Flow->CanEnter(EStationTrainingMode::Text));
+	SetAvailable(*VoiceButton, Flow->CanEnter(EStationTrainingMode::Voice));
 	const bool bVoiceOffered = IsVoiceTrainingAvailable(*Station);
-	StationUi::SetShown(TrainingsRow, !bExam);
 	StationUi::SetShown(VoiceButton, bVoiceOffered);
 	StationUi::SetShown(VoiceNote, !bExam && bVoiceOffered);
-	VoiceButton->SetIsEnabled(Flow->CanEnter(EStationTrainingMode::Voice));
-	VoiceNote->SetText(Flow->GetMicrophonePermission() == EStationMicPermission::Denied
-		? LOCTEXT("VoiceBlocked", "O microfone está bloqueado. Para treinar por voz, libere o acesso nos ajustes de privacidade do sistema e abra o app de novo.")
-		: LOCTEXT("VoiceNote", "No treino por voz, a Deepgram transcreve o seu áudio e a Cartesia gera a voz do paciente."));
+	StationUi::SetShown(VoiceBlockedNote, !bExam && bVoiceOffered
+		&& Flow->GetMicrophonePermission() == EStationMicPermission::Denied);
 
 	// The simulated exam stays in view when it cannot start, so the learner reads why.
-	StationUi::SetShown(SimulatedExamButton, bExam && !bRunning);
-	StationUi::SetShown(SimulatedExamNote, bExam && !bRunning);
 	const FText ExamUnavailable = SimulatedExamUnavailableText(*Station, Flow->GetMicrophonePermission());
+	StationUi::SetShown(SimulatedExamButton, bExamStart);
 	SimulatedExamButton->SetIsEnabled(Flow->CanEnterSimulatedExam());
-	SimulatedExamNote->SetText(ExamUnavailable.IsEmpty()
-		? LOCTEXT("SimulatedExamNote", "Só por voz e sem ajuda, como na prova prática do Revalida. Não é nota oficial do Revalida.")
-		: ExamUnavailable);
+	StationUi::SetShown(SimulatedExamNote, bExamStart && !ExamUnavailable.IsEmpty());
+	SimulatedExamNote->SetText(ExamUnavailable);
+	StationUi::SetShown(TrainingInsteadButton, bExamStart && !ExamUnavailable.IsEmpty());
 }
 
 void UStationBriefWidget::HandleTextTraining()
@@ -688,6 +883,15 @@ void UStationBriefWidget::HandleCloseBrief()
 	if (Flow)
 	{
 		Flow->CloseBrief();
+	}
+}
+
+void UStationBriefWidget::HandleTrainingInstead()
+{
+	if (Flow)
+	{
+		Flow->BackToMenu();
+		Flow->ChooseMode(EStationSessionMode::Training);
 	}
 }
 

@@ -187,8 +187,29 @@ private:
 	UFUNCTION()
 	void HandleCloseBrief();
 
+	/** From a simulated exam that cannot start to a training's brief. */
+	UFUNCTION()
+	void HandleTrainingInstead();
+
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
+
+	/** Over the scene, except before a simulated exam, which leaves it in view on the right. */
+	UPROPERTY()
+	TObjectPtr<UBorder> FullScrim;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> LeftScrim;
+
+	/** Top to bottom on a brief; a simulated exam's start sits at the bottom of it. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> BriefColumn;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> TrainingMark;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> ExamMark;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> StatusText;
@@ -211,9 +232,8 @@ private:
 	UPROPERTY()
 	TObjectPtr<UVerticalBox> TaskList;
 
-	/** Under the scrolling brief, so the trainings stay in view however long it runs. */
 	UPROPERTY()
-	TObjectPtr<UVerticalBox> FooterBox;
+	TObjectPtr<UTextBlock> FictionalNote;
 
 	/** Back to the main menu (#421). */
 	UPROPERTY()
@@ -223,13 +243,24 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> HeadingText;
 
-	/** A training's two ways in: by text and by voice. */
+	/** A training's two ways in, by voice and by text. Beside the brief, so it stays in view. */
 	UPROPERTY()
-	TObjectPtr<UHorizontalBox> TrainingsRow;
+	TObjectPtr<UWidget> TrainingsPanel;
 
-	/** When the time starts, and in a simulated exam when its scenario and tasks show (#425). */
+	/** When a training's time starts. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> TimerNote;
+
+	/** What comes before a simulated exam starts: its rules and its way in. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> ExamBox;
+
+	/** When a simulated exam's scenario and tasks show (#425). */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ExamLeadText;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> ExamRules;
 
 	/** A simulated exam's one way in ("Prova simulada", #421), by voice. */
 	UPROPERTY()
@@ -239,9 +270,17 @@ private:
 	UPROPERTY()
 	TObjectPtr<UButton> CloseButton;
 
-	/** What a simulated exam is, or why it cannot start. */
+	/** Why a simulated exam cannot start. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> SimulatedExamNote;
+
+	/** That a simulated exam is no official grade. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> SimulatedExamFine;
+
+	/** Offered when a simulated exam cannot start. */
+	UPROPERTY()
+	TObjectPtr<UButton> TrainingInsteadButton;
 
 	UPROPERTY()
 	TObjectPtr<UButton> TextButton;
@@ -249,8 +288,12 @@ private:
 	UPROPERTY()
 	TObjectPtr<UButton> VoiceButton;
 
+	/** Who handles the voice in a voice training. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> VoiceNote;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> VoiceBlockedNote;
 };
 
 /** One criterion's row in a Prova simulada's result: a click opens or closes what it holds. */

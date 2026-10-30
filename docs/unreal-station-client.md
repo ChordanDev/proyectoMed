@@ -1191,8 +1191,9 @@ no realtime voice), the invalidated run and the feedback (grading, graded,
 scrolled to the end). It writes to the same `STATION_HUD_SNAPSHOT_DIR`; run it
 with `-ExecCmds="Automation RunTests ProyectoMed.StationCards.Snapshot; Quit"`.
 `ProyectoMed.StationCards.Unit` (in `StationBriefSpec.cpp`) checks what the main
-menu and each mode's brief offer, and how the menu selects and enters a mode by
-click, arrow keys, focus and Enter. It needs nothing else.
+menu and each mode's brief offer, how the menu selects and enters a mode by
+click, arrow keys, focus and Enter, and how a simulated exam that cannot start
+leads to a training. It needs nothing else.
 
 The stack test checks four things:
 
