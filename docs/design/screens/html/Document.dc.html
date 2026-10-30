@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Exames e documento</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./cine.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}
+.x{all:unset;cursor:pointer;box-sizing:border-box;width:44px;height:44px;border-radius:22px;display:inline-flex;align-items:center;justify-content:center}
+.x:hover{background:rgba(127,127,127,.15)}
+.x:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+</style>
+</helmet>
+<div class="cine">
+<div class="scene" aria-hidden="true"><i class="win" style="left: 38%"></i><i class="pat" style="left: 52%; top: 26%"></i><i class="desk" style="left: 0"></i></div>
+<div class="scrim-full" aria-hidden="true" style="background: rgba(9,13,17,.7)"></div>
+
+<div class="paper" role="dialog" aria-label="Hemograma completo" style="position: absolute; left: 140px; top: 72px; bottom: 72px; width: 760px; padding: 40px 48px; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; justify-content: space-between; align-items: flex-start">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #5b6670">Exames laboratoriais</span>
+<h2 style="margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.02em">Hemograma completo</h2>
+</div>
+<button class="x" aria-label="Fechar documento" style="color: #1d2833"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1d2833" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+</div>
+<hr style="border: 0; height: 1px; background: #d9d4c7; margin: 0">
+<table style="border-collapse: collapse; font-size: 16px; width: 100%">
+<thead><tr style="text-align: left; color: #5b6670; font-size: 13px"><th style="padding: 8px 0; font-weight: 700">Parâmetro</th><th style="padding: 8px 0; font-weight: 700">Resultado</th><th style="padding: 8px 0; font-weight: 700">Referência</th></tr></thead>
+<tbody>
+<tr style="border-top: 1px solid #e6e1d5"><td style="padding: 12px 0">Hemoglobina</td><td>[valor]</td><td style="color: #5b6670">[referência]</td></tr>
+<tr style="border-top: 1px solid #e6e1d5"><td style="padding: 12px 0">Leucócitos</td><td>[valor]</td><td style="color: #5b6670">[referência]</td></tr>
+<tr style="border-top: 1px solid #e6e1d5"><td style="padding: 12px 0">Neutrófilos</td><td>[valor]</td><td style="color: #5b6670">[referência]</td></tr>
+<tr style="border-top: 1px solid #e6e1d5"><td style="padding: 12px 0">Plaquetas</td><td>[valor]</td><td style="color: #5b6670">[referência]</td></tr>
+</tbody>
+</table>
+<p style="margin: auto 0 0; font-size: 13px; color: #5b6670">Documento fictício do caso, liberado durante a estação.</p>
+</div>
+
+<aside class="panel" aria-label="Exames solicitados" style="position: absolute; right: 32px; top: 32px; bottom: 32px; width: 520px; display: flex; flex-direction: column">
+<div style="padding: 20px 16px 20px 24px; display: flex; justify-content: space-between; align-items: center"><h2 class="h3">Exames solicitados</h2><button class="x" aria-label="Fechar" style="color: #e8eef2"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#e8eef2" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"></path></svg></button></div>
+<hr class="rule">
+<div style="flex: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+<div style="padding: 16px 18px; border-radius: 10px; border: 1px solid #5fd0bf; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="h3" style="font-size: 16px">“Hemograma completo”</span><span class="chip" style="border-color: #5fd0bf; color: #5fd0bf">Liberado</span></div>
+<span class="fine">Aberto agora</span>
+</div>
+<div style="padding: 16px 18px; border-radius: 10px; border: 1px solid #2f3d48; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="h3" style="font-size: 16px">“Ultrassom de abdome”</span><span class="chip">Liberado</span></div>
+<a class="ghost" href="#" style="height: 32px; color: #e8eef2">Ver documento ›</a>
+</div>
+<div style="padding: 16px 18px; border-radius: 10px; border: 1px solid #2f3d48; display: flex; justify-content: space-between; align-items: center">
+<span class="h3" style="font-size: 16px; color: #c9d4db">“Tomografia de crânio”</span><span class="chip" style="color: #a9b7c1">Não disponível</span>
+</div>
+<div style="padding: 16px 18px; border-radius: 10px; border: 1px dashed #4a5a66; display: flex; justify-content: space-between; align-items: center">
+<span class="h3" style="font-size: 16px; color: #c9d4db">“PCR”</span><span class="chip" style="color: #a9b7c1">Solicitando...</span>
+</div>
+</div>
+<hr class="rule">
+<div style="padding: 20px 24px; display: flex; gap: 10px">
+<label for="req" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Exame a solicitar</label>
+<input id="req" class="field" placeholder="Ex.: hemograma completo" style="flex: 1; min-width: 0">
+<button class="btn btn-primary">Solicitar</button>
+</div>
+<p class="fine" style="padding: 0 24px 20px; margin: 0">Na prova simulada: segure <span class="kbd">Shift</span> + <span class="kbd">Espaço</span> e diga o que você solicita.</p>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
