@@ -1588,6 +1588,71 @@ defmodule BackendWeb.StationControllerTest do
     end
   end
 
+  describe "patient text in a simulated exam (#423)" do
+    defp converse(session) do
+      for {role, text} <- [learner: "Onde dói?", patient: "Dói no peito."] do
+        {:ok, _} =
+          Conversation.append_message(session.session_id, %{
+            role: role,
+            modality: :voice,
+            text: text
+          })
+      end
+    end
+
+    defp shown_messages(conn, session) do
+      conn
+      |> get(~p"/api/stations/active/sessions/#{session.session_id}")
+      |> json_response(200)
+      |> Map.fetch!("messages")
+      |> Enum.map(&{&1["role"], &1["text"]})
+    end
+
+    test "an active simulated exam returns the learner's messages and no patient text", %{
+      conn: conn
+    } do
+      session = start_session(:simulated_exam)
+      converse(session)
+
+      assert shown_messages(conn, session) == [{"learner", "Onde dói?"}]
+    end
+
+    test "a companion's reply is hidden with the patient's", %{conn: conn} do
+      session = start_session(:simulated_exam)
+
+      {:ok, _} =
+        Conversation.append_message(session.session_id, %{
+          role: :patient,
+          modality: :voice,
+          text: "Ele não dorme há dias.",
+          speaker: :companion
+        })
+
+      assert shown_messages(conn, session) == []
+    end
+
+    test "the transcript is whole once the simulated exam ended", %{conn: conn} do
+      session = start_session(:simulated_exam)
+      converse(session)
+      {:ok, _} = Conversation.complete(session.session_id, :user)
+
+      assert shown_messages(conn, session) == [
+               {"learner", "Onde dói?"},
+               {"patient", "Dói no peito."}
+             ]
+    end
+
+    test "a training still shows the patient text", %{conn: conn} do
+      session = start_session(:training)
+      converse(session)
+
+      assert shown_messages(conn, session) == [
+               {"learner", "Onde dói?"},
+               {"patient", "Dói no peito."}
+             ]
+    end
+  end
+
   describe "GET /api/stations/active/sessions/:id/impressos" do
     setup do
       pkg = StationLoader.active_package()
