@@ -362,6 +362,7 @@ defmodule BackendWeb.StationControllerTest do
                "started_at" => _started_at,
                "expires_at" => _expires_at,
                "deadline_at" => deadline_at_str,
+               "cap_at" => cap_at_str,
                "status" => "active",
                "completion_reason" => nil,
                "messages" => [],
@@ -373,6 +374,9 @@ defmodule BackendWeb.StationControllerTest do
       assert station_version == session.station_version
       assert {:ok, deadline_at, _} = DateTime.from_iso8601(deadline_at_str)
       assert DateTime.to_iso8601(session.deadline_at) == DateTime.to_iso8601(deadline_at)
+      # A training runs up to ten minutes past the expected end (#323).
+      assert {:ok, cap_at, _} = DateTime.from_iso8601(cap_at_str)
+      assert DateTime.diff(cap_at, deadline_at, :minute) == 10
       assert {:ok, _, _} = DateTime.from_iso8601(server_now_str)
     end
 
@@ -816,6 +820,7 @@ defmodule BackendWeb.StationControllerTest do
 
       late_session =
         Conversation.start(%{
+          mode: :simulated_exam,
           station_id: pkg["station_id"],
           station_version: pkg["version"],
           audio_consent: true

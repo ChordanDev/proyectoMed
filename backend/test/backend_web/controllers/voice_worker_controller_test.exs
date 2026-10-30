@@ -486,7 +486,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     test "a turn on a session completed by the timer returns 409 station_time_elapsed",
          %{conn: conn} do
       Application.put_env(:backend, :station_duration_ms, 30)
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       id = session.session_id
 
       wait_until(fn -> match?({:ok, %{status: :completed}}, Stations.get_session(id)) end)
@@ -507,7 +507,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
       Application.put_env(:backend, :voice_turn_test_pid, self())
 
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       id = session.session_id
 
       in_flight =
@@ -550,7 +550,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
       Application.put_env(:backend, :voice_turn_test_pid, self())
 
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       id = session.session_id
 
       task =

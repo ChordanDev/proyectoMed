@@ -489,7 +489,7 @@ defmodule Backend.StationsTest do
         end
       end)
 
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       Process.sleep(60)
 
       assert Stations.create_message(session.session_id, %{
@@ -970,7 +970,7 @@ defmodule Backend.StationsTest do
         end
       end)
 
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       assert Stations.check_session_deadline(session.session_id) == {:ok, :within_deadline}
 
       Process.sleep(80)
@@ -2301,7 +2301,7 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :station_duration_ms, 300)
       Application.put_env(:backend, :turn_grace_ms, 3_000)
 
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
 
       # A generation in flight keeps the session active past the deadline.
       first = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
@@ -2326,7 +2326,7 @@ defmodule Backend.StationsTest do
 
     test "a voice turn on a session completed by the timer returns :station_time_elapsed" do
       Application.put_env(:backend, :station_duration_ms, 30)
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
 
       wait_until(fn ->
         match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
@@ -2348,7 +2348,7 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :station_duration_ms, 200)
       Application.put_env(:backend, :turn_grace_ms, 100)
 
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
       assert_receive {:adapter_called, _}, 1000
 
@@ -2373,7 +2373,7 @@ defmodule Backend.StationsTest do
       Application.put_env(:backend, :station_duration_ms, 300)
       Application.put_env(:backend, :turn_grace_ms, 3_000)
 
-      session = Stations.create_session(%{audio_consent: true})
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       task = Task.async(fn -> Stations.process_voice_turn(session.session_id, 1, "Fala") end)
       assert_receive {:adapter_called, _}, 1000
 

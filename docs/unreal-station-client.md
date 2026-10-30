@@ -66,6 +66,20 @@ clock, so `GetRemainingTime()` ignores changes to the machine's date and time.
   `deadline_not_reached` (409), the local clock ran ahead: call `RefreshSession`
   and keep counting.
 
+### Training overtime (#323)
+
+In a training, `deadline_at` is the expected end, not the end of the run. Phoenix
+keeps accepting turns and impresso requests after it, until `cap_at`
+(`started_at` + 20 minutes). At `cap_at` Phoenix completes the run with
+`completion_reason: "cap"`, and later turns get `station_time_elapsed` (409).
+`expires_at` stays after `cap_at`, so the result can still be read.
+
+- Do not call `FinishSession(EStationFinishReason::Timer)` at zero in a training:
+  show that the expected time is over and count the overtime up. The learner
+  finishes whenever they choose (`user`).
+- In a real test (`"simulated_exam"`), `cap_at` equals `deadline_at`: the run ends
+  at ten minutes with `completion_reason: "timer"` and there is no overtime.
+
 ## Operations
 
 All operations are methods of `UStationClient`. Each one takes a
@@ -396,6 +410,7 @@ below.
   "started_at": "2026-10-25T15:00:00Z",
   "expires_at": "2026-10-25T15:30:00Z",
   "deadline_at": "2026-10-25T15:10:00Z",
+  "cap_at": "2026-10-25T15:20:00Z",
   "server_now": "2026-10-25T15:00:00Z"
 }
 ```
@@ -554,6 +569,16 @@ the same `invalid_parameters` and `audio_consent_required` errors.
 The voice worker needs no change: it reads `GET /api/internal/voice/sessions/:id`,
 which serves the language and speech-to-text keyterms of the session's own
 pinned station.
+
+## Training score (#323)
+
+The result of a training adds, next to `estimates` (which overtime never
+changes): `overtime_seconds` (whole seconds past `deadline_at`, `0` when the
+learner finished within ten minutes), `overtime_penalty` (0.25 points per started
+minute, at most `"2.5"`) and `training_score` (`estimates.total` minus the
+penalty, never below `"0"`, `null` when `estimates.total` is `null`). Phoenix
+computes them; the client only displays them. A real test result has none of
+these fields.
 
 ## Results history (`GET /me/results`, issue #338)
 

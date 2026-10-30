@@ -1069,7 +1069,10 @@ defmodule Backend.Stations do
            {:ok, session} <- Conversation.fetch(session_id) do
         package = session_package(session)
         assessment = Backend.Stations.LearnerFeedback.attach(assessment, package, session_id)
-        result = Backend.Stations.EducationalResult.serialize(session_id, assessment, package)
+
+        result =
+          Backend.Stations.EducationalResult.serialize(session_id, assessment, package, session)
+
         # History first (#338), then usage (#342): neither fails the result.
         :ok = ResultHistory.record(session, result)
         # Grading and feedback may have called providers after the finish (#342).
@@ -1245,9 +1248,11 @@ defmodule Backend.Stations do
   end
 
   @doc """
-  Checks whether a session is within its authoritative ten-minute deadline.
+  Checks whether a session is within its authoritative hard end: `deadline_at`
+  for a real test, `cap_at` for a training, which may run past its ten
+  expected minutes (#323).
 
-  Returns `{:error, :session_time_elapsed}` once `deadline_at` has passed, even
+  Returns `{:error, :session_time_elapsed}` once that time has passed, even
   if the session has not yet been auto-completed by the timer.
   """
   @spec check_session_deadline(String.t()) ::
@@ -1258,7 +1263,7 @@ defmodule Backend.Stations do
         {:error, :session_time_elapsed}
 
       {:ok, %{status: :active} = session} ->
-        if DateTime.compare(DateTime.utc_now(), session.deadline_at) == :lt do
+        if DateTime.compare(DateTime.utc_now(), hard_end_at(session)) == :lt do
           {:ok, :within_deadline}
         else
           {:error, :session_time_elapsed}
@@ -1439,8 +1444,10 @@ defmodule Backend.Stations do
   defp fresh_voice_turn?(session, turn_id, now) do
     turn_id > Map.get(session, :last_voice_turn_id, 0) and
       turn_id > Map.get(session, :cancelled_voice_turn_id, 0) and
-      DateTime.compare(now, session.deadline_at) == :lt
+      DateTime.compare(now, hard_end_at(session)) == :lt
   end
+
+  defp hard_end_at(session), do: Map.get(session, :cap_at, session.deadline_at)
 
   # The same request route as the exam button's typed request; the stable
   # request id makes a retry of the turn idempotent.
@@ -1919,8 +1926,9 @@ defmodule Backend.Stations do
 
   # Voice turns name the timer as the reason a session is closed, as the
   # conversation does. The deadline of a still-active session is checked there.
-  defp ensure_voice_turn_open(%{status: :completed, completion_reason: :timer}),
-    do: {:error, :station_time_elapsed}
+  defp ensure_voice_turn_open(%{status: :completed, completion_reason: reason})
+       when reason in [:timer, :cap],
+       do: {:error, :station_time_elapsed}
 
   defp ensure_voice_turn_open(session), do: ensure_active(session)
 
