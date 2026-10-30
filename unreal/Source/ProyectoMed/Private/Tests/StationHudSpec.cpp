@@ -12,8 +12,10 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
+#include "Station/StationPlayerController.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
+#include "StationClient.h"
 
 BEGIN_DEFINE_SPEC(FStationHudUnitSpec, "ProyectoMed.StationHud.Unit",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -307,6 +309,50 @@ void FStationHudUnitSpec::Define()
 		TestEqual(TEXT("the title"), Screen->TitleText->GetText().ToString(), FString(TEXT("Prova simulada invalidada")));
 		TestEqual(TEXT("why"), Screen->BodyText->GetText().ToString(),
 			StationInvalidatedText(EStationSessionMode::SimulatedExam, EStationInvalidation::VoiceLost).ToString());
+	});
+
+	// Jorge J2 on #441: a microphone that will not open invalidates a simulated exam while
+	// the screens render, and the invalidated screen must still get the mouse and keys.
+	It("leaves the invalidated screen in UI-only input when a simulated exam's microphone fails while rendering", [this]()
+	{
+		UWorld* World = GEngine->GetWorldContexts()[0].World();
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		Flow->Client = NewObject<UStationClient>();
+		AStationPlayerController* Controller = World->SpawnActor<AStationPlayerController>();
+		Controller->Flow = Flow;
+		Controller->Menu = CreateWidget<UStationMenuWidget>(World);
+		Controller->Notice = CreateWidget<UStationNoticeWidget>(World);
+		Controller->Brief = CreateWidget<UStationBriefWidget>(World);
+		Controller->Hud = CreateWidget<UStationHudWidget>(World);
+		Controller->Feedback = CreateWidget<UStationFeedbackWidget>(World);
+		Controller->Invalidated = CreateWidget<UStationInvalidatedWidget>(World);
+		Controller->MicrophoneScreen = CreateWidget<UStationMicrophoneWidget>(World);
+		for (UUserWidget* Screen : TArray<UUserWidget*>{Controller->Menu, Controller->Notice, Controller->Brief, Controller->Hud,
+				 Controller->Feedback, Controller->Invalidated, Controller->MicrophoneScreen})
+		{
+			Screen->TakeWidget();
+		}
+		Controller->Hud->SetFlow(Flow);
+		Controller->Brief->SetFlow(Flow);
+		Controller->Feedback->SetFlow(Flow);
+		Controller->Invalidated->SetFlow(Flow);
+		Flow->OnChanged.AddUObject(Controller, &AStationPlayerController::Render);
+		Controller->MicrophoneUpdate = [Flow]() { Flow->ReportMicrophoneUnavailable(); };
+
+		Controller->Render();
+		TestEqual(TEXT("invalidated"), Flow->GetStep(), EStationRunStep::Invalidated);
+		TestTrue(TEXT("an input mode applied"), Controller->bAppliedRunInputMode.IsSet());
+		TestFalse(TEXT("UI only, not the run's game and UI"), Controller->bAppliedRunInputMode.Get(true));
+
+		// A training goes on in writing (#196), so it keeps the run's input mode.
+		Flow->SessionMode = EStationSessionMode::Training;
+		Flow->Step = EStationRunStep::Running;
+		Flow->Voice.bMicrophoneUnavailable = false;
+		Controller->Render();
+		TestEqual(TEXT("a training still runs"), Flow->GetStep(), EStationRunStep::Running);
+		TestTrue(TEXT("with the run's game and UI"), Controller->bAppliedRunInputMode.Get(false));
+		Controller->Destroy();
 	});
 
 	It("keeps the typed turn and the typed exam request in a training", [this]()

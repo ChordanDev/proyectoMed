@@ -120,6 +120,18 @@ void AStationPlayerController::Render()
 		return;
 	}
 
+	// First, since it can change the run: a microphone that will not open invalidates
+	// a simulated exam (#422), which renders again inside this call. What follows then
+	// reads the step that change left, not the one before it (Jorge J2 on #441).
+	if (MicrophoneUpdate)
+	{
+		MicrophoneUpdate();
+	}
+	else
+	{
+		UpdateMicrophone();
+	}
+
 	const EStationRunStep Step = Flow->GetStep();
 	const bool bRunning = Step == EStationRunStep::Running;
 	MicrophoneScreen->SetVisibility(Step == EStationRunStep::Microphone ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
@@ -137,7 +149,6 @@ void AStationPlayerController::Render()
 	Hud->Refresh();
 	Feedback->Refresh();
 	Invalidated->Refresh();
-	UpdateMicrophone();
 	UpdateCamera();
 
 	// Only when the run starts or ends: applying an input mode releases the mouse
