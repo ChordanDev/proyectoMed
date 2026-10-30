@@ -47,8 +47,6 @@ jobs:
       PGHOST: localhost
       PGUSER: postgres
       PGPASSWORD: postgres
-      # The stack keeps its logs under TMPDIR: a failure uploads them.
-      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v7
 
@@ -105,6 +103,9 @@ jobs:
         run: ( cd voice-worker && uv sync --locked )
 
       - name: Run a Prova simulada and a training
+        env:
+          # The stack keeps its logs under TMPDIR: a failure uploads them.
+          TMPDIR: ${{ runner.temp }}
         run: scripts/run-simulated-exam-e2e.sh
 
       - name: Upload the voice stack logs
