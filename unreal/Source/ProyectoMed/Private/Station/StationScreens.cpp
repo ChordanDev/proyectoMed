@@ -199,18 +199,13 @@ namespace
 	/** Off a title's box, above and below: the mockups' tight line, in Manrope's taller one. */
 	constexpr float ModeTitleTrim = 10.f;
 
-	/**
-	 * Text that keeps to one line, `Pixels` tall as in the mockups: Slate sizes a font in
-	 * points at 96 DPI, so a CSS pixel is three quarters of one. `LetterSpacing` is in
-	 * thousandths of an em.
-	 */
+	/** Text that keeps to one line, `Pixels` tall as in the mockups. `LetterSpacing` is in thousandths of an em. */
 	UTextBlock* MakeText(UWidgetTree& Tree, const FText& Text, FName Weight, float Pixels, const FLinearColor& Color,
 		int32 LetterSpacing = 0)
 	{
 		UTextBlock* Block = Tree.ConstructWidget<UTextBlock>();
 		Block->SetText(Text);
-		FSlateFontInfo Font = StationUi::Font(Weight, 0);
-		Font.Size = Pixels * 0.75f;
+		FSlateFontInfo Font = StationUi::MockupFont(Weight, Pixels);
 		Font.LetterSpacing = LetterSpacing;
 		Block->SetFont(Font);
 		Block->SetColorAndOpacity(FSlateColor(Color));

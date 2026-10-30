@@ -1021,7 +1021,7 @@ so a colour or a control changes in one place. The tokens are those of
 | Round enter arrow | `MakeEnterArrow` |
 | A whole block that acts as a button, such as a menu mode | `MakeContentButton` |
 | Chip, panel, keyboard hint | `MakeChip`, `MakePanel`, `MakeKeyHint` |
-| Text in Manrope 400–800 | `AddText`, or `Font` with a weight |
+| Text in Manrope 400–800 | `AddText`, or `Font` with a weight; `MockupFont` takes the mockups' CSS pixels |
 
 Buttons and the enter arrow are at least 44 px tall. They gain a white ring while the
 keyboard has them, and a click does not draw it. `HudPanelOpacity` stays at the 60%

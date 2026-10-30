@@ -103,6 +103,12 @@ namespace StationUi
 	/** Manrope in `Weight`, one of the names above. */
 	FSlateFontInfo Font(FName Weight, int32 Size);
 
+	/**
+	 * `Font` as tall as `Pixels` in the mockups: Slate sizes a font in points at 96 DPI,
+	 * so a CSS pixel is three quarters of one.
+	 */
+	FSlateFontInfo MockupFont(FName Weight, float Pixels);
+
 	/** A rounded box of `Fill`, outlined in `Outline` when `OutlineWidth` is above 0. */
 	FSlateBrush RoundedBrush(const FLinearColor& Fill, float Radius,
 		const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.f);
