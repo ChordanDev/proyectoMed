@@ -28,7 +28,7 @@ The case-bound patient or actor that receives learner input during a station. It
 
 ## Station Input
 
-The MVP station accepts both voice and text from the learner. Voice is transcribed for the station interaction; text is an equal input path and the fallback when voice is unavailable.
+A training accepts both voice and text from the learner. Voice is transcribed for the station interaction; text is an equal input path and the fallback when voice is unavailable. A simulated exam accepts voice only: text is not available, neither for dialogue turns nor for impresso requests, which are made by pressing "Exames" and saying the request aloud.
 
 ## Station Mode
 

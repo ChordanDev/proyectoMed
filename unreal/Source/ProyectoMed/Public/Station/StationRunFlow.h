@@ -47,10 +47,21 @@ enum class EStationRunStep : uint8
 	/** The feedback, or why it could not be loaded, until the learner discards the run. */
 	Feedback,
 	/**
-	 * Phoenix stopped answering during the run: it is over, with no feedback and no
-	 * partial result, until the learner restarts the station (#196).
+	 * Phoenix stopped answering during the run, or a simulated exam lost its voice
+	 * (#422): it is over, with no feedback and no partial result, until the learner
+	 * restarts the station (#196). `GetInvalidation` says which.
 	 */
 	Invalidated,
+};
+
+/** Why a run was invalidated. Neither reason keeps a result or a penalty (#318 business rule 8). */
+UENUM()
+enum class EStationInvalidation : uint8
+{
+	/** Phoenix stopped answering during the run (#196). */
+	PhoenixLost,
+	/** The voice or the microphone failed in a simulated exam, which is performed only by voice (#422). */
+	VoiceLost,
 };
 
 UENUM()
@@ -90,6 +101,12 @@ PROYECTOMED_API FText SimulatedExamUnavailableText(const FStationSummary& Statio
  * body the client cannot read) gets `Fallback`, which is Brazilian Portuguese.
  */
 PROYECTOMED_API FText StationErrorText(const FStationClientError& Error, const FText& Fallback);
+
+/** The invalidated screen's title, in Brazilian Portuguese; it names the run's Station Mode. */
+PROYECTOMED_API FText StationInvalidatedTitle(EStationSessionMode SessionMode);
+
+/** Why the run is over, in Brazilian Portuguese, for the invalidated screen. */
+PROYECTOMED_API FText StationInvalidatedText(EStationSessionMode SessionMode, EStationInvalidation Reason);
 
 /** The Station Timer as `mm:ss`, rounding partial seconds up so it reads 00:00 only at the deadline. */
 PROYECTOMED_API FText FormatStationTimer(const FTimespan& Remaining);
@@ -218,7 +235,8 @@ public:
 
 	/**
 	 * The microphone would not open. Remembered until the run restarts, so the
-	 * capture is not retried on every change and the HUD says so.
+	 * capture is not retried on every change and the HUD says so. A simulated exam,
+	 * which is voice only, is invalidated (#422).
 	 */
 	void ReportMicrophoneUnavailable();
 
@@ -273,13 +291,23 @@ public:
 	/** The Station Mode last chosen on the menu; a training until the learner first chooses one. */
 	EStationSessionMode GetSessionMode() const { return SessionMode; }
 	bool IsVoiceFallback() const { return bVoiceFallback; }
+	/** Why the run was invalidated; meaningful only on `EStationRunStep::Invalidated`. */
+	EStationInvalidation GetInvalidation() const { return Invalidation; }
 
 	/** For #191 to join the room. Secret: never log or display the token. */
 	const FStationVoiceCredential* GetVoiceCredential() const { return VoiceCredential.GetPtrOrNull(); }
 
 	/**
-	 * True while the run is running, no typed turn is waiting for Phoenix and the
-	 * transcript is not being reloaded, whatever the microphone does.
+	 * Whether the run takes typed turns and typed exam requests (#422): a training
+	 * does, a simulated exam does not, since it is performed only by voice. Its
+	 * exams are asked aloud (`AskExamAloud`).
+	 */
+	bool AllowsTypedInput() const { return SessionMode != EStationSessionMode::SimulatedExam; }
+
+	/**
+	 * True while the run is running, takes typed input (`AllowsTypedInput`), no
+	 * typed turn is waiting for Phoenix and the transcript is not being reloaded,
+	 * whatever the microphone does.
 	 */
 	bool CanSendTurn() const;
 
@@ -312,9 +340,9 @@ public:
 	const FText& GetErrorText() const { return ErrorText; }
 
 	/**
-	 * True while the run is running and no exam request is waiting for Phoenix.
-	 * Exam requests have their own channel (ADR-008): they never wait for, or
-	 * join, the patient dialogue.
+	 * True while the run is running, takes typed input (`AllowsTypedInput`) and no
+	 * exam request is waiting for Phoenix. Exam requests have their own channel
+	 * (ADR-008): they never wait for, or join, the patient dialogue.
 	 */
 	bool CanRequestExam() const;
 
@@ -460,8 +488,8 @@ private:
 	void HandleVoiceState(EStationVoiceState State);
 
 	/**
-	 * The voice stopped for good. The run goes on in writing, unless Phoenix does not
-	 * answer either.
+	 * The voice stopped for good. A training goes on in writing, unless Phoenix does
+	 * not answer either; a simulated exam, which is voice only, is invalidated (#422).
 	 */
 	void LoseVoice();
 
@@ -471,8 +499,11 @@ private:
 	 */
 	void CheckPhoenix(TFunction<void()> OnAnswered = nullptr);
 
-	/** Phoenix is lost: the run ends here, with nothing kept and the patient silent. */
-	void Invalidate();
+	/**
+	 * Phoenix is lost, or the voice of a simulated exam is: the run ends here, with
+	 * nothing kept and the patient silent.
+	 */
+	void Invalidate(EStationInvalidation Reason = EStationInvalidation::PhoenixLost);
 
 	/** Moves the spoken reply, if any, into the conversation. */
 	void CommitVoiceReply();
@@ -595,6 +626,7 @@ private:
 	bool bLoadingStation = false;
 	bool bReloadingTranscript = false;
 	bool bVoiceFallback = false;
+	EStationInvalidation Invalidation = EStationInvalidation::PhoenixLost;
 	FStationMicrophoneSetup Microphone;
 	FStationVoiceView Voice;
 	int32 VoiceTurnId = 0;

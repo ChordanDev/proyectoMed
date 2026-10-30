@@ -45,6 +45,17 @@ namespace StationFakePhoenix
 		"estimates": {"total": null, "scored_subtotal": "0", "scored_max": "0", "eligible_max": "0", "unresolved": []}
 	})");
 
+	// A simulated exam is voice only (#422): Phoenix refuses its typed input.
+	const TCHAR* TypedTurnRefusedBody = TEXT(R"({
+		"error": "typed_input_not_allowed",
+		"message": "A prova simulada é feita só por voz: o texto digitado não é aceito."
+	})");
+
+	const TCHAR* TypedImpressoRefusedBody = TEXT(R"({
+		"error": "typed_input_not_allowed",
+		"message": "Na prova simulada os impressos são pedidos por voz, pelo botão Exames."
+	})");
+
 	/** Routes on a local port that answer with a fixed status after a delay. */
 	class FServer
 	{
@@ -57,16 +68,17 @@ namespace StationFakePhoenix
 
 		bool IsListening() const { return Router.IsValid(); }
 
-		void Route(const FString& Path, EHttpServerRequestVerbs Verb, float DelaySeconds, TFunction<FString()> Body)
+		void Route(const FString& Path, EHttpServerRequestVerbs Verb, float DelaySeconds, TFunction<FString()> Body,
+			EHttpServerResponseCodes Status = EHttpServerResponseCodes::Ok)
 		{
 			Handles.Add(Router->BindRoute(FHttpPath(Path), Verb,
-				FHttpRequestHandler::CreateLambda([DelaySeconds, Body](const FHttpServerRequest&, const FHttpResultCallback& OnComplete)
+				FHttpRequestHandler::CreateLambda([DelaySeconds, Body, Status](const FHttpServerRequest&, const FHttpResultCallback& OnComplete)
 				{
 					const FHttpResultCallback Complete = OnComplete;
-					auto Respond = [Complete, Body]()
+					auto Respond = [Complete, Body, Status]()
 					{
 						TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(Body(), TEXT("application/json"));
-						Response->Code = EHttpServerResponseCodes::Ok;
+						Response->Code = Status;
 						Complete(MoveTemp(Response));
 					};
 					if (DelaySeconds <= 0.f)
@@ -169,6 +181,39 @@ void FStationClientFakePhoenixSpec::Define()
 						{
 							TestEqual("status", Client->GetSession()->Status, EStationSessionStatus::Completed);
 							TestEqual("completed at", Client->GetSession()->CompletedAt, FDateTime(2026, 10, 21, 12, 5, 0));
+						}
+						Done.Execute();
+					});
+				});
+			});
+		});
+
+	LatentIt("hands Phoenix's refusal of typed input in a simulated exam to the caller", FTimespan::FromSeconds(20),
+		[this](const FDoneDelegate& Done)
+		{
+			Server.Route(FString(SessionPath) + TEXT("/messages"), EHttpServerRequestVerbs::VERB_POST, 0.f,
+				[]() { return FString(TypedTurnRefusedBody); }, EHttpServerResponseCodes::Forbidden);
+			Server.Route(FString(SessionPath) + TEXT("/impressos/request"), EHttpServerRequestVerbs::VERB_POST, 0.f,
+				[]() { return FString(TypedImpressoRefusedBody); }, EHttpServerResponseCodes::Forbidden);
+			Client->StartSession(false, [this, Done](const TStationResult<FStationSession>&)
+			{
+				Client->SendTurn(TEXT("Bom dia"), EStationTurnModality::Text, [this, Done](const TStationResult<FStationTurnReply>& Turn)
+				{
+					if (TestTrue("turn refused", Turn.HasError()))
+					{
+						TestEqual("turn status", Turn.GetError().HttpStatus, 403);
+						TestEqual("turn code", Turn.GetError().Code, TEXT("typed_input_not_allowed"));
+						TestEqual("turn message", Turn.GetError().Message,
+							TEXT("A prova simulada é feita só por voz: o texto digitado não é aceito."));
+					}
+					Client->RequestImpresso(TEXT("Solicito hemograma"), TEXT("typed-1"), [this, Done](const TStationResult<FStationImpressoReply>& Exam)
+					{
+						if (TestTrue("impresso refused", Exam.HasError()))
+						{
+							TestEqual("impresso status", Exam.GetError().HttpStatus, 403);
+							TestEqual("impresso code", Exam.GetError().Code, TEXT("typed_input_not_allowed"));
+							TestEqual("impresso message", Exam.GetError().Message,
+								TEXT("Na prova simulada os impressos são pedidos por voz, pelo botão Exames."));
 						}
 						Done.Execute();
 					});

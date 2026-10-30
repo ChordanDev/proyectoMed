@@ -740,6 +740,38 @@ void FStationClientPhoenixSpec::Define()
 		});
 	});
 
+	// #422: a simulated exam is voice only; impressos are asked aloud with "Exames".
+	LatentIt("is refused a typed turn and a typed impresso request in a simulated exam", Timeout, [this](const FDoneDelegate& Done)
+	{
+		Client->StartSession(true, EStationSessionMode::SimulatedExam, [this, Done](const TStationResult<FStationSession>& Started)
+		{
+			if (!TestFalse("start", Started.HasError()))
+			{
+				Done.Execute();
+				return;
+			}
+			Client->SendTurn(TEXT("Bom dia, o que o senhor sente?"), EStationTurnModality::Text,
+				[this, Done](const TStationResult<FStationTurnReply>& Turn)
+				{
+					if (TestTrue("turn refused", Turn.HasError()))
+					{
+						TestEqual("turn status", Turn.GetError().HttpStatus, 403);
+						TestEqual("turn code", Turn.GetError().Code, TEXT("typed_input_not_allowed"));
+					}
+					Client->RequestImpresso(TEXT("Gostaria de ver o eletrocardiograma"), FString(),
+						[this, Done](const TStationResult<FStationImpressoReply>& Requested)
+						{
+							if (TestTrue("impresso refused", Requested.HasError()))
+							{
+								TestEqual("impresso status", Requested.GetError().HttpStatus, 403);
+								TestEqual("impresso code", Requested.GetError().Code, TEXT("typed_input_not_allowed"));
+							}
+							Done.Execute();
+						});
+				});
+		});
+	});
+
 	LatentIt("requests and lists an impresso outside the patient dialogue", Timeout, [this](const FDoneDelegate& Done)
 	{
 		Client->StartSession(false, [this, Done](const TStationResult<FStationSession>& Started)

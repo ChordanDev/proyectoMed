@@ -200,6 +200,7 @@ can come with different statuses from different routes.
 | `deadline_not_reached` | 409 | `FinishSession(Timer)` called early |
 | `audio_consent_required` | 400 | `StartSession` of a `SimulatedExam` without audio consent (#421) |
 | `no_consent` | 403 | `RequestVoiceCredential` and `POST .../exam-mode` on a run without audio consent |
+| `typed_input_not_allowed` | 403 | `SendTurn` with `Modality` text and `RequestImpresso` in a `SimulatedExam`, which is voice only (#422) |
 | `voice_unavailable` | 503 | `RequestVoiceCredential` when Phoenix has no LiveKit set up |
 | `rate_limited` | 429 | every session route that calls a paid provider, past its per-session or per-learner limit (see [Rate limits](#rate-limits-issue-395)); `RequestVoiceCredential` also more than 5 times a minute |
 | `reply_verification_failed`, `station_ai_unavailable`, `timeout` | 502, 504 | `SendTurn` |
@@ -900,11 +901,51 @@ learner line joins the conversation before the reply.
   needs no exam mode), `409 session_completed`, `404 session_not_found`,
   `410 session_expired`.
 - Typed requests (`RequestImpresso`) are unchanged and do not touch the mode.
+  They exist only in a training: a simulated exam refuses them (see
+  [a simulated exam is voice only](#a-simulated-exam-is-voice-only-issue-422)).
 - The learner's LiveKit token still has no data-publishing grant: the mode is
   set over HTTP and only the worker publishes room events.
 - An utterance the learner was already speaking when the button was pressed
   may be the one that consumes the mode; arm it before the learner starts the
   request.
+
+## A simulated exam is voice only (issue #422)
+
+A simulated exam ("Prova simulada") takes no typed input. Phoenix refuses it
+before anything is recorded, with `403 typed_input_not_allowed` and a pt-BR
+`message`:
+
+| Call | `message` |
+| --- | --- |
+| `SendTurn(Text, EStationTurnModality::Text)` | "A prova simulada é feita só por voz: o texto digitado não é aceito." |
+| `RequestImpresso(Text, RequestId)` | "Na prova simulada os impressos são pedidos por voz, pelo botão Exames." |
+
+- Nothing joins the conversation and no impresso request is recorded.
+- A voice turn and the [spoken exam request](#spoken-exam-requests-issue-364)
+  (`ArmExamMode`, then the next utterance) are unchanged. Phoenix records that
+  request as the same verified impresso event the rubric uses.
+- An examiner-addressed dialogue turn releases no impresso, in every mode
+  ([#351](#exam-requests-in-the-dialogue-issue-351)).
+- A training accepts both typed calls, as before.
+
+What the client does:
+
+- `UStationRunFlow::AllowsTypedInput()` is false in a simulated exam, so
+  `CanSendTurn` and `CanRequestExam` are false and `SendTypedTurn` and
+  `RequestExam` send nothing. `CanAskExamAloud` does not depend on it.
+- The HUD hides the typed turn (`TurnRow`) and the typed exam box
+  (`ExamTypedRow`) for the whole run. The exam panel only names the microphone.
+- Without its voice a simulated exam takes no input at all, so the flow
+  invalidates it (#318 business rule 8: no result and no penalty, and the
+  learner can start again). That happens when `RequestVoiceCredential` fails
+  (the run never goes on in writing, `IsVoiceFallback` stays false), when the
+  voice is lost (a `Fatal` event or a failed room) and when the microphone
+  will not open. `GetInvalidation` is then `EStationInvalidation::VoiceLost`
+  (`PhoenixLost` when Phoenix stops answering), and the invalidated screen
+  names the mode and the reason (`StationInvalidatedTitle`,
+  `StationInvalidatedText`). A training still goes on in writing (#196).
+- If Phoenix still refuses a typed call, `StationErrorText` shows its
+  `message`, as for any Phoenix error.
 
 ## Not in the interface yet
 
