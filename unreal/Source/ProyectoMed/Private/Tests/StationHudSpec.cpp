@@ -10,7 +10,9 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/ContentWidget.h"
 #include "Components/EditableTextBox.h"
+#include "Components/HorizontalBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
@@ -27,6 +29,7 @@ BEGIN_DEFINE_SPEC(FStationHudUnitSpec, "ProyectoMed.StationHud.Unit",
 	UStationHudWidget* MakeHud(UStationRunFlow* Flow) const;
 	/** Every text under `Root`, in tree order. */
 	static TArray<FString> Texts(UWidget* Root);
+	UStationFeedbackWidget* MakeFeedback(UStationRunFlow* Flow) const;
 END_DEFINE_SPEC(FStationHudUnitSpec)
 
 UStationRunFlow* FStationHudUnitSpec::MakeFlow(EStationTrainingMode Mode) const
@@ -45,6 +48,15 @@ UStationHudWidget* FStationHudUnitSpec::MakeHud(UStationRunFlow* Flow) const
 	Hud->SetFlow(Flow);
 	Hud->Refresh();
 	return Hud;
+}
+
+UStationFeedbackWidget* FStationHudUnitSpec::MakeFeedback(UStationRunFlow* Flow) const
+{
+	UStationFeedbackWidget* Feedback = CreateWidget<UStationFeedbackWidget>(GEngine->GetWorldContexts()[0].World());
+	Feedback->TakeWidget();
+	Feedback->SetFlow(Flow);
+	Feedback->Refresh();
+	return Feedback;
 }
 
 TArray<FString> FStationHudUnitSpec::Texts(UWidget* Root)
@@ -431,6 +443,153 @@ void FStationHudUnitSpec::Define()
 		TestEqual(TEXT("a training still runs"), Flow->GetStep(), EStationRunStep::Running);
 		TestTrue(TEXT("with the run's game and UI"), Controller->bAppliedRunInputMode.Get(false));
 		Controller->Destroy();
+	});
+
+	// #426: a Prova simulada's result, with two criteria on a ten-point station.
+	auto ExamResult = []()
+	{
+		FStationCriterionResult Assessed;
+		Assessed.Description = TEXT("Pergunta sobre a migração da dor.");
+		Assessed.Status = EStationCriterionStatus::Assessed;
+		Assessed.Level = TEXT("parcialmente_adequado");
+		Assessed.Points = TEXT("6");
+		Assessed.MaxPoints = TEXT("8");
+		FStationEvidence Excerpt;
+		Excerpt.Speaker = EStationSpeaker::Learner;
+		Excerpt.Text = TEXT("A dor mudou de lugar?");
+		Assessed.Evidence.Add(Excerpt);
+		Assessed.Recommendation = TEXT("Pergunte também a intensidade.");
+		FStationCriterionResult LeftOut;
+		LeftOut.Description = TEXT("Orienta sobre sinais de alarme.");
+		LeftOut.Status = EStationCriterionStatus::Uncertain;
+		FStationResult Result;
+		Result.Criteria = {Assessed, LeftOut};
+		Result.ScoredSubtotal = TEXT("6");
+		Result.ScoredMax = TEXT("8");
+		Result.EligibleMax = TEXT("10");
+		Result.ScaledTotal = TEXT("7.5");
+		Result.CertaintyLevel = 4;
+		Result.bIncomplete = true;
+		return Result;
+	};
+	auto GradedFlow = [this](const FStationResult& Result, EStationSessionMode SessionMode)
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SessionMode = SessionMode;
+		Flow->Step = EStationRunStep::Feedback;
+		Flow->Result = Result;
+		return Flow;
+	};
+	const FString Disclaimer = TEXT(
+		"Estimativa educacional gerada por IA. Não é nota oficial do Revalida. Não indica aprovação, reprovação, certificação ou prontidão para o exame.");
+
+	It("shows a Prova simulada's scaled total, certainty and what was left out (#426)", [this, ExamResult, GradedFlow, Disclaimer]()
+	{
+		UStationFeedbackWidget* Feedback = MakeFeedback(GradedFlow(ExamResult(), EStationSessionMode::SimulatedExam));
+		const TArray<FString> Shown = Texts(Feedback->ExamScreen);
+		TestEqual("its own layout", Feedback->ExamScreen->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual("not the training's card", Feedback->CardScreen->GetVisibility(), ESlateVisibility::Collapsed);
+		TestTrue("the scaled total, with a comma", Shown.Contains(TEXT("7,5")));
+		TestTrue("of the full maximum", Shown.Contains(TEXT("de 10")));
+		TestTrue("the label", Shown.Contains(TEXT("Quase certeira")));
+		TestTrue("Phoenix's points, no percentage", Shown.Contains(TEXT("8 dos 10 pontos da estação foram avaliados.")));
+		TestTrue("the notice names what was left out", Shown.Contains(
+			TEXT("Nota incompleta. Ficou de fora: Critério 2 (incerto). O total foi estimado sem ele.")));
+		TestTrue("the disclaimer", Shown.Contains(Disclaimer));
+		TestTrue("the outcome", Shown.Contains(TEXT("Parcialmente adequado")));
+		TestTrue("exact points", Shown.Contains(TEXT("6 / 8")));
+		TestTrue("no points for what was left out", Shown.Contains(TEXT("sem pontos")));
+		TestTrue("no fictional mark on a real result", Feedback->ExamSampleMark->GetVisibility() == ESlateVisibility::Collapsed);
+		for (const FString& Text : Shown)
+		{
+			for (const TCHAR* Claim : {TEXT("Aprovado"), TEXT("Reprovado"), TEXT("Certificado"), TEXT("Pronto para")})
+			{
+				TestFalse(*FString::Printf(TEXT("no claim of %s"), Claim), Text.Contains(Claim));
+			}
+		}
+	});
+
+	It("lights one step of the meter per certainty level (#426)", [this, ExamResult, GradedFlow]()
+	{
+		for (int32 Level = 1; Level <= 5; ++Level)
+		{
+			FStationResult Result = ExamResult();
+			Result.CertaintyLevel = Level;
+			UStationFeedbackWidget* Feedback = MakeFeedback(GradedFlow(Result, EStationSessionMode::SimulatedExam));
+			TestEqual("five steps", Feedback->ExamMeter->GetChildrenCount(), 5);
+			int32 Lit = 0;
+			for (int32 Step = 0; Step < Feedback->ExamMeter->GetChildrenCount(); ++Step)
+			{
+				const UBorder* Segment = Cast<UBorder>(CastChecked<UContentWidget>(Feedback->ExamMeter->GetChildAt(Step))->GetContent());
+				Lit += Segment->Background.TintColor.GetSpecifiedColor() == FSlateColor(StationUi::PanelEdge).GetSpecifiedColor() ? 0 : 1;
+			}
+			TestEqual(*FString::Printf(TEXT("level %d"), Level), Lit, Level);
+		}
+	});
+
+	It("names the five certainty levels (#426)", [this]()
+	{
+		TestEqual("5", StationCertaintyLabel(5).ToString(), TEXT("Certeira"));
+		TestEqual("4", StationCertaintyLabel(4).ToString(), TEXT("Quase certeira"));
+		TestEqual("3", StationCertaintyLabel(3).ToString(), TEXT("Parcialmente certeira"));
+		TestEqual("2", StationCertaintyLabel(2).ToString(), TEXT("Pouco certeira"));
+		TestEqual("1", StationCertaintyLabel(1).ToString(), TEXT("Insuficiente"));
+	});
+
+	It("shows no total at level 1, but still what was left out (#426)", [this, ExamResult, GradedFlow, Disclaimer]()
+	{
+		FStationResult Result = ExamResult();
+		Result.Criteria[0].Status = EStationCriterionStatus::Uncertain;
+		Result.Criteria[1].Status = EStationCriterionStatus::NotObservable;
+		Result.ScoredMax = TEXT("3");
+		Result.ScaledTotal.Empty();
+		Result.CertaintyLevel = 1;
+		const TArray<FString> Shown = Texts(MakeFeedback(GradedFlow(Result, EStationSessionMode::SimulatedExam))->ExamScreen);
+		TestTrue("no total", Shown.Contains(TEXT("Sem total nesta tentativa")));
+		TestFalse("not of the maximum either", Shown.Contains(TEXT("de 10")));
+		TestTrue("the label", Shown.Contains(TEXT("Insuficiente")));
+		TestTrue("the notice, with nothing about a total", Shown.Contains(
+			TEXT("Nota incompleta. Ficaram de fora: Critério 1 (incerto), Critério 2 (não observável).")));
+		TestTrue("the disclaimer", Shown.Contains(Disclaimer));
+	});
+
+	It("warns harder at level 2 and not at all at full coverage (#426)", [this, ExamResult]()
+	{
+		FStationResult Result = ExamResult();
+		Result.CertaintyLevel = 2;
+		TestTrue("strong", StationIncompleteNotice(Result).ToString().StartsWith(
+			TEXT("Nota incompleta e pouco certeira: leia este total com cautela.")));
+		Result.bIncomplete = false;
+		TestTrue("nothing left out, nothing to warn of", StationIncompleteNotice(Result).IsEmpty());
+	});
+
+	It("opens a criterion's evidence and recommendation from its row (#426)", [this, ExamResult, GradedFlow]()
+	{
+		UStationFeedbackWidget* Feedback = MakeFeedback(GradedFlow(ExamResult(), EStationSessionMode::SimulatedExam));
+		TestEqual("one row per criterion", Feedback->ExamRows.Num(), 2);
+		UWidget* Details = Feedback->ExamRows[0]->Details;
+		const TArray<FString> Inside = Texts(Details);
+		TestTrue("the evidence", Inside.ContainsByPredicate(
+			[](const FString& Text) { return Text.Contains(TEXT("A dor mudou de lugar?")); }));
+		TestTrue("the recommendation", Inside.Contains(TEXT("Pergunte também a intensidade.")));
+		TestEqual("closed at first", Details->GetVisibility(), ESlateVisibility::Collapsed);
+		Feedback->ExamRows[0]->HandleClicked();
+		TestEqual("opened", Details->GetVisibility(), ESlateVisibility::Visible);
+		Feedback->ExamRows[0]->HandleClicked();
+		TestEqual("closed again", Details->GetVisibility(), ESlateVisibility::Collapsed);
+	});
+
+	It("keeps a training's result in its card, with its total (#426)", [this, GradedFlow]()
+	{
+		FStationResult Result;
+		Result.ScoredSubtotal = TEXT("6");
+		Result.ScoredMax = TEXT("8");
+		Result.EligibleMax = TEXT("8");
+		Result.EstimatedTotal = TEXT("6");
+		UStationFeedbackWidget* Feedback = MakeFeedback(GradedFlow(Result, EStationSessionMode::Training));
+		TestEqual("the card", Feedback->CardScreen->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual("no exam layout", Feedback->ExamScreen->GetVisibility(), ESlateVisibility::Collapsed);
+		TestTrue("the total", Texts(Feedback->CardScreen).Contains(TEXT("Total educacional: 6")));
 	});
 
 	// #425: a learner's remark to the examiner, which Phoenix notes without a reply.

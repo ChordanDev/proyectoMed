@@ -297,6 +297,62 @@ void FStationCardSnapshotSpec::Define()
 		});
 		Save(Scrolled, TEXT("post-4-feedback-scrolled"));
 	});
+
+	It("renders a Prova simulada's result", [this]()
+	{
+		if (OutDir.IsEmpty() || !FApp::CanEverRender())
+		{
+			AddInfo(TEXT("Skipped: set STATION_HUD_SNAPSHOT_DIR and run with an RHI."));
+			return;
+		}
+
+		// The mockup's station, assessed as far as `Reached` criteria; the rest stay uncertain.
+		const struct { const TCHAR* Description; const TCHAR* Level; const TCHAR* Points; const TCHAR* Max; } Authored[] = {
+			{TEXT("Pergunta sobre a migração da dor."), TEXT("adequado"), TEXT("1.5"), TEXT("1.5")},
+			{TEXT("Investiga sintomas associados."), TEXT("parcialmente_adequado"), TEXT("0.75"), TEXT("1.5")},
+			{TEXT("Realiza o exame físico abdominal."), TEXT("adequado"), TEXT("1.25"), TEXT("1.25")},
+			{TEXT("Solicita exames laboratoriais pertinentes."), TEXT("inadequado"), TEXT("0"), TEXT("1.25")},
+			{TEXT("Formula a hipótese diagnóstica."), TEXT("adequado"), TEXT("1.25"), TEXT("1.25")},
+			{TEXT("Explica a conduta ao paciente."), TEXT("parcialmente_adequado"), TEXT("0.5"), TEXT("1")},
+			{TEXT("Orienta sobre sinais de alarme."), TEXT("adequado"), TEXT("1"), TEXT("1")},
+			{TEXT("Responde às dúvidas finais do paciente."), TEXT("adequado"), TEXT("1.25"), TEXT("1.25")},
+		};
+		auto ExamResult = [&Authored](int32 Reached, const TCHAR* ScaledTotal, int32 Level, const TCHAR* ScoredMax)
+		{
+			FStationResult Result;
+			Result.bPlaceholder = true;
+			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Authored); ++Index)
+			{
+				FStationCriterionResult Criterion;
+				Criterion.Description = Authored[Index].Description;
+				Criterion.MaxPoints = Authored[Index].Max;
+				Criterion.Recommendation = TEXT("Mantenha a investigação dirigida.");
+				Criterion.Status = Index < Reached ? EStationCriterionStatus::Assessed : EStationCriterionStatus::Uncertain;
+				if (Index < Reached)
+				{
+					Criterion.Level = Authored[Index].Level;
+					Criterion.Points = Authored[Index].Points;
+				}
+				Result.Criteria.Add(Criterion);
+			}
+			Result.ScoredMax = ScoredMax;
+			Result.EligibleMax = TEXT("10");
+			Result.ScaledTotal = ScaledTotal;
+			Result.CertaintyLevel = Level;
+			Result.bIncomplete = Reached < UE_ARRAY_COUNT(Authored);
+			return Result;
+		};
+		auto SaveExam = [this](const FStationResult& Result, const FString& Name)
+		{
+			UStationRunFlow* Graded = MakeFlow(EStationMicPermission::Granted, EStationSessionMode::SimulatedExam);
+			Graded->Step = EStationRunStep::Feedback;
+			Graded->Result = Result;
+			Save(MakeFeedback(Graded), Name);
+		};
+		SaveExam(ExamResult(7, TEXT("7.15"), 4, TEXT("8.75")), TEXT("post-5-exam-result"));
+		SaveExam(ExamResult(8, TEXT("7.5"), 5, TEXT("10")), TEXT("post-6-exam-result-certain"));
+		SaveExam(ExamResult(2, TEXT(""), 1, TEXT("3")), TEXT("post-7-exam-result-level-1"));
+	});
 }
 
 #endif

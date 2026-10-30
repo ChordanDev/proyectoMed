@@ -1738,6 +1738,8 @@ void FStationRunPhoenixSpec::Define()
 				if (TestNotNull("result", Result) && TestTrue("criteria", Result->Criteria.Num() > 0))
 				{
 					TestEqual("this run's result", Result->SessionId, Client->GetSession()->SessionId);
+					TestEqual("a training has no simulated exam score", Result->CertaintyLevel, 0);
+					TestTrue("nor a scaled total", Result->ScaledTotal.IsEmpty());
 					const bool bCited = Result->Criteria.ContainsByPredicate([&Turn](const FStationCriterionResult& Criterion)
 					{
 						return Criterion.Evidence.ContainsByPredicate([&Turn](const FStationEvidence& Excerpt)

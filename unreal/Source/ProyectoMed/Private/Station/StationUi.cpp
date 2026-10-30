@@ -311,6 +311,14 @@ void StationUi::MakeGhost(UButton& Button)
 	MakeLabelled(Button, Look, FontSemiBold, 15, 0.f);
 }
 
+void StationUi::MakeRow(UButton& Button)
+{
+	FButtonLook Look;
+	Look.HoverFill = Raised;
+	Look.Radius = 4.f;
+	MakeLabelled(Button, Look, FontRegular, 15, 0.f);
+}
+
 UButton* StationUi::MakeEnterArrow(UWidgetTree& Tree, const FLinearColor& Accent)
 {
 	UButton* Button = Tree.ConstructWidget<UButton>();
