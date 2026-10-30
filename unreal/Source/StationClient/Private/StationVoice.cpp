@@ -61,6 +61,7 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 	/** Game thread only: whether the voice can still be heard, and its 10-second watch. */
 	FStationVoiceLiveness Liveness;
 	bool bWatching = false;
+	double ConnectSeconds = FStationVoiceLiveness::ConnectSeconds;
 
 	std::unique_ptr<livekit::Room> Room;
 	TFuture<void> ConnectTask;
@@ -127,7 +128,28 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 
 	static bool IsWatched(EStationVoiceState State)
 	{
-		return State == EStationVoiceState::WaitingForWorker || State == EStationVoiceState::Reconnecting;
+		return State == EStationVoiceState::Connecting || State == EStationVoiceState::WaitingForWorker
+			|| State == EStationVoiceState::Reconnecting;
+	}
+
+	static FString FailureReason(FStationVoiceLiveness::EFailure Failure)
+	{
+		switch (Failure)
+		{
+		case FStationVoiceLiveness::EFailure::NeverConnected:
+			return TEXT("The voice link did not connect within 30 seconds.");
+		case FStationVoiceLiveness::EFailure::WorkerNeverJoined:
+			return TEXT("The voice worker did not join within 20 seconds.");
+		default:
+			return TEXT("The voice did not come back within 10 seconds.");
+		}
+	}
+
+	/** Game thread. Gives the connection its deadline, and checks it from now on. */
+	void BeginConnecting()
+	{
+		Liveness.BeginConnecting(FPlatformTime::Seconds(), ConnectSeconds);
+		Watch();
 	}
 
 	/** Game thread. While the voice waits for the worker or reconnects, checks it twice a second until it is ready or lost. */
@@ -139,15 +161,17 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 			return;
 		}
 		bListening = NewState == EStationVoiceState::WaitingForWorker || NewState == EStationVoiceState::Ready;
-		FString Reason;
-		if (NewState == EStationVoiceState::Failed)
+		Link->SetState(NewState, NewState == EStationVoiceState::Failed ? FailureReason(Liveness.GetFailure()) : FString());
+		if (IsWatched(NewState))
 		{
-			Reason = Liveness.GetFailure() == FStationVoiceLiveness::EFailure::WorkerNeverJoined
-				? TEXT("The voice worker did not join within 20 seconds.")
-				: TEXT("The voice did not come back within 10 seconds.");
+			Watch();
 		}
-		Link->SetState(NewState, Reason);
-		if (!IsWatched(NewState) || bWatching)
+	}
+
+	/** Game thread. Starts the twice-a-second check unless it is running. */
+	void Watch()
+	{
+		if (bWatching)
 		{
 			return;
 		}
@@ -158,6 +182,11 @@ struct FStationVoiceLink::FImpl : public livekit::RoomDelegate
 			if (!Impl || !Impl->bAlive)
 			{
 				return false;
+			}
+			if (Impl->bPublished && Impl->Liveness.IsConnecting())
+			{
+				// Joined in time: the first report is queued for this thread, and a slow frame cannot fail the link.
+				return true;
 			}
 			const EStationVoiceState Current = Impl->Liveness.Tick(FPlatformTime::Seconds());
 			if (IsWatched(Current))
@@ -459,8 +488,15 @@ void FStationVoiceLink::Connect()
 	}
 	Impl->Owner = AsShared();
 	SetState(EStationVoiceState::Connecting);
+	Impl->BeginConnecting();
 	FImpl* RawImpl = &Impl.Get();
 	Impl->ConnectTask = Async(EAsyncExecution::Thread, [RawImpl]() { RawImpl->Connect(); });
+}
+
+void FStationVoiceLink::SetConnectDeadline(double Seconds)
+{
+	check(IsInGameThread());
+	Impl->ConnectSeconds = Seconds;
 }
 
 void FStationVoiceLink::Disconnect()

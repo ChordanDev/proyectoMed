@@ -872,6 +872,26 @@ void FStationRunUnitSpec::Define()
 		TestFalse("nor after the link failed", Failed->IsSpokenExamInFlight());
 	});
 
+	// #448: a link past its `Connecting` deadline ends `Failed`, and a simulated exam has no other input.
+	It("invalidates a simulated exam whose voice never connected", [this]()
+	{
+		UStationClient* Client = NewObject<UStationClient>();
+		Client->SetPhoenixBaseUrl(TEXT("http://127.0.0.1:9"));
+		UStationRunFlow* Flow = NewObject<UStationRunFlow>();
+		Flow->Client = Client;
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		Flow->Mode = EStationTrainingMode::Voice;
+		Flow->Step = EStationRunStep::Running;
+
+		Flow->HandleVoiceState(EStationVoiceState::Connecting);
+		TestEqual("runs while the voice connects", Flow->GetStep(), EStationRunStep::Running);
+
+		Flow->HandleVoiceState(EStationVoiceState::Failed);
+		TestEqual("invalidated, not graded at the end of the timer", Flow->GetStep(), EStationRunStep::Invalidated);
+		TestEqual("because of the voice", Flow->GetInvalidation(), EStationInvalidation::VoiceLost);
+		TestNull("no feedback", Flow->GetResult());
+	});
+
 	It("releases nothing for an exam asked in the dialogue without the button (#351)", [this, Spoken]()
 	{
 		UStationRunFlow* Flow = NewObject<UStationRunFlow>();

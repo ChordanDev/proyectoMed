@@ -5,7 +5,10 @@
 //   scripts/run-voice-stack.sh -- scripts/run-unreal-tests.sh ProyectoMed.StationVoice.Stack
 
 #include "Containers/Ticker.h"
+#include "IPAddress.h"
 #include "Misc/AutomationTest.h"
+#include "SocketSubsystem.h"
+#include "Sockets.h"
 #include "StationClient.h"
 #include "StationLiveKit.h"
 #include "StationPcm.h"
@@ -309,6 +312,50 @@ void FStationVoiceUnitSpec::Define()
 		const FSignals WorkerGone{ false, false };
 		const FSignals Retrying{ true, true };
 
+		It("gives a connection thirty seconds to leave Connecting, then loses the voice", [this, Answering]()
+		{
+			FStationVoiceLiveness Liveness;
+			Liveness.BeginConnecting(0.0);
+			TestEqual("connecting", Liveness.Tick(0.0), EStationVoiceState::Connecting);
+			TestTrue("says so", Liveness.IsConnecting());
+			TestEqual("before thirty seconds", Liveness.Tick(29.9), EStationVoiceState::Connecting);
+			TestEqual("no rule fired yet", Liveness.GetFailure(), FStationVoiceLiveness::EFailure::None);
+			TestEqual("after thirty seconds", Liveness.Tick(30.0), EStationVoiceState::Failed);
+			TestEqual("the connection's own failure", Liveness.GetFailure(), FStationVoiceLiveness::EFailure::NeverConnected);
+			TestEqual("a late join changes nothing", Liveness.Update(Answering, 31.0), EStationVoiceState::Failed);
+		});
+
+		It("ends the connection's deadline once the microphone is published", [this, Answering, WorkerGone]()
+		{
+			using EFailure = FStationVoiceLiveness::EFailure;
+			FStationVoiceLiveness Joined;
+			Joined.BeginConnecting(0.0);
+			TestEqual("published in time", Joined.Update(WorkerGone, 29.0), EStationVoiceState::WaitingForWorker);
+			TestFalse("no longer connecting", Joined.IsConnecting());
+			TestEqual("past the deadline", Joined.Tick(30.0), EStationVoiceState::WaitingForWorker);
+			TestEqual("the worker's twenty seconds run from the report", Joined.Tick(48.9), EStationVoiceState::WaitingForWorker);
+			TestEqual("the worker's limit still applies", Joined.Tick(49.0), EStationVoiceState::Failed);
+			TestEqual("named after the worker", Joined.GetFailure(), EFailure::WorkerNeverJoined);
+
+			FStationVoiceLiveness Answered;
+			Answered.BeginConnecting(0.0);
+			TestEqual("the worker was there", Answered.Update(Answering, 1.0), EStationVoiceState::Ready);
+			TestEqual("ready long after", Answered.Tick(1000.0), EStationVoiceState::Ready);
+
+			FStationVoiceLiveness Late;
+			Late.BeginConnecting(0.0);
+			TestEqual("a report past the deadline is a joined link", Late.Update(WorkerGone, 31.0), EStationVoiceState::WaitingForWorker);
+			TestEqual("no rule fired", Late.GetFailure(), EFailure::None);
+		});
+
+		It("takes a shorter deadline", [this]()
+		{
+			FStationVoiceLiveness Liveness;
+			Liveness.BeginConnecting(10.0, 1.0);
+			TestEqual("before", Liveness.Tick(10.9), EStationVoiceState::Connecting);
+			TestEqual("after", Liveness.Tick(11.0), EStationVoiceState::Failed);
+		});
+
 		It("waits twenty seconds for the worker to first join, then loses the voice", [this, Answering, WorkerGone]()
 		{
 			FStationVoiceLiveness Liveness;
@@ -376,6 +423,54 @@ void FStationVoiceUnitSpec::Define()
 			TestEqual("lost again", Liveness.Update(WorkerGone, 20.0), EStationVoiceState::Reconnecting);
 			TestEqual("a fresh ten seconds", Liveness.Tick(29.0), EStationVoiceState::Reconnecting);
 			TestEqual("given up", Liveness.Tick(30.0), EStationVoiceState::Failed);
+		});
+	});
+
+	Describe("FStationVoiceLink", [this]()
+	{
+		LatentIt("fails a connection that stays Connecting past its deadline", FTimespan::FromSeconds(20),
+			[this](const FDoneDelegate& Done)
+		{
+			// A LiveKit stand-in: it takes the join and never answers, so the SDK's first
+			// attempt outlasts this link's deadline.
+			ISocketSubsystem* Sockets = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+			FSocket* Silent = Sockets->CreateSocket(NAME_Stream, TEXT("Silent LiveKit"), false);
+			const TSharedRef<FInternetAddr> Address = Sockets->CreateInternetAddr();
+			Address->SetLoopbackAddress();
+			Address->SetPort(0);
+			if (!TestTrue("LiveKit stand-in listening", Silent->Bind(*Address) && Silent->Listen(1)))
+			{
+				Sockets->DestroySocket(Silent);
+				Done.Execute();
+				return;
+			}
+
+			FStationVoiceCredential Credential;
+			Credential.Url = FString::Printf(TEXT("ws://127.0.0.1:%d"), Silent->GetPortNo());
+			Credential.Token = TEXT("unused");
+			const TSharedRef<TArray<EStationVoiceState>> States = MakeShared<TArray<EStationVoiceState>>();
+			FStationVoiceHandlers Handlers;
+			Handlers.OnStateChanged = [States](EStationVoiceState State) { States->Add(State); };
+			const TSharedRef<FStationVoiceLink, ESPMode::ThreadSafe> Link = MakeShared<FStationVoiceLink, ESPMode::ThreadSafe>(
+				Credential, FString(TEXT("s1")), MoveTemp(Handlers));
+			Link->SetConnectDeadline(1.0);
+			Link->Connect();
+
+			const double GiveUpAt = FPlatformTime::Seconds() + 10.0;
+			FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+				[this, Done, Sockets, Silent, Link, States, GiveUpAt](float)
+				{
+					if (Link->GetState() == EStationVoiceState::Connecting && FPlatformTime::Seconds() < GiveUpAt)
+					{
+						return true;
+					}
+					TestEqual("failed", Link->GetState(), EStationVoiceState::Failed);
+					TestTrue("by the deadline, not the SDK", Link->GetFailure().Contains(TEXT("did not connect")));
+					TestEqual("straight from Connecting", *States, TArray<EStationVoiceState>{EStationVoiceState::Connecting, EStationVoiceState::Failed});
+					Sockets->DestroySocket(Silent);
+					Done.Execute();
+					return false;
+				}));
 		});
 	});
 

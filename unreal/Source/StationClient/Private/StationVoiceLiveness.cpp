@@ -1,5 +1,11 @@
 #include "StationVoiceLiveness.h"
 
+void FStationVoiceLiveness::BeginConnecting(double Now, double Seconds)
+{
+	State = EStationVoiceState::Connecting;
+	ConnectDeadline = Now + Seconds;
+}
+
 EStationVoiceState FStationVoiceLiveness::Update(const FSignals& Signals, double Now)
 {
 	if (State == EStationVoiceState::Failed)
@@ -32,12 +38,13 @@ EStationVoiceState FStationVoiceLiveness::Update(const FSignals& Signals, double
 
 EStationVoiceState FStationVoiceLiveness::Tick(double Now)
 {
+	const bool bNeverConnected = State == EStationVoiceState::Connecting && Now >= ConnectDeadline;
 	const bool bNotBack = State == EStationVoiceState::Reconnecting && Now - LostSince >= GraceSeconds;
 	const bool bNeverJoined = State == EStationVoiceState::WaitingForWorker && WaitingSince.IsSet()
 		&& Now - WaitingSince.GetValue() >= FirstJoinSeconds;
-	if (bNotBack || bNeverJoined)
+	if (bNeverConnected || bNotBack || bNeverJoined)
 	{
-		Failure = bNotBack ? EFailure::VoiceNotBack : EFailure::WorkerNeverJoined;
+		Failure = bNeverConnected ? EFailure::NeverConnected : bNotBack ? EFailure::VoiceNotBack : EFailure::WorkerNeverJoined;
 		State = EStationVoiceState::Failed;
 	}
 	return State;
