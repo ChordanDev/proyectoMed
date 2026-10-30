@@ -464,8 +464,10 @@ void FStationRunUnitSpec::Define()
 		UStationRunFlow* Flow = MakeRunning(EStationSessionMode::SimulatedExam, Exam);
 		Flow->CheckStationTimer();
 		TestTrue("one end sound", *Exam == TArray<EStationExamCue>{EStationExamCue::End});
+		// Phoenix found this clock a moment ahead of its deadline: the run goes on, then ends again.
+		Flow->Step = EStationRunStep::Running;
 		Flow->CheckStationTimer();
-		TestEqual("only once", Exam->Num(), 1);
+		TestEqual("still one end sound", Exam->Num(), 1);
 
 		const TSharedRef<TArray<EStationExamCue>> Early = MakeShared<TArray<EStationExamCue>>();
 		MakeRunning(EStationSessionMode::SimulatedExam, Early)->Finish();

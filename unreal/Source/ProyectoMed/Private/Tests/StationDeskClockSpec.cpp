@@ -70,6 +70,12 @@ void FStationDeskClockUnitSpec::Define()
 			TestEqual("on the plain shape material", Material ? Material->GetBaseMaterial()->GetName() : FString(),
 				FString(TEXT("BasicShapeMaterial")));
 		}
+		TestEqual("the second hand and its cap", Clock->SecondParts.Num(), 2);
+		for (const TObjectPtr<UStaticMeshComponent>& Part : Clock->SecondParts)
+		{
+			FLinearColor Color;
+			TestTrue("red", Part->GetMaterial(0)->GetVectorParameterValue(TEXT("Color"), Color) && Color.R > 0.5f && Color.G < 0.2f);
+		}
 		Clock->Destroy();
 	});
 }

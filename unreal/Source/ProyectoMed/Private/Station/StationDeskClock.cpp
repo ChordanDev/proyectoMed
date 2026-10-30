@@ -97,9 +97,9 @@ AStationDeskClock::AStationDeskClock()
 	Face = CreateDefaultSubobject<USceneComponent>(TEXT("Face"));
 	Face->SetupAttachment(RootComponent);
 	Face->SetRelativeLocation(Centre);
-	HourHand = AddHand(TEXT("HourHand"), 3.8, 0.6, 0.0);
-	MinuteHand = AddHand(TEXT("MinuteHand"), 5.6, 0.4, 0.15);
-	SecondHand = AddHand(TEXT("SecondHand"), 6.0, 0.15, 0.3);
+	HourHand = AddHand(TEXT("HourHand"), 3.8, 0.6, 0.0, InkParts);
+	MinuteHand = AddHand(TEXT("MinuteHand"), 5.6, 0.4, 0.15, InkParts);
+	SecondHand = AddHand(TEXT("SecondHand"), 6.0, 0.15, 0.3, SecondParts);
 	SecondParts.Add(AddPart(TEXT("Cap"), Face, true, FVector(0.45, 0.0, 0.0), ShapeScale(0.8, 0.8, 0.3),
 		FRotator(90.0, 0.0, 0.0)));
 }
@@ -122,7 +122,8 @@ UStaticMeshComponent* AStationDeskClock::AddPart(const TCHAR* Name, USceneCompon
 	return Part;
 }
 
-USceneComponent* AStationDeskClock::AddHand(const TCHAR* Name, double Length, double Width, double Depth)
+USceneComponent* AStationDeskClock::AddHand(const TCHAR* Name, double Length, double Width, double Depth,
+	TArray<TObjectPtr<UStaticMeshComponent>>& Colour)
 {
 	USceneComponent* Pivot = CreateDefaultSubobject<USceneComponent>(Name);
 	Pivot->SetupAttachment(Face);
@@ -130,7 +131,7 @@ USceneComponent* AStationDeskClock::AddHand(const TCHAR* Name, double Length, do
 	constexpr double Tail = 0.9;
 	UStaticMeshComponent* Bar = AddPart(*FString::Printf(TEXT("%sBar"), Name), Pivot, false,
 		FVector(Depth, 0.0, (Length - Tail) / 2.0), ShapeScale(0.1, Width, Length + Tail));
-	(FCString::Strcmp(Name, TEXT("SecondHand")) == 0 ? SecondParts : InkParts).Add(Bar);
+	Colour.Add(Bar);
 	return Pivot;
 }
 

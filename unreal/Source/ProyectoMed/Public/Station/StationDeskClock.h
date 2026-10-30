@@ -69,8 +69,12 @@ private:
 	/** Gives each part its colour; the level runs no construction script in a packaged build. */
 	void PaintParts();
 
-	/** A hand: a pivot at the face's centre, turned by the time, holding a bar that points to twelve. */
-	USceneComponent* AddHand(const TCHAR* Name, double Length, double Width, double Depth);
+	/**
+	 * A hand: a pivot at the face's centre, turned by the time, holding a bar that points
+	 * to twelve. The bar joins `Colour`, one of the part lists below.
+	 */
+	USceneComponent* AddHand(const TCHAR* Name, double Length, double Width, double Depth,
+		TArray<TObjectPtr<UStaticMeshComponent>>& Colour);
 
 	UPROPERTY(VisibleAnywhere, Category = "Station")
 	TObjectPtr<USceneComponent> Face;

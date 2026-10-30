@@ -519,7 +519,7 @@ void UStationBriefWidget::Refresh()
 
 	const bool bExam = Flow->GetSessionMode() == EStationSessionMode::SimulatedExam;
 	const bool bRunning = Flow->GetStep() == EStationRunStep::Running;
-	HeadingText->SetText(bRunning ? LOCTEXT("SimulatedExamRunningHeading", "Prova simulada · Cenário e tarefas")
+	HeadingText->SetText(bExam && bRunning ? LOCTEXT("SimulatedExamRunningHeading", "Prova simulada · Cenário e tarefas")
 		: bExam ? LOCTEXT("SimulatedExamHeading", "Prova simulada · Antes de entrar na estação")
 		: LOCTEXT("TrainingHeading", "Treino · Antes de entrar na estação"));
 	StationUi::SetShown(MenuButton, !bRunning);
