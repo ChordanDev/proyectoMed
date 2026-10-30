@@ -110,7 +110,7 @@ A versioned structured package: clinical context, facts the Station AI may revea
 
 ## Station Completion
 
-The learner may finish a station at any time. In a simulated exam, the ten-minute timer also ends it automatically. In a training, the run ends when the learner finishes or, at the latest, at the 20-minute cap, which Phoenix applies with its own completion reason (decided 2026-10-23, built in #323). Every path ends the interaction permanently for that run and transitions directly to actionable feedback.
+The learner may finish a station at any time. In a simulated exam, the ten-minute timer also ends it automatically, exactly at the deadline (#424): what the learner started saying before it still counts as evidence, even when its transcript arrives just after it, but the patient never answers after it, and anything the learner starts saying after it is discarded. There is no grace for the dialogue. Phoenix decides "started before" from the speech-start time the voice worker reports, with a tolerance of 500 ms, and waits at most 5 seconds after the deadline for that last transcript. In a training, the run ends when the learner finishes or, at the latest, at the 20-minute cap, which Phoenix applies with its own completion reason (decided 2026-10-23, built in #323). Every path ends the interaction permanently for that run and transitions directly to actionable feedback.
 
 ## Feedback Evidence Display
 

@@ -80,6 +80,24 @@ keeps accepting turns and impresso requests after it, until `cap_at`
 - In a real test (`"simulated_exam"`), `cap_at` equals `deadline_at`: the run ends
   at ten minutes with `completion_reason: "timer"` and there is no overtime.
 
+### A simulated exam ends exactly at its deadline (#424)
+
+Phoenix decides this; the client only waits for it.
+
+- There is no grace for the dialogue: the patient never answers after the
+  deadline, and the voice worker stops the reply it is speaking at that moment.
+- What the learner started saying before the deadline still counts. Phoenix keeps
+  that utterance with no patient reply, even when its transcript arrives just after
+  the deadline. The worker reports it like a refused reply (`PatientUnanswered`).
+- An utterance that starts after the deadline (500 ms tolerance) is discarded. It
+  gets no outcome event, and the worker leaves the room without an `error` event,
+  so the run is not taken for a lost voice.
+- At zero, call `FinishSession(EStationFinishReason::Timer)` as usual. Phoenix
+  answers when its evidence window closes: at the first transcript after the
+  deadline, or at most 5 seconds after it. That is well inside the request timeout
+  (15 s). Keep the voice link until the finish returns; `FinishSession` leaves the
+  room afterwards.
+
 ## Operations
 
 All operations are methods of `UStationClient`. Each one takes a

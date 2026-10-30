@@ -435,6 +435,15 @@ The worker log shows it registered with the LiveKit server.
    to a turn already in flight at the deadline. It is a non-retryable end of session,
    so the worker must stop instead of retrying. `409` (`stale_generation`) is
    different: it drops one superseded or cancelled turn and the session keeps going.
+
+   A simulated exam has no grace window for the dialogue (#424). The worker sends
+   `speech_started_at` (ISO 8601) with each final transcript. After the deadline
+   Phoenix keeps an utterance that started less than 500 ms after `deadline_at`
+   (`speech_start_tolerance_ms`) with `201`, `status: "kept"` and no reply, and
+   answers `409` for any other. The reply in flight at the deadline is never
+   released: its learner turn is kept the same way. The run waits at most 5 s
+   (`simulated_exam_evidence_window_ms`) after the deadline for that late
+   transcript, and the worker stops speaking at the deadline.
 10. The worker never logs transcript text: scan its output from steps 2–7 and confirm
     only lifecycle lines and session ids appear.
 
