@@ -2,11 +2,20 @@
 import asyncio
 import time
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from livekit.agents.stt import SpeechEventType
 
 from push_to_talk import PushToTalk
-from test_transcripts import END, FINAL, INTERIM, MockStream, event
+from test_transcripts import (
+    END,
+    FINAL,
+    INTERIM,
+    ControllablePhoenixClient,
+    MockStream,
+    event,
+)
+from transcripts import TurnTracker, process_speech_stream
 
 START = SpeechEventType.START_OF_SPEECH
 QUIET_S = 0.05
@@ -131,13 +140,15 @@ class PushToTalkTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await self.next_events(2), [(FINAL, "sim"), (END, None)])
 
-    async def test_a_press_with_nothing_heard_ends_no_turn(self):
+    async def test_a_press_with_nothing_heard_ends_at_the_settle_bound(self):
         await self.on_push_to_talk()
         self.ptt.press()
         await self.next_events(1)
+        released_at = time.monotonic()
         self.ptt.release()
 
-        await self.assert_nothing_within(MAX_SETTLE_S + QUIET_S)
+        self.assertEqual(await self.next_events(1), [(END, None)])
+        self.assertGreaterEqual(time.monotonic() - released_at, MAX_SETTLE_S * 0.9)
 
     async def test_transcript_after_the_turn_ended_is_dropped_until_the_next_press(
         self,
@@ -294,3 +305,35 @@ class PushToTalkTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(RuntimeError, "deepgram"):
             await anext(self.ptt)
+
+
+class PushToTalkSpeechStartTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #424: a press with no words must not date the next utterance."""
+
+    async def test_a_press_with_no_words_leaves_no_start_for_the_next_utterance(self):
+        tapped = datetime(2026, 10, 29, 12, 9, 58, tzinfo=UTC)
+        spoke = tapped + timedelta(seconds=30)
+        times = iter([tapped, spoke])
+        tracker = TurnTracker("s1", last_turn_id=0, clock=lambda: next(times))
+        queue: asyncio.Queue = asyncio.Queue()
+        ptt = PushToTalk(MockStream(queue), quiet_s=QUIET_S, max_settle_s=QUIET_S)
+
+        async with ControllablePhoenixClient() as client:
+            client.commit_events[1] = asyncio.Event()
+            stream = asyncio.create_task(process_speech_stream(ptt, tracker, client))
+            ptt.release()
+            ptt.press()
+            await asyncio.sleep(0)
+            ptt.release()
+            await asyncio.sleep(QUIET_S * 3)
+
+            ptt.press()
+            queue.put_nowait(event(FINAL, "Onde dói?"))
+            await asyncio.sleep(QUIET_S)
+            ptt.release()
+            await asyncio.wait_for(client.commit_events[1].wait(), 1)
+            queue.put_nowait(None)
+            await asyncio.wait_for(stream, 2)
+            await ptt.aclose()
+
+        self.assertEqual(client.speech_starts, {1: spoke})
