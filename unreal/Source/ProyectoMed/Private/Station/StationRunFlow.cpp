@@ -326,6 +326,12 @@ void UStationRunFlow::StartSession()
 					*Credential.GetValue().Room, *Credential.GetValue().ExpiresAt.ToIso8601());
 			}
 			Flow->Step = EStationRunStep::Running;
+			if (Flow->SessionMode == EStationSessionMode::SimulatedExam)
+			{
+				// The time runs: the entry beep, and the brief is read inside it (#425, #318 T3).
+				Flow->bBriefOpen = true;
+				Flow->OnExamCue.Broadcast(EStationExamCue::Start);
+			}
 			if (Flow->VoiceCredential.IsSet())
 			{
 				Flow->ConnectVoice();
@@ -657,6 +663,50 @@ bool UStationRunFlow::CanFinish() const
 	return Step == EStationRunStep::Running;
 }
 
+bool UStationRunFlow::ShowsStationTimer() const
+{
+	return SessionMode != EStationSessionMode::SimulatedExam;
+}
+
+bool UStationRunFlow::CanReadBrief() const
+{
+	return SessionMode != EStationSessionMode::SimulatedExam || Step == EStationRunStep::Running;
+}
+
+bool UStationRunFlow::IsBriefOpen() const
+{
+	return bBriefOpen && Step == EStationRunStep::Running && SessionMode == EStationSessionMode::SimulatedExam;
+}
+
+void UStationRunFlow::OpenBrief()
+{
+	if (Step == EStationRunStep::Running && SessionMode == EStationSessionMode::SimulatedExam && !bBriefOpen)
+	{
+		bBriefOpen = true;
+		OnChanged.Broadcast();
+	}
+}
+
+void UStationRunFlow::CloseBrief()
+{
+	if (bBriefOpen)
+	{
+		bBriefOpen = false;
+		OnChanged.Broadcast();
+	}
+}
+
+FDateTime UStationRunFlow::GetDeskClockTime() const
+{
+	const TOptional<FDateTime> Phoenix = Client ? Client->GetServerTime() : TOptional<FDateTime>();
+	if (!Phoenix.IsSet())
+	{
+		return FDateTime::Now();
+	}
+	// Phoenix's clock is UTC; the clock on the desk shows the learner's time of day.
+	return Phoenix.GetValue() + (FDateTime::Now() - FDateTime::UtcNow());
+}
+
 void UStationRunFlow::Finish()
 {
 	if (CanFinish())
@@ -699,6 +749,13 @@ void UStationRunFlow::BeginFinish(EStationFinishReason Reason)
 	Step = EStationRunStep::Finishing;
 	// Whatever the patient was saying stops with the run (#193).
 	SilencePatient();
+	// The finishing beep of a simulated exam whose time is up (#425), once: if Phoenix
+	// finds this clock a moment ahead of its deadline, the run goes on without a second one.
+	if (Reason == EStationFinishReason::Timer && SessionMode == EStationSessionMode::SimulatedExam && !bEndCueSounded)
+	{
+		bEndCueSounded = true;
+		OnExamCue.Broadcast(EStationExamCue::End);
+	}
 	OnChanged.Broadcast();
 	ContinueFinish();
 }
@@ -892,6 +949,8 @@ void UStationRunFlow::ResetRun()
 	// Phoenix's answers for the last run arrive here no more.
 	++Run;
 	bFinishInFlight = false;
+	bBriefOpen = false;
+	bEndCueSounded = false;
 	ErrorText = FText::GetEmpty();
 	bVoiceFallback = false;
 	VoiceCredential.Reset();
@@ -1148,7 +1207,8 @@ void UStationRunFlow::HandleVoiceEvent(const FStationVoiceEvent& Event)
 		bVoiceOutcome = true;
 		break;
 	case EStationVoiceEventKind::ExaminerAcknowledged:
-		Voice.bExaminerNoted = true;
+		// The examiner of a simulated exam stays silent; Phoenix still keeps the remark (#425, #318 T3b).
+		Voice.bExaminerNoted = SessionMode != EStationSessionMode::SimulatedExam;
 		bVoiceOutcome = true;
 		break;
 	case EStationVoiceEventKind::PatientUnanswered:

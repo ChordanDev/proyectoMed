@@ -369,6 +369,15 @@ FTimespan UStationClient::GetRemainingTimeAt(double LocalSeconds) const
 	return Clock.RemainingAt(Session->DeadlineAt, LocalSeconds);
 }
 
+TOptional<FDateTime> UStationClient::GetServerTime() const
+{
+	if (!Clock.IsAnchored())
+	{
+		return TOptional<FDateTime>();
+	}
+	return Clock.ServerTimeAt(FPlatformTime::Seconds());
+}
+
 FStationSession UStationClient::MergeRefreshed(const FStationSession& Refreshed) const
 {
 	FStationSession Merged = Refreshed;

@@ -62,6 +62,9 @@ clock, so `GetRemainingTime()` ignores changes to the machine's date and time.
   more time than is left. Phoenix still refuses late turns with
   `station_time_elapsed` (409): on that error, and when the app comes back to the
   foreground, call `RefreshSession`.
+- `GetServerTime()` is Phoenix's clock now (UTC), from the same anchor. It is
+  unset until Phoenix has sent a `server_now`, and keeps running after the run.
+  The scene's desk clock uses it ([#425](#the-prova-simulada-exam-room-issue-425)).
 - At zero, call `FinishSession(EStationFinishReason::Timer)`. If Phoenix answers
   `deadline_not_reached` (409), the local clock ran ahead: call `RefreshSession`
   and keep counting.
@@ -122,7 +125,7 @@ All operations are methods of `UStationClient`. Each one takes a
 | `ForgetSession` | none | Clears the local session at once and leaves the room, for a run Phoenix stopped answering; call `DiscardSession` first so Phoenix forgets it too if it is back | #196 |
 
 Synchronous accessors: `GetSession()` (null without a run), `GetRemainingTime()`
-(and `GetRemainingTimeAt(LocalSeconds)` for tests), `GetPhoenixBaseUrl()` and
+(and `GetRemainingTimeAt(LocalSeconds)` for tests), `GetServerTime()`, `GetPhoenixBaseUrl()` and
 `SetPhoenixBaseUrl()`. `FStationClock` is the public helper behind the timer.
 
 Known limits, for the slices that build on them:
@@ -964,6 +967,41 @@ What the client does:
   `StationInvalidatedText`). A training still goes on in writing (#196).
 - If Phoenix still refuses a typed call, `StationErrorText` shows its
   `message`, as for any Phoenix error.
+
+## The Prova simulada exam room (issue #425)
+
+A simulated exam looks and sounds like the official exam room (#318 business
+rule 3, T3 and T3b). Phoenix is unchanged: it still serves `deadline_at` and
+`server_now`, and still answers an examiner-addressed remark with
+`outcome: "examiner_acknowledged"`, keeping the turn as evidence.
+
+What the client does in a simulated exam:
+
+- **No countdown.** `UStationRunFlow::ShowsStationTimer()` is false, so the HUD
+  hides the Station Timer and names the run "Prova simulada". The flow still
+  ends the run at zero, as before.
+- **Desk clock.** `AStationDeskClock`, a scene object on the office desk, is an
+  analog clock with hands that shows the time of day, never a countdown. The
+  player controller sets it every frame from `UStationRunFlow::GetDeskClockTime()`:
+  Phoenix's clock (`UStationClient::GetServerTime`) in the machine's time zone,
+  or the machine's clock before Phoenix has sent a `server_now`. The client
+  never computes a deadline. The clock is there in trainings too, as furniture.
+- **Start and end sounds.** `UStationRunFlow::OnExamCue` broadcasts `Start` when
+  the run starts running and `End` when it ends because the time is up
+  (`FinishSession` with `timer`, from the Station Timer or because Phoenix ended
+  the run), once per run. An early finish and an invalidated run sound nothing.
+  The desk clock plays them (`S_ExamStart`, `S_ExamEnd`).
+- **Silent examiner.** `examiner_acknowledged` leaves `GetVoice().bExaminerNoted`
+  false, so the HUD shows no "Examinador: Anotado."; the remark stays in the
+  conversation.
+- **Brief once the time runs.** `CanReadBrief()` is false on a simulated exam's
+  brief, which shows only the way in and says the scenario and tasks appear with
+  the time already running. Once the run is running, the brief opens over the
+  room (`IsBriefOpen`); **Voltar ao consultório** closes it (`CloseBrief`) and
+  the HUD's **Cenário e tarefas** opens it again (`OpenBrief`).
+
+A training is unchanged: the countdown, "Anotado.", the brief before the run,
+and no sounds.
 
 ## Not in the interface yet
 

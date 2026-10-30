@@ -520,6 +520,55 @@ void FStationRunPhoenixLossSpec::Define()
 		});
 	});
 
+	// #425: the official entry beep, and the brief shown once the time runs (#318 T3).
+	LatentIt("sounds the start of a simulated exam and opens its brief once its time runs", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		Server.Route(FString(SessionPath) + TEXT("/voice"), EHttpServerRequestVerbs::VERB_POST, EHttpServerResponseCodes::Ok,
+			TEXT(R"({"url": "ws://127.0.0.1:9", "token": "t", "room": "r", "identity": "i", "expires_at": "2026-10-27T12:30:00Z"})"));
+		const TSharedRef<TArray<EStationExamCue>> Cues = MakeShared<TArray<EStationExamCue>>();
+		Flow->OnExamCue.AddLambda([Cues](EStationExamCue Cue) { Cues->Add(Cue); });
+		Client->ForgetSession();
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		Flow->Step = EStationRunStep::Starting;
+		Flow->StartSession();
+		WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Starting; }, [this, Done, Cues]()
+		{
+			TestEqual("running", Flow->GetStep(), EStationRunStep::Running);
+			TestTrue("one start sound", *Cues == TArray<EStationExamCue>{EStationExamCue::Start});
+			TestTrue("the brief over the room", Flow->IsBriefOpen());
+			Done.Execute();
+		});
+	});
+
+	LatentIt("starts a training with no sound and no brief over the room", Timeout, [this](const FDoneDelegate& Done)
+	{
+		const TSharedRef<TArray<EStationExamCue>> Cues = MakeShared<TArray<EStationExamCue>>();
+		Flow->OnExamCue.AddLambda([Cues](EStationExamCue Cue) { Cues->Add(Cue); });
+		Client->ForgetSession();
+		Flow->Mode = EStationTrainingMode::Text;
+		Flow->Step = EStationRunStep::Starting;
+		Flow->StartSession();
+		WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Starting; }, [this, Done, Cues]()
+		{
+			TestEqual("running", Flow->GetStep(), EStationRunStep::Running);
+			TestEqual("no sound", Cues->Num(), 0);
+			TestFalse("no brief over the room", Flow->IsBriefOpen());
+			Done.Execute();
+		});
+	});
+
+	// #425: the desk clock follows Phoenix's clock, not the machine's.
+	It("shows Phoenix's time on the desk clock, in this machine's time zone", [this]()
+	{
+		const FTimespan Zone = FDateTime::Now() - FDateTime::UtcNow();
+		// The stub session's `server_now`, a moment ago.
+		const FDateTime Expected = FDateTime(2026, 10, 27, 12, 0, 0) + Zone;
+		const FTimespan Off = Flow->GetDeskClockTime() - Expected;
+		TestTrue(FString::Printf(TEXT("Phoenix's time, %s off"), *Off.ToString()),
+			Off >= FTimespan::FromSeconds(-1) && Off <= FTimespan::FromSeconds(20));
+	});
+
 	LatentIt("invalidates a voice training when the voice fails and Phoenix does not answer either", Timeout,
 		[this](const FDoneDelegate& Done)
 	{
