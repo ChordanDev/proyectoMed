@@ -12,8 +12,6 @@
 
 #include "StationDeskClock.generated.h"
 
-class UMaterialInterface;
-class USceneComponent;
 class USoundBase;
 class UStaticMeshComponent;
 
@@ -58,50 +56,23 @@ public:
 
 protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
-	virtual void BeginPlay() override;
 
 private:
 	friend class FStationDeskClockUnitSpec;
 
-	UStaticMeshComponent* AddPart(const TCHAR* Name, USceneComponent* Parent, bool bCylinder,
-		const FVector& Location, const FVector& Scale, const FRotator& Rotation = FRotator::ZeroRotator);
+	UStaticMeshComponent* AddPart(const TCHAR* Name);
 
-	/** Gives each part its colour; the level runs no construction script in a packaged build. */
-	void PaintParts();
-
-	/**
-	 * A hand: a pivot at the face's centre, turned by the time, holding a bar that points
-	 * to twelve. The bar joins `Colour`, one of the part lists below.
-	 */
-	USceneComponent* AddHand(const TCHAR* Name, double Length, double Width, double Depth,
-		TArray<TObjectPtr<UStaticMeshComponent>>& Colour);
+	// All four meshes share the actor's origin, the centre of the dial. The level sets them
+	// on the placed clock, so the cook takes them. Each hand's mesh points to twelve.
+	UPROPERTY(VisibleAnywhere, Category = "Station")
+	TObjectPtr<UStaticMeshComponent> Body;
 
 	UPROPERTY(VisibleAnywhere, Category = "Station")
-	TObjectPtr<USceneComponent> Face;
+	TObjectPtr<UStaticMeshComponent> HourHand;
 
 	UPROPERTY(VisibleAnywhere, Category = "Station")
-	TObjectPtr<USceneComponent> HourHand;
+	TObjectPtr<UStaticMeshComponent> MinuteHand;
 
 	UPROPERTY(VisibleAnywhere, Category = "Station")
-	TObjectPtr<USceneComponent> MinuteHand;
-
-	UPROPERTY(VisibleAnywhere, Category = "Station")
-	TObjectPtr<USceneComponent> SecondHand;
-
-	/** The engine's plain material with a `Color` parameter, tinted for each kind of part. */
-	UPROPERTY()
-	TObjectPtr<UMaterialInterface> PlainMaterial;
-
-	/** Every part, by colour, for `PaintParts`. */
-	UPROPERTY()
-	TArray<TObjectPtr<UStaticMeshComponent>> CaseParts;
-
-	UPROPERTY()
-	TArray<TObjectPtr<UStaticMeshComponent>> DialParts;
-
-	UPROPERTY()
-	TArray<TObjectPtr<UStaticMeshComponent>> InkParts;
-
-	UPROPERTY()
-	TArray<TObjectPtr<UStaticMeshComponent>> SecondParts;
+	TObjectPtr<UStaticMeshComponent> SecondHand;
 };

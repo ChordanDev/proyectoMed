@@ -8,7 +8,6 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
-#include "Materials/MaterialInterface.h"
 #include "Station/StationDeskClock.h"
 
 BEGIN_DEFINE_SPEC(FStationDeskClockUnitSpec, "ProyectoMed.StationDeskClock.Unit",
@@ -52,30 +51,8 @@ void FStationDeskClockUnitSpec::Define()
 			Clock->HourHand->GetRelativeRotation().RotateVector(Twelve).Equals(FVector(0.0, -1.0, 0.0), 1e-4));
 		TestTrue("minute hand at twelve",
 			Clock->MinuteHand->GetRelativeRotation().RotateVector(Twelve).Equals(Twelve, 1e-4));
-		Clock->Destroy();
-	});
-
-	It("paints its parts in plain colours, not the engine's grid", [this]()
-	{
-		AStationDeskClock* Clock = GEngine->GetWorldContexts()[0].World()->SpawnActor<AStationDeskClock>();
-		if (!TestNotNull("clock", Clock))
-		{
-			return;
-		}
-		for (const TObjectPtr<UStaticMeshComponent>& Part : Clock->DialParts)
-		{
-			UMaterialInterface* Material = Part->GetMaterial(0);
-			FLinearColor Color;
-			TestTrue("tinted", Material && Material->GetVectorParameterValue(TEXT("Color"), Color) && Color.R > 0.5f);
-			TestEqual("on the plain shape material", Material ? Material->GetBaseMaterial()->GetName() : FString(),
-				FString(TEXT("BasicShapeMaterial")));
-		}
-		TestEqual("the second hand and its cap", Clock->SecondParts.Num(), 2);
-		for (const TObjectPtr<UStaticMeshComponent>& Part : Clock->SecondParts)
-		{
-			FLinearColor Color;
-			TestTrue("red", Part->GetMaterial(0)->GetVectorParameterValue(TEXT("Color"), Color) && Color.R > 0.5f && Color.G < 0.2f);
-		}
+		TestTrue("second hand at twelve",
+			Clock->SecondHand->GetRelativeRotation().RotateVector(Twelve).Equals(Twelve, 1e-4));
 		Clock->Destroy();
 	});
 }
