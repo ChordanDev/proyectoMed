@@ -6,7 +6,11 @@
 // without a test waiting for it, to check how a run ends (#461).
 // `http://127.0.0.1:9` stands for a Phoenix that answers nothing at all.
 
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/TextBlock.h"
 #include "Containers/Ticker.h"
+#include "Engine/Engine.h"
 #include "HttpPath.h"
 #include "HttpRouteHandle.h"
 #include "HttpServerModule.h"
@@ -15,6 +19,7 @@
 #include "IHttpRouter.h"
 #include "Misc/AutomationTest.h"
 #include "Station/StationRunFlow.h"
+#include "Station/StationScreens.h"
 #include "StationClient.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -191,6 +196,24 @@ BEGIN_DEFINE_SPEC(FStationRunPhoenixLossSpec, "ProyectoMed.StationRun.Unit.Phoen
 		TestNull("the room is left", Client->GetVoice());
 	}
 
+	/** Every text of a HUD on `Flow`, as it reads now. */
+	TArray<FString> HudTexts()
+	{
+		UStationHudWidget* Hud = CreateWidget<UStationHudWidget>(GEngine->GetWorldContexts()[0].World());
+		Hud->TakeWidget();
+		Hud->SetFlow(Flow);
+		Hud->Refresh();
+		TArray<FString> Found;
+		UWidgetTree::ForWidgetAndChildren(Hud->GetRootWidget(), [&Found](UWidget* Widget)
+		{
+			if (const UTextBlock* Text = Cast<UTextBlock>(Widget))
+			{
+				Found.Add(Text->GetText().ToString());
+			}
+		});
+		return Found;
+	}
+
 	/** Phoenix answers `Body`, and the client reads it: its clock is then where `Body` says. */
 	void WhenPhoenixShows(const FString& Body, const FDoneDelegate& Done, TFunction<void()> Then)
 	{
@@ -274,6 +297,9 @@ void FStationRunPhoenixLossSpec::Define()
 			TestTrue("the learner can still talk", Flow->CanSendTurn());
 			TestTrue("and finish", Flow->CanFinish());
 			TestFalse("Phoenix is not asked to end it", AskedToFinishByTimer());
+			const TArray<FString> Shown = HudTexts();
+			TestTrue("the HUD says the time is over", Shown.Contains(TEXT("Tempo esgotado · além do tempo")));
+			TestTrue("and counts up", Shown.ContainsByPredicate([](const FString& Text) { return Text.StartsWith(TEXT("+03:2")); }));
 			Done.Execute();
 		});
 	});
@@ -298,6 +324,9 @@ void FStationRunPhoenixLossSpec::Define()
 		Flow->SessionMode = EStationSessionMode::SimulatedExam;
 		WhenPhoenixShows(RunBody(TEXT("simulated_exam"), TEXT("2026-10-27T12:10:00Z"), TEXT("2026-10-27T12:10:00Z")), Done, [this, Done]()
 		{
+			const TArray<FString> Shown = HudTexts();
+			TestFalse("no overtime on screen", Shown.Contains(TEXT("Tempo esgotado · além do tempo")));
+			TestFalse("no count on screen", Shown.ContainsByPredicate([](const FString& Text) { return Text.StartsWith(TEXT("+")); }));
 			Flow->CheckStationTimer();
 			TestEqual("the run ends", Flow->GetStep(), EStationRunStep::Finishing);
 			WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Finishing; }, [this, Done]()

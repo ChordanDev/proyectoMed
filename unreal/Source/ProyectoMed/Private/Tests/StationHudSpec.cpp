@@ -13,6 +13,7 @@
 #include "Components/ContentWidget.h"
 #include "Components/EditableTextBox.h"
 #include "Components/HorizontalBox.h"
+#include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Engine/Engine.h"
@@ -322,7 +323,7 @@ void FStationHudUnitSpec::Define()
 			return Found;
 		};
 
-		// The top bar, the conversation and the exam drawer: the panel's colour.
+		// The timer, the conversation, the exam drawer and the two buttons' grounds: the panel's colour.
 		int32 Panels = 0;
 		for (UBorder* Border : Borders(Hud->GetRootWidget()))
 		{
@@ -333,7 +334,7 @@ void FStationHudUnitSpec::Define()
 				TestTrue(TEXT("a panel is translucent"), Fill.A < 1.f);
 			}
 		}
-		TestEqual(TEXT("the top bar, the conversation and the exam drawer"), Panels, 3);
+		TestEqual(TEXT("the timer, the conversation, the exam drawer and the side buttons"), Panels, 5);
 
 		const TArray<UBorder*> Bubbles = Borders(Hud->TranscriptBox);
 		TestEqual(TEXT("one bubble per line"), Bubbles.Num(), 2);
@@ -632,9 +633,105 @@ void FStationHudUnitSpec::Define()
 		NoteExaminer(*Flow);
 		UStationHudWidget* Hud = MakeHud(Flow);
 		TestEqual("the countdown", Hud->TimerText->GetVisibility(), ESlateVisibility::Visible);
-		TestEqual("named a training", Hud->ModeText->GetText().ToString(), FString(TEXT("Treino por voz · Tempo restante")));
+		TestEqual("named a training", Hud->ModeText->GetText().ToString(), FString(TEXT("Treino por voz")));
 		TestTrue("\"Anotado.\"", Texts(Hud->TranscriptBox).Contains(TEXT("Examinador: Anotado.")));
-		TestEqual("no brief button", Hud->BriefButton->GetVisibility(), ESlateVisibility::Collapsed);
+		TestEqual("the brief at hand", Hud->BriefButton->GetVisibility(), ESlateVisibility::Visible);
+	});
+
+	It("names a text training", [this]()
+	{
+		TestEqual("named", MakeHud(MakeFlow(EStationTrainingMode::Text))->ModeText->GetText().ToString(), FString(TEXT("Treino por texto")));
+	});
+
+	// #461: the time left until the deadline, then the time past it in the exam accent.
+	It("turns the timer into the overtime at the deadline, and back", [this]()
+	{
+		UStationHudWidget* Hud = MakeHud(MakeFlow(EStationTrainingMode::Voice));
+		const auto Color = [Hud]() { return Hud->TimerText->GetColorAndOpacity().GetSpecifiedColor(); };
+
+		Hud->ShowStationTime(FTimespan::FromSeconds(462));
+		TestEqual("counts down", Hud->TimerText->GetText().ToString(), FString(TEXT("07:42")));
+		TestTrue("the time left", Texts(Hud->GetRootWidget()).Contains(TEXT("Tempo restante")));
+		TestEqual("in white", Color(), StationUi::InkTitle);
+
+		Hud->ShowStationTime(FTimespan::Zero());
+		TestEqual("zero is still the deadline", Hud->TimerText->GetText().ToString(), FString(TEXT("00:00")));
+		TestTrue("not past it yet", Texts(Hud->GetRootWidget()).Contains(TEXT("Tempo restante")));
+
+		Hud->ShowStationTime(FTimespan::FromSeconds(-200));
+		TestEqual("counts up", Hud->TimerText->GetText().ToString(), FString(TEXT("+03:20")));
+		const TArray<FString> Shown = Texts(Hud->GetRootWidget());
+		TestTrue("says so", Shown.Contains(TEXT("Tempo esgotado · além do tempo")));
+		TestFalse("no time left", Shown.Contains(TEXT("Tempo restante")));
+		TestEqual("in the exam accent", Color(), StationUi::ProvaAccent);
+
+		// Phoenix re-anchored the clock, which ran ahead of its own.
+		Hud->ShowStationTime(FTimespan::FromSeconds(3));
+		TestEqual("in white again", Color(), StationUi::InkTitle);
+	});
+
+	It("keeps the voice states' copy", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		UStationHudWidget* Hud = MakeHud(Flow);
+		const auto Status = [Flow, Hud]()
+		{
+			Hud->Refresh();
+			return Hud->VoiceStatusText->GetText().ToString();
+		};
+		TestEqual("ready", Status(), FString(TEXT("Voz conectada")));
+		Flow->Voice.State = EStationVoiceState::Connecting;
+		TestEqual("connecting", Status(), FString(TEXT("Conectando a voz...")));
+		Flow->Voice.State = EStationVoiceState::Reconnecting;
+		TestEqual("reconnecting", Status(), FString(TEXT("Reconectando a voz...")));
+		Flow->Voice.bMicrophoneUnavailable = true;
+		TestEqual("no microphone", Status(), FString(TEXT("Microfone indisponível. Continue por escrito.")));
+		Flow->Voice.bLost = true;
+		TestEqual("lost", Status(), FString(TEXT("A voz caiu. O tempo da estação continua.")));
+	});
+
+	// #239: the brief, over the scene, while the clock goes on.
+	It("opens a training's brief over the scene and goes on with the run", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		FStationSummary Station;
+		Station.DisplayTitle = TEXT("Abdome agudo");
+		Station.Scenario = TEXT("Pronto atendimento de um hospital geral.");
+		Station.Tasks = {TEXT("Faça a anamnese."), TEXT("Solicite exames.")};
+		Flow->Station = Station;
+		UStationHudWidget* Hud = MakeHud(Flow);
+		TestEqual("closed at first", Hud->BriefReader->GetVisibility(), ESlateVisibility::Collapsed);
+
+		Hud->HandleOpenBrief();
+		TestEqual("open", Hud->BriefReader->GetVisibility(), ESlateVisibility::Visible);
+		const TArray<FString> Shown = Texts(Hud->BriefReader);
+		TestTrue("the heading", Shown.Contains(TEXT("Treino · Cenário e tarefas")));
+		TestTrue("the title", Shown.Contains(TEXT("Abdome agudo")));
+		TestTrue("the scenario", Shown.Contains(TEXT("Pronto atendimento de um hospital geral.")));
+		TestTrue("the first task", Shown.Contains(TEXT("•  Faça a anamnese.")));
+		TestTrue("the second task", Shown.Contains(TEXT("•  Solicite exames.")));
+		TestTrue("the way back", Shown.Contains(TEXT("Voltar ao consultório")));
+		TestEqual("the run goes on", Flow->GetStep(), EStationRunStep::Running);
+		TestFalse("the exam's brief stays closed", Flow->IsBriefOpen());
+		const UPanelWidget* Root = Cast<UPanelWidget>(Hud->GetRootWidget());
+		TestTrue("the time stays in view over it", Root->GetChildIndex(Hud->TimerPanel) > Root->GetChildIndex(Hud->BriefReader));
+
+		Hud->HandleCloseBriefReader();
+		TestEqual("closed", Hud->BriefReader->GetVisibility(), ESlateVisibility::Collapsed);
+
+		Hud->HandleOpenBrief();
+		Flow->Step = EStationRunStep::Finishing;
+		Hud->Refresh();
+		TestEqual("closed once the run ends", Hud->BriefReader->GetVisibility(), ESlateVisibility::Collapsed);
+	});
+
+	It("keeps a simulated exam's brief on its own screen", [this]()
+	{
+		UStationRunFlow* Flow = MakeFlow(EStationTrainingMode::Voice);
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		UStationHudWidget* Hud = MakeHud(Flow);
+		Hud->HandleOpenBrief();
+		TestEqual("not the training's reader", Hud->BriefReader->GetVisibility(), ESlateVisibility::Collapsed);
 	});
 
 	It("keeps the typed turn and the typed exam request in a training", [this]()

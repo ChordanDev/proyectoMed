@@ -359,7 +359,10 @@ private:
 	/** One message of the conversation; `bInProgress` for a turn still being said or sent. */
 	void AddMessage(EStationSpeaker Speaker, const FString& Text, bool bInProgress);
 	void SendTypedTurn();
-	void BuildExamTab(UOverlay& Root);
+	void BuildTimerPanel(UOverlay& Root);
+	/** "Cenário e tarefas" and "Exames", on the right. */
+	void BuildSideActions(UOverlay& Root);
+	void BuildBriefReader(UOverlay& Root);
 	void BuildExamDrawer(UOverlay& Root);
 	void BuildMicrophone(UVerticalBox& Footer);
 	void BuildDocumentViewer(UOverlay& Root);
@@ -370,6 +373,11 @@ private:
 	void AddPendingExamCard(const FString& Text);
 	/** A link that opens `Impresso`, labelled with its title unless `Label` is given. */
 	void AddDocumentLink(UVerticalBox& Parent, const FStationImpresso& Impresso, const FText& Label = FText::GetEmpty());
+
+	/** The time the client counts, while the run shows it. */
+	void RefreshTimer();
+	/** `Left` on the timer: the time left until the deadline, or past it once negative (#461). */
+	void ShowStationTime(const FTimespan& Left);
 
 	/** The microphone's look: idle, arming or recording, with the recording time. */
 	void RefreshMicrophone();
@@ -413,9 +421,12 @@ private:
 	UFUNCTION()
 	void HandleFinish();
 
-	/** A simulated exam's brief, over the room (#425). */
+	/** The station's brief: a simulated exam's own screen (#425), or a training's reader (#461). */
 	UFUNCTION()
 	void HandleOpenBrief();
+
+	UFUNCTION()
+	void HandleCloseBriefReader();
 
 	UPROPERTY()
 	TObjectPtr<UStationRunFlow> Flow;
@@ -446,8 +457,20 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> TalkText;
 
-	/** Whether the talk button is styled as talking; unset before its first style. */
-	TOptional<bool> TalkLookTalking;
+	/** The microphone beside the talk button's label; redrawn in the label's colour. */
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> TalkIcon;
+
+	/** The talk button's current fill; unset before its first style. */
+	TOptional<FLinearColor> TalkLookFill;
+
+	/** The patient is speaking: shown under the conversation. */
+	UPROPERTY()
+	TObjectPtr<UWidget> PatientTalkingRow;
+
+	/** "Cenário e tarefas" and "Exames"; the exam panel takes their place. */
+	UPROPERTY()
+	TObjectPtr<UWidget> SideActions;
 
 	UPROPERTY()
 	TObjectPtr<UButton> ExamTab;
@@ -530,12 +553,46 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> TimerText;
 
-	/** Opens a simulated exam's brief where a training shows its timer (#425). */
+	/** "Tempo restante", or that the time is over (#461). */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> TimerLabelText;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> TimerColumn;
+
+	UPROPERTY()
+	TObjectPtr<UWidget> TimerDivider;
+
+	/** The panel of the time, the voice and the way out. */
+	UPROPERTY()
+	TObjectPtr<UWidget> TimerPanel;
+
+	/** Opens the station's brief (#425, #461). */
 	UPROPERTY()
 	TObjectPtr<UButton> BriefButton;
 
+	/** A training's brief, over the scene and under the time, so the clock stays in view (#461). */
+	UPROPERTY()
+	TObjectPtr<UWidget> BriefReader;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> BriefTitleText;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> BriefScenarioText;
+
+	UPROPERTY()
+	TObjectPtr<UVerticalBox> BriefTaskList;
+
 	UPROPERTY()
 	TObjectPtr<UTextBlock> FallbackText;
+
+	/** The state of the voice: its dot and `VoiceStatusText`. */
+	UPROPERTY()
+	TObjectPtr<UWidget> VoiceRow;
+
+	UPROPERTY()
+	TObjectPtr<UBorder> VoiceDot;
 
 	UPROPERTY()
 	TObjectPtr<UTextBlock> VoiceStatusText;
