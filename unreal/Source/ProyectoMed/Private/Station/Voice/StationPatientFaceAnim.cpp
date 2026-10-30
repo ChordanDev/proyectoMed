@@ -66,6 +66,9 @@ void FStationPatientFaceProxy::PreUpdate(UAnimInstance* InAnimInstance, float De
 
 	const bool bSpeaking = Face->Mouth && Face->Mouth->Read(MouthControls);
 	SpeechWeight = StationFaceBlend::StepSpeechWeight(SpeechWeight, bSpeaking, DeltaSeconds);
+
+	EyeGazeWeight = Face->EyeGazeWeight;
+	StationGaze::EyeControls(Face->EyeGaze, EyeControls);
 }
 
 bool FStationPatientFaceProxy::Evaluate(FPoseContext& Output)
@@ -78,6 +81,15 @@ bool FStationPatientFaceProxy::Evaluate(FPoseContext& Output)
 	else
 	{
 		Output.ResetToRefPose();
+	}
+
+	if (EyeGazeWeight > 0.f)
+	{
+		for (const TPair<FName, float>& Control : EyeControls)
+		{
+			const float IdleValue = Output.Curve.Get(Control.Key);
+			Output.Curve.Set(Control.Key, FMath::Lerp(IdleValue, Control.Value, EyeGazeWeight));
+		}
 	}
 
 	if (SpeechWeight > 0.f)

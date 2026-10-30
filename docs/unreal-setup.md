@@ -223,6 +223,27 @@ Point the client at another Phoenix with `-PhoenixUrl=<origin>` or
   solved from the voice (StreamingADA, as in the #189 spike) over it. The
   patient is found as the actor with a skeletal mesh component named `Face`, so
   the level needs no extra setup, and no Live Link source is involved.
+- In a voice training the patient also looks at the learner (#449). The game
+  adds `UStationPatientGaze` to the patient. That component swaps the body to
+  `UStationPatientBodyAnim`, which plays the same seated idle and turns
+  `neck_01`, `neck_02` and `head` over it. The face copies those joints from the
+  body in its post-process Anim Blueprint, so it turns with them. It also sets
+  the face's eye-look controls (`CTRL_expressions_eyeLook*`) in
+  `UStationPatientFaceAnim`. The mouth controls are left alone. The look target
+  is read from the `StationView` camera every frame, so a re-framed camera needs
+  no change.
+  - While the learner holds the talk key the patient looks at them 3–8 s at a
+    time, with glances away of 0.4–1.2 s.
+  - While it answers, the looks last 2–5 s and the glances 0.7–1.8 s.
+  - When nobody speaks the idle loops keep the gaze, with a look at the learner
+    of 0.8–2 s every 4–10 s.
+  - Glances go down, aside or at nothing, at most 25° from the learner.
+  - The head takes half of a turn, at most 25° to a side, 12° up and 20° down,
+    and the eyes do the rest, at most 30° to a side, 20° up and 25° down. Both
+    eyes get the same controls, so they never cross.
+  - The timings and limits live in `Station/Patient/StationGaze.cpp`.
+  - `ProyectoMed.PatientGaze.Scene` checks the head turn and the eye angles on
+    the real MetaHuman, headless.
 - The learner sees the scene through the `CameraActor` tagged `StationView`
   with a seated doctor's eyes: 1.20 m above the floor, about 1.2 m from the
   patient's head, 6.5° down, with an 80° horizontal field of view and no look

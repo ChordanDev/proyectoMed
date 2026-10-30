@@ -9,6 +9,7 @@
 #include "Framework/Application/NavigationConfig.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Station/Patient/StationPatientGaze.h"
 #include "Station/StationDeskClock.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
@@ -226,6 +227,19 @@ void AStationPlayerController::PreparePatientVoice()
 					Voice->Start(WeakFace.Get(), WeakIdle.Get());
 				}
 			});
+			// The patient looks at the learner now and then while they talk (#449).
+			if (USkeletalMeshComponent* Body = Cast<USkeletalMeshComponent>(Face->GetAttachParent()))
+			{
+				UStationPatientGaze* Gaze = NewObject<UStationPatientGaze>(*It);
+				Gaze->RegisterComponent();
+				Gaze->Start(Body, Face, [WeakFlow = TWeakObjectPtr<UStationRunFlow>(Flow)]()
+				{
+					const UStationRunFlow* Run = WeakFlow.Get();
+					return Run
+						? UStationPatientGaze::ModeFor(Run->GetStep(), Run->GetVoiceCredential() != nullptr, Run->IsTalking(), Run->IsPatientAnswering())
+						: EStationGazeMode::Off;
+				});
+			}
 			return;
 		}
 	}
