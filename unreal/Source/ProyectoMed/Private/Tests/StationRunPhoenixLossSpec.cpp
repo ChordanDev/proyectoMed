@@ -476,6 +476,50 @@ void FStationRunPhoenixLossSpec::Define()
 		});
 	});
 
+	// #422: a simulated exam is voice only, so a voice that fails leaves it with no input
+	// at all; it is invalidated with no result and no penalty (#318 business rule 8).
+	It("invalidates a simulated exam when the transcription fails, though Phoenix answers", [this]()
+	{
+		AnswerChecks();
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		FStationVoiceEvent Fatal;
+		Fatal.Kind = EStationVoiceEventKind::Fatal;
+		Fatal.Failure = TEXT("timeout");
+		Flow->HandleVoiceEvent(Fatal);
+		ExpectInvalidated();
+		TestEqual("because of the voice", Flow->GetInvalidation(), EStationInvalidation::VoiceLost);
+	});
+
+	It("invalidates a simulated exam when the microphone fails", [this]()
+	{
+		AnswerChecks();
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		Flow->ReportMicrophoneUnavailable();
+		ExpectInvalidated();
+		TestEqual("because of the voice", Flow->GetInvalidation(), EStationInvalidation::VoiceLost);
+	});
+
+	LatentIt("invalidates a simulated exam that gets no voice credential, instead of going on in writing", Timeout,
+		[this](const FDoneDelegate& Done)
+	{
+		AnswerChecks();
+		Server.Route(FString(SessionPath) + TEXT("/voice"), EHttpServerRequestVerbs::VERB_POST,
+			EHttpServerResponseCodes::ServiceUnavail,
+			TEXT(R"({"error": "voice_unavailable", "message": "A voz não está disponível."})"));
+		// The flow starts its own session, as `Enter` does, instead of the running one.
+		Client->ForgetSession();
+		Flow->SessionMode = EStationSessionMode::SimulatedExam;
+		Flow->Step = EStationRunStep::Starting;
+		Flow->StartSession();
+		WhenFlow(Flow, [this]() { return Flow->GetStep() != EStationRunStep::Starting; }, [this, Done]()
+		{
+			ExpectInvalidated();
+			TestEqual("because of the voice", Flow->GetInvalidation(), EStationInvalidation::VoiceLost);
+			TestFalse("no text fallback", Flow->IsVoiceFallback());
+			Done.Execute();
+		});
+	});
+
 	LatentIt("invalidates a voice training when the voice fails and Phoenix does not answer either", Timeout,
 		[this](const FDoneDelegate& Done)
 	{

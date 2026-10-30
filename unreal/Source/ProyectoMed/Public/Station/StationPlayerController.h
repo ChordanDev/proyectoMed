@@ -42,6 +42,8 @@ protected:
 	virtual void SetupInputComponent() override;
 
 private:
+	friend class FStationHudUnitSpec;
+
 	void Render();
 	/** The first camera tagged `Tag` in the level, or null. */
 	AActor* FindCamera(const FName& Tag) const;
@@ -103,4 +105,10 @@ private:
 
 	/** The input mode last applied: game and UI during a run, UI only around it. */
 	TOptional<bool> bAppliedRunInputMode;
+
+	/**
+	 * What `Render` runs to keep the microphone in step with the run: `UpdateMicrophone`,
+	 * unless a test stands in for a device that will not open.
+	 */
+	TFunction<void()> MicrophoneUpdate;
 };

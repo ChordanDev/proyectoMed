@@ -1085,6 +1085,30 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
                |> post(transcripts_path(id), %{turn_id: 1, text: "Solicito uma tomografia"})
                |> json_response(201)
     end
+
+    # A simulated exam refuses typed impresso requests (#422); the spoken
+    # capture still records the verified impresso event the rubric uses.
+    test "a simulated exam keeps the spoken capture", %{conn: conn} do
+      Application.put_env(:backend, :station_ai_adapter, NoGenerationAdapter)
+
+      {:ok, %{session_id: id}} =
+        Stations.start_active_session(%{audio_consent: true, mode: :simulated_exam})
+
+      {:ok, _} = Stations.arm_exam_mode(id)
+
+      assert %{
+               "status" => "impresso_requested",
+               "request_id" => "voice-exam-1",
+               "decision" => "released"
+             } =
+               conn
+               |> post(transcripts_path(id), %{turn_id: 1, text: "Solicito hemograma e PCR"})
+               |> json_response(201)
+
+      {:ok, stored} = Stations.get_session(id)
+      assert [%{request_id: "voice-exam-1", decision: :released}] = stored.impresso_requests
+      assert ["laboratorio-sangue-enzimas"] = stored.released_impressos
+    end
   end
 
   describe "POST usage (#342)" do

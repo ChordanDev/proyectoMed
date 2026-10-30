@@ -56,6 +56,7 @@ void AStationPlayerController::BeginPlay()
 	Brief->SetFlow(Flow);
 	Hud->SetFlow(Flow);
 	Feedback->SetFlow(Flow);
+	Invalidated->SetFlow(Flow);
 	Menu->OnModeChosen.BindWeakLambda(this, [this](EStationSessionMode Mode) { Flow->ChooseMode(Mode); });
 	Menu->OnQuit.BindWeakLambda(this, [this]() { UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false); });
 	Notice->OnAcknowledged.BindWeakLambda(this, [this]() { Flow->AcknowledgeNotice(); });
@@ -119,6 +120,18 @@ void AStationPlayerController::Render()
 		return;
 	}
 
+	// First, since it can change the run: a microphone that will not open invalidates
+	// a simulated exam (#422), which renders again inside this call. What follows then
+	// reads the step that change left, not the one before it (Jorge J2 on #441).
+	if (MicrophoneUpdate)
+	{
+		MicrophoneUpdate();
+	}
+	else
+	{
+		UpdateMicrophone();
+	}
+
 	const EStationRunStep Step = Flow->GetStep();
 	const bool bRunning = Step == EStationRunStep::Running;
 	MicrophoneScreen->SetVisibility(Step == EStationRunStep::Microphone ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
@@ -135,7 +148,7 @@ void AStationPlayerController::Render()
 	Brief->Refresh();
 	Hud->Refresh();
 	Feedback->Refresh();
-	UpdateMicrophone();
+	Invalidated->Refresh();
 	UpdateCamera();
 
 	// Only when the run starts or ends: applying an input mode releases the mouse
