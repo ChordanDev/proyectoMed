@@ -37,6 +37,8 @@ RESULTS = "/api/v2/stations/active/sessions"
 # Past the speech-start tolerance Phoenix allows (500 ms), inside its evidence window.
 AFTER_DEADLINE_S = 1.0
 FINISH_TIMEOUT_S = 15
+# Long enough for a reply nobody should send to reach the learner, were it sent.
+LATE_REPLY_SETTLE_S = 1.5
 
 
 class CheckFailed(Exception):
@@ -110,6 +112,7 @@ class Learner:
         self.packets: list[bytes] = []
         self.audio_frames = 0
         self.frames_sent = 0
+        self._listeners: set[asyncio.Task] = set()  # the loop holds tasks weakly
         self._changed = asyncio.Event()
         self.room.on("data_received", self._on_data)
         self.room.on("track_subscribed", self._on_track)
@@ -128,7 +131,9 @@ class Learner:
 
     def _on_track(self, track, _publication, participant) -> None:
         if participant.identity == "voice-worker" and track.name == "patient-voice":
-            asyncio.ensure_future(self._listen(track))
+            listener = asyncio.ensure_future(self._listen(track))
+            self._listeners.add(listener)
+            listener.add_done_callback(self._listeners.discard)
 
     async def _listen(self, track: rtc.Track) -> None:
         async for frame_event in rtc.AudioStream(track):
@@ -295,6 +300,7 @@ async def simulated_exam() -> None:
 
     finished = await wait_until_completed(session_id)
     check(finished["completion_reason"] == "timer", "the deadline ended the run")
+    await asyncio.sleep(LATE_REPLY_SETTLE_S)
     check(
         len(by_role(finished, "learner")) == kept,
         "the utterance after the deadline was discarded",

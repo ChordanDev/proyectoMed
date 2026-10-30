@@ -109,7 +109,8 @@ jobs:
         run: scripts/run-simulated-exam-e2e.sh
 
       - name: Upload the voice stack logs
-        if: ${{ failure() }}
+        # A hung stack ends in a cancelled job, not a failed one.
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: voice-stack-logs

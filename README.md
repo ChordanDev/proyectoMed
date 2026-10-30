@@ -833,7 +833,9 @@ spoken turns with no patient text, an impresso requested by voice, an utterance
 discarded past a 30-second deadline, the scaled total and certainty level, and a
 training with its help intact. It needs `livekit-server`, `uv` and a migrated
 `backend_dev` database (or `DATABASE_URL`). The `Simulated Exam E2E` workflow runs it
-on every pull request that touches the backend, the voice worker or the stack.
+on every pull request that touches the backend, the voice worker or the stack. On a
+saturated machine LiveKit can refuse the job once (`no workers with sufficient
+capacity` in its log), and the run fails with `the voice worker joined`: run it again.
 
 ### Production deploy (Fly)
 
