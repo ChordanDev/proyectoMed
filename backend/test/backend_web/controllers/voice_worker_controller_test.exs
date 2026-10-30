@@ -207,6 +207,21 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert is_list(body["keyterms"]) and body["keyterms"] != []
     end
 
+    test "names the Station Mode and the deadline, so the worker stops speaking at it (#424)",
+         %{conn: conn} do
+      exam = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      training = Stations.create_session(%{audio_consent: true})
+
+      body = conn |> get(context_path(exam.session_id)) |> json_response(200)
+
+      assert body["mode"] == "simulated_exam"
+      assert body["deadline_at"] == DateTime.to_iso8601(exam.deadline_at)
+      assert {:ok, _server_now, 0} = DateTime.from_iso8601(body["server_now"])
+
+      assert %{"mode" => "training"} =
+               conn |> get(context_path(training.session_id)) |> json_response(200)
+    end
+
     test "refuses sessions without audio consent", %{conn: conn} do
       session = Stations.create_session(%{audio_consent: false})
 
@@ -474,10 +489,12 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
     setup do
       original_duration = Application.get_env(:backend, :station_duration_ms)
       original_grace = Application.get_env(:backend, :turn_grace_ms)
+      original_overtime = Application.get_env(:backend, :training_overtime_ms)
 
       on_exit(fn ->
         restore_env(:station_duration_ms, original_duration)
         restore_env(:turn_grace_ms, original_grace)
+        restore_env(:training_overtime_ms, original_overtime)
       end)
 
       :ok
@@ -485,7 +502,10 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
     test "a turn on a session completed by the timer returns 409 station_time_elapsed",
          %{conn: conn} do
+      original_window = Application.get_env(:backend, :simulated_exam_evidence_window_ms)
+      on_exit(fn -> restore_env(:simulated_exam_evidence_window_ms, original_window) end)
       Application.put_env(:backend, :station_duration_ms, 30)
+      Application.put_env(:backend, :simulated_exam_evidence_window_ms, 0)
       session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
       id = session.session_id
 
@@ -500,14 +520,17 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       assert {:ok, %{messages: [], completion_reason: :timer}} = Stations.get_session(id)
     end
 
-    test "a new turn past the deadline returns 409 while the in-flight turn still replies inside grace",
+    # A training keeps the #256 grace window at its cap (#424 changes only a
+    # simulated exam).
+    test "a training's in-flight turn still replies inside grace while a new turn past the cap returns 409",
          _tags do
       Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :training_overtime_ms, 0)
       Application.put_env(:backend, :turn_grace_ms, 3_000)
       Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
       Application.put_env(:backend, :voice_turn_test_pid, self())
 
-      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      session = Stations.create_session(%{audio_consent: true})
       id = session.session_id
 
       in_flight =
@@ -534,7 +557,7 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       resp = in_flight |> Task.await() |> json_response(201)
       assert resp["reply_text"] == @valid_fact_reply
 
-      assert {:ok, %{status: :completed, completion_reason: :timer} = stored} =
+      assert {:ok, %{status: :completed, completion_reason: :cap} = stored} =
                Stations.get_session(id)
 
       assert [
@@ -543,14 +566,15 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
              ] = stored.messages
     end
 
-    test "a generation cut off by the deadline returns 409 station_time_elapsed and no text",
+    test "a training's generation cut off by the cap grace returns 409 station_time_elapsed and no text",
          _tags do
       Application.put_env(:backend, :station_duration_ms, 200)
+      Application.put_env(:backend, :training_overtime_ms, 0)
       Application.put_env(:backend, :turn_grace_ms, 100)
       Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
       Application.put_env(:backend, :voice_turn_test_pid, self())
 
-      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      session = Stations.create_session(%{audio_consent: true})
       id = session.session_id
 
       task =
@@ -568,7 +592,250 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
       resp = task |> Task.await() |> json_response(409)
       assert resp == %{"error" => "station_time_elapsed"}
-      assert {:ok, %{messages: [], completion_reason: :timer}} = Stations.get_session(id)
+      assert {:ok, %{messages: [], completion_reason: :cap}} = Stations.get_session(id)
+    end
+  end
+
+  describe "a simulated exam ends exactly at its deadline (#424)" do
+    setup do
+      originals =
+        for key <- [:station_duration_ms, :simulated_exam_evidence_window_ms],
+            do: {key, Application.get_env(:backend, key)}
+
+      on_exit(fn -> Enum.each(originals, fn {key, value} -> restore_env(key, value) end) end)
+
+      Application.put_env(:backend, :station_duration_ms, 200)
+      Application.put_env(:backend, :simulated_exam_evidence_window_ms, 2_000)
+      :ok
+    end
+
+    defp start_exam do
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+      past_deadline(session)
+      session
+    end
+
+    # Waits until Phoenix's clock is past the session's deadline.
+    defp past_deadline(session) do
+      wait_until(fn -> DateTime.compare(DateTime.utc_now(), session.deadline_at) == :gt end)
+      Process.sleep(30)
+    end
+
+    defp spoken_at(session, offset_ms) do
+      session.deadline_at |> DateTime.add(offset_ms, :millisecond) |> DateTime.to_iso8601()
+    end
+
+    defp post_late(session, turn_id, text, speech_started_at) do
+      body = %{turn_id: turn_id, text: text}
+
+      body =
+        if speech_started_at, do: Map.put(body, :speech_started_at, speech_started_at), else: body
+
+      build_conn()
+      |> put_req_header("authorization", "Bearer " <> @secret)
+      |> post(transcripts_path(session.session_id), body)
+    end
+
+    test "an utterance that started before the deadline is kept with no patient reply, though its transcript arrives after it",
+         _tags do
+      Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = start_exam()
+
+      resp =
+        session
+        |> post_late(1, "Vou pedir um eletrocardiograma", spoken_at(session, -2_000))
+        |> json_response(201)
+
+      assert %{"turn_id" => 1, "status" => "kept", "addressee" => "patient"} = resp
+      assert is_integer(resp["generation_id"])
+      refute Map.has_key?(resp, "reply_text")
+      refute_received :failed_adapter_called
+
+      # It was the last utterance the run takes: the run ends at once.
+      assert {:ok, %{status: :completed, completion_reason: :timer} = stored} =
+               Stations.get_session(session.session_id)
+
+      assert [%{role: :learner, modality: :voice, text: "Vou pedir um eletrocardiograma"}] =
+               stored.messages
+    end
+
+    test "an utterance that started after the deadline is discarded", _tags do
+      Application.put_env(:backend, :station_ai_adapter, TestFailureAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = start_exam()
+
+      assert %{"error" => "station_time_elapsed"} =
+               session
+               |> post_late(1, "Chegou tarde", spoken_at(session, 1_000))
+               |> json_response(409)
+
+      refute_received :failed_adapter_called
+
+      assert {:ok, %{status: :completed, completion_reason: :timer, messages: []}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "the tolerance boundary: 499 ms after the deadline still counts, 500 ms does not",
+         _tags do
+      kept = start_exam()
+
+      assert %{"status" => "kept"} =
+               kept |> post_late(1, "No limite", spoken_at(kept, 499)) |> json_response(201)
+
+      assert {:ok, %{messages: [%{text: "No limite"}]}} = Stations.get_session(kept.session_id)
+
+      discarded = start_exam()
+
+      assert %{"error" => "station_time_elapsed"} =
+               discarded
+               |> post_late(1, "Fora do limite", spoken_at(discarded, 500))
+               |> json_response(409)
+
+      assert {:ok, %{messages: []}} = Stations.get_session(discarded.session_id)
+    end
+
+    test "a late transcript without its speech start is discarded", _tags do
+      session = start_exam()
+
+      assert %{"error" => "station_time_elapsed"} =
+               session |> post_late(1, "Sem horário", nil) |> json_response(409)
+
+      assert {:ok, %{messages: []}} = Stations.get_session(session.session_id)
+    end
+
+    test "a malformed speech start is refused as an invalid transcript", %{conn: conn} do
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+
+      for bad <- ["ontem", 12, "2026-10-29T10:00:00"] do
+        assert %{"error" => "invalid_transcript"} =
+                 conn
+                 |> post(transcripts_path(session.session_id), %{
+                   turn_id: 1,
+                   text: "Onde dói?",
+                   speech_started_at: bad
+                 })
+                 |> json_response(400)
+      end
+    end
+
+    test "the reply in flight at the deadline is never released: the learner turn stays as evidence",
+         _tags do
+      Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+
+      in_flight =
+        Task.async(fn ->
+          post_late(session, 1, "Onde dói?", spoken_at(session, -250))
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+      past_deadline(session)
+
+      send(in_flight.pid, {:resume_adapter, @valid_fact_reply})
+      resp = in_flight |> Task.await() |> json_response(201)
+
+      assert %{"turn_id" => 1, "status" => "kept", "addressee" => "patient"} = resp
+      refute Map.has_key?(resp, "reply_text")
+
+      assert {:ok, %{messages: [%{role: :learner, text: "Onde dói?"}]}} =
+               Stations.get_session(session.session_id)
+
+      # No grace for the dialogue: the run waits only for late evidence.
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
+      end)
+
+      assert {:ok, %{completion_reason: :timer, messages: [%{role: :learner}]}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "a streamed reply hands over no sentence after the deadline", _tags do
+      Application.put_env(:backend, :station_duration_ms, 300)
+      Application.put_env(:backend, :station_ai_adapter, TestSlowBarrierAdapter)
+      Application.put_env(:backend, :voice_turn_test_pid, self())
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+
+      in_flight =
+        Task.async(fn ->
+          build_conn()
+          |> put_req_header("authorization", "Bearer " <> @secret)
+          |> put_req_header("accept", "application/x-ndjson, application/json")
+          |> post(transcripts_path(session.session_id), %{turn_id: 1, text: "Onde dói?"})
+        end)
+
+      assert_receive {:adapter_called, _context}, 1000
+      past_deadline(session)
+      send(in_flight.pid, {:resume_adapter, @valid_fact_reply})
+
+      resp = in_flight |> Task.await() |> json_response(201)
+      assert %{"turn_id" => 1, "status" => "kept", "addressee" => "patient"} = resp
+      refute Map.has_key?(resp, "reply_text")
+
+      assert {:ok, %{messages: [%{role: :learner, text: "Onde dói?"}]}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "a timer finish waits for the utterance that started before the deadline",
+         _tags do
+      session = start_exam()
+
+      finish =
+        Task.async(fn ->
+          post(build_conn(), ~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+            reason: "timer"
+          })
+        end)
+
+      Process.sleep(200)
+      refute Task.yield(finish, 0)
+
+      assert %{"status" => "kept"} =
+               session
+               |> post_late(1, "Última frase", spoken_at(session, -500))
+               |> json_response(201)
+
+      assert %{"status" => "completed", "completion_reason" => "timer"} =
+               finish |> Task.await() |> json_response(200)
+
+      assert {:ok, %{messages: [%{text: "Última frase"}]}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "with nothing late the run completes when the evidence window closes", _tags do
+      Application.put_env(:backend, :simulated_exam_evidence_window_ms, 300)
+      session = start_exam()
+
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
+      end)
+
+      assert {:ok, %{completion_reason: :timer, messages: []}} =
+               Stations.get_session(session.session_id)
+    end
+
+    test "before the deadline a turn is answered as usual and the learner can still finish early",
+         %{conn: conn} do
+      Application.put_env(:backend, :station_duration_ms, 60_000)
+      session = Stations.create_session(%{audio_consent: true, mode: :simulated_exam})
+
+      assert %{"status" => "committed", "reply_text" => @valid_fact_reply} =
+               conn
+               |> post(transcripts_path(session.session_id), %{
+                 turn_id: 1,
+                 text: "Onde dói?",
+                 speech_started_at: DateTime.to_iso8601(DateTime.utc_now())
+               })
+               |> json_response(201)
+
+      assert %{"completion_reason" => "user"} =
+               build_conn()
+               |> post(~p"/api/stations/active/sessions/#{session.session_id}/finish", %{
+                 reason: "user"
+               })
+               |> json_response(200)
     end
   end
 

@@ -1537,6 +1537,8 @@ defmodule Backend.Stations do
   Deepgram's limit; see `SttKeyterms`, #292), so they stay server-side.
   `last_turn_id` is the committed learner cursor. `turn_id_floor` also covers
   cancelled turn IDs; a fresh worker must allocate strictly above this floor.
+  `mode` is the Station Mode, and `deadline_at` with `server_now` let the
+  worker stop speaking at a simulated exam's deadline (#424).
   """
   @spec voice_worker_context(String.t()) ::
           {:ok,
@@ -1545,7 +1547,10 @@ defmodule Backend.Stations do
              language: String.t(),
              keyterms: [String.t()],
              last_turn_id: non_neg_integer(),
-             turn_id_floor: non_neg_integer()
+             turn_id_floor: non_neg_integer(),
+             mode: Conversation.mode(),
+             deadline_at: DateTime.t(),
+             server_now: DateTime.t()
            }}
           | {:error, :not_found | :expired | :completed | :no_consent}
   def voice_worker_context(session_id) do
@@ -1564,7 +1569,10 @@ defmodule Backend.Stations do
            max(
              Map.get(session, :last_voice_turn_id, 0),
              Map.get(session, :cancelled_voice_turn_id, 0)
-           )
+           ),
+         mode: session.mode,
+         deadline_at: session.deadline_at,
+         server_now: DateTime.utc_now()
        }}
     end
   end
@@ -1600,7 +1608,7 @@ defmodule Backend.Stations do
 
   Encapsulates:
     1. Validating active session state and audio consent.
-    2. Atomically committing the learner turn via `Conversation.begin_voice_turn/3`
+    2. Atomically committing the learner turn via `Conversation.begin_voice_turn/4`
        which assigns a session-scoped monotonic generation identity and enforces
        the station deadline.
        Returns `{:ok, :duplicate}` if the turn is not newer than the last committed turn,
@@ -1647,8 +1655,17 @@ defmodule Backend.Stations do
   resolved inside it is a normal success on a session that is then completed
   with reason `:timer`, and one resolved after it returns
   `{:error, :station_time_elapsed}` without being recorded as a failed generation.
+
+  A simulated exam ends exactly at its deadline (#424, no grace for the
+  dialogue). `opts` takes `:speech_started_at`, the `DateTime` the worker heard
+  the utterance start. After the deadline a turn that started before it (within
+  the tolerance `Conversation.begin_voice_turn/4` documents) is kept as evidence
+  with no generation; one that started after it, or names no start, returns
+  `{:error, :station_time_elapsed}`. The generation in flight at the deadline is
+  cut: it releases nothing more and its learner turn is kept. Both kept turns
+  return `{:ok, {:kept, %{refusal: :station_time_elapsed, addressee: :patient}}}`.
   """
-  @spec process_voice_turn(String.t(), pos_integer(), String.t()) ::
+  @spec process_voice_turn(String.t(), pos_integer(), String.t(), keyword()) ::
           {:ok,
            %{
              reply_text: String.t(),
@@ -1661,7 +1678,12 @@ defmodule Backend.Stations do
               %{
                 turn_id: pos_integer(),
                 generation_id: pos_integer(),
-                refusal: :low_confidence | :semantic_refusal | :unspeakable | :examiner_addressed,
+                refusal:
+                  :low_confidence
+                  | :semantic_refusal
+                  | :unspeakable
+                  | :examiner_addressed
+                  | :station_time_elapsed,
                 addressee: :examiner | :patient
               }}}
           | {:ok, {:impresso, map()}}
@@ -1676,25 +1698,61 @@ defmodule Backend.Stations do
              | :station_time_elapsed
              | :station_ai_unavailable
              | term()}
-  def process_voice_turn(session_id, turn_id, text)
+  def process_voice_turn(session_id, turn_id, text, opts \\ [])
+
+  def process_voice_turn(session_id, turn_id, text, opts)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) do
     Usage.track(session_id, fn ->
       with :dialogue <- exam_mode_turn(session_id, turn_id, text) do
-        process_dialogue_voice_turn(session_id, turn_id, text)
+        process_dialogue_voice_turn(session_id, turn_id, text, opts)
       end
     end)
   end
 
-  def process_voice_turn(_session_id, _turn_id, _text), do: {:error, :invalid_transcript}
+  def process_voice_turn(_session_id, _turn_id, _text, _opts), do: {:error, :invalid_transcript}
 
-  defp process_dialogue_voice_turn(session_id, turn_id, text) do
-    case admit_voice_turn(session_id, turn_id, text) do
+  defp process_dialogue_voice_turn(session_id, turn_id, text, opts) do
+    case admit_voice_turn(session_id, turn_id, text, opts) do
       {:ok, generation_id, learner_text} ->
-        process_voice_reply(session_id, turn_id, generation_id, learner_text)
+        session_id
+        |> process_voice_reply(turn_id, generation_id, learner_text)
+        |> kept_at_deadline(session_id, {turn_id, generation_id})
 
       other ->
-        other
+        kept_at_deadline(other, turn_id)
     end
+  end
+
+  # A simulated exam's deadline keeps the learner turn with no reply (#424):
+  # one that started before the deadline and arrived after it, and the one whose
+  # generation the deadline cut, however that generation ended (a stream the cut
+  # halted may only end after the run completed).
+  defp kept_at_deadline({:kept_at_deadline, generation_id}, turn_id),
+    do: deadline_receipt(turn_id, generation_id)
+
+  defp kept_at_deadline(result, _turn_id), do: result
+
+  defp kept_at_deadline({:error, _reason} = error, session_id, {turn_id, generation_id}) do
+    case Conversation.fetch(session_id) do
+      {:ok, %{deadline_cut_generation_id: ^generation_id}} ->
+        deadline_receipt(turn_id, generation_id)
+
+      _not_cut ->
+        error
+    end
+  end
+
+  defp kept_at_deadline(result, _session_id, _turn), do: result
+
+  defp deadline_receipt(turn_id, generation_id) do
+    {:ok,
+     {:kept,
+      %{
+        turn_id: turn_id,
+        generation_id: generation_id,
+        refusal: :station_time_elapsed,
+        addressee: :patient
+      }}}
   end
 
   @typedoc "One verified sentence handed to the voice worker (#271)."
@@ -1754,8 +1812,10 @@ defmodule Backend.Stations do
   events are unchanged.
 
   Returns `{result, acc}`, where `result` has the shape of
-  `process_voice_turn/3`'s result and `reply_text` is the spoken sentences
-  joined by a space. Each sentence logs its generation and verification
+  `process_voice_turn/4`'s result and `reply_text` is the spoken sentences
+  joined by a space. `opts` and a simulated exam's deadline (#424) follow
+  `process_voice_turn/4`: no sentence is handed over once the deadline cut the
+  generation. Each sentence logs its generation and verification
   latency without content (`Backend.Stations.StationAI.SentenceStream`).
   """
   @spec stream_voice_turn(
@@ -1763,30 +1823,36 @@ defmodule Backend.Stations do
           pos_integer(),
           String.t(),
           acc,
-          (voice_sentence(), acc -> {:cont, acc} | {:halt, acc})
+          (voice_sentence(), acc -> {:cont, acc} | {:halt, acc}),
+          keyword()
         ) :: {term(), acc}
         when acc: term()
-  def stream_voice_turn(session_id, turn_id, text, acc, sink)
+  def stream_voice_turn(session_id, turn_id, text, acc, sink, opts \\ [])
+
+  def stream_voice_turn(session_id, turn_id, text, acc, sink, opts)
       when is_binary(session_id) and is_integer(turn_id) and turn_id > 0 and is_binary(text) and
              is_function(sink, 2) do
     Usage.track(session_id, fn ->
       case exam_mode_turn(session_id, turn_id, text) do
-        :dialogue -> stream_dialogue_voice_turn(session_id, turn_id, text, acc, sink)
+        :dialogue -> stream_dialogue_voice_turn(session_id, turn_id, text, {acc, sink}, opts)
         exam_result -> {exam_result, acc}
       end
     end)
   end
 
-  def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink),
+  def stream_voice_turn(_session_id, _turn_id, _text, acc, _sink, _opts),
     do: {{:error, :invalid_transcript}, acc}
 
-  defp stream_dialogue_voice_turn(session_id, turn_id, text, acc, sink) do
-    case admit_voice_turn(session_id, turn_id, text) do
+  defp stream_dialogue_voice_turn(session_id, turn_id, text, {acc, sink}, opts) do
+    case admit_voice_turn(session_id, turn_id, text, opts) do
       {:ok, generation_id, learner_text} ->
-        stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
+        {result, acc} =
+          stream_voice_reply(session_id, turn_id, generation_id, learner_text, acc, sink)
+
+        {kept_at_deadline(result, session_id, {turn_id, generation_id}), acc}
 
       other ->
-        {other, acc}
+        {kept_at_deadline(other, turn_id), acc}
     end
   end
 
@@ -2025,8 +2091,9 @@ defmodule Backend.Stations do
 
   # Commits the learner voice turn and opens its generation, at most once per
   # turn: `{:ok, generation_id, learner_text}` (the admitted, trimmed text),
-  # `{:ok, :duplicate}` or an error.
-  defp admit_voice_turn(session_id, turn_id, text) do
+  # `{:kept_at_deadline, generation_id}` (a simulated exam's late evidence,
+  # #424), `{:ok, :duplicate}` or an error.
+  defp admit_voice_turn(session_id, turn_id, text, opts) do
     case String.trim(text) do
       "" ->
         {:error, :invalid_transcript}
@@ -2036,8 +2103,16 @@ defmodule Backend.Stations do
              :ok <- ensure_voice_turn_open(session),
              :ok <- ensure_audio_consent(session),
              {:ok, :committed, generation_id} <-
-               Conversation.begin_voice_turn(session_id, turn_id, trimmed_text) do
+               Conversation.begin_voice_turn(
+                 session_id,
+                 turn_id,
+                 trimmed_text,
+                 Keyword.get(opts, :speech_started_at)
+               ) do
           {:ok, generation_id, trimmed_text}
+        else
+          {:ok, :kept_at_deadline, generation_id} -> {:kept_at_deadline, generation_id}
+          other -> other
         end
     end
   end
@@ -2045,7 +2120,14 @@ defmodule Backend.Stations do
   # Session-state outcomes pass through; the deadline cutting a generation off
   # is an end of session, not a failure. Anything else fails the generation.
   defp fail_voice_reply(_session_id, _generation_id, reason)
-       when reason in [:stale_generation, :station_time_elapsed, :completed, :expired, :not_found],
+       when reason in [
+              :stale_generation,
+              :station_time_elapsed,
+              :cut_by_deadline,
+              :completed,
+              :expired,
+              :not_found
+            ],
        do: {:error, reason}
 
   defp fail_voice_reply(session_id, generation_id, _reason) do
