@@ -2,9 +2,9 @@
 
 With `VOICE_WORKER_FAKE_PROVIDERS=true` the worker transcribes and speaks without
 Deepgram or Cartesia: every learner utterance becomes one fixed transcript
-(`VOICE_WORKER_FAKE_TRANSCRIPT`), and every approved reply is spoken as a tone whose
-length follows the text. Everything else, from the room and Phoenix to turn tracking,
-is the real worker. The switch is refused unless LiveKit runs on this machine, so a
+(`VOICE_WORKER_FAKE_TRANSCRIPT`; lines separated by `|` are said in turn, and the last
+one repeats), and every approved reply is spoken as a tone whose length follows the
+text. Everything else, from the room and Phoenix to turn tracking, is the real worker. The switch is refused unless LiveKit runs on this machine, so a
 misconfigured deployment cannot answer learners with canned transcripts.
 """
 
@@ -20,6 +20,7 @@ from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 
 DEFAULT_FAKE_TRANSCRIPT = "Qual é o seu nome?"
+TRANSCRIPT_LINE_SEPARATOR = "|"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 # Same silence as the Deepgram endpointing in worker.py, so turns split alike.
 ENDPOINT_MS = 500
@@ -69,14 +70,15 @@ class FakeSTT:
         self.language = language
 
     def stream(self) -> "FakeSpeechStream":
-        return FakeSpeechStream(self.transcript, self.language)
+        lines = self.transcript.split(TRANSCRIPT_LINE_SEPARATOR)
+        return FakeSpeechStream(lines, self.language)
 
 
 class FakeSpeechStream:
     """Energy endpointing: speech starts above `SPEECH_RMS` and ends after `ENDPOINT_MS` of quiet."""
 
-    def __init__(self, transcript: str, language: str):
-        self._transcript = transcript
+    def __init__(self, lines: list[str], language: str):
+        self._lines = lines
         self._language = language
         self._events: asyncio.Queue = asyncio.Queue()
         self._speaking = False
@@ -117,7 +119,8 @@ class FakeSpeechStream:
     def _end_utterance(self) -> None:
         self._speaking = False
         self._quiet_ms = 0.0
-        text = SpeechData(language=LanguageCode(self._language), text=self._transcript)
+        line = self._lines.pop(0) if len(self._lines) > 1 else self._lines[0]
+        text = SpeechData(language=LanguageCode(self._language), text=line)
         self._events.put_nowait(
             SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT, alternatives=[text])
         )
