@@ -848,6 +848,47 @@ class PatientVoiceFlowTest(unittest.IsolatedAsyncioTestCase):
             self.room.patient_events(),
         )
 
+    async def test_the_deadline_counts_from_when_the_context_arrived(self):
+        # Issue #424: the job connects to the room after reading the context, so
+        # the time since then is already spent; the deadline does not move later.
+        loop = asyncio.get_running_loop()
+        self.voice.silence_at_deadline(
+            self.exam_context(0.3), received_at=loop.time() - 0.25
+        )
+        task = self.connect()
+        await self.say("onde dói")
+        self.tts.streams[0].queue.put_nowait(chunk("a1"))
+        await settle()
+        await asyncio.sleep(0.1)
+        self.tts.streams[0].queue.put_nowait(chunk("a2"))
+        await settle()
+        await self.disconnect(task)
+
+        self.assertTrue(self.voice.silent)
+        frames = [payload for kind, payload in self.room.timeline if kind == "frame"]
+        self.assertEqual(frames, ["a1"])
+
+    async def test_a_reply_published_across_the_deadline_is_not_spoken(self):
+        # Issue #424: the deadline falls while the reply's text is being published.
+        participant = self.room.local_participant
+        publish_data = participant.publish_data
+
+        async def slow_patient_text(data, topic="transcript", reliable=True):
+            if json.loads(data).get("role") == "patient":
+                await asyncio.sleep(0.1)
+            await publish_data(data, topic=topic, reliable=reliable)
+
+        participant.publish_data = slow_patient_text
+        self.voice.silence_at_deadline(self.exam_context(0.03))
+        task = self.connect()
+        await self.say("onde dói")
+        await asyncio.sleep(0.15)
+        await settle()
+        await self.disconnect(task)
+
+        self.assertTrue(self.voice.silent)
+        self.assertEqual(self.tts.texts, [])
+
     async def test_a_training_or_an_older_context_keeps_speaking_past_the_deadline(
         self,
     ):

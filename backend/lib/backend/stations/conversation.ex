@@ -200,9 +200,9 @@ defmodule Backend.Stations.Conversation do
 
   In a simulated exam (#424) a `:timer` completion, like the deadline itself,
   opens the evidence window: the generation in flight is cut (see
-  `resolve_patient_reply/5`) and the caller waits until the first voice turn
-  after the deadline (see `begin_voice_turn/4`) or until the window, counted
-  from `deadline_at`, elapses.
+  `resolve_patient_reply/5`) and the caller waits until a voice turn that
+  started after the deadline arrives (see `begin_voice_turn/4`) or until the
+  window, counted from `deadline_at`, elapses.
   """
   @spec complete(String.t(), term()) :: {:ok, session()} | {:error, :not_found | :expired}
   def complete(session_id, reason) do
@@ -334,13 +334,13 @@ defmodule Backend.Stations.Conversation do
   completion for the same bounded grace period a pending text turn gets.
 
   A simulated exam has no grace for the dialogue (#424). Its deadline opens the
-  evidence window instead (see `complete/2`), and a new turn after the deadline
-  is its last one: `speech_started_at`, the time the worker heard the utterance
-  start, decides it. One that started less than the speech-start tolerance
-  after `deadline_at` is kept as evidence with no generation and returns
-  `{:ok, :kept_at_deadline, generation_id}`; any other, or one without
-  `speech_started_at`, returns `{:error, :station_time_elapsed}` and appends
-  nothing. Either way the session then completes with reason `:timer`.
+  evidence window instead (see `complete/2`), and `speech_started_at`, the time
+  the worker heard the utterance start, decides a new turn after the deadline.
+  One that started less than the speech-start tolerance after `deadline_at` is
+  kept as evidence with no generation and returns
+  `{:ok, :kept_at_deadline, generation_id}`; the window stays open. Any other,
+  or one without `speech_started_at`, returns `{:error, :station_time_elapsed}`,
+  appends nothing and completes the session with reason `:timer`.
   """
   @spec begin_voice_turn(String.t(), pos_integer(), String.t(), DateTime.t() | nil) ::
           {:ok, :committed, pos_integer()}
@@ -386,7 +386,9 @@ defmodule Backend.Stations.Conversation do
 
   In a simulated exam (#424) the deadline cuts the generation in flight at once:
   it returns `{:error, :cut_by_deadline}`, before or after the session
-  completes, its learner turn stays and nothing is appended.
+  completes, its learner turn stays and nothing is appended. A reply resolved
+  once the clock passed the deadline is cut the same way, even before the
+  deadline message is handled.
 
   `verified_fact_ids` are stored on the appended patient message (issue #286);
   they are recorded only when the reply is, never for a stale, cancelled or
@@ -835,31 +837,29 @@ defmodule Backend.Stations.Conversation do
       {:ok, %{status: :completed} = session} ->
         {:reply, {:error, completed_generation_error(session, generation_id)}, state}
 
-      {:ok, session} ->
-        active_gen = Map.get(session, :active_generation_id)
-
-        cond do
-          not valid_reply_text?(reply_text) ->
-            {:reply, {:error, :invalid_reply}, state}
-
-          is_nil(active_gen) or active_gen != generation_id ->
-            {:reply, {:error, :stale_generation}, state}
-
-          true ->
-            session =
-              session
-              |> Map.put(
-                :messages,
-                session.messages ++ patient_messages(reply_text, verified_fact_ids, speaker)
-              )
-              |> Map.put(:active_generation_id, nil)
-              |> Map.put(:active_voice_turn_id, nil)
-              |> Map.put(:active_generation_message_index, nil)
-
-            true = :ets.insert(__MODULE__, {session_id, session})
-            {final_session, state} = finalize_voice_grace(session_id, session, state)
-            {:reply, {:ok, final_session}, state}
+      # The clock passed a simulated exam's deadline before `{:deadline, id}`
+      # was handled: the reply is cut all the same (#424).
+      {:ok, %{mode: :simulated_exam, active_generation_id: ^generation_id} = session}
+      when is_integer(generation_id) ->
+        if exam_time_over?(session, state) do
+          cut_exam_generation(session)
+          {:reply, {:error, :cut_by_deadline}, state}
+        else
+          resolve_active_reply(
+            session,
+            generation_id,
+            {reply_text, verified_fact_ids, speaker},
+            state
+          )
         end
+
+      {:ok, session} ->
+        resolve_active_reply(
+          session,
+          generation_id,
+          {reply_text, verified_fact_ids, speaker},
+          state
+        )
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -1545,10 +1545,43 @@ defmodule Backend.Stations.Conversation do
       match?(%{evidence: true}, Map.get(state.voice_graces, session.session_id))
   end
 
-  # A simulated exam's voice turn after its deadline (#424) is the last one the
-  # run takes, since at most one utterance can have started before it: it is
-  # kept as evidence, with no generation, or discarded, and the run completes.
-  # Retries of an admitted turn stay idempotent.
+  defp resolve_active_reply(
+         %{session_id: session_id} = session,
+         generation_id,
+         {reply_text, verified_fact_ids, speaker},
+         state
+       ) do
+    active_gen = Map.get(session, :active_generation_id)
+
+    cond do
+      not valid_reply_text?(reply_text) ->
+        {:reply, {:error, :invalid_reply}, state}
+
+      is_nil(active_gen) or active_gen != generation_id ->
+        {:reply, {:error, :stale_generation}, state}
+
+      true ->
+        session =
+          session
+          |> Map.put(
+            :messages,
+            session.messages ++ patient_messages(reply_text, verified_fact_ids, speaker)
+          )
+          |> Map.put(:active_generation_id, nil)
+          |> Map.put(:active_voice_turn_id, nil)
+          |> Map.put(:active_generation_message_index, nil)
+
+        true = :ets.insert(__MODULE__, {session_id, session})
+        {final_session, state} = finalize_voice_grace(session_id, session, state)
+        {:reply, {:ok, final_session}, state}
+    end
+  end
+
+  # A simulated exam's voice turn after its deadline (#424): one that started
+  # before it is kept as evidence, with no generation, and the window stays open,
+  # since another utterance may also have started before the deadline. One that
+  # started after it is discarded and ends the run: every later utterance started
+  # after the deadline too. Retries of an admitted turn stay idempotent.
   defp late_exam_turn(session, turn_id, text, speech_started_at, state) do
     cond do
       turn_id <= Map.get(session, :last_voice_turn_id, 0) ->
@@ -1569,9 +1602,7 @@ defmodule Backend.Stations.Conversation do
           |> Map.put(:failed_voice_turn, nil)
 
         true = :ets.insert(__MODULE__, {session.session_id, kept})
-
-        {:reply, {:ok, :kept_at_deadline, generation_id},
-         end_exam_at_deadline(state, session.session_id)}
+        {:reply, {:ok, :kept_at_deadline, generation_id}, state}
 
       true ->
         {:reply, {:error, :station_time_elapsed}, end_exam_at_deadline(state, session.session_id)}

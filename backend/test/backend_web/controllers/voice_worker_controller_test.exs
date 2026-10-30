@@ -652,12 +652,41 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
       refute Map.has_key?(resp, "reply_text")
       refute_received :failed_adapter_called
 
-      # It was the last utterance the run takes: the run ends at once.
-      assert {:ok, %{status: :completed, completion_reason: :timer} = stored} =
+      # Another utterance may also have started before the deadline: the run
+      # waits for it until the evidence window closes.
+      assert {:ok, %{status: :active}} = Stations.get_session(session.session_id)
+
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(session.session_id))
+      end)
+
+      assert {:ok, %{completion_reason: :timer} = stored} =
                Stations.get_session(session.session_id)
 
       assert [%{role: :learner, modality: :voice, text: "Vou pedir um eletrocardiograma"}] =
                stored.messages
+    end
+
+    test "two utterances that both started before the deadline are both kept, and one after it ends the run",
+         _tags do
+      session = start_exam()
+
+      assert %{"status" => "kept"} =
+               session
+               |> post_late(1, "Primeira", spoken_at(session, -3_000))
+               |> json_response(201)
+
+      assert %{"status" => "kept"} =
+               session |> post_late(2, "Segunda", spoken_at(session, -400)) |> json_response(201)
+
+      assert %{"error" => "station_time_elapsed"} =
+               session |> post_late(3, "Depois", spoken_at(session, 800)) |> json_response(409)
+
+      # Nothing after the deadline can count any more: the run ends at once.
+      assert {:ok, %{status: :completed, completion_reason: :timer} = stored} =
+               Stations.get_session(session.session_id)
+
+      assert Enum.map(stored.messages, & &1.text) == ["Primeira", "Segunda"]
     end
 
     test "an utterance that started after the deadline is discarded", _tags do
@@ -682,6 +711,10 @@ defmodule BackendWeb.VoiceWorkerControllerTest do
 
       assert %{"status" => "kept"} =
                kept |> post_late(1, "No limite", spoken_at(kept, 499)) |> json_response(201)
+
+      wait_until(fn ->
+        match?({:ok, %{status: :completed}}, Stations.get_session(kept.session_id))
+      end)
 
       assert {:ok, %{messages: [%{text: "No limite"}]}} = Stations.get_session(kept.session_id)
 

@@ -90,6 +90,7 @@ async def entrypoint(ctx: JobContext) -> None:
         try:
             # Consent/active check happens before any audio reaches Deepgram.
             context = await phoenix.context()
+            context_received_at = asyncio.get_running_loop().time()
             await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
             connected = True
             meter.join("voice-worker")
@@ -113,7 +114,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 else None
             )
             voice = PatientVoice(ctx.room, player, session_id)
-            voice.silence_at_deadline(context)
+            voice.silence_at_deadline(context, received_at=context_received_at)
             await voice.start()
             typed_voice = voice
             ctx.room.on(
@@ -375,11 +376,12 @@ class PatientVoice:
         self._deadline: asyncio.TimerHandle | None = None
         self._silencing: asyncio.Task | None = None
 
-    def silence_at_deadline(self, context) -> None:
+    def silence_at_deadline(self, context, received_at: float | None = None) -> None:
         """Go silent at a simulated exam's deadline (#424).
 
         The delay is `deadline_at - server_now` from Phoenix's context, so the
-        worker's own clock does not move the deadline. At it, the reply being
+        worker's own clock does not move the deadline, less the event-loop time
+        spent since the context arrived (`received_at`). At it, the reply being
         spoken stops, and no later reply is published or spoken; a kept turn or a
         spoken exam request is still reported. A training, or a context from an
         older Phoenix without the deadline, never goes silent.
@@ -391,8 +393,10 @@ class PatientVoice:
             server_now = datetime.fromisoformat(context["server_now"])
         except (KeyError, TypeError, ValueError):
             return
-        delay = max(0.0, (deadline - server_now).total_seconds())
-        self._deadline = asyncio.get_running_loop().call_later(delay, self._fall_silent)
+        loop = asyncio.get_running_loop()
+        elapsed = loop.time() - received_at if received_at is not None else 0.0
+        delay = max(0.0, (deadline - server_now).total_seconds() - elapsed)
+        self._deadline = loop.call_later(delay, self._fall_silent)
 
     def _fall_silent(self) -> None:
         self.silent = True
@@ -436,6 +440,8 @@ class PatientVoice:
             # Called from the speech reader: a room publish error must not stop the
             # job. Phoenix keeps the approved text, and the reply is still spoken.
             await self._publish_failure(reply, "text_delivery_failed")
+        if self.silent:
+            return  # the deadline fell while the text was being published (#424)
         previous = None
         if self._tail is not None and self._tail[0] == reply.generation_id:
             previous = self._tail[2]

@@ -93,8 +93,8 @@ Phoenix decides this; the client only waits for it.
   gets no outcome event, and the worker leaves the room without an `error` event,
   so the run is not taken for a lost voice.
 - At zero, call `FinishSession(EStationFinishReason::Timer)` as usual. Phoenix
-  answers when its evidence window closes: at the first transcript after the
-  deadline, or at most 5 seconds after it. That is well inside the request timeout
+  answers when its evidence window closes: when an utterance that started after
+  the deadline arrives, or at most 5 seconds after the deadline. That is well inside the request timeout
   (15 s). Keep the voice link until the finish returns; `FinishSession` leaves the
   room afterwards.
 

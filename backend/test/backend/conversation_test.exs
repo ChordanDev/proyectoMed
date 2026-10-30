@@ -1995,6 +1995,26 @@ defmodule Backend.ConversationTest do
     end
   end
 
+  describe "a simulated exam's deadline (#424)" do
+    test "a reply resolved past the deadline is refused even before the deadline message is handled" do
+      session = Conversation.start(%{mode: :simulated_exam})
+      id = session.session_id
+      assert {:ok, :committed, 1} = Conversation.begin_voice_turn(id, 1, "Onde dói?")
+
+      # The clock is past the deadline, but `{:deadline, id}` has not been handled
+      # yet (the GenServer is shared by every session, so it can lag).
+      past = DateTime.add(DateTime.utc_now(), -10, :millisecond)
+      [{^id, stored}] = :ets.lookup(StationConversation, id)
+      true = :ets.insert(StationConversation, {id, %{stored | deadline_at: past, cap_at: past}})
+
+      assert {:error, :cut_by_deadline} =
+               Conversation.resolve_patient_reply(id, 1, "A dor começou ontem.")
+
+      assert {:ok, %{messages: [%{role: :learner, text: "Onde dói?"}]}} = Conversation.fetch(id)
+      assert {:ok, nil} = Conversation.active_generation(id)
+    end
+  end
+
   describe "Conversation process restart" do
     test "a Conversation restart loses ephemeral ETS state; existing sessions become not_found" do
       session = Conversation.start()

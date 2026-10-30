@@ -246,7 +246,9 @@ void FStationClientFakePhoenixSpec::Define()
 	// #424: the timer finish of a simulated exam waits for Phoenix's evidence
 	// window, inside the client's request timeout. An utterance that started
 	// before the deadline is in the transcript with no patient reply; one that
-	// started after it, or at the tolerance, is not.
+	// started after it is not. Phoenix applies the 500 ms tolerance, so the
+	// client sees a boundary utterance as one of these two cases; the boundary
+	// itself is tested at the Phoenix HTTP API.
 	for (const bool bStartedBefore : {true, false})
 	{
 		LatentIt(bStartedBefore

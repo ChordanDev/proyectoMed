@@ -442,8 +442,9 @@ The worker log shows it registered with the LiveKit server.
    (`speech_start_tolerance_ms`) with `201`, `status: "kept"` and no reply, and
    answers `409` for any other. The reply in flight at the deadline is never
    released: its learner turn is kept the same way. The run waits at most 5 s
-   (`simulated_exam_evidence_window_ms`) after the deadline for that late
-   transcript, and the worker stops speaking at the deadline.
+   (`simulated_exam_evidence_window_ms`) after the deadline for late transcripts,
+   and less when an utterance that started after the deadline arrives. The worker
+   stops speaking at the deadline.
 10. The worker never logs transcript text: scan its output from steps 2–7 and confirm
     only lifecycle lines and session ids appear.
 
