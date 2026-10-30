@@ -5,8 +5,9 @@
 // the simulated exam by voice), then the run, where typed turns are
 // always available and exam and impresso requests have their own channel, then
 // the feedback once the learner or the Station Timer ends it. A run that loses
-// Phoenix is invalidated instead (#196). Interface code renders it; only the
-// station client talks to the network.
+// Phoenix is invalidated instead (#196). A start Phoenix refuses for the daily quota
+// or the subscription has a step of its own (#467). Interface code renders it; only
+// the station client talks to the network.
 
 #pragma once
 
@@ -52,6 +53,10 @@ enum class EStationRunStep : uint8
 	 * restarts the station (#196). `GetInvalidation` says which.
 	 */
 	Invalidated,
+	/** Phoenix refused the start: today's simulations are used up (#467). */
+	DailyQuota,
+	/** Phoenix refused the start: the account has no active subscription (#467). */
+	Subscription,
 };
 
 /** Why a run was invalidated. Neither reason keeps a result or a penalty (#318 business rule 8). */
@@ -198,8 +203,8 @@ public:
 	void AcknowledgeNotice();
 
 	/**
-	 * Notice or brief back to the menu. Does nothing on any other step. Why the station
-	 * did not load stays shown; any other error is cleared.
+	 * Notice, brief, or a start Phoenix refused (#467) back to the menu. Does nothing on
+	 * any other step. Why the station did not load stays shown; any other error is cleared.
 	 */
 	void BackToMenu();
 
@@ -307,6 +312,14 @@ public:
 	bool IsVoiceFallback() const { return bVoiceFallback; }
 	/** Why the run was invalidated; meaningful only on `EStationRunStep::Invalidated`. */
 	EStationInvalidation GetInvalidation() const { return Invalidation; }
+
+	/**
+	 * Time left until Phoenix renews the daily quota, on this machine's clock: a
+	 * refused start holds no session, so Phoenix's clock is not known. Zero when
+	 * `resets_at` has passed or Phoenix did not send a readable one. Only shown: the
+	 * next start is still Phoenix's to allow.
+	 */
+	FTimespan GetDailyQuotaTimeLeft() const;
 
 	/** For #191 to join the room. Secret: never log or display the token. */
 	const FStationVoiceCredential* GetVoiceCredential() const { return VoiceCredential.GetPtrOrNull(); }
@@ -527,6 +540,9 @@ private:
 	friend class FStationHudUnitSpec;
 	friend class FStationCardSnapshotSpec;
 	friend class FStationBriefUnitSpec;
+	friend class FStationQuotaScreensSpec;
+	friend class FStationQuotaSnapshotSpec;
+	friend class FStationQuotaUnitSpec;
 
 	void LoadStation();
 	void BeginEntry(EStationTrainingMode InMode, EStationSessionMode InSessionMode);
@@ -683,6 +699,8 @@ private:
 	/** The `End` cue of this run sounded. */
 	bool bEndCueSounded = false;
 	EStationInvalidation Invalidation = EStationInvalidation::PhoenixLost;
+	/** UTC. When the daily quota renews, as Phoenix said on `EStationRunStep::DailyQuota`. */
+	FDateTime DailyQuotaResetsAt;
 	FStationMicrophoneSetup Microphone;
 	FStationVoiceView Voice;
 	int32 VoiceTurnId = 0;

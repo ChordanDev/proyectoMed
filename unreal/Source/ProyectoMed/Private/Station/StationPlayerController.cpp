@@ -8,9 +8,11 @@
 #include "EngineUtils.h"
 #include "Framework/Application/NavigationConfig.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/PlatformProcess.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Station/Patient/StationPatientGaze.h"
 #include "Station/StationDeskClock.h"
+#include "Station/StationQuotaScreens.h"
 #include "Station/StationRunFlow.h"
 #include "Station/StationScreens.h"
 #include "Station/Voice/StationMicrophone.h"
@@ -55,15 +57,24 @@ void AStationPlayerController::BeginPlay()
 	Hud = CreateWidget<UStationHudWidget>(this, UStationHudWidget::StaticClass());
 	Feedback = CreateWidget<UStationFeedbackWidget>(this, UStationFeedbackWidget::StaticClass());
 	Invalidated = CreateWidget<UStationInvalidatedWidget>(this, UStationInvalidatedWidget::StaticClass());
+	Quota = CreateWidget<UStationQuotaWidget>(this, UStationQuotaWidget::StaticClass());
+	Subscription = CreateWidget<UStationSubscriptionWidget>(this, UStationSubscriptionWidget::StaticClass());
 	Brief->SetFlow(Flow);
 	Hud->SetFlow(Flow);
 	Feedback->SetFlow(Flow);
 	Invalidated->SetFlow(Flow);
+	Quota->SetFlow(Flow);
 	Menu->OnModeChosen.BindWeakLambda(this, [this](EStationSessionMode Mode) { Flow->ChooseMode(Mode); });
 	Menu->OnQuit.BindWeakLambda(this, [this]() { UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false); });
 	Notice->OnAcknowledged.BindWeakLambda(this, [this]() { Flow->AcknowledgeNotice(); });
 	MicrophoneScreen->OnAnswered.BindWeakLambda(this, [this](bool bAllow) { Flow->AnswerMicrophone(bAllow); });
 	Invalidated->OnRestart.BindWeakLambda(this, [this]() { Flow->Restart(); });
+	Quota->OnBackToMenu.BindWeakLambda(this, [this]() { Flow->BackToMenu(); });
+	Subscription->OnBackToMenu.BindWeakLambda(this, [this]() { Flow->BackToMenu(); });
+	Subscription->OnOpenPlans.BindWeakLambda(this, [this]()
+	{
+		FPlatformProcess::LaunchURL(*StationPlansUrl(Flow->GetClient()->GetPhoenixBaseUrl()), nullptr, nullptr);
+	});
 	MicrophoneScreen->AddToViewport();
 	Menu->AddToViewport();
 	Notice->AddToViewport();
@@ -72,6 +83,8 @@ void AStationPlayerController::BeginPlay()
 	Brief->AddToViewport(1);
 	Feedback->AddToViewport();
 	Invalidated->AddToViewport();
+	Quota->AddToViewport();
+	Subscription->AddToViewport();
 
 	Microphone = NewObject<UStationMicrophone>(this);
 	PreparePatientVoice();
@@ -168,6 +181,12 @@ void AStationPlayerController::Render()
 		? ESlateVisibility::Visible
 		: ESlateVisibility::Collapsed);
 	Invalidated->SetVisibility(Step == EStationRunStep::Invalidated ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (Quota && Subscription)
+	{
+		Quota->SetVisibility(Step == EStationRunStep::DailyQuota ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		Subscription->SetVisibility(Step == EStationRunStep::Subscription ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		Quota->Refresh();
+	}
 	Brief->Refresh();
 	Hud->Refresh();
 	Feedback->Refresh();

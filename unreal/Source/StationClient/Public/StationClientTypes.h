@@ -430,6 +430,14 @@ struct STATIONCLIENT_API FStationClientError
 
 	UPROPERTY(BlueprintReadOnly, Category = "Station")
 	FString Message;
+
+	/** The learner's simulations per day, from a `daily_quota_exhausted` answer; 0 otherwise. */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	int32 DailyQuota = 0;
+
+	/** UTC. When the daily quota renews, from a `daily_quota_exhausted` answer; unset otherwise. */
+	UPROPERTY(BlueprintReadOnly, Category = "Station")
+	FDateTime ResetsAt;
 };
 
 /** The outcome of a station client call: a value, or why there is none. */

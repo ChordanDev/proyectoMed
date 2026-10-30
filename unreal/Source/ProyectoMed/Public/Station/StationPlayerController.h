@@ -18,7 +18,9 @@ class UStationMicrophone;
 class UStationMicrophoneWidget;
 class UStationNoticeWidget;
 class UStationPatientVoice;
+class UStationQuotaWidget;
 class UStationRunFlow;
+class UStationSubscriptionWidget;
 
 UCLASS()
 class PROYECTOMED_API AStationPlayerController : public APlayerController
@@ -46,6 +48,7 @@ protected:
 
 private:
 	friend class FStationHudUnitSpec;
+	friend class FStationQuotaScreensSpec;
 
 	void Render();
 	/** The first camera tagged `Tag` in the level, or null. */
@@ -93,6 +96,12 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStationInvalidatedWidget> Invalidated;
+
+	UPROPERTY()
+	TObjectPtr<UStationQuotaWidget> Quota;
+
+	UPROPERTY()
+	TObjectPtr<UStationSubscriptionWidget> Subscription;
 
 	UPROPERTY()
 	TObjectPtr<UStationMicrophoneWidget> MicrophoneScreen;

@@ -8,6 +8,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "StationClientLog.h"
+#include "StationJson.h"
 
 namespace
 {
@@ -48,6 +49,8 @@ namespace
 		{
 			Json->TryGetStringField(TEXT("error"), Error.Code);
 			Json->TryGetStringField(TEXT("message"), Error.Message);
+			Json->TryGetNumberField(TEXT("daily_quota"), Error.DailyQuota);
+			StationJson::ParseDate(*Json, TEXT("resets_at"), Error.ResetsAt);
 		}
 		Response.Error = MoveTemp(Error);
 		return Response;
