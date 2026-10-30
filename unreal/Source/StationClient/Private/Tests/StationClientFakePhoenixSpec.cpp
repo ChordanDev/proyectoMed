@@ -56,6 +56,28 @@ namespace StationFakePhoenix
 		"message": "Na prova simulada os impressos são pedidos por voz, pelo botão Exames."
 	})");
 
+	// A simulated exam ended at its deadline (#424): Phoenix answers the timer
+	// finish only when its evidence window closes, and the transcript keeps the
+	// learner's late utterance only when it started before the deadline.
+	const TCHAR* ExamFinishBody = TEXT(R"({
+		"session_id": "stub-session", "status": "completed", "completed_at": "2026-10-21T12:10:03Z",
+		"completion_reason": "timer", "mode": "simulated_exam", "deadline_at": "2026-10-21T12:10:00Z",
+		"cap_at": "2026-10-21T12:10:00Z", "server_now": "2026-10-21T12:10:03Z"
+	})");
+
+	FString ExamShowBody(const TCHAR* Messages)
+	{
+		return FString::Printf(TEXT(R"({
+			"session_id": "stub-session", "station_id": "s", "station_version": "1", "audio_consent": true,
+			"mode": "simulated_exam", "started_at": "2026-10-21T12:00:00Z", "expires_at": "2026-10-21T12:30:00Z",
+			"deadline_at": "2026-10-21T12:10:00Z", "status": "completed", "completion_reason": "timer",
+			"messages": [%s], "server_now": "2026-10-21T12:10:04Z"
+		})"), Messages);
+	}
+
+	/** Seconds Phoenix's evidence window lasts by default (Backend.Stations.Conversation). */
+	constexpr float EvidenceWindowSeconds = 5.f;
+
 	/** Routes on a local port that answer with a fixed status after a delay. */
 	class FServer
 	{
@@ -220,6 +242,55 @@ void FStationClientFakePhoenixSpec::Define()
 				});
 			});
 		});
+
+	// #424: the timer finish of a simulated exam waits for Phoenix's evidence
+	// window, inside the client's request timeout. An utterance that started
+	// before the deadline is in the transcript with no patient reply; one that
+	// started after it, or at the tolerance, is not.
+	for (const bool bStartedBefore : {true, false})
+	{
+		LatentIt(bStartedBefore
+				? TEXT("finishes a simulated exam at its deadline keeping the utterance that started before it")
+				: TEXT("finishes a simulated exam at its deadline without the utterance that started after it"),
+			FTimespan::FromSeconds(30),
+			[this, bStartedBefore](const FDoneDelegate& Done)
+			{
+				Server.Route(FString(SessionPath) + TEXT("/finish"), EHttpServerRequestVerbs::VERB_POST, EvidenceWindowSeconds + 0.5f,
+					[]() { return FString(ExamFinishBody); });
+				const FString Messages = bStartedBefore
+					? TEXT(R"({"role": "learner", "modality": "voice", "text": "Vou pedir um eletrocardiograma", "at": "2026-10-21T12:10:01Z"})")
+					: TEXT("");
+				Server.Route(SessionPath, EHttpServerRequestVerbs::VERB_GET, 0.f, [Messages]() { return ExamShowBody(*Messages); });
+				Client->StartSession(true, [this, Done, bStartedBefore](const TStationResult<FStationSession>&)
+				{
+					Client->FinishSession(EStationFinishReason::Timer, [this, Done, bStartedBefore](const TStationResult<FStationSession>& Finished)
+					{
+						if (!TestFalse(Finished.HasError() ? *FString::Printf(TEXT("finish error %s"), *Finished.GetError().Code) : TEXT("finish"),
+							Finished.HasError()))
+						{
+							Done.Execute();
+							return;
+						}
+						TestEqual("reason", Finished.GetValue().CompletionReason, TEXT("timer"));
+						Client->RefreshSession([this, Done, bStartedBefore](const TStationResult<FStationSession>& Refreshed)
+						{
+							if (TestFalse("refresh", Refreshed.HasError()))
+							{
+								const TArray<FStationMessage>& Messages = Refreshed.GetValue().Messages;
+								TestNull("no patient reply after the deadline", Messages.FindByPredicate(
+									[](const FStationMessage& Message) { return Message.Speaker == EStationSpeaker::Patient; }));
+								TestEqual("late utterances kept", Messages.Num(), bStartedBefore ? 1 : 0);
+								if (bStartedBefore && Messages.Num() == 1)
+								{
+									TestEqual("kept utterance", Messages[0].Text, TEXT("Vou pedir um eletrocardiograma"));
+								}
+							}
+							Done.Execute();
+						});
+					});
+				});
+			});
+	}
 
 	LatentIt("does not reopen a finished run when an older refresh answers late", FTimespan::FromSeconds(20),
 		[this](const FDoneDelegate& Done)

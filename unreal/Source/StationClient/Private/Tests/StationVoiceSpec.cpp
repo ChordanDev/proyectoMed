@@ -142,6 +142,22 @@ void FStationVoiceUnitSpec::Define()
 			TestFalse("unknown status", Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"other"})")).IsSet());
 		});
 
+		// #424: after a simulated exam's deadline the worker publishes the late
+		// utterance's transcript and, when Phoenix kept it, a kept receipt: the
+		// patient does not answer it, and nothing carries patient text.
+		It("reads a learner turn Phoenix kept at a simulated exam's deadline", [this]()
+		{
+			const TOptional<FStationVoiceEvent> Final = Parse(TEXT(R"({"session_id":"s1","turn_id":7,"final":true,"text":"Vou pedir um eletrocardiograma"})"));
+			TestTrue("final transcript", Final.IsSet() && Final->Kind == EStationVoiceEventKind::Learner && Final->bFinal);
+			const TOptional<FStationVoiceEvent> Kept = Parse(
+				TEXT(R"({"session_id":"s1","turn_id":7,"generation_id":7,"role":"examiner","status":"kept"})"));
+			if (TestTrue("kept", Kept.IsSet() && Kept->Kind == EStationVoiceEventKind::PatientUnanswered))
+			{
+				TestEqual("same turn", Kept->TurnId, 7);
+				TestTrue("no patient text", Kept->Text.IsEmpty());
+			}
+		});
+
 		It("reads the outcome of a spoken exam request (#364)", [this]()
 		{
 			const TOptional<FStationVoiceEvent> Released = Parse(TEXT(R"({"session_id":"s1","turn_id":4,"role":"examiner","status":"impresso_requested","request_id":"voice-exam-4","decision":"released","newly_released":[{"id":"lab","title":"IMPRESSO — EXAMES LABORATORIAIS","category":"laboratory"}],"feedback_message":"Impresso liberado: IMPRESSO — EXAMES LABORATORIAIS"})"));
