@@ -3,6 +3,7 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimInstanceProxy.h"
 #include "CoreMinimal.h"
+#include "Station/Patient/StationGaze.h"
 
 #include "StationPatientFaceAnim.generated.h"
 
@@ -41,14 +42,17 @@ struct FStationPatientFaceProxy : public FAnimInstanceProxy
 	double IdleTime = 0.0;
 	float SpeechWeight = 0.f;
 	TMap<FName, float> MouthControls;
+	float EyeGazeWeight = 0.f;
+	TMap<FName, float> EyeControls;
 };
 
 /**
  * The patient's face during a voice run (#191). It plays the idle face loop and,
  * while the patient speaks, overrides only the jaw, mouth, lips, tongue and teeth
- * controls with the ones solved from the voice. The eyes and brows keep the idle
- * loop. The MetaHuman's post-process Anim Blueprint turns the controls into the
- * face rig, as it does for its own Live Link input.
+ * controls with the ones solved from the voice. The brows keep the idle loop, and
+ * so do the eyes unless the gaze (#449) turns them with the eye-look controls. The
+ * MetaHuman's post-process Anim Blueprint turns the controls into the face rig, as
+ * it does for its own Live Link input.
  */
 UCLASS(Transient)
 class UStationPatientFaceAnim : public UAnimInstance
@@ -63,6 +67,13 @@ public:
 		Mouth = MoveTemp(InMouth);
 	}
 
+	/** Where the eyes look in the head, applied over the idle loop with `Weight` (#449); game thread. */
+	void SetEyeGaze(const FStationGazeAngles& Eyes, float Weight)
+	{
+		EyeGaze = Eyes;
+		EyeGazeWeight = Weight;
+	}
+
 protected:
 	virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;
 	virtual void DestroyAnimInstanceProxy(FAnimInstanceProxy* InProxy) override;
@@ -74,4 +85,6 @@ private:
 	TObjectPtr<UAnimSequence> Idle;
 
 	TSharedPtr<FStationMouthState, ESPMode::ThreadSafe> Mouth;
+	FStationGazeAngles EyeGaze;
+	float EyeGazeWeight = 0.f;
 };
