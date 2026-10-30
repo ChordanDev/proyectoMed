@@ -28,7 +28,7 @@ namespace
 	/** Between a button's label and the arrow after it. */
 	constexpr float ArrowGap = 8.f;
 
-	UTextBlock* MakeText(UWidgetTree& Tree, const FText& Text, FName Weight, float Pixels, const FLinearColor& Color,
+	UTextBlock* MakeQuotaText(UWidgetTree& Tree, const FText& Text, FName Weight, float Pixels, const FLinearColor& Color,
 		int32 LetterSpacing = 0)
 	{
 		UTextBlock* Block = Tree.ConstructWidget<UTextBlock>();
@@ -60,8 +60,8 @@ namespace
 		}
 
 		UHorizontalBox* Wordmark = Tree.ConstructWidget<UHorizontalBox>();
-		Wordmark->AddChild(MakeText(Tree, LOCTEXT("WordmarkFirst", "Proyecto"), StationUi::FontExtraBold, 26.f, StationUi::InkTitle, -15));
-		Wordmark->AddChild(MakeText(Tree, LOCTEXT("WordmarkSecond", "Med"), StationUi::FontExtraBold, 26.f, StationUi::TreinoAccent, -15));
+		Wordmark->AddChild(MakeQuotaText(Tree, LOCTEXT("WordmarkFirst", "Proyecto"), StationUi::FontExtraBold, 26.f, StationUi::InkTitle, -15));
+		Wordmark->AddChild(MakeQuotaText(Tree, LOCTEXT("WordmarkSecond", "Med"), StationUi::FontExtraBold, 26.f, StationUi::TreinoAccent, -15));
 		if (UOverlaySlot* BrandSlot = Screen->AddChildToOverlay(Wordmark))
 		{
 			BrandSlot->SetHorizontalAlignment(HAlign_Left);
@@ -80,16 +80,16 @@ namespace
 			ColumnSlot->SetPadding(FMargin(96.f, 0.f, 0.f, 96.f));
 		}
 
-		UTextBlock* EyebrowText = MakeText(Tree, Eyebrow, StationUi::FontBold, 13.f, StationUi::Muted, 120);
+		UTextBlock* EyebrowText = MakeQuotaText(Tree, Eyebrow, StationUi::FontBold, 13.f, StationUi::Muted, 120);
 		EyebrowText->SetTextTransformPolicy(ETextTransformPolicy::ToUpper);
 		AddBlock(*Column, EyebrowText);
 
-		UTextBlock* TitleText = MakeText(Tree, Title, StationUi::FontBold, 56.f, StationUi::InkTitle, -25);
+		UTextBlock* TitleText = MakeQuotaText(Tree, Title, StationUi::FontBold, 56.f, StationUi::InkTitle, -25);
 		TitleText->SetAutoWrapText(true);
 		TitleText->SetLineHeightPercentage(TitleLineHeight);
 		AddBlock(*Column, TitleText);
 
-		UTextBlock* BodyText = MakeText(Tree, Body, StationUi::FontMedium, 18.f, StationUi::InkBody);
+		UTextBlock* BodyText = MakeQuotaText(Tree, Body, StationUi::FontMedium, 18.f, StationUi::InkBody);
 		BodyText->SetAutoWrapText(true);
 		AddBlock(*Column, BodyText);
 		return Column;
@@ -169,10 +169,10 @@ TSharedRef<SWidget> UStationQuotaWidget::RebuildWidget()
 		UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
 		Countdown = Row;
 		AddBlock(*Column, Row);
-		TimeLeftText = MakeText(*WidgetTree, FText::GetEmpty(), StationUi::FontExtraBold, 44.f, StationUi::Ink);
+		TimeLeftText = MakeQuotaText(*WidgetTree, FText::GetEmpty(), StationUi::FontExtraBold, 44.f, StationUi::Ink);
 		Row->AddChild(TimeLeftText);
 		if (UHorizontalBoxSlot* NoteSlot = Row->AddChildToHorizontalBox(
-				MakeText(*WidgetTree, LOCTEXT("QuotaToRenew", "para renovar"), StationUi::FontMedium, 14.f, StationUi::Muted)))
+				MakeQuotaText(*WidgetTree, LOCTEXT("QuotaToRenew", "para renovar"), StationUi::FontMedium, 14.f, StationUi::Muted)))
 		{
 			NoteSlot->SetVerticalAlignment(VAlign_Bottom);
 			NoteSlot->SetPadding(FMargin(12.f, 0.f, 0.f, 8.f));
